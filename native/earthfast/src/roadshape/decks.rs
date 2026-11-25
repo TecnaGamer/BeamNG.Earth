@@ -272,10 +272,22 @@ fn struct_len(deck: &Line, others: &[Other], prm: &[f64]) -> f64 {
 /// The skew end direction at deck end `end` (unit end line pointing to the deck's left) or None (square), and the
 /// audit's numbers: (the nearest crossing's reach along the deck or -1, the end's distance from the crossed line, the
 /// crossed line's half width, the structure's length slen).
-fn skew(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f64], slen: f64, nbi: Option<[f64; 4]>)
-        -> (Option<P2>, [f64; 6]) {
+#[allow(clippy::too_many_arguments)]
+fn skew(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f64], slen: f64, nbi: Option<[f64; 4]>,
+        deck_hw: f64) -> (Option<P2>, [f64; 6]) {
     let mut diag = [-1.0, 0.0, 0.0, slen, 0.0, -1.0];
     let d = skew_dir(deck, end, others, skip, prm, slen, nbi, &mut diag);
+    // (627) both ends' skewed rows apart along the deck (deck_hw: its half width; 0 unknown): a short deck's end line
+    // reaching past its other end's folded its slab
+    if let (Some(dv), true) = (d, deck_hw > 0.0) {
+        let l = deck.len();
+        let h = 2.0f64.min(0.5 * l);
+        if let Some(t) = if end == 0 { deck.dir(h, h) } else { deck.dir(l - h, h) } {
+            let left = [-t[1], t[0]];
+            let (ux, uy) = (dot(dv, t), dot(dv, left));
+            if uy.abs() > 1e-9 && 2.0 * deck_hw * (ux / uy).abs() + 1.0 >= l { return (None, diag); }
+        }
+    }
     (d, diag)
 }
 
@@ -386,7 +398,7 @@ fn skew_dir(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f6
 #[cfg(test)]
 fn shape_core(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64])
               -> (Vec<P2>, Vec<f64>, [[f64; 14]; 2], Vec<P2>, [usize; 3]) {
-    shape_core_nbi(xy, z, others, prm, None)
+    shape_core_nbi(xy, z, others, prm, None, 0.0)
 }
 
 /// The shape of one deck (module doc). Returns (xy, z, ends (2 x 13: approach kind or -1, tangent x y, skew 0 / 1,
@@ -395,7 +407,7 @@ fn shape_core(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64])
 /// record decided, the crossed line's kind or -1), overlap polylines of both ends (flat x y), their offsets). nbi: (627) the inventory's record of
 /// the deck's structure: (NBI item 34 skew deg, 99 varies; structure length m or 0; cos and sin of the skew).
 #[allow(clippy::type_complexity)]
-fn shape_core_nbi(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64], nbi: Option<[f64; 4]>)
+fn shape_core_nbi(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64], nbi: Option<[f64; 4]>, deck_hw: f64)
               -> (Vec<P2>, Vec<f64>, [[f64; 14]; 2], Vec<P2>, [usize; 3]) {
     let deck = Line::new(xy);
     let mut ends = [[-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0]; 2];
@@ -521,7 +533,7 @@ fn shape_core_nbi(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64], nbi: Opti
             && [o.line.p[0], o.line.p[o.line.p.len() - 1]].iter().any(|&q| norm(sub(q, p_end)) <= prm[P_JOIN]));
         if joint { ooff[e + 1] = ov.len(); }
         if !joint {
-            let (d, diag) = skew(&shaped, e, others, &skip, prm, slen, nbi);
+            let (d, diag) = skew(&shaped, e, others, &skip, prm, slen, nbi, deck_hw);
             ends[e][8..14].copy_from_slice(&diag);
             if let Some(d) = d {
                 ends[e][3] = 1.0;
@@ -568,13 +580,13 @@ fn interp1(t: f64, xs: &[f64], ys: &[f64]) -> f64 {
 /// line, its half width, the structure's length, 1 where the inventory's record decided, the crossed kind), the overlap polylines flat (x y), their offsets (3,): end 0's points
 /// off[0]..off[1], end 1's off[1]..off[2]).
 #[pyfunction]
-#[pyo3(signature = (xy, z, lines, loff, lkind, lown, params, lhw=None, nbi=None))]
+#[pyo3(signature = (xy, z, lines, loff, lkind, lown, params, lhw=None, nbi=None, deck_hw=0.0))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn deck_shape<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>,
                        lines: PyReadonlyArray2<'py, f64>, loff: PyReadonlyArray1<'py, i64>,
                        lkind: PyReadonlyArray1<'py, i64>, lown: PyReadonlyArray1<'py, i64>,
                        params: PyReadonlyArray1<'py, f64>, lhw: Option<PyReadonlyArray1<'py, f64>>,
-                       nbi: Option<PyReadonlyArray1<'py, f64>>)
+                       nbi: Option<PyReadonlyArray1<'py, f64>>, deck_hw: f64)
                        -> PyResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<i64>)> {
     let (xy, z, lines, loff, lkind, lown, prm) = (xy.as_array(), z.as_array(), lines.as_array(),
         loff.as_array().to_vec(), lkind.as_array(), lown.as_array(), params.as_array().to_vec());
@@ -597,7 +609,7 @@ pub fn deck_shape<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyRea
         let rows: Vec<P2> = (loff[k] as usize..loff[k + 1] as usize).map(|r| [lines[[r, 0]], lines[[r, 1]]]).collect();
         Other { line: Line::new(&rows), kind: lkind[k], own: lown[k] != 0, hw: hw[k] }
     }).collect();
-    let (out, zo, ends, ov, ooff) = py.detach(|| shape_core_nbi(&pts, &zz, &others, &prm, rec));
+    let (out, zo, ends, ov, ooff) = py.detach(|| shape_core_nbi(&pts, &zz, &others, &prm, rec, if deck_hw.is_finite() { deck_hw } else { 0.0 }));
     Ok((out.iter().flat_map(|p| [p[0], p[1]]).collect(), zo, ends.iter().flat_map(|e| e.iter().copied()).collect(),
         ov.iter().flat_map(|p| [p[0], p[1]]).collect(), ooff.iter().map(|&v| v as i64).collect()))
 }
@@ -731,6 +743,17 @@ mod tests {
     }
 
     #[test]
+    fn a_deck_shorter_than_its_skewed_rows_stays_square() {
+        // a 5 m deck 8 m wide over a stream at 60 degrees: its end lines would reach 2.3 m each way: square
+        let deck: Vec<P2> = vec![[0.0, 0.0], [5.0, 0.0]];
+        let w = [crossing(2.5, 60.0, 1.5, KIND_WATER)];
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &w, &prm627(), None, 4.0);
+        assert_eq!((ends[0][3], ends[1][3]), (0.0, 0.0));
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &w, &prm627(), None, 0.0);
+        assert_eq!((ends[0][3], ends[1][3]), (1.0, 1.0));
+    }
+
+    #[test]
     fn the_inventorys_skew_decides() {
         // the viaduct's end of a_viaducts_ends_are_square with a matched record: 30 deg skew (its length agreeing):
         // skewed 30 deg off square to the crossed road's side; a 0 deg record squares a short overpass; a record whose
@@ -741,16 +764,16 @@ mod tests {
         let mut others = vec![crossing(30.0, 60.0, 7.0, KIND_ROAD)];
         others.push(Other { line: Line::new(&[[40.0, 0.0], [110.0, 0.0]]), kind: KIND_DECK, own: false, hw: 0.0 });
         others.push(Other { line: Line::new(&[[180.0, 0.0], [110.0, 0.0]]), kind: KIND_DECK, own: false, hw: 0.0 });
-        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([30.0, 175.0, c30, s30]));
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([30.0, 175.0, c30, s30]), 0.0);
         assert_eq!((ends[0][3], ends[0][12]), (1.0, 1.0), "{:?}", ends[0]);
         // the end line 30 deg off the deck's normal (0, 1), leaning toward the crossed road's direction (+x)
         assert!((ends[0][4] - s30).abs() < 1e-3 && (ends[0][5] - c30).abs() < 1e-3, "{:?}", ends[0]);
-        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([30.0, 50.0, c30, s30]));
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([30.0, 50.0, c30, s30]), 0.0);
         assert_eq!((ends[0][3], ends[0][12]), (0.0, 0.0));
-        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([99.0, 175.0, 1.0, 0.0]));
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([99.0, 175.0, 1.0, 0.0]), 0.0);
         assert_eq!((ends[0][3], ends[0][12]), (0.0, 0.0));
         let short = [crossing(20.0, 60.0, 7.0, KIND_ROAD)];
-        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &short, &prm627(), Some([0.0, 40.0, 1.0, 0.0]));
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &short, &prm627(), Some([0.0, 40.0, 1.0, 0.0]), 0.0);
         assert_eq!((ends[0][3], ends[1][3], ends[0][12]), (0.0, 0.0, 1.0));
     }
 

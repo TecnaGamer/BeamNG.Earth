@@ -475,11 +475,11 @@ pub struct RoadsysEnds { ends: roadsys::handover::Ends,
 #[pymethods]
 impl RoadsysEnds {
     #[new]
-    #[pyo3(signature = (bridges, grounds, tunnels, s, crossed=None, nbi=None))]
+    #[pyo3(signature = (bridges, grounds, tunnels, s, crossed=None, nbi=None, noskew=None))]
     #[allow(clippy::type_complexity)]
     fn new(bridges: Vec<(PyReadonlyArray2<'_, f64>, f64)>, grounds: Vec<(PyReadonlyArray2<'_, f64>, f64)>,
            tunnels: Vec<PyReadonlyArray2<'_, f64>>, s: f64, crossed: Option<Vec<(PyReadonlyArray2<'_, f64>, i64)>>,
-           nbi: Option<Vec<Option<(f64, f64, f64, f64)>>>) -> PyResult<Self> {
+           nbi: Option<Vec<Option<(f64, f64, f64, f64)>>>, noskew: Option<Vec<bool>>) -> PyResult<Self> {
         let b = lines2("RoadsysEnds bridges", &bridges)?;
         let g = lines2("RoadsysEnds grounds", &grounds)?;
         let mut t = Vec::with_capacity(tunnels.len());
@@ -502,6 +502,8 @@ impl RoadsysEnds {
                 if !nb.is_empty() && nb.len() != b.len() { return Err(PyValueError::new_err("RoadsysEnds nbi: one per bridge part")); }
                 k.nbi = nb.into_iter().map(|r| r.map(|(a, l, c, sn)| [a, l, c, sn])).collect();
                 if k.nbi.iter().flatten().any(|r| r.iter().any(|v| !v.is_finite())) { return Err(PyValueError::new_err("RoadsysEnds nbi: finite values")); }
+                k.noskew = noskew.unwrap_or_default();
+                if !k.noskew.is_empty() && k.noskew.len() != g.len() { return Err(PyValueError::new_err("RoadsysEnds noskew: one per ground part")); }
                 Some(k)
             }
         };

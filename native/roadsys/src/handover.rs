@@ -99,6 +99,47 @@ fn head(p: &[P2], reach: f64) -> Vec<P2> {
 
 fn mmkey(p: &[P2]) -> Vec<I2> { p.iter().map(|&q| mm2(q)).collect() }
 
+/// (627) m a skewed end's tip keeps off another line's surface; the half width taken for a railway or a waterway
+pub const TIP_CLEAR_M: f64 = 1.0;
+pub const TIP_OTHER_HW_M: f64 = 2.0;
+/// the skew's slope eased by these factors in turn until its tip is clear (then square)
+pub const TIP_EASE: [f64; 4] = [1.0, 0.75, 0.5, 0.25];
+
+fn seg_seg_dist(a: P2, b: P2, c: P2, d: P2) -> f64 {
+    if seg_x(a, b, c, d).is_some() { return 0.0; }
+    let pd = |q: P2, x: P2, y: P2| -> f64 {
+        let xy = sub(y, x);
+        let l2 = dot(xy, xy);
+        let u = if l2 > 0.0 { clampf(dot(sub(q, x), xy) / l2, 0.0, 1.0) } else { 0.0 };
+        dist(q, add(x, scale(xy, u)))
+    };
+    pd(a, c, d).min(pd(b, c, d)).min(pd(c, a, b)).min(pd(d, a, b))
+}
+
+fn in_tri(q: P2, a: P2, b: P2, c: P2) -> bool {
+    let (d1, d2, d3) = (cross(sub(b, a), sub(q, a)), cross(sub(c, b), sub(q, b)), cross(sub(a, c), sub(q, c)));
+    !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+}
+
+/// Is the tip of an end at p (t: into the deck, n: its left) skewed by slope k (deck half width hw) clear of the lines'
+/// surfaces (each line's half width + TIP_CLEAR_M)? The tip: the triangle past the square end line, between the square
+/// corner and the skewed one on the side where the end line runs back over the approach.
+fn tip_clear(p: P2, t: P2, n: P2, k: f64, hw: f64, lines: &[(&[P2], u8)], widths: &[f64]) -> bool {
+    let side = if k > 0.0 { -1.0 } else { 1.0 };       // (the corner at lateral side * hw lies k * side * hw along t)
+    let a = add(p, scale(n, side * hw));
+    let c = add(a, scale(t, k * side * hw));
+    for (li, (q, _kind)) in lines.iter().enumerate() {
+        let r = widths.get(li).copied().unwrap_or(TIP_OTHER_HW_M) + TIP_CLEAR_M;
+        for w in q.windows(2) {
+            if in_tri(w[0], p, a, c) || in_tri(w[1], p, a, c) { return false; }
+            if seg_seg_dist(w[0], w[1], p, a) <= r || seg_seg_dist(w[0], w[1], a, c) <= r || seg_seg_dist(w[0], w[1], c, p) <= r {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 impl Ends {
     /// The ground ends of the deck parts `bridges` (each part's line in the frame, its half width), the ground parts
     /// `grounds` (their lines and half widths: the approaches, and the roads whose surface keeps its ground) and the
@@ -112,7 +153,7 @@ impl Ends {
     /// ground parts are the roads that may pass under (an end's own approaches left out).
     #[allow(clippy::type_complexity)]
     pub fn new_skewed(bridges: &[Part], grounds: Vec<Part>, tunnels: &[Vec<P2>], s: f64,
-                      skew: Option<(&[(Vec<P2>, u8)], &[Option<[f64; 4]>])>) -> Ends {
+                      skew: Option<(&[(Vec<P2>, u8)], &[Option<[f64; 4]>], &[bool])>) -> Ends {
         // (one copy of each part, in a canonical order: the same ends whatever order the cells came in)
         let mut seen: BTreeSet<Vec<I2>> = BTreeSet::new();
         let mut br: Vec<(Vec<I2>, &Part, usize)> = Vec::new();
@@ -126,14 +167,20 @@ impl Ends {
         }
         // (a record per part: the first copy's, the parts' keys ordering the rest)
         br.sort_by(|a, b| a.0.cmp(&b.0).then(a.2.cmp(&b.2)));
-        let mut gs: Vec<(Vec<I2>, Part)> = Vec::new();
-        let mut gseen: BTreeSet<Vec<I2>> = BTreeSet::new();
-        for g in grounds {
+        let mut gs: Vec<(Vec<I2>, Part, bool)> = Vec::new();
+        let mut gseen: BTreeMap<Vec<I2>, usize> = BTreeMap::new();
+        for (gi, g) in grounds.into_iter().enumerate() {
             if g.pts.len() < 2 || g.pts.iter().any(|q| !q.iter().all(|v| v.is_finite())) { continue; }
             let k = mmkey(&g.pts);
-            if gseen.insert(k.clone()) { gs.push((k, g)); }
+            // (627: a ground part whose surface cannot be cut along a skewed end line: its ends stay square)
+            let ns = skew.map(|x| x.2.get(gi).copied().unwrap_or(false)).unwrap_or(false);
+            match gseen.get(&k) {
+                Some(&j) => { if ns { gs[j].2 = true; } }
+                None => { gseen.insert(k.clone(), gs.len()); gs.push((k, g, ns)); }
+            }
         }
         gs.sort_by(|a, b| a.0.cmp(&b.0));
+        let noskew_g: Vec<bool> = gs.iter().map(|x| x.2).collect();
         let grounds: Vec<Part> = gs.into_iter().map(|x| x.1).collect();
         let gbb: Vec<[f64; 4]> = grounds.iter().map(|g| bbox(&g.pts, g.hw + CLEAR_M)).collect();
         let mut ends = Vec::new();
@@ -167,7 +214,7 @@ impl Ends {
                 let mut bb = bbox(&path, hw + 1.0);
                 // (627) the end's skew: the structure walked in from here, the lines that may pass under it
                 let (mut dir_e, mut sk) = (None, 0.0);
-                if let Some((crossed, nbi)) = skew {
+                if let Some((crossed, nbi, _)) = skew.filter(|_| !approach.iter().any(|&gi| noskew_g[gi])) {
                     let (inward, slen) = crate::skew::walk(&parts, bi, side);
                     let mut lines: Vec<(&[P2], u8)> = grounds.iter().enumerate().filter(|(gi, _)| !approach.contains(gi))
                         .map(|(_, g)| (g.pts.as_slice(), crate::skew::KIND_ROAD)).collect();
@@ -177,9 +224,22 @@ impl Ends {
                         let n = [-t[1], t[0]];
                         let (ux, uy) = (dot(d, t), dot(d, n));
                         if uy > 1e-6 {
-                            dir_e = Some(d);
-                            sk = ux / uy;
-                            bb = bbox(&path, hw + 1.0 + absf(sk) * hw);
+                            // (the deck's tip past the square end line, over the approach, kept clear of every other
+                            // line's surface + TIP_CLEAR_M: the skew eased (TIP_EASE) until it is, else square)
+                            let widths: Vec<f64> = grounds.iter().enumerate().filter(|(gi, _)| !approach.contains(gi))
+                                .map(|(_, g)| g.hw).chain(crossed.iter().map(|_| TIP_OTHER_HW_M)).collect();
+                            for f in TIP_EASE {
+                                let k = ux / uy * f;
+                                if k == 0.0 { break; }
+                                // (and the skewed rows of both ends apart along the part: deck.rs set_skews' span rule)
+                                if absf(k) * b.hw * 2.0 + 2.0 * crate::part::SKEW_GAP_M < length(&b.pts)
+                                    && tip_clear(p, t, n, k, b.hw, &lines, &widths) {
+                                    dir_e = unit(add(n, scale(t, k)));
+                                    sk = k;
+                                    bb = bbox(&path, hw + 1.0 + absf(sk) * hw);
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -728,14 +788,14 @@ pub fn zone(soup: &Soup, top: u32, ends: &Ends, g: &Grid, tile_uv: f64) -> (Soup
 /// (627) The skew's own inputs (Ends::new_skewed): the other lines that may pass under a structure with their kinds,
 /// per bridge part the inventory's record.
 #[derive(Clone, Debug, Default)]
-pub struct SkewIn { pub crossed: Vec<(Vec<P2>, u8)>, pub nbi: Vec<Option<[f64; 4]>> }
+pub struct SkewIn { pub crossed: Vec<(Vec<P2>, u8)>, pub nbi: Vec<Option<[f64; 4]>>, pub noskew: Vec<bool> }
 
 impl Ends {
     /// Ends::new, or new_skewed with sk's lines and records.
     pub fn build(bridges: &[Part], grounds: Vec<Part>, tunnels: &[Vec<P2>], s: f64, sk: Option<&SkewIn>) -> Ends {
         match sk {
             None => Ends::new(bridges, grounds, tunnels, s),
-            Some(k) => Ends::new_skewed(bridges, grounds, tunnels, s, Some((&k.crossed, &k.nbi))),
+            Some(k) => Ends::new_skewed(bridges, grounds, tunnels, s, Some((&k.crossed, &k.nbi, &k.noskew))),
         }
     }
 }
@@ -775,6 +835,8 @@ pub fn encode_input(bridges: &[Part], grounds: &[Part], tunnels: &[Vec<P2>], sou
         for n in &k.nbi {
             match n { None => u(&mut b, 0), Some(v) => { u(&mut b, 1); for c in v { f(&mut b, *c); } } }
         }
+        u(&mut b, k.noskew.len() as u32);
+        for &x in &k.noskew { u(&mut b, x as u32); }
     }
     b
 }
@@ -851,6 +913,8 @@ pub fn run_input(b: &[u8]) -> Result<(Vec<f64>, Soup, ZoneStats), String> {
         }
         let nn = r.u()? as usize;
         for _ in 0..nn { k.nbi.push(if r.u()? == 1 { Some([r.f()?, r.f()?, r.f()?, r.f()?]) } else { None }); }
+        let nk = r.u()? as usize;
+        for _ in 0..nk { k.noskew.push(r.u()? == 1); }
         sk = Some(k);
     }
     let grounds = lists.pop().unwrap();
@@ -906,7 +970,7 @@ mod tests {
         let gnd = Part { pts: vec![[-40.0, 0.2], [0.3, 0.2]], hw: 4.0 };
         let road = Part { pts: vec![[20.3 - 25.0, 0.2 - 43.30127018922193], [20.3 + 25.0, 0.2 + 43.30127018922193]], hw: 3.5 };
         let none: Vec<(Vec<P2>, u8)> = Vec::new();
-        let e = Ends::new_skewed(&[b.clone()], vec![gnd.clone(), road.clone()], &[], 1.0, Some((&none, &[])));
+        let e = Ends::new_skewed(&[b.clone()], vec![gnd.clone(), road.clone()], &[], 1.0, Some((&none, &[], &[])));
         let k = e.ends.iter().position(|x| dist(x.p, [0.3, 0.2]) < 1e-9).unwrap();
         assert!((e.ends[k].sk - 0.5773502691896257).abs() < 1e-9, "{:?}", e.ends[k].sk);
         assert_eq!(e.drop_at(3.0, 3.2), 0.0);           // (left: the line 1.73 m in)
@@ -915,10 +979,18 @@ mod tests {
         let sq = Ends::new(&[b.clone()], vec![gnd.clone(), road.clone()], &[], 1.0);
         assert_eq!(sq.drop_at(0.5, -2.8), 0.0);
         let water = vec![(road.pts.clone(), crate::skew::KIND_WATER)];
-        let w = Ends::new_skewed(&[b.clone()], vec![gnd.clone()], &[], 1.0, Some((&water, &[])));
+        let w = Ends::new_skewed(&[b.clone()], vec![gnd.clone()], &[], 1.0, Some((&water, &[], &[])));
         assert!(w.ends.iter().any(|x| x.sk != 0.0));
+        // a side road along the end line 2 m before it (the tip would lie on it): the skew eased until clear, or square
+        let side = Part { pts: vec![[-2.0 - 25.0, 0.2 - 43.30127018922193], [-2.0 + 25.0, 0.2 + 43.30127018922193]], hw: 2.0 };
+        let t = Ends::new_skewed(&[b.clone()], vec![gnd.clone(), road.clone(), side], &[], 1.0, Some((&none, &[], &[])));
+        let kt = t.ends.iter().find(|x| dist(x.p, [0.3, 0.2]) < 1e-9).unwrap().sk;
+        assert!(kt.abs() < 0.5773502691896257 * 0.75 + 1e-9, "{kt}");
+        // an approach whose surface cannot be cut along the line (noskew): square
+        let ns = Ends::new_skewed(&[b.clone()], vec![gnd.clone(), road.clone()], &[], 1.0, Some((&none, &[], &[true, false])));
+        assert!(ns.ends.iter().all(|x| x.sk == 0.0));
         let more = Part { pts: vec![[40.3, 0.2], [140.3, 0.2]], hw: 4.0 };
-        let v = Ends::new_skewed(&[b, more], vec![gnd, road], &[], 1.0, Some((&none, &[])));
+        let v = Ends::new_skewed(&[b, more], vec![gnd, road], &[], 1.0, Some((&none, &[], &[])));
         assert!(v.ends.iter().all(|x| x.sk == 0.0));
     }
 

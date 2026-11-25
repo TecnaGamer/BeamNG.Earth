@@ -1157,6 +1157,8 @@ def _end_rows(feats):
     if got is not None:
         return got
     import roads
+    import roadsurf3
+    v3 = SKEW and roadsurf3.ON
     out = []
     if feats is not None and len(feats):
         bs = roads.bridge_specs(feats)
@@ -1174,8 +1176,11 @@ def _end_rows(feats):
                     ll = np.asarray(ring, np.float64)[:, :2]
                     if decks and _overlaps(ll, decks):
                         out.append(("b", fid, j, ll, float(bs[i].width) / 2))
+            # (627: "G" a ground part the road surface v3 draws (roadsurf3: its pieces end square at structures,
+            # never cut along a skewed end line): a deck end onto it stays square)
+            gk = "G" if (v3 and gs[i] is not None and roadsurf3.replaces_ground_paint(gs[i])) else "g"
             for j, ring in enumerate(roads._parts_by_level_new(feats, i, "ground", rngs=tags)):
-                out.append(("g", fid, j, np.asarray(ring, np.float64)[:, :2], float(sp.width) / 2))
+                out.append((gk, fid, j, np.asarray(ring, np.float64)[:, :2], float(sp.width) / 2))
             for j, ring in enumerate(roads.tunnel_parts(feats, i)):
                 out.append(("t", fid, j, np.asarray(ring, np.float64)[:, :2], float(sp.width) / 2))
     feats.__dict__["_roadsys_end_rows"] = out
@@ -1231,6 +1236,7 @@ def _ends_from(frame, cell_fn, keys, reg):
                 hw = max(hw, xs[feature(fid)])
             rows.setdefault((kind, fid, j), (ll, hw))     # (a feature in several cells: once)
     br, gr, tu = [], [], []
+    noskew = []                 # (627) per ground part: its surface cannot be cut along a skewed end line ("G")
     crossed = []                # (627, SKEW) the railways and waterways that may pass under a structure
     if SKEW:
         for k in keys:
@@ -1266,12 +1272,13 @@ def _ends_from(frame, cell_fn, keys, reg):
             # nodes before the portal, as at a ground end; deck ends onto tunnels had no hand-over, 65-145 mm lips at
             # Fort Pitt's portals)
             gr.append((xy, hw))
+            noskew.append(kind == "G")
     if SKEW:
         fast.require(SKEW_KERNEL, "the deck ends' skew")
         import roadshape
         nbi = [roadshape.nbi_record(xy, frame) for xy, _hw in br]
         return fast._ef.RoadsysEnds(br, gr, tu, float(heightmap.SQUARE), [(xy, kind) for kind, xy in crossed],
-                                    [None if r is None else tuple(float(v) for v in r) for r in nbi])
+                                    [None if r is None else tuple(float(v) for v in r) for r in nbi], noskew)
     return fast._ef.RoadsysEnds(br, gr, tu, float(heightmap.SQUARE))
 
 

@@ -409,7 +409,8 @@ def shape_chain(comp, pool, zs, ground, simple_of=None, hw_of=None, water=(), fr
             rec = nbi_record(xy, frame)
             sxy, sz, ends, ov, ooff = fast._ef.deck_shape(xy, z, pts, off, np.asarray(kinds, np.int64),
                                                           np.asarray(owns, np.int64), PARAMS,
-                                                          np.asarray(hws, np.float64), rec)
+                                                          np.asarray(hws, np.float64), rec,
+                                                          float(getattr(pool[k][0], "width", 0.0) or 0.0) / 2)
         else:
             sxy, sz, ends, ov, ooff = fast._ef.deck_shape(xy, z, pts, off, np.asarray(kinds, np.int64),
                                                           np.asarray(owns, np.int64), PARAMS)
