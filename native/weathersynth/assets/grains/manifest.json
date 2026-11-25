@@ -17,10 +17,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
-    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs338088.mp3",
+    "sha256": "363365035a99e277fdc9122dce9d3a8cb2136e62dc4855994bd70b7faa6935ec",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.2275,
@@ -36,9 +42,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -10.92,
+   "level_gain_db": -11.17,
    "crest_db_before": 9.6,
-   "sha256_grain": "2b4ecf3c989c890ed117e69148d333f3849c0e4fc8167e993d8e7e6ac6bb0047",
+   "sha256_grain": "bcd58e6525773d095e8523175c3f14933ea7aa285c76fbabad3efccf8cddb284",
    "centroid_hz": 300,
    "snr_db": 193.8
   },
@@ -55,10 +61,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
-    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs336314.wav",
+    "sha256": "4cbe40f2bb33d69decf8834e8e10c56f2729eb8db45e05d080b22a42fd333533",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     -0.009,
@@ -74,9 +86,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": 3.12,
+   "level_gain_db": 2.86,
    "crest_db_before": 10.9,
-   "sha256_grain": "cd9f1198c8b1f5d050805f39537e5fd49b0d096cfba5ec7be90e96632eede170",
+   "sha256_grain": "2e8c2dfceef5ec9a25c005c416f40fbbadd7f8a133c2cb9f09aca0f7168d759f",
    "centroid_hz": 345,
    "snr_db": 61.3
   },
@@ -93,10 +105,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
-    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs253953.wav",
+    "sha256": "7d6a2ec51db088c63966cd8fb874d34f8aec4012651c997fd805b64b925b9ca8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.885,
@@ -112,9 +130,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -5.88,
+   "level_gain_db": -6.15,
    "crest_db_before": 12.5,
-   "sha256_grain": "09df86ea21fd614af1decf3f6877e24fe18421806f660c990cfce4a41be5a412",
+   "sha256_grain": "92209cdaf2df44ceeb34611428e9a4a540fbb5ba4c77964f6f400965fc738843",
    "centroid_hz": 345,
    "snr_db": 60.1
   },
@@ -131,10 +149,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/760/760214_2247456-hq.mp3",
-    "sha256": "5b9479902db171011dd6f49c2cc07db92dd487732bca991a8aceecb792805d25",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs760214.wav",
+    "sha256": "e53abd170ba8a4a980aed2c301cdd389b80fc0321048cbdfaf6a8bc139d3a126",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.6266,
@@ -150,9 +174,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -8.36,
+   "level_gain_db": -8.62,
    "crest_db_before": 10.0,
-   "sha256_grain": "cfde7dd761ef1e128e30d5206d76533c6acc40f437b5113b479df82707a06860",
+   "sha256_grain": "9842860aa957dc20b2a47646abdab9e9ae0c08ba432762f4e992a5ffb6ea40ed",
    "centroid_hz": 227,
    "snr_db": 58.0
   },
@@ -169,10 +193,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
-    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717358.wav",
+    "sha256": "ff577cda5b9598dfa9aedc7df69449e7be6fe6d3f51daf7e42864b3be95db4fd",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     18.1793,
@@ -188,9 +218,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -6.61,
-   "crest_db_before": 6.3,
-   "sha256_grain": "f5f737d3f65ee6f3f6aa450d63afc947ae3d785b5b8d35765a6e07ea81f4396d",
+   "level_gain_db": -6.87,
+   "crest_db_before": 6.1,
+   "sha256_grain": "f135e91d2712751826bfe3ce09f967873e9b602147269db6f7ab81a6d99f7bf5",
    "centroid_hz": 203,
    "snr_db": 56.6
   },
@@ -207,10 +237,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
-    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717907.mp3",
+    "sha256": "e07f922e8e272bc3db17b5acc632341bffc162df101dd6d811612b22ec1b1eba",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.6216,
@@ -226,9 +262,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -5.83,
+   "level_gain_db": -6.1,
    "crest_db_before": 13.0,
-   "sha256_grain": "0fd788eb5a9a2c75db22e83e290d7f123beae902008736d8ac1e912455d7ddbd",
+   "sha256_grain": "e8d7874d43ea57df30dffcb02f29fc2c23d10151082279e54657dcf6bad069f4",
    "centroid_hz": 169,
    "snr_db": 54.0
   },
@@ -245,10 +281,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
-    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616992.wav",
+    "sha256": "6a9f0613b11c61d2bb40efc5009357269f4baf4f3038aec07d08b0a83dec8d11",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.9987,
@@ -264,9 +306,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -9.51,
-   "crest_db_before": 10.8,
-   "sha256_grain": "4db6d17ba0a3e5a360ac54034d6c72cd68e9843b192ec8217a824a937e52474c",
+   "level_gain_db": -9.78,
+   "crest_db_before": 10.7,
+   "sha256_grain": "58942b35db9dddf702ac2ba721811f87c47879c53c63be5100f244a3f6419b17",
    "centroid_hz": 174,
    "snr_db": 53.8
   },
@@ -283,10 +325,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/439/439550_1481531-hq.mp3",
-    "sha256": "0ac3ded4c92c715162cd8d89758a3bb469eaea7224bcf28ba2a50e8fc9a7dce4",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs439550.wav",
+    "sha256": "a184b62b207c68b5c11239800ef265960f4af62d1bd3a45e22796ce42824a59e",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     8.8701,
@@ -302,9 +350,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -8.45,
+   "level_gain_db": -8.71,
    "crest_db_before": 11.4,
-   "sha256_grain": "db39b4ea15f7205892543a96bec6cfbdcfd203b352eb5cc5ba8e5b5bfc7131e9",
+   "sha256_grain": "07c0100312630b6e6ddb56f78d7c76a6a1afc52e9ddc55bdd1ebe37f9316362e",
    "centroid_hz": 141,
    "snr_db": 52.5
   },
@@ -321,10 +369,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/672/672776_1357949-hq.mp3",
-    "sha256": "813f57934c49e8c5185be340aca884bfdfdc50d208cb042b89f4fb6f1f5483dd",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs672776.mp3",
+    "sha256": "56ec33a96896c3ad3df748ce7b19f8f2567520dfa2fc7cf105449729f8cb6f79",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.2095,
@@ -340,9 +394,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -6.41,
-   "crest_db_before": 12.8,
-   "sha256_grain": "f08e3ee2af8f5c3eeb9f6571b620c1f6314adada1d9d7130a71b61eb8b6a2882",
+   "level_gain_db": -6.67,
+   "crest_db_before": 12.7,
+   "sha256_grain": "a5c3f7bf7f407b8191c8db10909191040e0ac766abcc5f69e5d645f36d7ece91",
    "centroid_hz": 683,
    "snr_db": 52.1
   },
@@ -359,10 +413,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
-    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717909.mp3",
+    "sha256": "6c1b08fffcc868312538bc26b7d410be92bc7e4c9eca346665927c4f5949ce94",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.0286,
@@ -378,9 +438,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": 18.69,
+   "level_gain_db": 18.42,
    "crest_db_before": 11.9,
-   "sha256_grain": "4d6761b93574793d1bc68ef286309e8e70f7caa426bfa77eb5be8edf34d34bdf",
+   "sha256_grain": "d632415283a8e683f75b6d8cd924f93e084c67f828cbd22a55de6e90648feb76",
    "centroid_hz": 99,
    "snr_db": 47.8
   },
@@ -397,10 +457,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/434/434359_197070-hq.mp3",
-    "sha256": "1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs434359.wav",
+    "sha256": "aedaad95bbcd8ddc8c480c08db7a382bd7f703b66f7f4f9618a388233ab5a84e",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.429,
@@ -416,9 +482,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -12.05,
-   "crest_db_before": 9.1,
-   "sha256_grain": "b0928e3b8d2a2cc188952d83abda9fe71d96198949c59bdfe6ccfc3af4fba09c",
+   "level_gain_db": -12.3,
+   "crest_db_before": 8.7,
+   "sha256_grain": "ee202a6ba04686c330632d4cdc4401ed68659ba8321bc5258f131bd7361312f3",
    "centroid_hz": 545,
    "snr_db": 47.3
   },
@@ -435,10 +501,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/188/188367_2337290-hq.mp3",
-    "sha256": "a5013844e0da437b41332cc0aa439e21097a3089daf987d79bef4cbc2bba4f49",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs188367.wav",
+    "sha256": "b73efd41584cd672f6e20074b565f65b857177ae261ba98d8fe2783f1daad105",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     76.2288,
@@ -454,9 +526,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -12.01,
-   "crest_db_before": 8.9,
-   "sha256_grain": "dcb6707d52ab637f9e9852ba0e74db433cd05248267424e570fbcd1d40aa95df",
+   "level_gain_db": -12.28,
+   "crest_db_before": 8.8,
+   "sha256_grain": "fa4a1ce95b08686289899b49f9f83fbee14181faed992303182dbc7ae07e12a7",
    "centroid_hz": 212,
    "snr_db": 47.3
   },
@@ -473,10 +545,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
-    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs486253.wav",
+    "sha256": "63c580cbebb1c0ac2c0956d689fadcdebfb346e743456a00b61f44b8f926e25a",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     -0.01,
@@ -492,9 +570,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -3.63,
+   "level_gain_db": -3.9,
    "crest_db_before": 5.7,
-   "sha256_grain": "f4033698ea781e1a194eed4f2adb4877a20eaa886b758f22e4885c531fcbc4da",
+   "sha256_grain": "de35bffa9c6a1de48a69cd4cefbb4bfc7bd15773b831e6fc89213f22799bd41a",
    "centroid_hz": 93,
    "snr_db": 44.1
   },
@@ -511,10 +589,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/240/240664_1558130-hq.mp3",
-    "sha256": "5413649c8f7efce1f931adb99d0ceff8e233515df2d662775f7da6ae69909b8b",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs240664.wav",
+    "sha256": "a83f94213a663c6f531d821a4af3e7ad9c4c3888f009d51194615eef489a66e0",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.6356,
@@ -532,9 +616,9 @@
    "processing": [
     "pre-compressed: RMS 2 ms, thr = loudest-400ms-RMS + 4 dB, ratio 4, att 1 ms, rel 150 ms (max GR 4.3 dB)"
    ],
-   "level_gain_db": 0.71,
+   "level_gain_db": 0.45,
    "crest_db_before": 14.5,
-   "sha256_grain": "a4aeeaeb1d21a48ad0634f222b45c0147ed050d918646377975a8b42005f6b0c",
+   "sha256_grain": "0d4f2fdf7ec06007e139af4b44aa68b0544cc9f6ffca64c695bcb0e41e9a503c",
    "centroid_hz": 280,
    "snr_db": 44.0
   },
@@ -551,10 +635,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/240/240230_2451161-hq.mp3",
-    "sha256": "3097e9a2c5f82ae7347d43130baeb23f4cc901d241af7289d0e8c4144e31e684",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs240230.wav",
+    "sha256": "b38346ea3c977825166ca8a837c21cac03e93a0d2a053f88ffec0469c993ce32",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.0516,
@@ -570,9 +660,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -7.91,
-   "crest_db_before": 12.9,
-   "sha256_grain": "98af3e1deca9dc473dd03eb711624a0e7310a22bbf086342d92ebb3ad8cedc55",
+   "level_gain_db": -8.17,
+   "crest_db_before": 12.8,
+   "sha256_grain": "5b4e65b6393b7aef94060c0c2b62723418bc6f5954cf16a0f6c397e53f156653",
    "centroid_hz": 344,
    "snr_db": 42.8
   },
@@ -589,10 +679,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/646/646912_10586310-hq.mp3",
-    "sha256": "93042e52364324e371ff1fc03237e7e0297b0c8a36bcf8bcd930ca79bd04c9db",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs646912.wav",
+    "sha256": "4c7ff45434ba1bd540d32138ab525abe637cbb04028c97883e1599f6e48f1b29",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.2571,
@@ -608,9 +704,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -18.15,
-   "crest_db_before": 3.2,
-   "sha256_grain": "a725d84ca4ccdf7d36cd14fb83f826e95ed95d43a437fd318751a7846e07d512",
+   "level_gain_db": -18.42,
+   "crest_db_before": 3.0,
+   "sha256_grain": "7d0153e10e428de27a905c5bfff9978da67feb6bd984c43e1cdc3dcaa47c2a1e",
    "centroid_hz": 282,
    "snr_db": 40.5
   },
@@ -627,10 +723,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/635/635121_12070288-hq.mp3",
-    "sha256": "5c063d7d17150af9b68ce4f4811b478b5f03c61d7a77e32595978038d988c3d1",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs635121.wav",
+    "sha256": "5565ccda6fef553dc76ca51d0f85adec805f01314003bea8ed3eac81c9111c2d",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9996,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.6502,
@@ -646,9 +748,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -9.16,
-   "crest_db_before": 11.1,
-   "sha256_grain": "abfb158812f1c8001be07a9e42ab522f64bd7a62c22cde78f7b7e5f7c39cdcf7",
+   "level_gain_db": -9.43,
+   "crest_db_before": 11.0,
+   "sha256_grain": "115748f07f7f9740155d8cc44b1bb7052d900aec012c321ed23a146545e9cf83",
    "centroid_hz": 493,
    "snr_db": 40.0
   },
@@ -665,10 +767,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
-    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs573677.mp3",
+    "sha256": "310598a6c6e178fd82440edd3341a31e712324bf37a934cd4ddb85b9dfbfc555",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.9768,
@@ -684,9 +792,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -7.36,
+   "level_gain_db": -7.63,
    "crest_db_before": 8.3,
-   "sha256_grain": "cd553cca2d6c7753ddc0aa2e481c83602fc410ee94c5c72cb09ff3cf012faca7",
+   "sha256_grain": "db251456b3279012c891a009f29baa78dc091ab7f8a2d870e548b67a3e94de9f",
    "centroid_hz": 377,
    "snr_db": 39.7
   },
@@ -703,10 +811,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/501/501745_1050391-hq.mp3",
-    "sha256": "4ce9e39cb048b3a182e8b9b1540b91d0df9115cc701cebb5efd87fcea6b381cf",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs501745.wav",
+    "sha256": "1a48bdeeacb47e28a760413f9417690030b454538cf0b24658f47f22f8679e37",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     54.9489,
@@ -722,9 +836,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -10.39,
-   "crest_db_before": 9.5,
-   "sha256_grain": "6dc3bcbf4bf5f6a92c01b3a3af26c262a046950ce73c8f4a95d23186bc0038c8",
+   "level_gain_db": -10.65,
+   "crest_db_before": 9.4,
+   "sha256_grain": "727f8fc12086aebbbf427fda548d64f9472c268a958692b12f4fe5af1a9ab3cc",
    "centroid_hz": 237,
    "snr_db": 38.8
   },
@@ -741,10 +855,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/186/186907_3466279-hq.mp3",
-    "sha256": "6c9ef8fb07de800dbbcd037a48d382edf2f842e16491752b672c62f4659cc1dd",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs186907.wav",
+    "sha256": "8e39ddfa9a327aa07a2665d374f9177b0bf0e2b1fe884f5a3ee6e0671107d622",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.3205,
@@ -760,9 +880,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -9.2,
-   "crest_db_before": 11.7,
-   "sha256_grain": "ef5ac8f24fabe9922c68d983e12ad60c022b84941a4fbfb096ca27641f70142c",
+   "level_gain_db": -9.46,
+   "crest_db_before": 11.6,
+   "sha256_grain": "fbb9ed4b9ac0a37d9270ed94928492709be9899974d9078b2b831f127fc9e0a2",
    "centroid_hz": 243,
    "snr_db": 38.4
   },
@@ -779,10 +899,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/536/536902_57789-hq.mp3",
-    "sha256": "a4a6c673311987f0ecb0cbc3233a203b092e34e5522f23f316a6c37bfcacb38e",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs536902.wav",
+    "sha256": "a3e847f832ff7d36fb27fa7a445332c84b333078c29c3b95ff5e33e9f16beaf0",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.1491,
@@ -798,9 +924,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -12.84,
+   "level_gain_db": -13.11,
    "crest_db_before": 6.3,
-   "sha256_grain": "db144ffc0ee18a84d0da3beffcd86e85689fcab66060f47a3d1ca49b90a70b45",
+   "sha256_grain": "70b6f41881404fab4dedf50d75ca263740553130c6fb87f86d21f05e4795badf",
    "centroid_hz": 96,
    "snr_db": 37.5
   },
@@ -817,10 +943,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717888_97550-hq.mp3",
-    "sha256": "986c3633d3bd5a1114d4e65a2dc89dc47ef97895e8f5a4454eea45c92266a10b",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717888.mp3",
+    "sha256": "feb01428e972800866c2d297ee57534ec78268c780dc9a4c65063e28aaff1a29",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.9378,
@@ -838,9 +970,9 @@
    "processing": [
     "pre-compressed: RMS 2 ms, thr = loudest-400ms-RMS + 4 dB, ratio 4, att 1 ms, rel 150 ms (max GR 7.8 dB)"
    ],
-   "level_gain_db": 6.14,
+   "level_gain_db": 5.87,
    "crest_db_before": 16.8,
-   "sha256_grain": "63bbc52f94cb34af3c353817d25c6d0773748f7a6dd7470101e57f6893792f76",
+   "sha256_grain": "b670ca50a7ef3cc02750d77955d3755995487592bfbd9f51ff9c4469453a684d",
    "centroid_hz": 184,
    "snr_db": 40.1
   },
@@ -857,10 +989,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
-    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs534023.wav",
+    "sha256": "efe9057c7d3e6b08ca8082a8da2f90d4810452c005abbaadb75947cc7ddb4db2",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.1713,
@@ -879,9 +1017,9 @@
     "pre-compressed: RMS 2 ms, thr = loudest-400ms-RMS + 4 dB, ratio 4, att 1 ms, rel 150 ms (max GR 5.6 dB)",
     "soft-clipped to 0.98 (peak was 2.2 dBFS)"
    ],
-   "level_gain_db": 5.08,
+   "level_gain_db": 4.82,
    "crest_db_before": 22.7,
-   "sha256_grain": "199bc41df5f7b102f0d72c9318d3c88a01046ddf1d6a37857ef7625285806fe8",
+   "sha256_grain": "f277ee90f74589ae57e6f416d370747d0b681fe978ca9390c617d949dcdfe2c2",
    "centroid_hz": 302,
    "snr_db": 45.9
   },
@@ -898,10 +1036,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
-    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs338088.mp3",
+    "sha256": "363365035a99e277fdc9122dce9d3a8cb2136e62dc4855994bd70b7faa6935ec",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9997,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.2275,
@@ -919,9 +1063,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 2.11,
+   "level_gain_db": 1.87,
    "crest_db_before": 15.6,
-   "sha256_grain": "51ef770e1bd4594d2538e7d4dba33db44dad37a037ff3b49043c62492d4baeac",
+   "sha256_grain": "4a0a6894d3dfbeccb15377a041c91473b1f819c44fa7bf13d4980c605b330150",
    "centroid_hz": null,
    "snr_db": 193.8
   },
@@ -938,10 +1082,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
-    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs336314.wav",
+    "sha256": "4cbe40f2bb33d69decf8834e8e10c56f2729eb8db45e05d080b22a42fd333533",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     -0.009,
@@ -958,11 +1108,11 @@
    ],
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)",
-    "soft-clipped to 0.98 (peak was 4.8 dBFS)"
+    "soft-clipped to 0.98 (peak was 4.7 dBFS)"
    ],
-   "level_gain_db": 11.42,
+   "level_gain_db": 11.15,
    "crest_db_before": 21.6,
-   "sha256_grain": "2b8f473af9d9453711995b1b155d6ca7fe64a75377ddd57b9580e9b8b65c873b",
+   "sha256_grain": "ca983e215858a5b6ec6185975299224f5bc64112edf51948cca30acceeebd6d2",
    "centroid_hz": null,
    "snr_db": 61.3
   },
@@ -979,10 +1129,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/760/760214_2247456-hq.mp3",
-    "sha256": "5b9479902db171011dd6f49c2cc07db92dd487732bca991a8aceecb792805d25",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs760214.wav",
+    "sha256": "e53abd170ba8a4a980aed2c301cdd389b80fc0321048cbdfaf6a8bc139d3a126",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.6266,
@@ -1000,9 +1156,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 3.22,
+   "level_gain_db": 2.96,
    "crest_db_before": 14.9,
-   "sha256_grain": "aec401eed60675bc95f9abd96f2e62e38d959ccf9dee1b38caae5c0de5b21208",
+   "sha256_grain": "38ae08965ef19baf400a8cef00c6726ec98101897bcace82ad61ad3cd76c8307",
    "centroid_hz": null,
    "snr_db": 58.0
   },
@@ -1019,10 +1175,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
-    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717358.wav",
+    "sha256": "ff577cda5b9598dfa9aedc7df69449e7be6fe6d3f51daf7e42864b3be95db4fd",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     18.1793,
@@ -1040,9 +1202,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 27.64,
+   "level_gain_db": 27.39,
    "crest_db_before": 17.4,
-   "sha256_grain": "99464089e336031ba6bf27d65ff780adec28c3e0af7215894828fdacf4201b8c",
+   "sha256_grain": "32553e72d4a375315f0f19c66e46a9726f809185fb948209bea1415363574d1d",
    "centroid_hz": null,
    "snr_db": 56.6
   },
@@ -1059,10 +1221,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
-    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs253953.wav",
+    "sha256": "7d6a2ec51db088c63966cd8fb874d34f8aec4012651c997fd805b64b925b9ca8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.885,
@@ -1081,9 +1249,9 @@
     "highpass 700 Hz 2nd order (minimum phase)",
     "soft-clipped to 0.98 (peak was -0.0 dBFS)"
    ],
-   "level_gain_db": 6.44,
+   "level_gain_db": 6.17,
    "crest_db_before": 17.1,
-   "sha256_grain": "c1b57b57564a816f6b431a369709f4a59a92411d40ea4aff69c38284aea411f7",
+   "sha256_grain": "b7ad5b583da527f11bc1ee610931e885fbbcab0bf20257d3ea66ce60bb78d1c9",
    "centroid_hz": null,
    "snr_db": 60.1
   },
@@ -1100,10 +1268,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
-    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717907.mp3",
+    "sha256": "e07f922e8e272bc3db17b5acc632341bffc162df101dd6d811612b22ec1b1eba",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.6216,
@@ -1121,9 +1295,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 8.79,
-   "crest_db_before": 13.9,
-   "sha256_grain": "c0d3fb7538f8c04f5ba80e890307f3a697aaa8eb458436f9ef6003d9e91b6e71",
+   "level_gain_db": 8.53,
+   "crest_db_before": 13.8,
+   "sha256_grain": "089c803e0703cb49de08d9958d5ca39838187e0d205fbff55c8392875bb4fbed",
    "centroid_hz": null,
    "snr_db": 54.0
   },
@@ -1140,10 +1314,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
-    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616992.wav",
+    "sha256": "6a9f0613b11c61d2bb40efc5009357269f4baf4f3038aec07d08b0a83dec8d11",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.9987,
@@ -1161,9 +1341,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 7.2,
-   "crest_db_before": 14.4,
-   "sha256_grain": "d3d597305210b1faed67e5d49f61232aea58935449d1f433dc9307a8a4cb4fdc",
+   "level_gain_db": 6.94,
+   "crest_db_before": 14.5,
+   "sha256_grain": "ee03d71eae4b216b65e1d78074fa686dc144f29a3dff3bb6d151745d00097028",
    "centroid_hz": null,
    "snr_db": 53.8
   },
@@ -1180,10 +1360,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
-    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717909.mp3",
+    "sha256": "6c1b08fffcc868312538bc26b7d410be92bc7e4c9eca346665927c4f5949ce94",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.0286,
@@ -1201,9 +1387,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 47.11,
+   "level_gain_db": 46.84,
    "crest_db_before": 23.3,
-   "sha256_grain": "8fb2370a5855866b5e2d533f61d8e771eebe645de03f3b6a80c42a2dd440dad0",
+   "sha256_grain": "13d3edb7f9a69454882fcad1bbbc7dbb57db5795d5ef600142719d0aac618378",
    "centroid_hz": null,
    "snr_db": 47.8
   },
@@ -1220,10 +1406,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/434/434359_197070-hq.mp3",
-    "sha256": "1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs434359.wav",
+    "sha256": "aedaad95bbcd8ddc8c480c08db7a382bd7f703b66f7f4f9618a388233ab5a84e",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9996,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.429,
@@ -1241,9 +1433,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 2.95,
+   "level_gain_db": 2.69,
    "crest_db_before": 15.3,
-   "sha256_grain": "0cafe77cfe9f1685159f92870cb627a7a7e13bea4ef30ce2b61ac2a9a1bd0b94",
+   "sha256_grain": "e2eec84e5a8adbed349cc689180f9aa672ea7694dc05bb1969aef1d676b0f927",
    "centroid_hz": null,
    "snr_db": 47.3
   },
@@ -1260,10 +1452,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/439/439550_1481531-hq.mp3",
-    "sha256": "0ac3ded4c92c715162cd8d89758a3bb469eaea7224bcf28ba2a50e8fc9a7dce4",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs439550.wav",
+    "sha256": "a184b62b207c68b5c11239800ef265960f4af62d1bd3a45e22796ce42824a59e",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     8.8701,
@@ -1281,9 +1479,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 13.8,
-   "crest_db_before": 15.8,
-   "sha256_grain": "cb5b2ed2fcabe1ac0a8d9b24cf6299413f5c423c8dfcd729ad460e504282f059",
+   "level_gain_db": 13.54,
+   "crest_db_before": 15.9,
+   "sha256_grain": "48df4833d79f12dda2c2d5abb2c40b7cfdd8515d597e1269689269af4e48097a",
    "centroid_hz": null,
    "snr_db": 52.5
   },
@@ -1300,10 +1498,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/672/672776_1357949-hq.mp3",
-    "sha256": "813f57934c49e8c5185be340aca884bfdfdc50d208cb042b89f4fb6f1f5483dd",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs672776.mp3",
+    "sha256": "56ec33a96896c3ad3df748ce7b19f8f2567520dfa2fc7cf105449729f8cb6f79",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.2095,
@@ -1322,9 +1526,9 @@
     "highpass 700 Hz 2nd order (minimum phase)",
     "soft-clipped to 0.98 (peak was 0.0 dBFS)"
    ],
-   "level_gain_db": 2.2,
+   "level_gain_db": 1.94,
    "crest_db_before": 18.5,
-   "sha256_grain": "035de6ffca68bd151dfe9650e249802f89add46cfc1ef81eb2f740301549a331",
+   "sha256_grain": "e56536972b80df0685330a058295248261069248785b023e6e4646fff146ce2c",
    "centroid_hz": null,
    "snr_db": 52.1
   },
@@ -1341,10 +1545,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
-    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs534023.wav",
+    "sha256": "efe9057c7d3e6b08ca8082a8da2f90d4810452c005abbaadb75947cc7ddb4db2",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.1713,
@@ -1363,9 +1573,9 @@
     "highpass 700 Hz 2nd order (minimum phase)",
     "soft-clipped to 0.98 (peak was 6.3 dBFS)"
    ],
-   "level_gain_db": 14.37,
+   "level_gain_db": 14.11,
    "crest_db_before": 23.5,
-   "sha256_grain": "4262c447b74e036f48a3be2d5c15c029d9e6910550e0fe61e1360daef626da19",
+   "sha256_grain": "1dfde5a3d4d190cfef23032a112bc9d75c0a2cb0e9fd5522d24e79ce0951db72",
    "centroid_hz": null,
    "snr_db": 45.9
   },
@@ -1382,10 +1592,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
-    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs486253.wav",
+    "sha256": "63c580cbebb1c0ac2c0956d689fadcdebfb346e743456a00b61f44b8f926e25a",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     -0.01,
@@ -1404,9 +1620,9 @@
     "highpass 700 Hz 2nd order (minimum phase)",
     "soft-clipped to 0.98 (peak was 0.8 dBFS)"
    ],
-   "level_gain_db": 38.27,
+   "level_gain_db": 38.0,
    "crest_db_before": 18.1,
-   "sha256_grain": "af9dccc5e7f8a53ed1ace4fb86d576d8b23358de327b0d855e0dce629c7e9013",
+   "sha256_grain": "8b1aa918203509ec8f9ddbb7e6bf53d6b79942cae1c7a09168b6677f4fd1fa14",
    "centroid_hz": null,
    "snr_db": 44.1
   },
@@ -1423,10 +1639,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/240/240664_1558130-hq.mp3",
-    "sha256": "5413649c8f7efce1f931adb99d0ceff8e233515df2d662775f7da6ae69909b8b",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs240664.wav",
+    "sha256": "a83f94213a663c6f531d821a4af3e7ad9c4c3888f009d51194615eef489a66e0",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.6356,
@@ -1444,9 +1666,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 8.51,
+   "level_gain_db": 8.24,
    "crest_db_before": 15.9,
-   "sha256_grain": "ac9fa97c9085551925375df80bcd4aa0dd6f1ccc434f6d096cbb286c744f1f5b",
+   "sha256_grain": "e993f4728ad2b6ea6e8f10b7f1ceb76228ac8fdd7b81a8b2d9d8285c283f8598",
    "centroid_hz": null,
    "snr_db": 44.0
   },
@@ -1463,10 +1685,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/188/188367_2337290-hq.mp3",
-    "sha256": "a5013844e0da437b41332cc0aa439e21097a3089daf987d79bef4cbc2bba4f49",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs188367.wav",
+    "sha256": "b73efd41584cd672f6e20074b565f65b857177ae261ba98d8fe2783f1daad105",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     76.2288,
@@ -1483,11 +1711,11 @@
    ],
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)",
-    "soft-clipped to 0.98 (peak was 0.0 dBFS)"
+    "soft-clipped to 0.98 (peak was 0.1 dBFS)"
    ],
-   "level_gain_db": 2.72,
+   "level_gain_db": 2.47,
    "crest_db_before": 16.9,
-   "sha256_grain": "d2db918b2da6e152be191f8aecdd80821ccc62c84ae968ce11f33092433eea52",
+   "sha256_grain": "ad0d7badc8bbb9d8ef3e14e19103850fe8fe3187a3757ab1e8c87cf1a93021d4",
    "centroid_hz": null,
    "snr_db": 47.3
   },
@@ -1504,10 +1732,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/646/646912_10586310-hq.mp3",
-    "sha256": "93042e52364324e371ff1fc03237e7e0297b0c8a36bcf8bcd930ca79bd04c9db",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs646912.wav",
+    "sha256": "4c7ff45434ba1bd540d32138ab525abe637cbb04028c97883e1599f6e48f1b29",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.2571,
@@ -1524,11 +1758,11 @@
    ],
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)",
-    "soft-clipped to 0.98 (peak was 1.7 dBFS)"
+    "soft-clipped to 0.98 (peak was 1.8 dBFS)"
    ],
-   "level_gain_db": -5.81,
-   "crest_db_before": 18.8,
-   "sha256_grain": "84b4e4997986de08516fe8f236d7c7626fb8c268f30c47b0ebd5142fe673e507",
+   "level_gain_db": -6.07,
+   "crest_db_before": 18.9,
+   "sha256_grain": "01e988cc6d4c2d84195f3c6582aaa00a479e58009f7cb216711e2345eb087610",
    "centroid_hz": null,
    "snr_db": 40.5
   },
@@ -1545,10 +1779,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717888_97550-hq.mp3",
-    "sha256": "986c3633d3bd5a1114d4e65a2dc89dc47ef97895e8f5a4454eea45c92266a10b",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717888.mp3",
+    "sha256": "feb01428e972800866c2d297ee57534ec78268c780dc9a4c65063e28aaff1a29",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.9378,
@@ -1565,11 +1805,11 @@
    ],
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)",
-    "soft-clipped to 0.98 (peak was 1.3 dBFS)"
+    "soft-clipped to 0.98 (peak was 1.4 dBFS)"
    ],
-   "level_gain_db": 16.27,
-   "crest_db_before": 19.2,
-   "sha256_grain": "e2d8110ee80f0fbc37fbd81d52813ea4ff559d52cba5dcf9b98b251928789489",
+   "level_gain_db": 16.01,
+   "crest_db_before": 19.3,
+   "sha256_grain": "5510fb5283b0648f1e2c18fdc96c9d32d73b645f91f37188741a3d38250f5f75",
    "centroid_hz": null,
    "snr_db": 40.1
   },
@@ -1586,10 +1826,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/501/501745_1050391-hq.mp3",
-    "sha256": "4ce9e39cb048b3a182e8b9b1540b91d0df9115cc701cebb5efd87fcea6b381cf",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs501745.wav",
+    "sha256": "1a48bdeeacb47e28a760413f9417690030b454538cf0b24658f47f22f8679e37",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     54.9489,
@@ -1607,9 +1853,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 3.21,
+   "level_gain_db": 2.95,
    "crest_db_before": 14.6,
-   "sha256_grain": "5a3698de4a7b0981f8942d89ce2c08a90f16a6568959eee6f401aaeed8a8044d",
+   "sha256_grain": "4e134d6d409da6af0cfbbf1f7fe316a5851de200b2738816504e5b4ec26d2872",
    "centroid_hz": null,
    "snr_db": 38.8
   },
@@ -1626,10 +1872,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/186/186907_3466279-hq.mp3",
-    "sha256": "6c9ef8fb07de800dbbcd037a48d382edf2f842e16491752b672c62f4659cc1dd",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs186907.wav",
+    "sha256": "8e39ddfa9a327aa07a2665d374f9177b0bf0e2b1fe884f5a3ee6e0671107d622",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.3205,
@@ -1647,9 +1899,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 2.85,
-   "crest_db_before": 16.5,
-   "sha256_grain": "a4a1a9834cd32d7fc7109d1fe49964f2205409eb90d06619bd96eec48306c451",
+   "level_gain_db": 2.61,
+   "crest_db_before": 16.4,
+   "sha256_grain": "4413c8fd6b0ef4443f367f702d15880b2292c3272407cdd9f3d6f5e75c0d6b38",
    "centroid_hz": null,
    "snr_db": 38.4
   },
@@ -1666,10 +1918,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/536/536902_57789-hq.mp3",
-    "sha256": "a4a6c673311987f0ecb0cbc3233a203b092e34e5522f23f316a6c37bfcacb38e",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs536902.wav",
+    "sha256": "a3e847f832ff7d36fb27fa7a445332c84b333078c29c3b95ff5e33e9f16beaf0",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.1491,
@@ -1687,9 +1945,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 6.85,
+   "level_gain_db": 6.59,
    "crest_db_before": 16.5,
-   "sha256_grain": "f8152e3fd8777482e2983b989ff10c4547ac37a0edc0fa8753b8cbf5520d43e4",
+   "sha256_grain": "5203df9aa6928b51eea50ab275fbb1b1b871134385cef06d1eed05a9a499a27f",
    "centroid_hz": null,
    "snr_db": 37.5
   },
@@ -1706,10 +1964,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/240/240230_2451161-hq.mp3",
-    "sha256": "3097e9a2c5f82ae7347d43130baeb23f4cc901d241af7289d0e8c4144e31e684",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs240230.wav",
+    "sha256": "b38346ea3c977825166ca8a837c21cac03e93a0d2a053f88ffec0469c993ce32",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.0516,
@@ -1727,9 +1991,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 1.63,
+   "level_gain_db": 1.37,
    "crest_db_before": 15.0,
-   "sha256_grain": "76f4819d547360543d700b34f9f0d0c849d8a62c22f499abee2925b87cc9d159",
+   "sha256_grain": "05e9202bcda02ec674f8d74ee7f7dbb03b5f1a81944318f949a2742f34469fa7",
    "centroid_hz": null,
    "snr_db": 42.8
   },
@@ -1746,10 +2010,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/635/635121_12070288-hq.mp3",
-    "sha256": "5c063d7d17150af9b68ce4f4811b478b5f03c61d7a77e32595978038d988c3d1",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs635121.wav",
+    "sha256": "5565ccda6fef553dc76ca51d0f85adec805f01314003bea8ed3eac81c9111c2d",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9995,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.6502,
@@ -1767,9 +2037,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 2.14,
+   "level_gain_db": 1.9,
    "crest_db_before": 14.0,
-   "sha256_grain": "f9ebcc4b8e6cadded934b8acaa18479ca7b953c7c647330e01746873a8e64dc0",
+   "sha256_grain": "0d1f1366b446ecdc06329602984a9a55cbb7d5f53e337dbdc1c23f57256f5c85",
    "centroid_hz": null,
    "snr_db": 40.0
   },
@@ -1786,10 +2056,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
-    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs573677.mp3",
+    "sha256": "310598a6c6e178fd82440edd3341a31e712324bf37a934cd4ddb85b9dfbfc555",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.9768,
@@ -1807,9 +2083,9 @@
    "processing": [
     "highpass 700 Hz 2nd order (minimum phase)"
    ],
-   "level_gain_db": 3.21,
+   "level_gain_db": 2.97,
    "crest_db_before": 16.0,
-   "sha256_grain": "c378fe7df28dba0fb3784e850cb012e516b60faad2938d26154416934046446a",
+   "sha256_grain": "48db30bff2fabaa3980c6c03b9f6aab4e0a70e21bc8c3b6831357e0afe0a78f7",
    "centroid_hz": null,
    "snr_db": 39.7
   },
@@ -1826,10 +2102,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
-    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs486253.wav",
+    "sha256": "63c580cbebb1c0ac2c0956d689fadcdebfb346e743456a00b61f44b8f926e25a",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9997,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.55,
@@ -1845,9 +2127,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 1.79,
+   "level_gain_db": 1.52,
    "crest_db_before": 10.8,
-   "sha256_grain": "e112ca8cb3eaeb62383ff1bf0cfa13b9c9f38776c54dea20cb186c54f3006fdf",
+   "sha256_grain": "08fa88b06ca7734ac7beb6e2cdcd74a6921ddc430ae5f77b21285808860255d2",
    "centroid_hz": null,
    "snr_db": 44.1
   },
@@ -1864,10 +2146,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
-    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs338088.mp3",
+    "sha256": "363365035a99e277fdc9122dce9d3a8cb2136e62dc4855994bd70b7faa6935ec",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9997,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.92,
@@ -1883,9 +2171,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -10.86,
+   "level_gain_db": -11.12,
    "crest_db_before": 9.4,
-   "sha256_grain": "2091c1b7267303a71af2eb94cf3cc3045830a713a46b1b12f65023f0c1a19062",
+   "sha256_grain": "d4d580d0430e43461e238e998ece59ea2f43556f8567583cf51e9d80cffb29f2",
    "centroid_hz": null,
    "snr_db": 193.8
   },
@@ -1902,10 +2190,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
-    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs338088.mp3",
+    "sha256": "363365035a99e277fdc9122dce9d3a8cb2136e62dc4855994bd70b7faa6935ec",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.9,
@@ -1921,9 +2215,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -8.12,
-   "crest_db_before": 11.6,
-   "sha256_grain": "1a7e6791a43a1cdcf7929643d26db1abf79114a9480664b3e91ad837cc04e03e",
+   "level_gain_db": -8.38,
+   "crest_db_before": 11.7,
+   "sha256_grain": "4c289f2b1132fdb2e375986e42d97143166a00b0cb2437348477b642e729b525",
    "centroid_hz": null,
    "snr_db": 193.8
   },
@@ -1940,10 +2234,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
-    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs338088.mp3",
+    "sha256": "363365035a99e277fdc9122dce9d3a8cb2136e62dc4855994bd70b7faa6935ec",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.71,
@@ -1959,9 +2259,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -10.67,
+   "level_gain_db": -10.93,
    "crest_db_before": 9.3,
-   "sha256_grain": "b02c5871ff1c2e3a155d09db4a3d41ff80489d5cf244dbedd5056658e7b3975b",
+   "sha256_grain": "ef9d490c97d2336cb8bd866c29486d79e26e7842a18e49a37e5ae76796e58ecf",
    "centroid_hz": null,
    "snr_db": 193.8
   },
@@ -1978,10 +2278,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
-    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs486253.wav",
+    "sha256": "63c580cbebb1c0ac2c0956d689fadcdebfb346e743456a00b61f44b8f926e25a",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.23,
@@ -1997,9 +2303,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 9.46,
+   "level_gain_db": 9.2,
    "crest_db_before": 9.7,
-   "sha256_grain": "80c51741dbe71a2816a20fa107f88f2646696840edaefa5da7a8251a3eacb74a",
+   "sha256_grain": "58c9b50222bbe997959fe023278f8f191b8c622a2b4e8d119d079bd71e72c2a6",
    "centroid_hz": null,
    "snr_db": 44.1
   },
@@ -2016,10 +2322,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
-    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717909.mp3",
+    "sha256": "6c1b08fffcc868312538bc26b7d410be92bc7e4c9eca346665927c4f5949ce94",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     3.76,
@@ -2035,9 +2347,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -8.14,
-   "crest_db_before": 12.4,
-   "sha256_grain": "7b434ba26d387c026fbb60670eae5ddf5c619b10cab0d9bc7b737d6f2c98edad",
+   "level_gain_db": -8.41,
+   "crest_db_before": 12.3,
+   "sha256_grain": "8011358594482fbf747a12040a6d80e91d19c66d07a104c6b9467dff1354749e",
    "centroid_hz": null,
    "snr_db": 47.8
   },
@@ -2054,10 +2366,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
-    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717907.mp3",
+    "sha256": "e07f922e8e272bc3db17b5acc632341bffc162df101dd6d811612b22ec1b1eba",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.58,
@@ -2073,9 +2391,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 0.9,
+   "level_gain_db": 0.63,
    "crest_db_before": 14.5,
-   "sha256_grain": "40beaf371a629f30ccad74c82dcd1fa58c8c6ddffb61003ea271d315c1bbecf4",
+   "sha256_grain": "b0d739cea87f751b270022f938857ba0ba642e48da0f0272b83268d8c5a571a6",
    "centroid_hz": null,
    "snr_db": 54.0
   },
@@ -2092,10 +2410,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
-    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717907.mp3",
+    "sha256": "e07f922e8e272bc3db17b5acc632341bffc162df101dd6d811612b22ec1b1eba",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.38,
@@ -2111,9 +2435,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 2.81,
+   "level_gain_db": 2.54,
    "crest_db_before": 13.7,
-   "sha256_grain": "92c3530a4aa3db615147b9461c8e30bf51042bdba109c0ac4811960e8ffb8ee5",
+   "sha256_grain": "6f6a46b4e4ee4549ec9caaf226412660c017c1ea9b6b36c82179c61c51267d42",
    "centroid_hz": null,
    "snr_db": 54.0
   },
@@ -2130,10 +2454,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/619/619052_781461-hq.mp3",
-    "sha256": "89c7f3a414d6d18a3b73b87dd0e2b23c89417f6a7300c7fac3d7df45a2bddceb",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs619052.mp3",
+    "sha256": "47605ec6313dcb9a6b1a9dfce520236f7d9c2c1ccef9861a99c335b72a3e63cd",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     38.15,
@@ -2149,9 +2479,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -3.71,
+   "level_gain_db": -3.98,
    "crest_db_before": 15.0,
-   "sha256_grain": "082fa28b21c949c3427d280afd8b496ab5f173f9d541072c13181a8d739e716a",
+   "sha256_grain": "db47a8d8201d0db48e5e6f0130c91f9b1d63e0be820a8d16ade360a7e5a80414",
    "centroid_hz": null,
    "snr_db": 30.9
   },
@@ -2168,10 +2498,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
-    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717907.mp3",
+    "sha256": "e07f922e8e272bc3db17b5acc632341bffc162df101dd6d811612b22ec1b1eba",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     3.64,
@@ -2187,9 +2523,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 5.61,
+   "level_gain_db": 5.34,
    "crest_db_before": 17.3,
-   "sha256_grain": "4bcbd706fc6d068c8e698113d2ce9d6ee5d98fd6da7502d658f3dcc5c7eb59d4",
+   "sha256_grain": "bea98467dd1bb3b67c551ec475cdeb790ce38630e83f9ead1924a564771ba6a6",
    "centroid_hz": null,
    "snr_db": 54.0
   },
@@ -2206,10 +2542,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/690/690039_63209-hq.mp3",
-    "sha256": "7ad7ff795bfd4d491f79ecf5974245c62af763684f2f578ba9c143c9c02ef4d8",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs690039.mp3",
+    "sha256": "88ac0c8651e85ceaf64aeabb8503bb6fcb06a55f54a91503ef468725c11f6bf0",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.023,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     8.76,
@@ -2225,9 +2567,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -9.39,
-   "crest_db_before": 9.4,
-   "sha256_grain": "0d5e5a4f3f1ac2e9507d5f18c74c5b652e8dcaab40382db1005879cb1b5537cc",
+   "level_gain_db": -9.66,
+   "crest_db_before": 10.1,
+   "sha256_grain": "7f6447223fb0ba6e695c96e0be9d77af9e3bb8cfa67e4d79b4aa6458df1096fe",
    "centroid_hz": null,
    "snr_db": 36.5
   },
@@ -2244,10 +2586,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
-    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs336314.wav",
+    "sha256": "4cbe40f2bb33d69decf8834e8e10c56f2729eb8db45e05d080b22a42fd333533",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     6.61,
@@ -2263,9 +2611,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 0.53,
+   "level_gain_db": 0.26,
    "crest_db_before": 13.8,
-   "sha256_grain": "e69c191cfb79d2439637b5ada433f16e485fca5dfb7740ddc48f5e51515a8f6f",
+   "sha256_grain": "7e7e30fe9629363e9ee287810f2397925dd281898fb459d288b8e574d9857f0a",
    "centroid_hz": null,
    "snr_db": 61.3
   },
@@ -2282,10 +2630,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
-    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs336314.wav",
+    "sha256": "4cbe40f2bb33d69decf8834e8e10c56f2729eb8db45e05d080b22a42fd333533",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.28,
@@ -2301,9 +2655,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -5.84,
+   "level_gain_db": -6.1,
    "crest_db_before": 14.2,
-   "sha256_grain": "3b6c5779170ffce6bcb76710e51ba2fe5c841733a9f9c9c20392c26ec6e94bf8",
+   "sha256_grain": "5af568495d871d3e8d1954b445ab6574ba70179bf3a97fca77d2a411e42c9bfb",
    "centroid_hz": null,
    "snr_db": 61.3
   },
@@ -2320,10 +2674,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
-    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs336314.wav",
+    "sha256": "4cbe40f2bb33d69decf8834e8e10c56f2729eb8db45e05d080b22a42fd333533",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     6.24,
@@ -2339,9 +2699,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -1.55,
+   "level_gain_db": -1.81,
    "crest_db_before": 15.9,
-   "sha256_grain": "a31f43cb64b5a31ae4fa4beb71048653fa66fa482c4c12954859e945b4676162",
+   "sha256_grain": "811dbf9275449091a82049660c18348abc35904c07779101f7a2173d9347708c",
    "centroid_hz": null,
    "snr_db": 61.3
   },
@@ -2358,10 +2718,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
-    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616992.wav",
+    "sha256": "6a9f0613b11c61d2bb40efc5009357269f4baf4f3038aec07d08b0a83dec8d11",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.26,
@@ -2377,9 +2743,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -6.28,
+   "level_gain_db": -6.55,
    "crest_db_before": 11.9,
-   "sha256_grain": "9f2ef6b11a20d6a6fabfafc7a8bce11db6bdd3f869f353c44701586fe566c3cb",
+   "sha256_grain": "4e691752a2ee4316f042b7eb3229a5f20839637c18cbae965b19f8a3223a83e8",
    "centroid_hz": null,
    "snr_db": 53.8
   },
@@ -2396,10 +2762,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
-    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs534023.wav",
+    "sha256": "efe9057c7d3e6b08ca8082a8da2f90d4810452c005abbaadb75947cc7ddb4db2",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     6.28,
@@ -2415,9 +2787,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 8.03,
+   "level_gain_db": 7.76,
    "crest_db_before": 14.2,
-   "sha256_grain": "064a90cedc77e8faa73cb8cc87d53ecc91917debc47154465630213b318e84f7",
+   "sha256_grain": "1d80f6034b19869c9512a4ef8f2421300e1b5e06acac0f67b735e9064220463c",
    "centroid_hz": null,
    "snr_db": 45.9
   },
@@ -2434,10 +2806,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
-    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616992.wav",
+    "sha256": "6a9f0613b11c61d2bb40efc5009357269f4baf4f3038aec07d08b0a83dec8d11",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9997,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.76,
@@ -2453,9 +2831,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -5.81,
+   "level_gain_db": -6.08,
    "crest_db_before": 12.6,
-   "sha256_grain": "76331997cb49f12c38133c3c3c0ad15cd244b55999d0be39ce0265621c5a7be4",
+   "sha256_grain": "7dd2a50dac7167cf9ca791b01bcee283338c94eacbf859ed4a87c9b5b9c3d5bc",
    "centroid_hz": null,
    "snr_db": 53.8
   },
@@ -2472,10 +2850,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
-    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs486253.wav",
+    "sha256": "63c580cbebb1c0ac2c0956d689fadcdebfb346e743456a00b61f44b8f926e25a",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.78,
@@ -2491,9 +2875,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 29.35,
+   "level_gain_db": 29.09,
    "crest_db_before": 14.9,
-   "sha256_grain": "96218b4180f792d1b49f95e572c081402ac43c3f636815b2849709f03172234d",
+   "sha256_grain": "ee7a9f986d4e90d233ecc48012146f584adfad53f1aa14f76b59a53c60cc1b35",
    "centroid_hz": null,
    "snr_db": 44.1
   },
@@ -2510,10 +2894,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
-    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs573677.mp3",
+    "sha256": "310598a6c6e178fd82440edd3341a31e712324bf37a934cd4ddb85b9dfbfc555",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     6.54,
@@ -2529,9 +2919,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 8.83,
+   "level_gain_db": 8.59,
    "crest_db_before": 15.7,
-   "sha256_grain": "dd22b8a00afae3a623f5514361c9881f73d9d7998e36320baecc633dac8f2249",
+   "sha256_grain": "edfdb308efcbc60782cdffb32217fd5844c2013a8626d91b867bfb944f954f9a",
    "centroid_hz": null,
    "snr_db": 39.7
   },
@@ -2548,10 +2938,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
-    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs573677.mp3",
+    "sha256": "310598a6c6e178fd82440edd3341a31e712324bf37a934cd4ddb85b9dfbfc555",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.02,
@@ -2567,9 +2963,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 10.51,
+   "level_gain_db": 10.25,
    "crest_db_before": 16.0,
-   "sha256_grain": "7e4fe47ebf5a5b9b928b11f5cf273c8e2be9a795fa8354534a380b7df37e2371",
+   "sha256_grain": "cbcfcda109919c337e9b55620cba160e9f4041bd7d2c6b39c5baa29696b672f5",
    "centroid_hz": null,
    "snr_db": 39.7
   },
@@ -2586,10 +2982,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/240/240664_1558130-hq.mp3",
-    "sha256": "5413649c8f7efce1f931adb99d0ceff8e233515df2d662775f7da6ae69909b8b",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs240664.wav",
+    "sha256": "a83f94213a663c6f531d821a4af3e7ad9c4c3888f009d51194615eef489a66e0",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     8.68,
@@ -2605,9 +3007,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -1.79,
+   "level_gain_db": -2.05,
    "crest_db_before": 12.7,
-   "sha256_grain": "e8c740890ccfcb87da929ba3af2bf0bee675fd92f66527b43cbf18a12888cbdb",
+   "sha256_grain": "017a1e635ec5d087d7a62decb9587a263887cbf4b112d6b9e5d27f4b3f2875b0",
    "centroid_hz": null,
    "snr_db": 44.0
   },
@@ -2624,10 +3026,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
-    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717358.wav",
+    "sha256": "ff577cda5b9598dfa9aedc7df69449e7be6fe6d3f51daf7e42864b3be95db4fd",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     19.47,
@@ -2643,9 +3051,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -6.61,
-   "crest_db_before": 6.3,
-   "sha256_grain": "487489cc41e4e8066074f6ff8714625af19dd29b0d3ec54ae0fb0d5f4502d5d7",
+   "level_gain_db": -6.87,
+   "crest_db_before": 6.1,
+   "sha256_grain": "9f43c6efc281c44d28e2381a5f85869e7d0aeeb2f41e1d3e966f52b9484c490b",
    "centroid_hz": null,
    "snr_db": 56.6
   },
@@ -2662,10 +3070,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
-    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs253953.wav",
+    "sha256": "7d6a2ec51db088c63966cd8fb874d34f8aec4012651c997fd805b64b925b9ca8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.69,
@@ -2681,9 +3095,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 10.56,
+   "level_gain_db": 10.29,
    "crest_db_before": 15.8,
-   "sha256_grain": "f572f259a8bf0f14e412395d4de350c6b40f0221f3af7f1afef65ee164ee4670",
+   "sha256_grain": "609250a55bbc697581597148728b1a10bcd440710015226c3ccacb9e30f27251",
    "centroid_hz": null,
    "snr_db": 60.1
   },
@@ -2700,10 +3114,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/195/195344_3633506-hq.mp3",
-    "sha256": "4b8f06542a2ddd1d993ec1a9fecb4361b0dd2e398ce960f46cc6096ca447fd74",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs195344.aiff",
+    "sha256": "befc2c561d603310472a1adc0ace71436388c3511822aa1a7cc5b1a332d6357a",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     13.23,
@@ -2719,9 +3139,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 27.26,
+   "level_gain_db": 27.0,
    "crest_db_before": 11.1,
-   "sha256_grain": "590053c83a6fef1edff869d0f0598f25cfb8446e62744a5ec40c2ce075aee4d9",
+   "sha256_grain": "e16ad94a830814bdb2b16a9716caac7ff9bd977b442cd7c791434a84539f2787",
    "centroid_hz": null,
    "snr_db": 32.5
   },
@@ -2738,10 +3158,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
-    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616992.wav",
+    "sha256": "6a9f0613b11c61d2bb40efc5009357269f4baf4f3038aec07d08b0a83dec8d11",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     6.61,
@@ -2757,9 +3183,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -4.46,
+   "level_gain_db": -4.72,
    "crest_db_before": 13.9,
-   "sha256_grain": "cda2bae1d0dc0956f128637ff6ba0b76a9ffce4d5903c6f56da46f62c0f20a0a",
+   "sha256_grain": "f4e7d2f3bb11c8e995662c075761d85b1da1dabdd58fc074f4df3d74059ceb6a",
    "centroid_hz": null,
    "snr_db": 53.8
   },
@@ -2776,10 +3202,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/439/439550_1481531-hq.mp3",
-    "sha256": "0ac3ded4c92c715162cd8d89758a3bb469eaea7224bcf28ba2a50e8fc9a7dce4",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs439550.wav",
+    "sha256": "a184b62b207c68b5c11239800ef265960f4af62d1bd3a45e22796ce42824a59e",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     13.7,
@@ -2795,9 +3227,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 10.69,
+   "level_gain_db": 10.42,
    "crest_db_before": 13.0,
-   "sha256_grain": "c276463e61d593d72440176c54e39f4f23854e631e1499ec9d95a29ab492e00c",
+   "sha256_grain": "7054d19441110da184fdb042412e4551aae1b0e31a7d0895c5846460286c310c",
    "centroid_hz": null,
    "snr_db": 52.5
   },
@@ -2814,10 +3246,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/325/325503_2774517-hq.mp3",
-    "sha256": "10c48a949bb239d98f6d89fc150ee963dc7d28e53fd1976eb8f3c4e12cb922ed",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs325503.wav",
+    "sha256": "09e73a659cbcef1b90df192652d3d951d2e2a4930e733fa46f8848f6bd075de8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     6.19,
@@ -2833,9 +3271,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 0.72,
+   "level_gain_db": 0.46,
    "crest_db_before": 17.1,
-   "sha256_grain": "67d376b4c9cc3f2a4f2b774c9f41aa6b88f27ec12ecb6bf8685bb51fe3004ada",
+   "sha256_grain": "98e0c37a83e06f9425f8e39fbd35c4a32e22e001c72c3cd2a6ae5a8cc60afdf8",
    "centroid_hz": null,
    "snr_db": 37.0
   },
@@ -2852,10 +3290,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
-    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs534023.wav",
+    "sha256": "efe9057c7d3e6b08ca8082a8da2f90d4810452c005abbaadb75947cc7ddb4db2",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     3.31,
@@ -2871,11 +3315,11 @@
     450
    ],
    "processing": [
-    "soft-clipped to 0.98 (peak was -0.1 dBFS)"
+    "soft-clipped to 0.98 (peak was -0.0 dBFS)"
    ],
-   "level_gain_db": 6.58,
+   "level_gain_db": 6.32,
    "crest_db_before": 17.9,
-   "sha256_grain": "a3fd59c25f61f32de927aa9d7a7c82f5c246e79e36dffc8c918fc423ecd6d8c6",
+   "sha256_grain": "2fce13b7b6e4f11c58163bd2c51830575c660dc5f74e22094b5dd72d30ced347",
    "centroid_hz": null,
    "snr_db": 45.9
   },
@@ -2892,10 +3336,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
-    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs253953.wav",
+    "sha256": "7d6a2ec51db088c63966cd8fb874d34f8aec4012651c997fd805b64b925b9ca8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.59,
@@ -2911,9 +3361,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -5.85,
-   "crest_db_before": 12.6,
-   "sha256_grain": "cac63dc79758087d4eea0bc8c60b12139eb71e312b6b9d4f4a08604b6c2683e4",
+   "level_gain_db": -6.12,
+   "crest_db_before": 12.5,
+   "sha256_grain": "ee8b94b306d4518226e8121f012a342aad9189592b394fe00ff4457ac9bed27f",
    "centroid_hz": null,
    "snr_db": 60.1
   },
@@ -2930,10 +3380,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/760/760214_2247456-hq.mp3",
-    "sha256": "5b9479902db171011dd6f49c2cc07db92dd487732bca991a8aceecb792805d25",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs760214.wav",
+    "sha256": "e53abd170ba8a4a980aed2c301cdd389b80fc0321048cbdfaf6a8bc139d3a126",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     6.46,
@@ -2949,9 +3405,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 1.87,
+   "level_gain_db": 1.6,
    "crest_db_before": 9.1,
-   "sha256_grain": "ae491e8fe7069cb9acf63acee6ff2a1c8dae619c6d739fbed11445b5e6606e96",
+   "sha256_grain": "d36cb8197ac2d7b23bbd81bea0ab54fd7c51ae6f85a0d40633877cdde2845e03",
    "centroid_hz": null,
    "snr_db": 58.0
   },
@@ -2968,10 +3424,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
-    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs534023.wav",
+    "sha256": "efe9057c7d3e6b08ca8082a8da2f90d4810452c005abbaadb75947cc7ddb4db2",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.09,
@@ -2989,9 +3451,9 @@
    "processing": [
     "soft-clipped to 0.98 (peak was 6.9 dBFS)"
    ],
-   "level_gain_db": 4.39,
+   "level_gain_db": 4.13,
    "crest_db_before": 24.9,
-   "sha256_grain": "dc6cbac5dbd53bb8303c7c14089484189c4ddd340796333463c7955d1dfa4e59",
+   "sha256_grain": "d2564b80a0cfb80976d111aa5c59e66e7ad81ae7ab5fffe6e12c17852488a5f6",
    "centroid_hz": null,
    "snr_db": 45.9
   },
@@ -3008,10 +3470,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
-    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs253953.wav",
+    "sha256": "7d6a2ec51db088c63966cd8fb874d34f8aec4012651c997fd805b64b925b9ca8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.5,
@@ -3027,9 +3495,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 10.58,
+   "level_gain_db": 10.32,
    "crest_db_before": 11.7,
-   "sha256_grain": "a310baae08a7b87c1ef85aaf6656671a5c8ca2874f6026b3a885003ae07fbaf9",
+   "sha256_grain": "3b2cca2f4db25e0e69fe4d9855fbf91ae4eadc308cdbce2efbb4340ed70726c0",
    "centroid_hz": null,
    "snr_db": 60.1
   },
@@ -3046,10 +3514,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/347/347854_57789-hq.mp3",
-    "sha256": "55512e7e096bfc76d88b13784d0091b84456df81d0c82394fce7fcd6098b5656",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs347854.wav",
+    "sha256": "514b50fee05c2ff35b7ef8c765ce98be55044ca3028d2512bcee2406827885ac",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.45,
@@ -3065,9 +3539,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 13.52,
+   "level_gain_db": 13.25,
    "crest_db_before": 13.1,
-   "sha256_grain": "bb822f746b2022b36b1998d16148dc4c241449be026004e2cd816833ee86184a",
+   "sha256_grain": "2552b386f985bffd80b5e83177fa5dc02813787c9bc9ecc70be3ac6cf6ea0b57",
    "centroid_hz": null,
    "snr_db": 32.3
   },
@@ -3084,10 +3558,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
-    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717909.mp3",
+    "sha256": "6c1b08fffcc868312538bc26b7d410be92bc7e4c9eca346665927c4f5949ce94",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.2,
@@ -3103,9 +3583,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -5.34,
+   "level_gain_db": -5.61,
    "crest_db_before": 13.6,
-   "sha256_grain": "e558cc078954eaf4bac965d494b753fe6a2bd0c3eb7cb2beace88964c31e5dc6",
+   "sha256_grain": "ba504ed9a3252983fd607cce6cf043ba48ca7a09145270e4e556763253e5076b",
    "centroid_hz": null,
    "snr_db": 47.8
   },
@@ -3122,10 +3602,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/434/434359_197070-hq.mp3",
-    "sha256": "1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs434359.wav",
+    "sha256": "aedaad95bbcd8ddc8c480c08db7a382bd7f703b66f7f4f9618a388233ab5a84e",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     9.35,
@@ -3143,9 +3629,9 @@
    "processing": [
     "soft-clipped to 0.98 (peak was 0.3 dBFS)"
    ],
-   "level_gain_db": 3.36,
+   "level_gain_db": 3.09,
    "crest_db_before": 18.2,
-   "sha256_grain": "293f858601484f43854a34abc072eec3af4b264f7a9ce86c85563e6e4786e73f",
+   "sha256_grain": "68cd45cb3008da5fe0de83ab0def9e1dbfaba8c8306be6b4849119e085a36548",
    "centroid_hz": null,
    "snr_db": 47.3
   },
@@ -3162,10 +3648,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/434/434359_197070-hq.mp3",
-    "sha256": "1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs434359.wav",
+    "sha256": "aedaad95bbcd8ddc8c480c08db7a382bd7f703b66f7f4f9618a388233ab5a84e",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     8.8,
@@ -3183,9 +3675,9 @@
    "processing": [
     "soft-clipped to 0.98 (peak was 1.8 dBFS)"
    ],
-   "level_gain_db": 4.13,
+   "level_gain_db": 3.86,
    "crest_db_before": 18.5,
-   "sha256_grain": "c24d44a270ce14616db3a66fcc6526f9ab3caeede5fd1d26afc6c6b8f383b6fe",
+   "sha256_grain": "ca45fada67fef85e324ab888225a239c48cb54b6852e03ba1fe7c9149d5c6b10",
    "centroid_hz": null,
    "snr_db": 47.3
   },
@@ -3202,10 +3694,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/347/347854_57789-hq.mp3",
-    "sha256": "55512e7e096bfc76d88b13784d0091b84456df81d0c82394fce7fcd6098b5656",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs347854.wav",
+    "sha256": "514b50fee05c2ff35b7ef8c765ce98be55044ca3028d2512bcee2406827885ac",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.86,
@@ -3221,9 +3719,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 9.64,
+   "level_gain_db": 9.37,
    "crest_db_before": 16.2,
-   "sha256_grain": "782592a99a8e6ab5084c37260f260b5595e77890e433e61ca2e62b98fc1f500d",
+   "sha256_grain": "47be26809bad0bd7de69e92c6a2be94326a7a55a20e6b2af3afcd5eec045663c",
    "centroid_hz": null,
    "snr_db": 32.3
   },
@@ -3240,10 +3738,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/523/523905_4838185-hq.mp3",
-    "sha256": "04ec01e41e944240693a072bfd9ca754c7adfcd41e937209f4916fe7db2ec752",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs523905.mp3",
+    "sha256": "0b1cb3155e035e77a4d3e97573dd4163d612964207be1e3daf7a42027fc94725",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.023,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     9.34,
@@ -3259,9 +3763,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 1.82,
+   "level_gain_db": 1.55,
    "crest_db_before": 16.1,
-   "sha256_grain": "941dfa3f7bf864a6529dbc7e90b454ccb6264cb19b059a9f6ca3a497d9b5d5a7",
+   "sha256_grain": "3e66de44ee4e8fc148454dd64110336928c16e1db1c5b06ccc41d3adfcd74bbd",
    "centroid_hz": null,
    "snr_db": 37.8
   },
@@ -3278,10 +3782,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/325/325503_2774517-hq.mp3",
-    "sha256": "10c48a949bb239d98f6d89fc150ee963dc7d28e53fd1976eb8f3c4e12cb922ed",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs325503.wav",
+    "sha256": "09e73a659cbcef1b90df192652d3d951d2e2a4930e733fa46f8848f6bd075de8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     3.53,
@@ -3297,9 +3807,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 5.77,
+   "level_gain_db": 5.5,
    "crest_db_before": 14.3,
-   "sha256_grain": "86628ae53ee6160d47dbf657190cd349096616b78baf0241c2dceaf4daca2e04",
+   "sha256_grain": "1cffe514cf12e7f78ee560ebafb02da0dde7d80a698fa32a5f00f0bbc0e0c21d",
    "centroid_hz": null,
    "snr_db": 37.0
   },
@@ -3316,10 +3826,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
-    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs573677.mp3",
+    "sha256": "310598a6c6e178fd82440edd3341a31e712324bf37a934cd4ddb85b9dfbfc555",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     3.08,
@@ -3335,9 +3851,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 9.87,
-   "crest_db_before": 16.0,
-   "sha256_grain": "3030f53db81ddf31d75a61697ee2bd1ecddca9bfa6423693cc784db2fa4ae887",
+   "level_gain_db": 9.61,
+   "crest_db_before": 15.9,
+   "sha256_grain": "1a888693b11d5b49dcb621f7638cae4141b2d9bcd850c955b307c0c26859709f",
    "centroid_hz": null,
    "snr_db": 39.7
   },
@@ -3354,10 +3870,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/840/840628_16682330-hq.mp3",
-    "sha256": "3104c195a1c9b29533c724591d38dc279fb3765ad0711cf9cc0fff37fcad1547",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs840628.wav",
+    "sha256": "182a06bdf8851f4308aea2245be95a94b3aa52768bb2e1700150fa541a21fd35",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.62,
@@ -3373,9 +3895,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 9.91,
+   "level_gain_db": 9.65,
    "crest_db_before": 11.9,
-   "sha256_grain": "5c56a22e94844fd63eadb3e1aabb3e141ffa068166e9780b9fa837aa5f6c3023",
+   "sha256_grain": "eb7dcaf97a9ed48094c5f5b020fd4784ed3d83617871391681cc3894739bcf19",
    "centroid_hz": null,
    "snr_db": 36.9
   },
@@ -3392,10 +3914,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
-    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717358.wav",
+    "sha256": "ff577cda5b9598dfa9aedc7df69449e7be6fe6d3f51daf7e42864b3be95db4fd",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     23.5,
@@ -3411,9 +3939,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 2.68,
+   "level_gain_db": 2.41,
    "crest_db_before": 12.5,
-   "sha256_grain": "aad08e0371c7b075251edae14a83f2bd6f35100a4ac2e1de0b22440b06fc1dc2",
+   "sha256_grain": "28fa8422a8b528e64a6958b14e8a3d7162ca61b278e4632cf8d9c0b185b98cbd",
    "centroid_hz": null,
    "snr_db": 56.6
   },
@@ -3430,10 +3958,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
-    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717909.mp3",
+    "sha256": "6c1b08fffcc868312538bc26b7d410be92bc7e4c9eca346665927c4f5949ce94",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.7,
@@ -3449,9 +3983,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 12.64,
+   "level_gain_db": 12.38,
    "crest_db_before": 15.5,
-   "sha256_grain": "2f1ab4cd4329151a38580f3c9e1613d32d9cee73cf11611252210c534c910851",
+   "sha256_grain": "ea6dd20b60f365e5ca8ba1d511b5e7888f945443ab2712ea02cc153da1007041",
    "centroid_hz": null,
    "snr_db": 47.8
   },
@@ -3468,10 +4002,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
-    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717358.wav",
+    "sha256": "ff577cda5b9598dfa9aedc7df69449e7be6fe6d3f51daf7e42864b3be95db4fd",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     18.83,
@@ -3487,9 +4027,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": 2.04,
-   "crest_db_before": 7.5,
-   "sha256_grain": "03924c10a910d18883e4be3a759db628d7b1726aa884d2408fd40b10b762a63a",
+   "level_gain_db": 1.79,
+   "crest_db_before": 7.4,
+   "sha256_grain": "422635f34ccfd6d5c0b6cb8d73932d962e04165980dbe6edb8bc25a49423d210",
    "centroid_hz": null,
    "snr_db": 56.6
   },
@@ -3506,10 +4046,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/325/325503_2774517-hq.mp3",
-    "sha256": "10c48a949bb239d98f6d89fc150ee963dc7d28e53fd1976eb8f3c4e12cb922ed",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs325503.wav",
+    "sha256": "09e73a659cbcef1b90df192652d3d951d2e2a4930e733fa46f8848f6bd075de8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.77,
@@ -3527,9 +4073,9 @@
    "processing": [
     "soft-clipped to 0.98 (peak was 0.2 dBFS)"
    ],
-   "level_gain_db": 1.82,
+   "level_gain_db": 1.56,
    "crest_db_before": 17.0,
-   "sha256_grain": "5bfa23d4eaf4781656a1f8020b7fc1119b1fd599b3225993c22f2a933bc38c81",
+   "sha256_grain": "46935baa5be429bb31f57f67a881a09532bae7cce0c8db95e224b67985ad5ebf",
    "centroid_hz": null,
    "snr_db": 37.0
   },
@@ -3546,10 +4092,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/646/646912_10586310-hq.mp3",
-    "sha256": "93042e52364324e371ff1fc03237e7e0297b0c8a36bcf8bcd930ca79bd04c9db",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs646912.wav",
+    "sha256": "4c7ff45434ba1bd540d32138ab525abe637cbb04028c97883e1599f6e48f1b29",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     3.46,
@@ -3565,9 +4117,9 @@
     450
    ],
    "processing": [],
-   "level_gain_db": -12.1,
+   "level_gain_db": -12.36,
    "crest_db_before": 8.7,
-   "sha256_grain": "2544c7ba51aa69ae1615f42a60131552a97d9f4b434f42fb30c24c9a3ea21cc1",
+   "sha256_grain": "e18b1976520cc17625688ec62844e0e2d527ee7601550e07b88e37b6f070a1cf",
    "centroid_hz": null,
    "snr_db": 40.5
   },
@@ -3584,10 +4136,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
-    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs338088.mp3",
+    "sha256": "363365035a99e277fdc9122dce9d3a8cb2136e62dc4855994bd70b7faa6935ec",
+    "offset_s": 0.012,
+    "align": {
+     "global_offset_s": 0.012,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     3.7375,
@@ -3603,9 +4161,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": -11.59,
+   "level_gain_db": -11.86,
    "crest_db_before": 9.3,
-   "sha256_grain": "25f36ab61e9dc76641236d05121f12b79d9514091a3980bf74a4718ab9fef8dc",
+   "sha256_grain": "33a70bacbf33ca99f6c031ce062b778c60213e5b73cc83d2dd37aeed0445d31b",
    "centroid_hz": null,
    "snr_db": 193.8
   },
@@ -3622,10 +4180,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
-    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs336314.wav",
+    "sha256": "4cbe40f2bb33d69decf8834e8e10c56f2729eb8db45e05d080b22a42fd333533",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.001,
@@ -3641,9 +4205,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": -5.96,
+   "level_gain_db": -6.23,
    "crest_db_before": 14.2,
-   "sha256_grain": "cf0f1d402da77735f57ab66aa410c48122784d8957386bd0f5483faf2f262e49",
+   "sha256_grain": "3d98fcb6e0154fc5c52526d8d9979c97345ceafd50c07592199c6cd8d087290e",
    "centroid_hz": null,
    "snr_db": 61.3
   },
@@ -3660,10 +4224,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/760/760214_2247456-hq.mp3",
-    "sha256": "5b9479902db171011dd6f49c2cc07db92dd487732bca991a8aceecb792805d25",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs760214.wav",
+    "sha256": "e53abd170ba8a4a980aed2c301cdd389b80fc0321048cbdfaf6a8bc139d3a126",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.6366,
@@ -3679,9 +4249,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": -4.38,
+   "level_gain_db": -4.64,
    "crest_db_before": 8.3,
-   "sha256_grain": "2c3a04bf5e85465a7d2ab15e376f5403be2f583131a742d7f025cb1447cfc0e6",
+   "sha256_grain": "ad93b15d6c61960105b1c126dac70eef13808b3a3b9422871a3c77acb54d2a34",
    "centroid_hz": null,
    "snr_db": 58.0
   },
@@ -3698,10 +4268,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
-    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs253953.wav",
+    "sha256": "7d6a2ec51db088c63966cd8fb874d34f8aec4012651c997fd805b64b925b9ca8",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.895,
@@ -3717,9 +4293,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": 7.78,
+   "level_gain_db": 7.51,
    "crest_db_before": 13.0,
-   "sha256_grain": "c244a75f412dc22600f568039a85b717feae7ce7de2d30510736f6ae21d339e2",
+   "sha256_grain": "f4b04ac5dad54c32a39a8c1b49fbcc8872f261b2d3e7b9e8ce8fb024d1e28943",
    "centroid_hz": null,
    "snr_db": 60.1
   },
@@ -3736,10 +4312,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
-    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717358.wav",
+    "sha256": "ff577cda5b9598dfa9aedc7df69449e7be6fe6d3f51daf7e42864b3be95db4fd",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     24.6893,
@@ -3755,9 +4337,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": -3.7,
+   "level_gain_db": -3.96,
    "crest_db_before": 9.0,
-   "sha256_grain": "02151ce0c92556e441e55716f941d85827e856e6683df2a901ba84117e646432",
+   "sha256_grain": "192d8419333b88bbb5a877bde7b6318fab1aa7dcac33116761bac99d1d98af4f",
    "centroid_hz": null,
    "snr_db": 56.6
   },
@@ -3774,10 +4356,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
-    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616992.wav",
+    "sha256": "6a9f0613b11c61d2bb40efc5009357269f4baf4f3038aec07d08b0a83dec8d11",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.5087,
@@ -3793,9 +4381,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": -7.56,
-   "crest_db_before": 10.4,
-   "sha256_grain": "07f631d5b4f29420f1ee40cdec802fe88c6b7b2e5fe5a3fc74da43e74d394ff4",
+   "level_gain_db": -7.83,
+   "crest_db_before": 10.3,
+   "sha256_grain": "0951bdb00c47c61137c6930bf36547a8061144fe34c3bcb260bd876f3faa1183",
    "centroid_hz": null,
    "snr_db": 53.8
   },
@@ -3812,10 +4400,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
-    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717907.mp3",
+    "sha256": "e07f922e8e272bc3db17b5acc632341bffc162df101dd6d811612b22ec1b1eba",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.6316,
@@ -3831,9 +4425,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": 0.27,
+   "level_gain_db": 0.01,
    "crest_db_before": 13.9,
-   "sha256_grain": "93ad7d062addf5a063c6ff3b83dacf95e32ae63c91f3cb7258a08a0a6c7adede",
+   "sha256_grain": "1ae0894e227c29b44a482e3f2fb82311f6b9b3ec229cbc8a64ac68889c4c14f7",
    "centroid_hz": null,
    "snr_db": 54.0
   },
@@ -3850,10 +4444,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/672/672776_1357949-hq.mp3",
-    "sha256": "813f57934c49e8c5185be340aca884bfdfdc50d208cb042b89f4fb6f1f5483dd",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs672776.mp3",
+    "sha256": "56ec33a96896c3ad3df748ce7b19f8f2567520dfa2fc7cf105449729f8cb6f79",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.9998,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     2.2195,
@@ -3869,9 +4469,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": 4.29,
+   "level_gain_db": 4.03,
    "crest_db_before": 14.4,
-   "sha256_grain": "4cb82345ba49a7a160fb990535128473c81cc98aee1837b8e7a141d75b5e6ec5",
+   "sha256_grain": "60c3ba9af9a11cf0f251dda4d165a3fd5a09014f7d2cea5cda171c85491ed3cf",
    "centroid_hz": null,
    "snr_db": 52.1
   },
@@ -3888,10 +4488,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/439/439550_1481531-hq.mp3",
-    "sha256": "0ac3ded4c92c715162cd8d89758a3bb469eaea7224bcf28ba2a50e8fc9a7dce4",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs439550.wav",
+    "sha256": "a184b62b207c68b5c11239800ef265960f4af62d1bd3a45e22796ce42824a59e",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     10.8801,
@@ -3907,9 +4513,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": 12.49,
+   "level_gain_db": 12.23,
    "crest_db_before": 13.8,
-   "sha256_grain": "1ac2baefad5aa719da9989123a1fadeae521e36586ca5c543f434d4bc7ad7203",
+   "sha256_grain": "37762f380ea75c69e0ee94443186eedccd9fd0f25f08dba15a8e70953dde6677",
    "centroid_hz": null,
    "snr_db": 52.5
   },
@@ -3926,10 +4532,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
-    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs717909.mp3",
+    "sha256": "6c1b08fffcc868312538bc26b7d410be92bc7e4c9eca346665927c4f5949ce94",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     3.0386,
@@ -3945,9 +4557,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": -8.14,
-   "crest_db_before": 12.4,
-   "sha256_grain": "d7d1c191a998b7aaa8a83729cd20138eba66cdd0059fb7be10c3308690f3a246",
+   "level_gain_db": -8.41,
+   "crest_db_before": 12.3,
+   "sha256_grain": "8d248c957209ef7d28b5679051f6cffbfdbaa881416ba7c04cf59a0316ed8627",
    "centroid_hz": null,
    "snr_db": 47.8
   },
@@ -3964,10 +4576,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/719/719552_13751957-hq.mp3",
-    "sha256": "6c3cf040b24e2df1a95d2aa6d5ee17e33a9ac62fbfcaf163787343b71f90f7f2",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs719552.wav",
+    "sha256": "e3f2bf3e596f6891ae87fcf3fe01df640bd3837c4d52aea98e1ce48a4b0c6f34",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.729,
@@ -3983,9 +4601,9 @@
     800
    ],
    "processing": [],
-   "level_gain_db": 11.64,
+   "level_gain_db": 11.38,
    "crest_db_before": 11.6,
-   "sha256_grain": "dd3592cb0988b8d8099c0b611f46fe82873c97769a7e2d4a5063c2603c6732cf",
+   "sha256_grain": "c5d6480f54004c126d34f05ada616857eae3670d4a422356b90a765d04cb42d9",
    "centroid_hz": null,
    "snr_db": 51.5
   },
@@ -4002,10 +4620,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/574/574387_97550-hq.mp3",
-    "sha256": "912b13da2abb9292ad5e5c4545303d28f468cc917d5c6bc1626d57f54f7dfc6b",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs574387.flac",
+    "sha256": "90840bacfe92effe3f10dc7d006edee6e6c7200ad9e651eeaeceb4ef7882ca10",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.5215,
@@ -4021,9 +4645,9 @@
     800
    ],
    "processing": [],
-   "level_gain_db": -6.54,
+   "level_gain_db": -6.8,
    "crest_db_before": 13.1,
-   "sha256_grain": "956247739eea5cf7b5288e117fe78162d6b0914f4549390a0746035c6d3ea61b",
+   "sha256_grain": "49fb5c526c23e7c8dea5bc5cd54bdc8a3b05e3ada5855952cea13f1c112450dc",
    "centroid_hz": null,
    "snr_db": 50.3
   },
@@ -4040,10 +4664,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616980_97550-hq.mp3",
-    "sha256": "af8ee7403d2c2cb40aa61111cab565ab00102e2d09cffe3ed3f277aaa3f759f3",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616980.wav",
+    "sha256": "4b053212c5008a838e5d5a1e76872a9efd8c82f22a024cb638c7f818eb15c756",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.9808,
@@ -4059,9 +4689,9 @@
     800
    ],
    "processing": [],
-   "level_gain_db": -6.56,
+   "level_gain_db": -6.82,
    "crest_db_before": 11.2,
-   "sha256_grain": "121b0f78403be42b5f657f25925cd018bab0adb7325043b797219ae7dfb1d10b",
+   "sha256_grain": "4b7bede2876f994d2bc498105466ac8d0977966b539c2e60785c010733f7a57a",
    "centroid_hz": null,
    "snr_db": 48.9
   },
@@ -4078,10 +4708,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/640/640249_13893750-hq.mp3",
-    "sha256": "ee9f566c3ed4376b5bbb65933661d8a953b378214d12521eb122dc5982ab037c",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs640249.mp3",
+    "sha256": "ac5af58ec710f4a0e40b8d87b7ac1ca79d586c270c3623c03b79791a44e61230",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     34.6915,
@@ -4097,9 +4733,9 @@
     800
    ],
    "processing": [],
-   "level_gain_db": -4.95,
+   "level_gain_db": -5.21,
    "crest_db_before": 12.2,
-   "sha256_grain": "a852d731effb0f47040b5633998a95f3d8295dfe38117cd6ed6670a6ff5f3e29",
+   "sha256_grain": "f812537ebca1b8a2522b56d3a450aee8bf823e2b50fdcf462267bcdd4c918d16",
    "centroid_hz": null,
    "snr_db": 37.2
   },
@@ -4116,10 +4752,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/719/719552_13751957-hq.mp3",
-    "sha256": "6c3cf040b24e2df1a95d2aa6d5ee17e33a9ac62fbfcaf163787343b71f90f7f2",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs719552.wav",
+    "sha256": "e3f2bf3e596f6891ae87fcf3fe01df640bd3837c4d52aea98e1ce48a4b0c6f34",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.749,
@@ -4135,9 +4777,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": 9.0,
+   "level_gain_db": 8.74,
    "crest_db_before": 13.5,
-   "sha256_grain": "0c255ccb3300a473dee8265092ef5d09672c3ff0636df673091e6d71f52ef170",
+   "sha256_grain": "b49df3ce07c67e79e1222e8aa994383bf1b284bae45cb60b76c8601736abf26f",
    "centroid_hz": null,
    "snr_db": 51.5
   },
@@ -4154,10 +4796,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616980_97550-hq.mp3",
-    "sha256": "af8ee7403d2c2cb40aa61111cab565ab00102e2d09cffe3ed3f277aaa3f759f3",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616980.wav",
+    "sha256": "4b053212c5008a838e5d5a1e76872a9efd8c82f22a024cb638c7f818eb15c756",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.5008,
@@ -4173,9 +4821,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": -7.64,
+   "level_gain_db": -7.91,
    "crest_db_before": 11.4,
-   "sha256_grain": "86666f01f32900f9cee8e6cb6ab6d1a1bf8edfa46835359d34d5e53c860124c6",
+   "sha256_grain": "f240886afa1d21c9c9032dda700d3909b9477493147a66cd2c5a506c4728f485",
    "centroid_hz": null,
    "snr_db": 48.9
   },
@@ -4192,10 +4840,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/574/574387_97550-hq.mp3",
-    "sha256": "912b13da2abb9292ad5e5c4545303d28f468cc917d5c6bc1626d57f54f7dfc6b",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs574387.flac",
+    "sha256": "90840bacfe92effe3f10dc7d006edee6e6c7200ad9e651eeaeceb4ef7882ca10",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.0415,
@@ -4211,9 +4865,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": -0.74,
+   "level_gain_db": -1.01,
    "crest_db_before": 14.9,
-   "sha256_grain": "249a47fdd0419faeb0b1e5f78bad1b459f7e5a336cdce5ca897993c09d9804dd",
+   "sha256_grain": "d6ced4e63d1d1243c245dcfe8560924a02fc63f75e8ad507bab4e66a3c9a8c66",
    "centroid_hz": null,
    "snr_db": 50.3
   },
@@ -4230,10 +4884,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/640/640249_13893750-hq.mp3",
-    "sha256": "ee9f566c3ed4376b5bbb65933661d8a953b378214d12521eb122dc5982ab037c",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs640249.mp3",
+    "sha256": "ac5af58ec710f4a0e40b8d87b7ac1ca79d586c270c3623c03b79791a44e61230",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     37.2115,
@@ -4249,9 +4909,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": 1.42,
+   "level_gain_db": 1.16,
    "crest_db_before": 11.9,
-   "sha256_grain": "43893899a81fe74e9097cddbba4f1f55dd970bd4ddec63e3e517f1a125237afd",
+   "sha256_grain": "64432d47f6b1ad4f78b27d0502714b09248b2f808c3a95222f2ad809ce311623",
    "centroid_hz": null,
    "snr_db": 37.2
   },
@@ -4268,10 +4928,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/400/400987_3798635-hq.mp3",
-    "sha256": "084c5eb10b3232bd8e7f62aee71e0eefacf8c258f64bc40ec563e2e7e61c9747",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs400987.mp3",
+    "sha256": "d1a84c0172db1d0a54d7a7abba794e63047e491a357106bce3dc8d824410a4b7",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     111.8304,
@@ -4287,9 +4953,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": 6.99,
+   "level_gain_db": 6.72,
    "crest_db_before": 12.8,
-   "sha256_grain": "1ca113d6aa5b99621129138c379ae4b84bef96d28e071353cdd056a554d52823",
+   "sha256_grain": "0a167c68700743d063c1f42cc32df4fe08232ddb11d51a9b40246a1a8cdd2653",
    "centroid_hz": null,
    "snr_db": 34.9
   },
@@ -4306,10 +4972,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/653/653664_266548-hq.mp3",
-    "sha256": "d5169a7dd88d266751b81dda28bdeb933bd20441d456b221fd861aa0d3724412",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs653664.wav",
+    "sha256": "a32d5018f43c4529688f5a5806782f713b642c8fb507f1d2f884e77da174bf68",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     9.0428,
@@ -4325,9 +4997,9 @@
     600
    ],
    "processing": [],
-   "level_gain_db": 2.11,
+   "level_gain_db": 1.84,
    "crest_db_before": 10.8,
-   "sha256_grain": "dd261ad3d4c3284fea353f4e8530c9a18ae8a4102f8a3833d007db38e9999b42",
+   "sha256_grain": "553740663e18168ab7d104ddeb9e56417ba0ce9de767a0d76a79f4ae0fb8c5a3",
    "centroid_hz": null,
    "snr_db": 34.6
   },
@@ -4344,10 +5016,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/267/267550_2792951-hq.mp3",
-    "sha256": "59f048a72a25d52b4bdd9b8ffc32e3dfcd01abeb3be21c5df27648aaa2428bce",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs267550.wav",
+    "sha256": "6ab66431c300fbadcd810b1ae55721d2c8cacfea39437eed715eeb920c14e751",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     4.6834,
@@ -4363,9 +5041,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -7.43,
+   "level_gain_db": -7.7,
    "crest_db_before": 12.8,
-   "sha256_grain": "bba4800e702b4339464326023c856c24f52fe1b38ba23f0371876820f678abe7",
+   "sha256_grain": "96bcb79b2d57290a78cdd68e2c86f80c837012a7ee2b80e42d998646fdd82e17",
    "centroid_hz": null,
    "snr_db": 54.1
   },
@@ -4382,10 +5060,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/414/414064_5984825-hq.mp3",
-    "sha256": "9b6bf858b8c8af66de15891e343d4ae003f2e3595d13d3c8574b4b13ed4fe594",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs414064.wav",
+    "sha256": "6d47947033d622dcda13286ebdcfe2caec5a937589cbe5bd94dd5ed9f09666b7",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     1.3689,
@@ -4401,9 +5085,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -1.65,
+   "level_gain_db": -1.91,
    "crest_db_before": 7.7,
-   "sha256_grain": "f24e8790abecdcaf21464a2527c613fcfaa82aca214fae5674611f2f7a7a25d3",
+   "sha256_grain": "e273750470165e04e7aee9fdc852c755272c36241c9026de790d817fc929c73c",
    "centroid_hz": null,
    "snr_db": 46.3
   },
@@ -4420,10 +5104,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/419/419051_4194075-hq.mp3",
-    "sha256": "ca0cdd1c901540d5f30b790220643e34fbb8b78449ec164088bb376170328967",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs419051.m4a",
+    "sha256": "b5f692b0294e63f0bb774719b15bdfec4b2e4a192c2076785d8381c0725d210f",
+    "offset_s": 0.02322,
+    "align": {
+     "global_offset_s": 0.02322,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.9638,
@@ -4439,9 +5129,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -10.02,
+   "level_gain_db": -7.27,
    "crest_db_before": 10.7,
-   "sha256_grain": "355f3f9ea56184799eda52dd0a981204e199e0927b76bf00e4deea18a1df8d30",
+   "sha256_grain": "314cc8015008c221a2c104483ed60c99d9fa9b2c5c53592b80b86f09d1320f0f",
    "centroid_hz": null,
    "snr_db": 34.8
   },
@@ -4458,10 +5148,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/478/478026_1106446-hq.mp3",
-    "sha256": "635dc763a96c63a00e6560b39b3ab5897c73ae8239287c819bbadc28d9570a73",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs478026.aiff",
+    "sha256": "cdadb2974bbd44d2c25d78203772b8321b8a805cfb2f04d86ee5b646005eaf6b",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     7.317,
@@ -4477,9 +5173,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -0.31,
+   "level_gain_db": -0.58,
    "crest_db_before": 10.0,
-   "sha256_grain": "f62a29135780a138c80bcfb9faf28719754edd19a3e4ca1a05c162d582cd9b37",
+   "sha256_grain": "cbbcfb054da5221b1a0fd0711e153682cadc9e987a07ba9980a9fab5b865aa2c",
    "centroid_hz": null,
    "snr_db": 34.3
   },
@@ -4496,10 +5192,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/616/616976_97550-hq.mp3",
-    "sha256": "69c734e10baac1509587eccab66968de504e6aa0751cd3992dc04757fa173e12",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs616976.wav",
+    "sha256": "2b1cd2a61607e5e044414570286ea898b196e11501cb981ed0f2577008bfc53d",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 1.0,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     0.876,
@@ -4515,9 +5217,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -4.69,
+   "level_gain_db": -4.95,
    "crest_db_before": 11.5,
-   "sha256_grain": "1c2546f9a0b0bb6d3d930d61afd31c48624d72dd072a6aba70a39ba76a88f86e",
+   "sha256_grain": "2280d38a946588b4c7249b05c6b274ffec49b9ce5b706f618340c52076e3b88b",
    "centroid_hz": null,
    "snr_db": 33.2
   },
@@ -4534,10 +5236,16 @@
    "license": "http://creativecommons.org/publicdomain/zero/1.0/",
    "licence_checked": "2026-11-25",
    "source_file": {
-    "file": "hq_preview",
-    "url": "https://cdn.freesound.org/previews/546/546677_5637404-hq.mp3",
-    "sha256": "ca444855c00c6368c36858f82f68230ee54ac3d05e7f071a292972bf81e68f56",
-    "offset_s": 0.0
+    "file": "original",
+    "path": "fs546677.wav",
+    "sha256": "717df0475c07b59b1f7430cfdcd4d140b6d02379ac3142cb55fc75d9e57d5a86",
+    "offset_s": 0.0,
+    "align": {
+     "global_offset_s": 0.0,
+     "local_lag_ms": 0.0,
+     "corr": 0.999,
+     "status": "aligned"
+    }
    },
    "cut_s": [
     5.0415,
@@ -4553,9 +5261,9 @@
     700
    ],
    "processing": [],
-   "level_gain_db": -8.06,
+   "level_gain_db": -8.31,
    "crest_db_before": 8.5,
-   "sha256_grain": "98307bbe1ad4412771943693ebf52e92aa5c8b8abc57ff9e4560cc05cdc3d0a1",
+   "sha256_grain": "e2a08d7e7833d33631a04b6c8a4ce420ffdd0858a5956b6d3704add14b15b4b7",
    "centroid_hz": null,
    "snr_db": 31.9
   }

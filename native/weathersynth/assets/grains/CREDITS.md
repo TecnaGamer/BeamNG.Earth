@@ -50,4 +50,4 @@ the game layers and spaces them procedurally. Licences were checked on each soun
 | [253953](https://freesound.org/s/253953/) | Thunder 1 | Yoyodaman234 | CC0 1.0 | 2026-11-25 | 6 (body, clap, crack, roll) |
 | [267550](https://freesound.org/s/267550/) | Thunder3 | Yoyodaman234 | CC0 1.0 | 2026-11-25 | 1 (far_roll) |
 
-42 recordings, 118 grains, 193.2 s. Source files: Freesound HQ previews (128 kbps MP3) until the originals replace them (grainbank/originals_needed.tsv); each grain's source sha256 is in manifest.json.
+42 recordings, 118 grains, 193.2 s. Source files: the Freesound originals (downloaded 2026-11-25, aligned to the screened previews, every grain checked: normalised correlation >= 0.999, lag 0); each grain's source sha256 is in manifest.json.
