@@ -447,7 +447,8 @@ pub fn scene(name: &str) -> Option<Scene> {
         // objects, no drip points or canopy drips, no single drops within 3.5 m (they stay in the wash), faint single
         // drops 3.5-20 m out
         "light_d1" => Scene {
-            name: "light_d1",
+            // (the random streams' label: as rendered for rain4, so the same seed gives the same loop)
+            name: "light",
             rate_mm_h: 0.7,
             kind: DsdKind::Drizzle,
             puddle: 0.05,
@@ -472,7 +473,8 @@ pub fn scene(name: &str) -> Option<Scene> {
         // light (light_D2, the user's pick 2026-11-25): as D1 with the near layers kept faint: near objects at -15 dB
         // and 30 % of them, 4 drip points and 2 canopy drips a second (6-15 m) at -15 dB
         "light" | "light_d2" => Scene {
-            name: "light",
+            // (the random streams' label: as rendered for rain4, so seed 101 gives the loop the user picked)
+            name: "light_d2",
             rate_mm_h: 0.7,
             kind: DsdKind::Drizzle,
             puddle: 0.05,
