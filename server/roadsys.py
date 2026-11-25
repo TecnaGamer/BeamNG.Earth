@@ -49,6 +49,14 @@ product declares and hands them over.
       ("rs_hide"); no junction pads. A structure the faces cannot take (no deck heights for a knot near the tile, a
       short read) keeps today's deck, recorded (STATS["deck_fallback"]).
 
+  M5 (the user's decisions 2026-11-24, every mode from heights up): the mapped bridge end is the truth (the structure
+      and tunnel ranges and the hand-over ends from the map's tags, roads.tag_level_ranges; a deck of the deck builder
+      lengthened past them takes the profile there, and under surface the stretch it lengthened over is drawn as
+      ground road, K_COVER); a floor is the lower road's clearance (its maxheight sign, else its class's: main roads by
+      country, other public roads, service roads and tracks, foot and cycle ways; net.rs clearance_of) + the
+      structure's own depth (structure_depth: its design and span), the road under cut up to 5 m where that is gentler
+      than lifting (one solve); twin decks one height; surface decks drawn their whole depth until the girder kits.
+
   BNE_ROADSYS_AREAS (osmareas.py; with shadow or surface): audit: the products read OSM's mapped road areas
       (area:highway=*) of their read's cells and report how their faces meet them (the shadow record's "areas": edge
       distance, IoU, width error, splits; native/roadsys areas.rs); on: the areas are also the carriageway edges' soft
@@ -1334,6 +1342,37 @@ def _deck_read(frame, cell_fn, box, style):
     return None
 
 
+COVER_EDGE_M = 2.0           # m: the longest edge of a cover face draped on the ground (deck_faces' K_COVER)
+
+
+def _subdivide(v, uv, t, max_edge):
+    """Triangles t over vertices v (n, 2) with uv (n, 2) split at their edges' middles until no edge is longer than
+    max_edge (each triangle by its own longest edges: 1 -> 2, 3 or 4; a shared edge's middle made once). Pure, ordered."""
+    v, uv, t = [tuple(map(float, p)) for p in v], [tuple(map(float, p)) for p in uv], [tuple(map(int, x)) for x in t]
+    for _round in range(8):
+        mids, out, changed = {}, [], False
+
+        def mid(a, b):
+            k = (a, b) if a < b else (b, a)
+            if k not in mids:
+                mids[k] = len(v)
+                v.append(((v[a][0] + v[b][0]) * 0.5, (v[a][1] + v[b][1]) * 0.5))
+                uv.append(((uv[a][0] + uv[b][0]) * 0.5, (uv[a][1] + uv[b][1]) * 0.5))
+            return mids[k]
+        for a, b, c in t:
+            long_ = [((v[p][0] - v[q][0]) ** 2 + (v[p][1] - v[q][1]) ** 2) > max_edge * max_edge for p, q in ((a, b), (b, c), (c, a))]
+            if not any(long_):
+                out.append((a, b, c))
+                continue
+            changed = True
+            ab, bc, ca = mid(a, b), mid(b, c), mid(c, a)
+            out.extend([(a, ab, ca), (ab, b, bc), (ca, bc, c), (ab, bc, ca)])
+        t = out
+        if not changed:
+            break
+    return np.asarray(v, np.float64), np.asarray(uv, np.float64), np.asarray(t, np.int64).reshape(-1, 3)
+
+
 def deck_faces(frame, exact, bridges, cells, country=None):
     """BNE_ROADSYS=surface: the decks of the tile box exact (x0, y0, x1, y1, in frame) from the road system's own
     faces (native/roadsys deck.rs) as roads.build_tile chunks: ([chunk], {map features drawn so}), or None (no deck
@@ -1443,7 +1482,10 @@ def deck_faces(frame, exact, bridges, cells, country=None):
         if not len(clipped):
             continue
         if kind == "cover":         # (draped on the ground as today's ground roads are: the terrain carries it)
-            out.append(roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, mat, tl, prio, "base"))
+            # (split to COVER_EDGE_M edges first: a long face draped by its corners alone dips under the terrain between
+            # them, as the partition's sparse rows on a straight would)
+            cv, cuv, ct = _subdivide(xyz[:, :2], np.asarray(uv, np.float64), clipped, COVER_EDGE_M)
+            out.append(roadsurf3._tri_chunk(cv, cuv, ct, mat, tl, prio, "base"))
             continue
         if kind == "strip":
             ch = roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, roadmesh.DECK_SIDE, 10.0, prio,

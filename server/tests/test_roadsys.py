@@ -268,6 +268,32 @@ class ChainEndsTest(unittest.TestCase):
         self.assertEqual(roadsys._half_width((None, a)), roadsys.DECK_HALF_MIN_M)
 
 
+class StructureDepthTest(unittest.TestCase):
+    def test_some_bridges_are_thicker_than_others(self):
+        """(M5) roadsys.structure_depth: a through truss's floor system whatever its span, a deck truss a tenth of its
+        span or so, girders span / 22 within 0.6-4.0 m (a short slab thin, a long flyover deep)."""
+        import bridgetypes as bt
+        import roadsys
+        self.assertEqual(roadsys.structure_depth(120.0, bt.NBI_THROUGH_TRUSS), roadsys.DEPTH_FLOOR_SYSTEM_M)
+        self.assertAlmostEqual(roadsys.structure_depth(60.0, bt.NBI_DECK_TRUSS), 5.0)
+        self.assertAlmostEqual(roadsys.structure_depth(8.0), 0.6)
+        self.assertAlmostEqual(roadsys.structure_depth(44.0), 2.0)
+        self.assertAlmostEqual(roadsys.structure_depth(200.0, bt.PLAIN), 4.0)
+        self.assertLess(roadsys.structure_depth(15.0), roadsys.structure_depth(60.0))
+
+    def test_cover_faces_are_split_before_they_are_draped(self):
+        """(M5) roadsys._subdivide: every edge at most the limit, the area kept, shared middles made once."""
+        import roadsys
+        v, uv, t = roadsys._subdivide(np.array([[0.0, 0.0], [10.0, 0.0], [0.0, 1.0], [10.0, 1.0]]), np.zeros((4, 2)),
+                                      np.array([[0, 1, 2], [1, 3, 2]]), 2.0)
+        e = [float(np.hypot(*(v[a] - v[b]))) for tr in t for a, b in ((tr[0], tr[1]), (tr[1], tr[2]), (tr[2], tr[0]))]
+        self.assertLessEqual(max(e), 2.0)
+        area = sum(abs((v[b][0] - v[a][0]) * (v[c][1] - v[a][1]) - (v[b][1] - v[a][1]) * (v[c][0] - v[a][0])) / 2
+                   for a, b, c in t)
+        self.assertAlmostEqual(area, 10.0)
+        self.assertEqual(len(np.unique(np.round(v, 9), axis=0)), len(v))
+
+
 @unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 596, "earthfast 596 (roadsys) required")
 class KernelTest(unittest.TestCase):
     def test_same_bytes_whatever_the_order(self):
