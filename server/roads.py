@@ -10022,9 +10022,9 @@ class TunnelProfiles(BridgeProfiles):
 
         while True:
             comp = super()._resolve(start, pool, ground, loaded)
-            # the parts as the network's own cells give them, in their keys' order (the longest copy, the first such
-            # of equal length), whichever cell the asker loaded first: copies of one part from different cells differ
-            # in their last bits, and Wacker Drive's network, asked from two cells by two threads, was solved from
+            # the parts as the network's own cells give them (each part's home copy, _canon_pool), whichever cell the
+            # asker loaded first: copies of one part from different cells differ (each cell's tile quantises them, up
+            # to 0.33 m on I-395), and Wacker Drive's network, asked from two cells by two threads, was solved from
             # different copies and published by whichever finished first (two builds' tunnel meshes 1.5e-5 m apart,
             # 2026-11-25). Until its cells settle (a copy's ends can lie in other cells).
             cells = end_cells(comp)
@@ -10053,14 +10053,27 @@ class TunnelProfiles(BridgeProfiles):
         return comp
 
     def _canon_pool(self, pool, cells):
-        """pool again from these cells (keys), in their keys' order (_load's rule: the longest copy wins, the first of
-        equal length); a part none of them gives is kept as it was. True when a part changed."""
+        """pool again from these cells (keys): each part's home copy (the copy of the cell its start lies in), else
+        the longest line, then the most map vertices, then the first cell's in key order; a part none of them gives
+        is kept as it was. True when a part changed."""
         old = dict(pool)
         pool.clear()
-        scratch = {}
+        best = {}
         for c in sorted(cells):
             z, x, y = (int(v) for v in c.split("/"))
-            self._load(mapcells.CellKey(z, x, y), pool, scratch)
+            for k, v in self._cell_entries(mapcells.CellKey(z, x, y))[0]:
+                xy = np.asarray(v[1], np.float64)
+                # (the home copy: the cell's own copy of a part that starts in it, as roads.home_copy takes a feature's;
+                # then the longest line, in mm; then the most map vertices; then the first cell's)
+                la, lo, _ = self.frame.enu_to_geodetic(xy[:1, 0], xy[:1, 1], 0.0)
+                home = str(mapcells.cell_of(float(np.asarray(la)[0]), float(np.asarray(lo)[0]))) == c
+                rank = (home, int(round(math.fsum(dnp.hypot(*np.diff(xy[:, :2], axis=0).T).tolist()) * 1000.0))
+                        if len(xy) > 1 else 0, v[4])
+                got = best.get(k)
+                if got is None or rank > got[0]:
+                    best[k] = (rank, v)
+        for k in sorted(best, key=str):
+            pool[k] = best[k][1]
         for k in sorted(set(old) - set(pool), key=str):
             pool[k] = old[k]
         def same(a, b):

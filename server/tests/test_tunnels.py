@@ -636,24 +636,27 @@ class ChainPins(unittest.TestCase):
 
 class CanonicalPool(unittest.TestCase):
     """One tunnel network, the same parts whichever cell asked for it (TunnelProfiles._resolve): two map cells hold
-    copies of one part of equal length whose coordinates differ in their last bits, and the copy a solve took was the
-    asker's first cell's. Wacker Drive's network was asked from two cells by two threads and solved from different
-    copies; whichever published first won: two builds' tunnel and road meshes differed (2026-11-25)."""
+    copies of one part whose coordinates differ (each cell's tile quantises them: I-395's copies 0.33 m apart), and the
+    copy a solve took was the asker's first cell's. Wacker Drive's network was asked from two cells by two threads and
+    solved from different copies; whichever published first won: two builds' tunnel and road meshes differed
+    (2026-11-25). Now the home copy (the cell the part starts in) whichever cell asked, not the first in key order."""
 
-    def test_the_same_copy_from_either_cell(self):
+    def test_the_home_copy_from_either_cell(self):
         import geodesy
         import mapcells
-        lat, lon = 41.8856, -87.6368
-        frame = geodesy.EnuFrame(lat, lon)
-        a = mapcells.cell_of(lat, lon)
-        b = mapcells.CellKey(a.z, a.x + 1, a.y)
+        lat0, lon0 = 41.8856, -87.6368
+        a = mapcells.cell_of(lat0, lon0)
+        b = mapcells.CellKey(a.z, a.x - 1, a.y)          # (west of a: first in key order)
+        edge = mapcells._lon_of(a.x, 2 ** a.z)            # (a's west edge)
+        frame = geodesy.EnuFrame(lat0, edge)
         spec = Spec(7.0, "paved", False, "primary", False)
-        base = line(0, 40)
-        copies = {str(a): base + 1e-9, str(b): base - 1e-9}     # (equal length: the first in key order wins)
+        base = line(20, -20, step=-4.0)                   # (from 20 m inside a across its west edge into b)
+        self.assertEqual(str(mapcells.cell_of(lat0, edge + 0.0002)), str(a))
+        copies = {str(a): base + 1e-6, str(b): base - 1e-6}
 
         def entries(key):
             xy = copies[str(key)]
-            return [((("f", 0)), (spec, xy, lon, -1.0, len(xy), ""))], []
+            return [((("f", 0)), (spec, xy, lon0, -1.0, len(xy), ""))], []
 
         got = []
         for first in (b, a):
@@ -667,4 +670,4 @@ class CanonicalPool(unittest.TestCase):
             self.assertEqual(comp, [("f", 0)])
             got.append(np.asarray(pool[("f", 0)][1]))
         self.assertTrue(np.array_equal(got[0], got[1]), "the copy depended on the asker's cell")
-        self.assertTrue(np.array_equal(got[0], copies[min(str(a), str(b))]))
+        self.assertTrue(np.array_equal(got[0], copies[str(a)]), "not the home copy")
