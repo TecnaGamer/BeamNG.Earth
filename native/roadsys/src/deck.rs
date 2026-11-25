@@ -42,6 +42,8 @@ pub const COVER_DZ_M: f64 = 0.5;
 /// m outward from a free edge a structure face at its height makes a twin (the gap filled to its middle, no parapet)
 pub const TWIN_M: f64 = 3.0;
 const TWIN_STEP_M: f64 = 0.25;
+/// (M5) cos 25 deg: a twin found past TWIN_M runs this near parallel to the free edge
+const TWIN_PAR_COS: f64 = 0.9063077870366499;
 /// m a twin deck's face may lie above or below the free edge (decks side by side parting in height: no parapet
 /// between them until they are a level apart)
 pub const TWIN_DZ_M: f64 = 1.5;
@@ -474,7 +476,13 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
                     if dd <= TWIN_M + 1e-9 { return true; }
                     let tg2 = m.tag[t as usize];
                     let sj = if tg2.kind == K_ZONE { usize::MAX } else { stroke_of.get(&tg2.piece).copied().unwrap_or(usize::MAX) };
-                    sj != si_of && dd <= TWIN_M + r_self + widen_out(&net, &sboxes, q, [-out[0], -out[1]]) + 1e-9
+                    // (past TWIN_M: a parallel deck only (within 25 deg), never a crossing one: a ramp crossing two
+                    // twin carriageways at their height filled the gap round it, I-95)
+                    if sj == usize::MAX || sj == si_of { return false; }
+                    let st2 = &net.strokes[sj];
+                    let (s2, _o) = st2.line.project(q, 0.0, st2.len());
+                    absf(dot(dir, st2.line.at(s2).1)) >= TWIN_PAR_COS
+                        && dd <= TWIN_M + r_self + widen_out(&net, &sboxes, q, [-out[0], -out[1]]) + 1e-9
                 });
                 if hit { gap = dd; break; }
                 dd += TWIN_STEP_M;
