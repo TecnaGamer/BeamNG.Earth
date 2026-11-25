@@ -96,6 +96,13 @@ local lastCheck = -math.huge
 function M.setMode(m) mode = m end
 function M.getMode() return mode end     -- (groundcover.lua: the grass's season)
 
+-- Winter's snow (server BNE_WINTER: hello.snow, the 'snow' message; nil without): winterlook.lua, loaded only when the
+-- server has winter on (nothing otherwise, not even the module).
+function M.setSnow(s)
+  if s == nil and not package.loaded['beamngEarth/winterlook'] then return end
+  require('beamngEarth/winterlook').set(s)
+end
+
 -- Pure: the tint of a species {tint, days, winter} on day doy at lat for mode: the strongest of its fall (its own
 -- timing, eased), winter and spring tints, as {r, g, b} multipliers and that amount.
 function M.speciesTint(sp, mode_, doy, lat)
@@ -191,6 +198,7 @@ function M.restore()
     end
   end
   orig, applied = {}, {}
+  if package.loaded['beamngEarth/winterlook'] then require('beamngEarth/winterlook').restore() end
 end
 
 return M

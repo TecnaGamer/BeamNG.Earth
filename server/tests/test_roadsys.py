@@ -252,6 +252,22 @@ class SquareTest(unittest.TestCase):
         roadsys._squares.clear()
 
 
+class ChainEndsTest(unittest.TestCase):
+    def test_an_end_on_another_deck_of_the_chain_is_no_abutment(self):
+        """(M5) roadsys._ends_on_decks: a viaduct's two parts 1.8 m apart (past endmatch's JOIN_M): each end's
+        approach point lies on the other part, so neither is lifted or dropped to the ground under it; a real
+        abutment's point (past the chain's outer end) is on no deck; a part never covers its own end."""
+        import roadsys
+        a = np.array([[0.0, 0.0], [50.0, 0.0]])
+        b = np.array([[51.8, 0.0], [120.0, 0.0]])
+        spec = type("Spec", (), {"width": 8.3})()
+        decks = [("a", a, roadsys._half_width((spec, a))), ("b", b, roadsys._half_width((spec, b)))]
+        pts = np.array([[-0.5, 0.0], [50.5, 0.0], [51.3, 0.0], [120.5, 0.0]])
+        got = roadsys._ends_on_decks(pts, ["a", "a", "b", "b"], decks)
+        self.assertEqual(got.tolist(), [False, True, True, False])
+        self.assertEqual(roadsys._half_width((None, a)), roadsys.DECK_HALF_MIN_M)
+
+
 @unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 596, "earthfast 596 (roadsys) required")
 class KernelTest(unittest.TestCase):
     def test_same_bytes_whatever_the_order(self):
@@ -343,7 +359,9 @@ class KernelTest(unittest.TestCase):
         blob += struct.pack("<Iqq", n, -2, -2) + np.zeros(n * n, "<f4").tobytes() + bytes(n * n)
         blob += struct.pack("<I", 0) + struct.pack("<I", 0)
         import json
-        self.assertFalse(any(json.loads(fast._ef.roadsys_audit(blob)).values()), "an empty scene: nothing counted")
+        # (the auditor's measuring rules are stamped on every result, audit.rs AUDIT_VERSION: not a count)
+        got = json.loads(fast._ef.roadsys_audit(blob))
+        self.assertFalse(any(v for k, v in got.items() if k != "audit_version"), "an empty scene: nothing counted")
         with self.assertRaises(ValueError):
             fast._ef.roadsys_audit(b"nope")
 
@@ -411,9 +429,14 @@ class SwitchTest(unittest.TestCase):
         i = src.index("if roadsys.HEIGHTS and not roadshape.PROFILE_BUILT:")
         self.assertIn("roadsys.pins_near(", src[i:i + 400])
 
-    def test_not_on_the_settings_page(self):
+    def test_only_with_the_revamped_roads_setting(self):
+        # (the user, 2026-11-24: "make sure the revamped roads toggle uses the updated rewritten roads": no page entry
+        # of its own, only inside Revamped roads, at the M4 surface mode with the areas fit and cross-sections)
         import experimental
-        self.assertFalse(any("BNE_ROADSYS" in env for _sid, env, _n in experimental.FEATURES))
+        holders = [sid for sid, env, _n in experimental.FEATURES if any(k.startswith("BNE_ROADSYS") for k in env)]
+        self.assertEqual(holders, ["expRoadRevamp"])
+        env = {sid: env for sid, env, _n in experimental.FEATURES}["expRoadRevamp"]
+        self.assertEqual((env["BNE_ROADSYS"], env["BNE_ROADSYS_AREAS"], env["BNE_ROADSYS_XSEC"]), ("surface", "on", "on"))
 
     def test_the_tile_path_only_reads_the_flag(self):
         src = (HERE / "blockworker.py").read_text(encoding="utf-8")

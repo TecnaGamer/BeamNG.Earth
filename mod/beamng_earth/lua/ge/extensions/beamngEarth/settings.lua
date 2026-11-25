@@ -99,7 +99,22 @@ M.SCHEMA = {
   hazeStrength = { kind = 'number', default = 0, min = 0, max = 1, label = 'Distance haze (placeholder)' },
   skyMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Sky' },
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
-  weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
+  -- the Weather page (weather.lua; the weather plan 2026-11-24, phase A): Real, a preset or Off ('manual': the game's
+  -- own controls, as before), the preset, its intensity, the change speed, the drops on screen, the rain visibility, the
+  -- parts of the real weather kept and the fog cap
+  weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'preset', 'manual' }, label = 'Weather' },
+  weatherPreset = { kind = 'enum', default = 'rain', values = { 'clear', 'fewclouds', 'cloudy', 'overcast', 'drizzle',
+    'rain', 'heavyrain', 'storm', 'fog', 'lightsnow', 'snow', 'blizzard', 'sleet', 'freezingrain', 'hail' },
+    label = 'Weather preset' },
+  weatherIntensity = { kind = 'number', default = 1, min = 0, max = 1.5, label = 'Weather intensity' },
+  weatherChange = { kind = 'enum', default = '60', values = { '0', '30', '60', '120' }, label = 'Weather changes take (s)' },
+  weatherPrecip = { kind = 'bool', default = true, label = 'Show rain and snow' },
+  rainVisibility = { kind = 'number', default = 1.3, min = 0.5, max = 2.5, label = 'Rain visibility' },
+  realClouds = { kind = 'bool', default = true, label = 'Real clouds' },
+  realFog = { kind = 'bool', default = true, label = 'Real fog' },
+  realWind = { kind = 'bool', default = true, label = 'Real wind' },
+  realPrecip = { kind = 'bool', default = true, label = 'Real rain and snow' },
+  fogLimit = { kind = 'enum', default = '0', values = { '0', '200', '500', '1600' }, label = 'Thickest fog (m, 0: real)' },
   -- the seasons' date (seasondate.lua; the user, 2026-11-23): the PC's clock (dev's) or the game's environment date
   seasonDate = { kind = 'enum', default = 'clock', values = { 'clock', 'game' }, label = 'Season date' },
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
@@ -171,6 +186,8 @@ M.SCHEMA = {
   expCanadaLidar = { kind = 'bool', default = false, label = 'Detailed Canadian lidar' },
   expGenGround = { kind = 'bool', default = false, label = 'Generated ground' },
   expStaleRevisit = { kind = 'bool', default = false, label = 'Show the older world while rebuilding' },
+  expWinter = { kind = 'bool', default = false, label = 'Winter' },
+  expWetRoads = { kind = 'bool', default = false, label = 'Wet roads' },
   -- in Germany: the German right-of-way signs and markings at junctions, 30-zone signs and traffic that gives way
   -- accordingly (server designs.py; the message german_junctions)
   germanJunctionSigns = { kind = 'bool', default = false, label = 'German junction signs' },
@@ -232,7 +249,8 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTextures', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'seasonDate', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
+  'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'realClouds',
+  'realFog', 'realWind', 'realPrecip', 'fogLimit', 'seasonDate', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -242,7 +260,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
   'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expRoadFollow', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
-  'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
+  'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads' }
 
 -- Stored but not on the settings page
 M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true }
@@ -627,6 +645,16 @@ M.APPLY = {
     if w and w.setMode and not (v == 'manual' and w.getMode and w.getMode() == v) then w.setMode(v) end
   end,
   seasonDate = function(v) require('beamngEarth/seasondate').setSource(v) end,
+  weatherPreset = function(v) local w = ext('beamngEarth_weather') if w and w.setPresetChoice then w.setPresetChoice(v) end end,
+  weatherIntensity = function(v) local w = ext('beamngEarth_weather') if w and w.setIntensity then w.setIntensity(v) end end,
+  weatherChange = function(v) local w = ext('beamngEarth_weather') if w and w.setChangeSpeed then w.setChangeSpeed(tonumber(v)) end end,
+  weatherPrecip = function(v) local w = ext('beamngEarth_weather') if w and w.setShowPrecip then w.setShowPrecip(v) end end,
+  rainVisibility = function(v) local w = ext('beamngEarth_weather') if w and w.setRainVisibility then w.setRainVisibility(v) end end,
+  realClouds = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('clouds', v) end end,
+  realFog = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('fog', v) end end,
+  realWind = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('wind', v) end end,
+  realPrecip = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('precip', v) end end,
+  fogLimit = function(v) local w = ext('beamngEarth_weather') if w and w.setFogLimit then w.setFogLimit(tonumber(v)) end end,
   realGravity = function(v)
     local w = ext('beamngEarth_weather')
     if w and w.setGravityEnabled and w.GRAVITY_ENABLED ~= v then w.setGravityEnabled(v) end

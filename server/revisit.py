@@ -403,7 +403,13 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 # (where a cell's inputs are read from: its CIP cell holds the arrays its sources give, bit for bit,
                 # cip.py; the weekly data builds a CIP build pins are keyed as such, MapData.versions(). Proof: the
                 # portcheck corpus's plans and facts and the sessions' tiles identical with it on and the sources gone)
-                "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD")
+                "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD",
+                # (winter W1, snow.py: a live 'snowstate' message only; snow never enters plans, cell facts, tiles or
+                # the decision archives, ~/bnge-tests/winterplan/PLAN.md decisions. W2: the snow on the ground photos is
+                # in the keys of the items it changes, the far tiles' textures and the blocks' base photos, as
+                # snowcover.key_parts: a spec's hash of the band tables, the packs and the look's version, nothing
+                # where no snow can lie. Anything else snow comes to change must carry its own spec part, snowcover.py)
+                "BNE_WINTER", "BNE_SNOW", "BNE_WET_ROADS")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
@@ -490,11 +496,17 @@ def keyed_env(k):
 # (roadsys.deck_faces, earthfast 606); keyed as "2s1u1" (structures' meaning and its own); its plans are heights' own.
 # BNE_ROADSYS_XSEC 1 (2026-11-22): the road system's cross-sections from OSM's street tags (parking, cycle and bus lanes,
 # shoulders, mapped carriageway widths; native/roadsys xsec.rs XSEC_FORMAT 1, earthfast 610).
+# BNE_ROADSYS 3 (heights, M5, 2026-11-24): twin decks side by side take one height, a structure going on past a
+# stroke's end (another deck, a nose) is no abutment for its chord or its deck-over-ground limit, a measured deck keeps
+# its measured clearance over the road under it (no dig), measured decks held to their measurement, a chain's end on
+# another deck of the chain is no abutment (earthfast 623, QP_FORMAT 6).
+# BNE_ROADSYS=surface 2 (M5): the decks' free edges widened to any structure's mapped paved width (not only their own
+# stroke's, up to 8 m), twins found across their widened gaps.
 ROADSYS_STRUCTURES_VERSION = 1
-ROADSYS_SURFACE_VERSION = 1
+ROADSYS_SURFACE_VERSION = 2
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 2, "BNE_ROADSYS_XSEC": 1}
+                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 3, "BNE_ROADSYS_XSEC": 1}
 
 
 def keyed_value(k, v):

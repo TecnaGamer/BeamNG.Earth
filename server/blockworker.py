@@ -4099,7 +4099,9 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
     rock = rockfacemod.tile_inputs(geotiles.frame(x, y, z), -s / 2, -s / 2, s, px, built.grid)
     if not isinstance(photo, imagerymod.FarPhoto):
         photo = imagerymod.FarPhoto(np.asarray(photo, np.uint8), None)  # provider RGB already has its seasonal grade
-    n = photo.write(tex["path"], rock, imagerymod.FAR_SRGB)
+    import snowcover
+    n = photo.write(tex["path"], rock, imagerymod.FAR_SRGB,
+                    snow=snowcover.look_from_rock(tex.get("snow"), geotiles.frame(x, y, z), rock))
     _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, px, tex.get("keep_fin"), tex["path"])
     return built, (n, used)
 
@@ -4239,6 +4241,13 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
             rgb = rockfacemod.rock(rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1))
         except Exception as e:
             log.debug("base photo: rock faces: %s", e)
+            U = None
+        if tex.get("snow") is not None:     # (earthd.Server.write_base: winter's snow after the roads and rock)
+            import snowcover
+            road, water = snowcover.masks(frame, x0, y0, size, rgb.shape[0],
+                                          getattr(_s, "surface", None) if roadsmod.ROADS_IN_GROUND else None,
+                                          _s.widths, getattr(_s, "md", None))
+            rgb = snowcover.apply_kept(tex["snow"], rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1), road, water)
         return rgb
 
     fast.require(564, "terrain base rendering")
@@ -4266,6 +4275,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     process's own CPU, one interpreter for every thread (55 s of a drive), and the far field waited on it. A tile
     built in this anchor's place before (and its texture) comes from the revisit cache."""
     import revisit
+    import snowcover
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
     k = _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex)
     got = revisit.load(_s.cache_dir, "far", k)
@@ -4291,7 +4301,8 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
             revisit.store(_s.cache_dir, "far", k, blobs, meta,
                           where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions(),
                                            chain=tuple(tex["chain"]), tone=tex["tone"], leaf_on=tex["leaf_on"],
-                                           season_mode=tex["season_mode"]))
+                                           season_mode=tex["season_mode"],
+                                           **({"winter": True} if snowcover.ON else {})))
             _keep_fin(k, built, tex, mask, got, lat, lon)
         except Exception as e:          # (not kept rather than no tile)
             log.debug("revisit: far tile %s not kept: %s: %s", (tile.level, tile.i, tile.j), type(e).__name__, e)
@@ -4309,13 +4320,14 @@ def _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     import genground
     import imagery as imagerymod
     import season as seasonmod
+    import snowcover
     _gx, _gy, gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, int(tex["px"]))
     if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, int(tex["px"])) is not None \
             and not tex.get("quick"):
         surf = (*surf, genground.far_key(getattr(_s, "md", None), tex.get("gen_trees")))
     return revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
                        mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"],
-                       seasonmod.season_key(tex["season_mode"], lat),
+                       seasonmod.season_key(tex["season_mode"], lat), *snowcover.key_parts(tex.get("snow")),
                        bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
                        *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()), *surf)
 
@@ -4461,6 +4473,8 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     except imagerymod.ImageryError:
         return built, None
     import surface as surfacemod
+    import snowcover
+    import roads as roadsmod
     if isinstance(rgb, imagerymod.FarPhoto):
         rock = rockfacemod.tile_inputs(frame, x0, y0, tile.size, px, built.grid)
         paint = None
@@ -4470,7 +4484,12 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
                                                        pads=tex.get("pads") or ())
             except Exception as e:
                 log.debug("road faces of %s: %s", tile.key, e)
-        n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB, paint=paint)
+        road = water = None
+        if tex.get("snow") is not None and surfacemod.far_photo_roads(tile.size, px):     # (earthd.Server.snow_masks)
+            road, water = snowcover.masks(frame, *sq, px, _paint_surface() if roadsmod.ROADS_IN_GROUND else None,
+                                          _s.widths, getattr(_s, "md", None))
+        n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB, paint=paint,
+                      snow=snowcover.look_from_rock(tex.get("snow"), frame, rock, road, water))
         rgb = None
     elif built.grid is not None:          # (earthd.Server.rock_faces)
         try:
@@ -4496,6 +4515,15 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
         except Exception as e:
             log.debug("road mask of %s: %s", tile.key, e)
     if rgb is not None:
+        if tex.get("snow") is not None:     # (earthd.Server.finish_tile_texture: after the roads)
+            g = None if built.grid is None else np.asarray(built.grid, np.float64)
+            road = water = None
+            if surfacemod.far_photo_roads(tile.size, px):
+                road, water = snowcover.masks(frame, *sq, px, _paint_surface() if roadsmod.ROADS_IN_GROUND else None,
+                                              _s.widths, getattr(_s, "md", None))
+            rgb = snowcover.apply_kept(tex["snow"], rgb, frame, *sq, g, x0, y0,
+                                       tile.size / (g.shape[1] - 1) if g is not None and g.ndim == 2 else 1.0, road,
+                                       water)
         n = genground.write_far_dds(tex["path"], rgb, imagerymod.FAR_SRGB)
     return built, (n, used)
 

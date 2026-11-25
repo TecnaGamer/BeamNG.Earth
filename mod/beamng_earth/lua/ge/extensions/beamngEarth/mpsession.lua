@@ -520,14 +520,15 @@ local function onConfig(data)
 end
 
 -- The server's time and weather (its plugin's G.TIME / G.WEATHER, in bngeConfig): { time = { hours, speed, epoch } or
--- nil (the real clock), weather = a preset name or nil (the real weather) }. A player who set Sky or Weather to
--- Manual keeps their own (the sky and weather only follow the server in their 'real' mode).
+-- nil (the real clock), weather = a preset name, 'real-host' (everyone gets the weather host's real weather: bngeWeather;
+-- weatherHost = true on the host itself, which sends its own) or nil (the real weather) }. A player who set Sky or
+-- Weather to Manual (Off) keeps their own (the sky and weather follow the server in their real and preset modes).
 function M.applyServerSky(d)
   local sk, wx = rawget(_G, 'beamngEarth_sky'), rawget(_G, 'beamngEarth_weather')
   local time = type(d) == 'table' and type(d.time) == 'table' and d.time or nil
   local weather = type(d) == 'table' and type(d.weather) == 'string' and d.weather or nil
   if sk and sk.setServerClock then pcall(sk.setServerClock, time) end
-  if wx and wx.setPreset then pcall(wx.setPreset, weather) end
+  if wx and wx.setPreset then pcall(wx.setPreset, weather, type(d) == 'table' and d.weatherHost == true) end
   if time or weather then
     log('I', 'beamngEarth', string.format('BeamMP: the server\'s time %s, weather %s',
       time and string.format('%05.2f h x%g', tonumber(time.hours) or 0, tonumber(time.speed) or 0) or 'real',
@@ -934,6 +935,28 @@ local function onShare(data)
   stats.shareIn = (stats.shareIn or 0) + 1
 end
 
+-- 'real-host': the weather host's real weather, relayed by the plugin (checked again here: weather.sanitizeMsg).
+local function onWeather(data)
+  local wx = rawget(_G, 'beamngEarth_weather')
+  if type(data) ~= 'string' or #data > M.WEATHER_MAX_BYTES or not (wx and wx.setHostWeather and wx.sanitizeMsg) then return end
+  local ok, d = pcall(jsonDecode, data)
+  if not ok then return end
+  local m = wx.sanitizeMsg(d)
+  if m then pcall(wx.setHostWeather, m) end
+end
+M._onWeather = onWeather   -- (tests)
+
+-- 'real-host' on the weather host: its real weather to the server, which passes it on (weather.lua's onWeather).
+M.WEATHER_MAX_BYTES = 2048
+function M.sendHostWeather(msg)
+  local wx = rawget(_G, 'beamngEarth_weather')
+  if not (rawget(_G, 'TriggerServerEvent') and wx and wx.sanitizeMsg) then return end
+  local m = wx.sanitizeMsg(msg)
+  if not m then return end
+  local ok, text = pcall(jsonEncode, m)
+  if ok and type(text) == 'string' and #text <= M.WEATHER_MAX_BYTES then TriggerServerEvent('bngeWeather', text) end
+end
+
 local function onGroup(data)
   if type(data) == 'string' then require('beamngEarth/net').send({ type = 'share_group', d = data }) end
 end
@@ -955,6 +978,7 @@ function M.update(dt, anchor, player)
     AddEventHandler('bngeGroup', onGroup, 'beamngEarth')
     -- AddEventHandler('bngePeers', onPeers, 'beamngEarth')     -- (shared world building, commented out)
     AddEventHandler('bngeConfig', onConfig, 'beamngEarth')
+    AddEventHandler('bngeWeather', onWeather, 'beamngEarth')
     handlers = true
   end
   local mpanchor = require('beamngEarth/mpanchor')

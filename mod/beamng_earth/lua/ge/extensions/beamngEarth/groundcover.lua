@@ -553,6 +553,9 @@ M.density = 1.0
 -- times it, its element count times its square (the same density on the larger disc: the rebuild frame grows with it)
 M.DISTANCE = { near = 0.7, normal = 1.0, far = 1.5 }
 M.distance = 1.0
+-- element count factor under snow (winterlook.lua: winter's snow depth; 1 without): the grass thins under a light cover
+-- (deep snow moves the block's samples to the snow layer, where none grows anyway)
+M.snow = 1.0
 M.RADIUS_FIELDS = { radius = true, dissolveRadius = true }
 
 local created = {}        -- object names we made
@@ -683,7 +686,7 @@ local function makeOne(e, def)
   if old then old:delete() end
   local gc = createObject('GroundCover')
   local dist = M.distance
-  for _, c in ipairs(M.fieldsFor(def, e.layer, e.share * M.density * dist * dist, dist, e.types)) do
+  for _, c in ipairs(M.fieldsFor(def, e.layer, e.share * M.density * M.snow * dist * dist, dist, e.types)) do
     gc:setField(c[1], c[2], c[3])
   end
   for k, v in pairs(e.fields or {}) do
@@ -825,6 +828,17 @@ function M.setDay(d)
   return currentMonth()
 end
 
+-- Under snow (winterlook.lua): the element counts times f (0..1; 1 = none); existing objects are made again with it.
+function M.setSnow(f)
+  f = tonumber(f)
+  if not f or f < 0 then return false end
+  f = math.min(f, 1)
+  if f == M.snow then return true end
+  M.snow = f
+  if #created > 0 then M.rebuild() end
+  return true
+end
+
 -- The level ended (its objects are gone with it, the stock materials loaded for it too: a level started again in
 -- the same game session found no m_grass_* / wca_groundcover and drew no grass, 2026-10-19).
 function M.reset()
@@ -861,7 +875,7 @@ end
 function M.status()
   local names = {}
   for i, n in ipairs(created) do names[i] = n:sub(#M.PREFIX + 1) end
-  return { enabled = M.enabled, density = M.density, distance = M.distance, objects = #created, names = names,
+  return { enabled = M.enabled, density = M.density, distance = M.distance, snow = M.snow, objects = #created, names = names,
     profile = profile, koppen = climate.k, day = month, materialsLoaded = next(loadedMaterials) ~= nil,
     error = lastError }
 end
