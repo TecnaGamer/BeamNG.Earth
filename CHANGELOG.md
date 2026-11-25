@@ -2,6 +2,11 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### Fixed
+- Rain particles now stop above the cloud base. Rain audio no longer uses the particle emitter's name.
+
 ## 1.10.1 beta (2026-11-15)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
