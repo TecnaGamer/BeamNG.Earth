@@ -23,8 +23,8 @@ What changed in each release of BeamNG.Earth, newest first.
 - **Rain streaks** (off by default, on the Weather page): streaks of falling rain around you, lit by the sun, headlights and street lamps, leaning in the wind
   and as you drive, so rain shows by day and in the distance.
 - **Wet look**: sidewalks, markings, bridges and buildings get darker and glossier in rain and dry slowly after it (with
-  the winter road conditions on, they follow the road condition). City streets look wet and reflect the sky too; they
-  change as new ground loads around you (every few hundred metres while driving).
+  the winter road conditions on, they follow the road condition). City streets get darker too, with the sky shining
+  on them further away; they change as new ground loads around you (every few hundred metres while driving).
 - **Rain sounds**: light, steady and heavy rain by the rain's strength, muffled under roofs and bridges and in tunnels,
   and rain drumming on the roof in the driver's view.
 - **Weather sounds: Live** (experimental, on the Weather page; Pre-recorded stays the default): the BeamNG.Earth app
