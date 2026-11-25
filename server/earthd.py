@@ -1243,6 +1243,9 @@ class Server:
         self.near_radii = dict(self.layout.near_radii if near_radii is None else near_radii)
         self.tile_cache = TILE_CACHE[cells]
         self.net = net if net is not None else netfetch.Fetcher()
+        if snowcovermod.ON:     # (winter: the leaf type and water share packs for the snow's crowns and water)
+            import winterpacks
+            snowcovermod.set_packs(winterpacks.packs(cache_dir, self.net))
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=self.net)
         import railways as _railways    # (coarse elevation: rail decks raised over the roads under them)
         _railways.COARSE_AT = self.dem.coarse_at
@@ -6782,6 +6785,8 @@ class Server:
             frame, x0, y0, s = self.tile_where(anchor, tile)
             sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom,
                                               used if material is not None else None)
+            if material is not None:        # (the winter packs its snow read)
+                sources |= snowcovermod.credit_ids(snow)
         info = TileInfo(built.pos, built.err, built.sink, built.skirt, built.grid, size, dt,
                         material, texture, tex_bytes, tex_s, credits=sources, err_n=built.lod_err)
         info.tile = tile
@@ -7140,7 +7145,8 @@ class Server:
             frame, x0, y0, s = self.tile_where(anchor, tile)
             zoom = (farfield.global_dem_zoom(tile.z, self.layout.cells) if isinstance(tile, farfield.GTile)
                     else anchor.zooms[max(tile.level, 0)])
-            sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used)
+            sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used) \
+                | snowcovermod.credit_ids(snow)
         return replace(prev, texture=texture, tex_bytes=tex_bytes, tex_seconds=time.perf_counter() - t0,
                        cm_pending=frozenset(pending), stale=False, rev=prev.rev + 1, credits=sources, tex_px=px,
                        coarse=False)

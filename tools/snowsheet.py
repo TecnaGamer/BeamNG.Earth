@@ -121,6 +121,8 @@ def main():
     ap.add_argument("--out", default=os.path.expanduser("~/bnge-tests/winter/w2"))
     ap.add_argument("--cache", default=os.path.expanduser("~/bnge-tests/winter/w2/cache"))
     ap.add_argument("--no-s2", action="store_true")
+    ap.add_argument("--packs", action="store_true", help="the winter packs (cdn.json's, or BNGE_WINTERPACKS_DIR's local "
+                    "build): ESA CCI's evergreen share, JRC's water share")
     ap.add_argument("--map", action="store_true", help="the map data's roads and water for the snow (block-sized squares,"
                     " texels to 2 m: as the game's block photos and near far tiles)")
     a = ap.parse_args()
@@ -155,7 +157,11 @@ def main():
     U = np.asarray(U, np.float64)
     print("heights z%d %.0f..%.0f m" % (zoom, U.min(), U.max()))
     photo = rockface.rock(rgb, frame, x0, y0, a.size, U, x0, y0, a.size / (nn - 1))
+    if os.environ.get("BNGE_WINTERPACKS_DIR") or a.packs:
+        import winterpacks
+        snowcover.set_packs(winterpacks.packs(a.cache, net))
     spec = snowcover.spec_for_square(frame, x0, y0, a.size)
+    print("packs:", snowcover._packs.versions() if snowcover._packs else None, "credits", sorted(spec.credits) if spec else ())
     road = water = None
     if a.map:
         import mapcells

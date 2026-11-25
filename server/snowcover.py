@@ -167,7 +167,77 @@ def field_for(south, west, north, east):
     return None
 
 
-Spec = namedtuple("Spec", "sig field perm")     # field: (res, ci0, cj0, idx int32 (nj, ni), tables, counts) or None
+# field: (res, ci0, cj0, idx int32 (nj, ni), tables, counts) or None; leaf, wsh: the winter packs' grids round the box
+# (pack_grid: (values uint8, north, west, res, scale, nodata)) or None; credits: the data credits' ids of what it used
+Spec = namedtuple("Spec", "sig field perm leaf wsh credits trees", defaults=(None, None, frozenset(), None))
+
+# The winter packs (winterpacks.py, the data repo's leaftype / watershare: ESA CCI's evergreen share, JRC's water share),
+# set by the server's main process (set_packs); without them the climate's evergreen share and the photo's water.
+_packs = None
+PACK_SIDE_MAX = 256         # cells a side of a pack window a spec carries (a far global tile's box: strided)
+
+
+def set_packs(p):
+    """The server's winterpacks.Packs (None: none)."""
+    global _packs
+    _packs = p
+
+
+def _pack_window(values, north, west, res, south, west_, north_, east, pad):
+    """The cells of a (rows, cols) grid (row 0 at north, column 0 at west) round the box, strided to PACK_SIDE_MAX:
+    (values, its north, west, res)."""
+    rows, cols = values.shape
+    j0 = max(int(np.floor((north - north_) / res)) - pad, 0)
+    j1 = min(int(np.floor((north - south) / res)) + pad, rows - 1)
+    i0 = max(int(np.floor((west_ - west) / res)) - pad, 0)
+    i1 = min(int(np.floor((east - west) / res)) + pad, cols - 1)
+    if j1 < j0 or i1 < i0:
+        return None
+    k = max(1, int(np.ceil(max(j1 - j0 + 1, i1 - i0 + 1) / PACK_SIDE_MAX)))
+    v = np.ascontiguousarray(values[j0:j1 + 1:k, i0:i1 + 1:k])
+    # (strided: each kept cell stands for k x k; its centre where the sampler expects it)
+    return v, north - j0 * res + 0.5 * res * (k - 1), west + i0 * res - 0.5 * res * (k - 1), res * k
+
+
+def _pack_grids(south, west, north, east):
+    """(leaf, wsh, credits, versions, trees) of the winter packs round the box (each grid None when not had)."""
+    if _packs is None:
+        return None, None, frozenset(), None, None
+    import winterpacks
+    leaf = wsh = trees = None
+    credits = set()
+    try:
+        g = _packs.leaf_grid()
+        if g is not None:
+            w = _pack_window(g.evergreen, g.north, g.west, g.res, south, west, north, east, 2)
+            if w is not None:
+                leaf = (w[0], w[1], w[2], w[3], float(g.scale), -1)
+                credits.add("land:esa-cci-lc")
+            t = _pack_window(g.trees, g.north, g.west, g.res, south, west, north, east, 2)
+            if t is not None:
+                trees = (t[0], t[1], t[2], t[3], float(g.scale), -1)
+    except Exception as e:
+        import logging
+        logging.getLogger("earthd.snowcover").debug("leaf type pack: %s: %s", type(e).__name__, e)
+    try:
+        if west <= east:
+            pad = 2.0 / winterpacks.WATER_PER_DEG
+            g = _packs.water_grid(max(south - pad, -90.0), max(west - pad, -180.0), min(north + pad, 90.0),
+                                  min(east + pad, 180.0))
+            if g is not None:
+                w = _pack_window(g.values, g.north, g.west, g.res, south, west, north, east, 2)
+                if w is not None:
+                    wsh = (w[0], w[1], w[2], w[3], float(g.scale), int(g.nodata))
+                    credits.add("land:jrc-gsw")
+    except Exception as e:
+        import logging
+        logging.getLogger("earthd.snowcover").debug("water share pack: %s: %s", type(e).__name__, e)
+    return leaf, wsh, frozenset(credits), _packs.versions(), trees
+
+
+def credit_ids(spec):
+    """The data credits' ids of what a texture's snow read (the winter packs), for its tile's sources."""
+    return frozenset() if spec is None else frozenset(getattr(spec, "credits", ()) or ())
 
 
 def _window(f, south, west, north, east):
@@ -241,14 +311,17 @@ def spec_for_box(south, west, north, east):
     perm = perm_possible(south, west, north, east)
     if win is None and not perm:
         return None
-    h = hashlib.sha1(repr(("snow", LOOK_VERSION, PARAMS.tobytes(), GEO_N, perm)).encode())
+    leaf, wsh, credits, versions, trees = _pack_grids(south, west, north, east)
+    # (the packs' versions, and whether each was had for this box: what the texture is made with)
+    h = hashlib.sha1(repr(("snow", LOOK_VERSION, PARAMS.tobytes(), GEO_N, perm, versions, leaf is not None,
+                           wsh is not None)).encode())
     if win is not None:
         res, ci0, cj0, idx, tables, counts = win
         h.update(repr((res, ci0, cj0, idx.shape)).encode())
         h.update(idx.tobytes())
         h.update(tables.tobytes())
         h.update(counts.tobytes())
-    return Spec(("snow", h.hexdigest()[:20]), win, perm)
+    return Spec(("snow", h.hexdigest()[:20]), win, perm, leaf, wsh, credits, trees)
 
 
 def key_parts(spec):
@@ -309,7 +382,8 @@ def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
     return fast._ef.SnowLook((float(x0), float(y0), float(size)), (frame.lat0, frame.lon0), U,
                              (float(ux0), float(uy0), float(usp)), geo, field, PARAMS,
                              None if road is None else np.ascontiguousarray(road, np.uint8),
-                             None if water is None else np.ascontiguousarray(water, np.uint8))
+                             None if water is None else np.ascontiguousarray(water, np.uint8),
+                             getattr(spec, "leaf", None), getattr(spec, "wsh", None), getattr(spec, "trees", None))
 
 
 # Overture water (the map data's "water" layer): moving water stays open (a river, a canal, a stream: their current),

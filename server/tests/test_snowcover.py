@@ -295,6 +295,56 @@ class LookTest(unittest.TestCase):
                 sigs.add(sc.spec_for_box(40.0, -89.0, 40.1, -88.9).sig)
             self.assertEqual(len(sigs), 3, "the ice share is keyed")
 
+    def test_winter_packs(self):
+        """The winter packs (winterpacks.py) in place of the fallbacks: the leaf type's evergreen share decides a crown
+        (a taiga cell the pack calls deciduous: light bare crowns), JRC's water share keeps a narrow water body open
+        whatever its photo colour; their versions are in the spec's key and their credits named."""
+        import winterpacks
+        crowns = np.zeros((256, 256, 3), np.uint8)
+        crowns[...] = (24, 40, 30)
+        muddy = np.zeros_like(crowns)
+        muddy[...] = (92, 85, 82)       # (a muddy river in the USGS mosaic: grey-brown, not blue)
+        taiga = geodesy.EnuFrame(62.0, 26.0)
+
+        class Packs:
+            def __init__(self, ever, water, version="v1-0000000000000001"):
+                self.ever, self.water_v, self.version = ever, water, version
+
+            def versions(self):
+                return {"leaftype": self.version, "watershare": self.version}
+
+            def leaf_grid(self):
+                return winterpacks.LeafGrid(np.full((3600, 7200), self.ever, np.uint8),
+                                            np.full((3600, 7200), 200, np.uint8), 0.05, -180.0, 90.0, 250)
+
+            def water_grid(self, south, west, north, east):
+                j0, i0 = int((90.0 - north) * 250), int((west + 180.0) * 250)
+                rows, cols = int((90.0 - south) * 250) - j0 + 1, int((east + 180.0) * 250) - i0 + 1
+                v = np.zeros((rows, cols), np.uint8)
+                v[:, cols // 2] = self.water_v       # (a river one cell wide, ~210 m here, down the middle)
+                return winterpacks.WaterGrid(v, 90.0 - j0 / 250, i0 / 250 - 180.0, 1 / 250, 250, 255)
+        with winter("heavy") as sc:
+            sp0 = sc.spec_for_square(taiga, -500, -500, 1000.0)
+            look0 = sc.look(sp0, taiga, -500, -500, 1000.0, np.full((65, 65), 150.0), -500, -500, 1000 / 64)
+            dark = float(look0.apply(crowns)[..., 0].mean())
+            try:
+                sc.set_packs(Packs(0, 250))
+                sp = sc.spec_for_square(taiga, -500, -500, 1000.0)
+                self.assertEqual(set(sp.credits), {"land:esa-cci-lc", "land:jrc-gsw"})
+                self.assertNotEqual(sp.sig, sp0.sig, "the packs are in the key")
+                sl = sc.look(sp, taiga, -500, -500, 1000.0, np.full((65, 65), 150.0), -500, -500, 1000 / 64)
+                light = float(sl.apply(crowns)[..., 0].mean())
+                self.assertGreater(light, dark + 40, f"the pack's deciduous taiga: {light:.0f} against {dark:.0f}")
+                out = sl.apply(muddy).astype(int)
+                col = int(np.argmin(out[:, :, 0].mean(axis=0)))
+                self.assertLess(abs(out[:, col, 0].mean() - 92), 25, "the river stays open")
+                self.assertTrue(80 < col < 176, col)
+                self.assertGreater(out[:, :40, 0].mean(), 180, "the ground beside it white")
+                sc.set_packs(Packs(0, 250, "v2-0000000000000002"))
+                self.assertNotEqual(sc.spec_for_square(taiga, -500, -500, 1000.0).sig, sp.sig, "another version")
+            finally:
+                sc.set_packs(None)
+
     def test_no_seam(self):
         """A block photo and a far tile over the same ground: their snow agrees where they overlap (one function of
         the world point; planar heights, which both grids hold exactly)."""
