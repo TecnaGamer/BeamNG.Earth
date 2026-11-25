@@ -23,6 +23,7 @@ local M = {}
 
 M.VERSION = 1           -- the copies' folder (bump with any change of the renames or the copy)
 M.TEX = '/levels/beamng_earth/art/shapes/beamngEarth/bare/'
+M.FACTOR = { 0.85, 0.85, 0.92, 1 }     -- the twig colour, a touch cooler (Windows shots: sunlit far crowns read pink)
 M.ALPHA_REF = 70        -- low: the coarse mips' averaged twigs stay drawn at range as a haze (make_twig_textures.py)
 
 -- the stock deciduous shapes' folders and their species
@@ -106,7 +107,8 @@ function M.materials()
       seen[name] = true
       out[name] = { name = name, mapTo = name, class = 'Material', version = 1.5, annotation = 'NATURE',
         Stages = { { baseColorMap = M.TEX .. 'bne_twig_' .. tex .. '_b.color.dds',
-          opacityMap = M.TEX .. 'bne_twig_' .. tex .. '_o.data.dds', roughnessFactor = 0.85 }, {}, {}, {} },
+          opacityMap = M.TEX .. 'bne_twig_' .. tex .. '_o.data.dds', roughnessFactor = 0.85,
+          baseColorFactor = M.FACTOR }, {}, {}, {} },
         alphaTest = true, alphaRef = M.ALPHA_REF, doubleSided = true, invertBackFaceNormals = true }
     end
   end
