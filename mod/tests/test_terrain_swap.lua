@@ -126,7 +126,7 @@ function tb:setField(k, i, v)
   return setField(self, k, i, v)
 end
 T.check(terrain.swap('/t/w.ter', 2, 512, 0, 0, 0, { materials = mats }, nil) == true, 'a swap while wet')
-T.check(wetAtFile and wetAtFile:find('bngEarth_base_rw') ~= nil and asph.fields.aoBaseTex:find('bngEarth_base_aow') ~= nil,
+T.check(wetAtFile and wetAtFile:find('bngEarth_base_nm') ~= nil and asph.fields.aoBaseTex:find('bngEarth_base_h') ~= nil,
   'the asphalt layer wet before the file is set: ' .. tostring(wetAtFile))
 T.check((calls.updateMaterial or 0) == upd0, 'no updateMaterial for it')
 T.check(dirt.fields.roughnessBaseTex == nil or not tostring(dirt.fields.roughnessBaseTex):find('_rw'), 'the dirt layer stays')

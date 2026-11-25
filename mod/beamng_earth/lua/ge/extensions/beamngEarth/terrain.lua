@@ -679,13 +679,15 @@ end
 -- Wet carriageways (weather phase C, the weather plan 4.4 route 1): the city's roads are terrain layers under the
 -- aerial photo, and a terrain material change costs an updateMaterial (~1 s) on its own. But every block swap rebinds
 -- all its layers anyway (terrainFile + postApply): the paved layers' flat roughness and ambient-occlusion base maps are
--- switched to wet ones just before that, at no extra cost (probe P4). A wet road: a low roughness (the sky and the
--- lamps reflect, SSR where on) and a darker ambient (under a rain deck the ambient is most of the light). The step
--- (0 dry, 1 damp, 2 wet) comes from wetlook.lua; it shows from the next swap (driving: every few hundred metres;
--- standing still: when the next block comes). The level's flat maps at each photo size (tools/make_level_assets.py).
+-- switched just before that. A wet road: a lower roughness (the sky and the lamps reflect, SSR where on) and a darker
+-- ambient (under a rain deck the ambient is most of the light). The maps are the level's own flat base maps every layer
+-- already uses, read as other values (the normal map's red 127 = roughness 0.5, the height map's 175 = 0.69): no new
+-- texture, so no first-use load (probe P4 on the Deck: own wet maps cost the first wet swap +285 ms, their decode). The
+-- step (0 dry, 1 damp, 2 wet) comes from wetlook.lua; it shows from the next swap (driving: every few hundred metres;
+-- standing still: when the next block comes).
 M.WET_LAYERS = { '^bngEarthGroundAsphalt', '^bngEarthGroundCobble', '^bngEarthGroundPavers', '^bngEarthGroundBrick' }
-M.WET_MAPS = { [1] = { r = 'bngEarth_base_rd.png', ao = 'bngEarth_base_aod.png' },
-  [2] = { r = 'bngEarth_base_rw.png', ao = 'bngEarth_base_aow.png' } }
+M.WET_MAPS = { [1] = { r = 'bngEarth_base_h.png', ao = 'bngEarth_base_ao.png' },     -- damp: roughness 0.69
+  [2] = { r = 'bngEarth_base_nm.png', ao = 'bngEarth_base_h.png' } }                  -- wet: roughness 0.5, ao 0.69
 local wetWant = 0
 local wetHave, wetOrig = {}, {}     -- layer name -> the step on it; -> { r, ao } its own base maps
 M.wetSets = 0
