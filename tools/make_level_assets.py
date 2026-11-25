@@ -112,14 +112,20 @@ with open(os.path.join(L, "art/weather/precipitation.datablocks.json"), "w") as 
     json.dump({"bngEarthSnowflake": {"name": "bngEarthSnowflake", "class": "PrecipitationData",
                                      "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c26",
                                      "dropTexture": "/levels/beamng_earth/art/weather/bngEarth_snowflake.color.dds",
-                                     "dropsPerSide": 2, "splashesPerSide": 1}}, f, indent=2)
+                                     "dropsPerSide": 2, "splashesPerSide": 1},
+               # (the rain's own streak, brighter than rain_drop's: the stock one read as dry at noon)
+               "bngEarthRainDrop": {"name": "bngEarthRainDrop", "class": "PrecipitationData",
+                                    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c27",
+                                    "dropTexture": "/levels/beamng_earth/art/weather/bngEarth_raindrop.color.dds",
+                                    "splashTexture": "art/shapes/particles/Particle_rain_splash.dds",
+                                    "dropsPerSide": 1, "splashesPerSide": 1}}, f, indent=2)
     f.write("\n")
 lines(os.path.join(L, "main/MissionGroup/Weather/items.level.json"), [
     {"name": "bngEarthClouds", "class": "CloudLayer", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c21", "__parent": "Weather",
      "texture": "art/skies/clouds/clouds_normal_displacement.png", "coverage": 0.5, "cirrusCoverage": 0.3, "exposure": 1.45,
      "windSpeed": 0.1, "baseColor": [0.99, 0.99, 0.99, 0.9], "altitudeKm": 1.5},
     {"name": "bngEarthRain", "class": "Precipitation", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c22", "__parent": "Weather",
-     "dataBlock": "rain_drop", "numDrops": 0, "boxWidth": 36, "boxHeight": 24, "dropSize": 0.2, "splashSize": 0,
+     "dataBlock": "bngEarthRainDrop", "numDrops": 0, "boxWidth": 36, "boxHeight": 24, "dropSize": 0.2, "splashSize": 0,
      "fadeDist": 2, "fadeDistEnd": 17, "followCam": True, "useWind": True, "useTurbulence": False, "doCollision": True,
      "hitVehicles": False, "rotateWithCamVel": False},
     {"name": "bngEarthSnow", "class": "Precipitation", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c23", "__parent": "Weather",

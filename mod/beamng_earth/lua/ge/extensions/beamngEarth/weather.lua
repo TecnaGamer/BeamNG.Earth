@@ -139,7 +139,7 @@ M.FOG_LIMIT_M = 0
 M.FLAKES = {
   wet = { dropSize = 0.11, minSpeed = 0.9, maxSpeed = 1.3, minMass = 1.0, maxMass = 1.4, maxTurbulence = 0.25, turbulenceSpeed = 0.15 },
   snow = { dropSize = 0.08, minSpeed = 0.7, maxSpeed = 1.1, minMass = 0.75, maxMass = 1.0, maxTurbulence = 0.45, turbulenceSpeed = 0.2 },
-  dry = { dropSize = 0.05, minSpeed = 0.9, maxSpeed = 1.5, minMass = 0.5, maxMass = 0.8, maxTurbulence = 0.6, turbulenceSpeed = 0.3 },
+  dry = { dropSize = 0.065, minSpeed = 0.9, maxSpeed = 1.5, minMass = 0.5, maxMass = 0.8, maxTurbulence = 0.6, turbulenceSpeed = 0.3 },
   hail = { dropSize = 0.035, minSpeed = 6.0, maxSpeed = 8.0, minMass = 5.0, maxMass = 6.0, maxTurbulence = 0, turbulenceSpeed = 0 },
 }
 M.FLAKE_WET_C, M.FLAKE_DRY_C = -1, -8
@@ -1092,17 +1092,27 @@ function M.tintValue(lever, base, g)
     return string.format('%.4f', b + (lever.value - b) * g)
   elseif lever.kind == 'string' then
     return g >= (lever.on or M.TINT_ON) and lever.value or base
+  elseif lever.kind == 'mul' then          -- (every component times 1 .. k: the atmosphere's Point3F fields)
+    local c = {}
+    for v in tostring(base or ''):gmatch('[-%d%.eE]+') do c[#c + 1] = tonumber(v) end
+    if #c == 0 then return nil end
+    local f = 1 + ((lever.k or 1) - 1) * g
+    local out = {}
+    for i, v in ipairs(c) do out[i] = string.format('%.6g', v * f) end
+    return table.concat(out, ' ')
   end
 end
 
+-- (relative: the atmosphere's Mie coefficients are thousandths)
+local function differs(x, y) return math.abs(x - y) > M.TINT_EPS * math.max(math.abs(x), math.abs(y), 1e-3) end
 local function valuesDiffer(a, b)
   local ca, cb = parseColor(a), parseColor(b)
   if ca and cb then
-    for i = 1, 3 do if math.abs(ca[i] - cb[i]) > M.TINT_EPS then return true end end
+    for i = 1, 3 do if differs(ca[i], cb[i]) then return true end end
     return false
   end
   local na, nb = tonumber(a), tonumber(b)
-  if na and nb then return math.abs(na - nb) > M.TINT_EPS end
+  if na and nb then return differs(na, nb) end
   return tostring(a) ~= tostring(b)
 end
 

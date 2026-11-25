@@ -1,4 +1,5 @@
-"""make_precip_textures.py: the snow object's flakes (levels/beamng_earth/art/weather/bngEarth_snowflake.color.png, a 2 x 2
+"""make_precip_textures.py: the rain object's streak (art/weather/bngEarth_raindrop.color.png, PrecipitationData
+bngEarthRainDrop) and the snow object's flakes (levels/beamng_earth/art/weather/bngEarth_snowflake.color.png, a 2 x 2
 atlas for the PrecipitationData bngEarthSnowflake, dropsPerSide 2: art/weather/precipitation.datablocks.json).
 
 Why (the weather study 2026-11-24, its probe P10: snow was invisible in every broker shot): the stock datablock the
@@ -8,8 +9,13 @@ speck was about a centimetre across, most cells nearly empty. Here each drop is 
 shapes (a soft round flake, an oval one, a wet clump of three, a small six-armed crystal softened), white, the alpha
 the shape (premultiplied edges are not needed: the precipitation shader blends by alpha).
 
+The rain streak (phase A's daylight check, 2026-11-24: the stock rain_drop streak's alpha peaks at 0.29, so even a
+storm read as dry at noon in Tokyo while the same drops showed at night): the same shape (a thin vertical streak in a
+square, the drop billboard), its alpha up to RAIN_ALPHA, a cool white.
+
     python3 tools/make_precip_textures.py
-    python3 tools/mod_textures_dds.py mod/beamng_earth/levels/beamng_earth/art/weather/bngEarth_snowflake.color.png
+    python3 tools/mod_textures_dds.py mod/beamng_earth/levels/beamng_earth/art/weather/bngEarth_snowflake.color.png \
+        mod/beamng_earth/levels/beamng_earth/art/weather/bngEarth_raindrop.color.png
 
 Deterministic: no randomness, the same bytes every run.
 """
@@ -22,7 +28,12 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "mod", "beamng_earth", "levels", "beamng_earth", "art", "weather",
                    "bngEarth_snowflake.color.png")
+RAIN_OUT = OUT.replace("bngEarth_snowflake", "bngEarth_raindrop")
 CELL = 64            # px per flake (the atlas is 2 x 2 cells)
+RAIN_PX = 128        # the streak's square
+RAIN_ALPHA = 0.65    # its peak (stock rain_drop: 0.29)
+RAIN_SIGMA_PX = 2.6  # its half width (gaussian)
+RAIN_RGB = (232, 238, 245)
 SOFT = 0.5           # the edge's softness, share of the radius (a flake in motion is soft)
 
 
@@ -58,7 +69,22 @@ def cell(kind):
     return np.clip(a * 0.95, 0.0, 1.0)
 
 
+def raindrop():
+    t = np.arange(RAIN_PX) + 0.5
+    x, y = np.meshgrid(t, t)
+    across = np.exp(-0.5 * ((x - RAIN_PX / 2) / RAIN_SIGMA_PX) ** 2)
+    v = (y - 4) / (RAIN_PX - 8)                               # 0 at the top end .. 1 at the bottom
+    along = np.clip(np.sin(np.clip(v, 0, 1) * math.pi), 0, 1) ** 0.6 * (0.55 + 0.45 * np.clip(v, 0, 1))
+    a = np.clip(across * along * RAIN_ALPHA, 0, 1)
+    img = np.zeros((RAIN_PX, RAIN_PX, 4), dtype=np.uint8)
+    img[..., :3] = RAIN_RGB
+    img[..., 3] = np.round(a * 255).astype(np.uint8)
+    return img
+
+
 def main():
+    Image.fromarray(raindrop(), "RGBA").save(RAIN_OUT)
+    print(RAIN_OUT)
     atlas = np.zeros((2 * CELL, 2 * CELL, 4), dtype=np.uint8)
     atlas[..., :3] = 255
     for k in range(4):

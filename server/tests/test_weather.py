@@ -379,7 +379,7 @@ class LevelObjectsTest(unittest.TestCase):
         lua_sky = (modsim.MOD_DIR / "sky.lua").read_text()
         self.assertIn(f"M.CLOUD_NAME = '{by_class['CloudLayer'][0]['name']}'", lua_sky)
         rain, snow = (modsim.lua_string("weather.lua", "RAIN_NAME"), modsim.lua_string("weather.lua", "SNOW_NAME"))
-        self.assertEqual(names[rain]["dataBlock"], "rain_drop")
+        self.assertEqual(names[rain]["dataBlock"], "bngEarthRainDrop")
         # (snow's own flakes: Snow_menu's sheet of specks drew centimetre dots, the weather study's probe P10; the
         # datablock is the level's own, art/weather/precipitation.datablocks.json, and its texture is a shipped source)
         self.assertEqual(names[snow]["dataBlock"], "bngEarthSnowflake")

@@ -1060,6 +1060,11 @@
    "source": "levels/beamng_earth/art/weather/bngEarth_snowflake.color.webp",
    "format": "BC7_SRGB",
    "role": "color"
+  },
+  "levels/beamng_earth/art/weather/bngEarth_raindrop.color.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_raindrop.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
   }
  }
 }
