@@ -119,6 +119,13 @@ function M.wetValues(class, color, rough, k)
   return col, ro
 end
 
+-- Pure: the terrain's wet step (0 dry, 1 damp, 2 wet) for a wetness level.
+function M.terrainStep(k)
+  k = tonumber(k) or 0
+  if k >= 3 then return 2 elseif k >= 1 then return 1 end
+  return 0
+end
+
 -- Pure: the wetness from W1's road row ({ condition, ... }), or nil.
 function M.wetFromCondition(cond)
   return cond and M.CONDITION_WET[cond] or nil
@@ -187,6 +194,10 @@ end
 local function startLevel(k)
   if not known or k > 0 then scan() end
   level = k
+  -- the terrain's paved layers (the city carriageways) follow at the next block swap (terrain.lua setWet: 0 dry, 1 damp,
+  -- 2 wet)
+  local ter = package.loaded['beamngEarth/terrain']
+  if ter and ter.setWet then pcall(ter.setWet, M.terrainStep(k)) end
   queue = {}
   if k == 0 then
     for name in pairs(orig) do queue[#queue + 1] = name end
@@ -275,6 +286,8 @@ end
 function M.restoreAll()
   for name in pairs(orig) do pcall(writeOne, name, 0) end
   orig, queue, level = {}, nil, 0
+  local ter = package.loaded['beamngEarth/terrain']
+  if ter and ter.setWet then pcall(ter.setWet, 0) end
 end
 
 M._setOwn = function(w) own = w end      -- (tests)

@@ -111,4 +111,30 @@ T.check(terrain.swap('/t/g.ter', 2, 512, 256, 0, 0, { materials = otherMats }, '
   and calls.updateMaterial == before + #otherMats, 'one updateMaterial per slot after the swap: '
   .. tostring((calls.updateMaterial or 0) - before))
 terrain.REBIND_AFTER_SWAP = false
+
+-- weather phase C: the paved layers' wet base maps ride on the next swap (set before the file, no updateMaterial),
+-- and go back to their own when dry; the other layers are untouched
+T.check(terrain.isWetLayer('bngEarthGroundAsphalt') and terrain.isWetLayer('bngEarthGroundCobble')
+  and not terrain.isWetLayer('beamngEarthDirt') and not terrain.isWetLayer('bngEarthGroundGrass'), 'the paved layers')
+local asph = scenetree.findObject('bngEarthGroundAsphalt')
+asph:setField('roughnessBaseTex', 0, '/levels/beamng_earth/art/terrains/bngEarth_base_r.png')
+asph:setField('aoBaseTex', 0, '/levels/beamng_earth/art/terrains/bngEarth_base_ao.png')
+terrain.setWet(2)
+local wetAtFile, upd0 = nil, calls.updateMaterial or 0
+function tb:setField(k, i, v)
+  if k == 'terrainFile' and v == '/t/w.ter' then wetAtFile = asph.fields.roughnessBaseTex end
+  return setField(self, k, i, v)
+end
+T.check(terrain.swap('/t/w.ter', 2, 512, 0, 0, 0, { materials = mats }, nil) == true, 'a swap while wet')
+T.check(wetAtFile and wetAtFile:find('bngEarth_base_rw') ~= nil and asph.fields.aoBaseTex:find('bngEarth_base_aow') ~= nil,
+  'the asphalt layer wet before the file is set: ' .. tostring(wetAtFile))
+T.check((calls.updateMaterial or 0) == upd0, 'no updateMaterial for it')
+T.check(dirt.fields.roughnessBaseTex == nil or not tostring(dirt.fields.roughnessBaseTex):find('_rw'), 'the dirt layer stays')
+local sets = terrain.wetSets
+terrain.swap('/t/w2.ter', 2, 512, 0, 0, 0, { materials = mats }, nil)
+T.check(terrain.wetSets == sets, 'already wet: nothing set again')
+terrain.setWet(0)
+terrain.swap('/t/w3.ter', 2, 512, 0, 0, 0, { materials = mats }, nil)
+T.check(asph.fields.roughnessBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_r.png'
+  and asph.fields.aoBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_ao.png', 'dry: its own maps back')
 T.done('test_terrain_swap')

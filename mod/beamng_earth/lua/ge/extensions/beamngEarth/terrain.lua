@@ -538,6 +538,11 @@ function M.load(path, squareSize, maxHeight, x, y, z, layers, base, baseSize)
       layers = nil
     end
   end
+  if layers then          -- (the paved layers' wet maps before the import binds them: weather phase C)
+    local names = {}
+    for i, nm in ipairs(layers.materials) do names[i] = nm[1] end
+    pcall(M.applyWet, names)
+  end
   local ok, err = importMaps(tb, path, squareSize, maxHeight, true, layers)
   if not ok then
     -- Ground without a material still collides; it just renders as the placeholder.
@@ -578,6 +583,7 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
   local sw = stopwatch.new()
   local saved = {}
   local ok, err = pcall(function()
+    M.applyWet(slots)        -- (the wet look of the paved layers rides on the swap's own rebind: weather phase C)
     if base ~= nil then
       local path = base or nil
       local tex, size = baseFields(path, baseSize)
@@ -670,8 +676,59 @@ function M.delete()
   if tb then tb:delete() end
 end
 
+-- Wet carriageways (weather phase C, the weather plan 4.4 route 1): the city's roads are terrain layers under the
+-- aerial photo, and a terrain material change costs an updateMaterial (~1 s) on its own. But every block swap rebinds
+-- all its layers anyway (terrainFile + postApply): the paved layers' flat roughness and ambient-occlusion base maps are
+-- switched to wet ones just before that, at no extra cost (probe P4). A wet road: a low roughness (the sky and the
+-- lamps reflect, SSR where on) and a darker ambient (under a rain deck the ambient is most of the light). The step
+-- (0 dry, 1 damp, 2 wet) comes from wetlook.lua; it shows from the next swap (driving: every few hundred metres;
+-- standing still: when the next block comes). The level's flat maps at each photo size (tools/make_level_assets.py).
+M.WET_LAYERS = { '^bngEarthGroundAsphalt', '^bngEarthGroundCobble', '^bngEarthGroundPavers', '^bngEarthGroundBrick' }
+M.WET_MAPS = { [1] = { r = 'bngEarth_base_rd.png', ao = 'bngEarth_base_aod.png' },
+  [2] = { r = 'bngEarth_base_rw.png', ao = 'bngEarth_base_aow.png' } }
+local wetWant = 0
+local wetHave, wetOrig = {}, {}     -- layer name -> the step on it; -> { r, ao } its own base maps
+M.wetSets = 0
+
+-- Pure: is a terrain material one of the paved layers?
+function M.isWetLayer(name)
+  name = tostring(name or '')
+  for _, p in ipairs(M.WET_LAYERS) do if name:find(p) then return true end end
+  return false
+end
+
+-- The step wanted (0..2); applied at the next swap.
+function M.setWet(step)
+  wetWant = math.max(0, math.min(2, math.floor(tonumber(step) or 0)))
+end
+function M.wetStep() return wetWant end
+
+-- The paved layers among `slots` set to the wanted step (only those not on it yet). Called inside the swap, before
+-- the block's file is set.
+function M.applyWet(slots)
+  for _, name in ipairs(slots or {}) do
+    if M.isWetLayer(name) and (wetHave[name] or 0) ~= wetWant then
+      local m = scenetree.findObject(name)
+      if m then
+        if not wetOrig[name] then
+          wetOrig[name] = { r = m:getField('roughnessBaseTex', 0), ao = m:getField('aoBaseTex', 0) }
+        end
+        local o = wetOrig[name]
+        local maps = M.WET_MAPS[wetWant]
+        local r = maps and M.baseMapFor(TERRAIN_DIR .. maps.r, M.BASE_TEX_SIZE) or o.r
+        local ao = maps and M.baseMapFor(TERRAIN_DIR .. maps.ao, M.BASE_TEX_SIZE) or o.ao
+        m:setField('roughnessBaseTex', 0, r)
+        m:setField('aoBaseTex', 0, ao)
+        wetHave[name] = wetWant
+        M.wetSets = M.wetSets + 1
+      end
+    end
+  end
+end
+
 function M.onLevelChanged()
   materialsChecked = false
+  wetHave, wetOrig = {}, {}
 end
 
 return M
