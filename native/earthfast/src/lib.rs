@@ -6893,6 +6893,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_class::<snowlook::SnowLook>()?;
     m.add_function(wrap_pyfunction!(snowlook::snow_ela, m)?)?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_evergreen, m)?)?;
     m.add_function(wrap_pyfunction!(snowlook::snow_perm_possible, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::season_amounts, m)?)?;

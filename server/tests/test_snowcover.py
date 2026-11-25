@@ -220,7 +220,15 @@ class LookTest(unittest.TestCase):
             self.assertGreater(int(out[..., 0].min()), 200, "open ground white under heavy snow")
             crowns = np.zeros_like(grass)
             crowns[...] = (24, 40, 30)
-            self.assertLess(int(sl.apply(crowns)[..., 0].mean()), 90, "dark conifer crowns keep most of their colour")
+            # Illinois (hot-summer continental): its crowns mostly deciduous, a light bare grey-brown under snow; in the
+            # taiga (subarctic) evergreen, near black (snowcover's climate fallback, snow_evergreen)
+            bare = sl.apply(crowns).astype(int)
+            self.assertTrue(90 < bare[..., 0].mean() < 200, f"deciduous crowns under snow: {bare[..., 0].mean():.0f}")
+            taiga = geodesy.EnuFrame(62.0, 26.0)
+            sp_t = sc.spec_for_square(taiga, -500, -500, 1000.0)
+            sl_t = sc.look(sp_t, taiga, -500, -500, 1000.0, np.full((65, 65), 150.0), -500, -500, 1000 / 64)
+            self.assertLess(int(sl_t.apply(crowns)[..., 0].mean()), 75, "evergreen crowns keep most of their colour")
+            self.assertGreater(float(bare[..., 0].mean()), float(sl_t.apply(crowns)[..., 0].mean()) + 40)
             snowy = np.full_like(grass, 246)
             got = sl.apply(snowy)
             self.assertLessEqual(int(np.abs(got.astype(int) - 246).max()), 12,

@@ -26,7 +26,7 @@ use crate::dm::Dm;
 pub const ROWS: usize = 8;          // band rows per table at most
 pub const ROAD_CLASSES: usize = 5;  // plow classes P0..P4 (W3): the share of the ground's cover a road keeps, 0..8
 const RD: usize = ROAD_CLASSES + 1; // ... and then the share of still water frozen and snow-covered (lake ice), 0..8
-pub const N_PARAMS: usize = 79;
+pub const N_PARAMS: usize = 87;
 const NO_ELA: f64 = 1.0e9;
 
 /// The constants snowcover.py passes (snowcover.PARAMS, in this order).
@@ -65,6 +65,12 @@ pub struct SnowParams {
                                 // ground is a water surface (the DEMs' hydro-flattened lakes and rivers) ...
     flat_v: (f64, f64),         // ... where the photo there is no brighter than this (value) ...
     flat_cv: (f64, f64),        // ... and smooth (its window's coefficient of variation, coarse texels)
+    montane: (f64, f64, f64),   // m: mid-latitude crowns are evergreen from this height to this one (spruce, fir,
+                                // pine forests of the mountains), at most this share
+    bare: [f64; 3],             // a leafless crown's colour over snow (sRGB): trunks, twigs and their shadows
+    bare_k: f64,                // ... its share of a deciduous crown's texel under full cover (the rest: the snow seen
+                                // through)
+    ever_dark: f64,             // an evergreen crown darker by this share under full cover (low winter sun)
     white_v: (f64, f64),        // photo value above which a neutral texel counts as snow already
     white_sat: f64,             // ... at most this saturation
     shade: (f64, f64, f64),     // the snow's brightness: base + gain * photo luminance, at most max
@@ -95,6 +101,7 @@ impl SnowParams {
             treeline_band: p[59], struct_keep: p[60], struct_cv: (p[61], p[62]), struct_texel: (p[63], p[64]),
             winter_dark: p[65], rock_rel: (p[66], p[67]), lake_frac: (p[68], p[69]), lake_r_m: p[70],
             sea_h: (p[71], p[72]), flat: (p[73], p[74]), flat_v: (p[75], p[76]), flat_cv: (p[77], p[78]),
+            montane: (p[79], p[80], p[81]), bare: [p[82], p[83], p[84]], bare_k: p[85], ever_dark: p[86],
         })
     }
 }
@@ -239,6 +246,53 @@ fn vnoise(x: f64, y: f64, seed: i64) -> f64 {
     top + ((c + (d - c) * fx) - top) * fy
 }
 
+/// The share of evergreen crowns in a Koppen class's forests (climate.py's legend, 1-30): a climate fallback until a
+/// leaf-type map (MODIS MCD12C1 / ESA CCI land cover: see snowcover.py) is packed. Tropical and Mediterranean
+/// forests evergreen; the oceanic and humid subtropical ones mixed; hot-summer continental (Minneapolis, Chicago,
+/// Moscow's south) mostly deciduous; warm-summer continental mixed; subarctic (taiga) and alpine tundra evergreen.
+const EVERGREEN: [f64; 31] = [0.5,
+    0.9, 0.9, 0.8,              // Af Am Aw
+    0.6, 0.6, 0.6, 0.6,         // BWh BWk BSh BSk (junipers, pinyon, pines where trees stand)
+    0.8, 0.8, 0.7,              // Csa Csb Csc
+    0.5, 0.5, 0.6,              // Cwa Cwb Cwc
+    0.35, 0.35, 0.6,            // Cfa Cfb Cfc
+    0.6, 0.6, 0.8, 0.85,        // Dsa Dsb Dsc Dsd
+    0.2, 0.45, 0.8, 0.85,       // Dwa Dwb Dwc Dwd
+    0.2, 0.45, 0.85, 0.85,      // Dfa Dfb Dfc Dfd
+    0.8, 0.8];                  // ET EF
+
+/// The evergreen share at each (lat, lon) (the Koppen grid kop at res deg, its four pixels blended; the sea's pixels
+/// left out).
+#[pyfunction]
+pub fn snow_evergreen<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
+                           kop: PyReadonlyArray2<'py, u8>, res: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (la, lo, k) = (lat.as_array(), lon.as_array(), kop.as_array());
+    if la.len() != lo.len() || k.is_empty() || !(res > 0.0) {
+        return Err(PyValueError::new_err("snow_evergreen: lat and lon of one length, a Koppen grid, res > 0"));
+    }
+    let (nj, ni) = (k.shape()[0] as i64, k.shape()[1] as i64);
+    let out: Vec<f64> = py.detach(|| la.iter().zip(lo.iter()).map(|(&a, &o)| {
+        let fj = (90.0 - a) / res - 0.5;
+        let fi = (o + 180.0) / res - 0.5;
+        let (j0, i0) = (fj.floor(), fi.floor());
+        let (wj, wi) = (fj - j0, fi - i0);
+        let (mut e, mut w) = (0.0, 0.0);
+        for (dj, w1) in [(0i64, 1.0 - wj), (1, wj)] {
+            for (di, w2) in [(0i64, 1.0 - wi), (1, wi)] {
+                let j = (j0 as i64 + dj).clamp(0, nj - 1) as usize;
+                let i = (i0 as i64 + di).rem_euclid(ni) as usize;
+                let c = k[[j, i]] as usize;
+                if (1..=30).contains(&c) {
+                    e += w1 * w2 * EVERGREEN[c];
+                    w += w1 * w2;
+                }
+            }
+        }
+        if w > 0.0 { e / w } else { EVERGREEN[0] }
+    }).collect());
+    Ok(out.into_pyarray(py))
+}
+
 /// The climatic snowline (m) at |lat| (deg), before the Koppen gate: the equilibrium line of mountain glaciers,
 /// highest in the dry subtropics, near sea level past 75 deg.
 const ELA_TABLE: [(f64, f64); 14] = [(0.0, 5000.0), (15.0, 5400.0), (25.0, 5800.0), (32.0, 5400.0), (40.0, 4300.0),
@@ -358,7 +412,7 @@ pub struct SnowLook {
     gx: Array2<f64>,                // their gradient (dz/dx, dz/dy per m)
     gy: Array2<f64>,
     uarea: (f64, f64, f64),         // ux0, uy0, spacing
-    geo: [Array2<f64>; 4],          // lat, lon, zoff (geodetic h - frame z), ela, on G x G nodes (row 0 north)
+    geo: [Array2<f64>; 5],          // lat, lon, zoff (geodetic h - frame z), ela, evergreen share, on G x G nodes
     field: Option<SnowField>,
     p: SnowParams,
     road: Option<Array2<u8>>,       // the texture's plow class per texel (0 none, 1..5 P0..P4), when known
@@ -379,6 +433,7 @@ struct Coarse {
     st: Vec<f64>,       // the slope taper (1 flat, 0 a wall)
     h: Vec<f64>,        // geodetic height
     fl: Vec<f64>,       // the largest geodetic height step to a neighbour node, per m (0 on a flattened lake)
+    ever: Vec<f64>,     // the evergreen share
     o: Vec<f64>,        // opacity
     g: Vec<f64>,        // age
     rd: Vec<[f64; RD]>,
@@ -395,6 +450,7 @@ struct Pt {
     slope: f64,
     tree: f64,          // 1 below the climatic treeline, 0 above
     h: f64,
+    ever: f64,          // the evergreen share of the crowns there
 }
 
 impl SnowLook {
@@ -413,6 +469,7 @@ impl SnowLook {
         let lon = bil(&self.geo[1].view(), fy, fx);
         let zoff = bil(&self.geo[2].view(), fy, fx);
         let ela = bil(&self.geo[3].view(), fy, fx);
+        let ever_climate = bil(&self.geo[4].view(), fy, fx);
         let (ux0, uy0, usp) = self.uarea;
         let (uy, ux) = ((y - uy0) / usp, (x - ux0) / usp);
         let z = bil(&self.u.view(), uy, ux);
@@ -438,7 +495,9 @@ impl SnowLook {
         let steep = 1.0 - smooth(tan2.sqrt(), self.p.steep_tan.0, self.p.steep_tan.1);
         let tl = treeline_lat(lat);
         let tree = 1.0 - smooth(h, tl - 0.5 * self.p.treeline_band, tl + 0.5 * self.p.treeline_band);
-        Pt { c, steep, d, g, rd, slope: tan2.sqrt(), tree, h }
+        let (m0, m1, mmax) = self.p.montane;
+        let ever = ever_climate.max(mmax * smooth(h, m0, m1));
+        Pt { c, steep, d, g, rd, slope: tan2.sqrt(), tree, h, ever }
     }
 
     fn opacity(&self, d: f64) -> f64 {
@@ -462,6 +521,7 @@ impl SnowLook {
         let (mut st, mut hh) = (vec![0.0; n], vec![0.0; n]);
         let mut sl = vec![0.0; n];
         let mut tree = vec![0.0; n];
+        let mut ever = vec![0.0; n];
         let mut any = false;
         for r in 0..nk {
             let y = y0 + size - ((r * s) as f64 + 0.5) * t;
@@ -471,6 +531,7 @@ impl SnowLook {
                 let q = r * nk + k;
                 sl[q] = pt.slope;
                 tree[q] = pt.tree;
+                ever[q] = pt.ever;
                 c[q] = pt.c;
                 st[q] = pt.steep;
                 hh[q] = pt.h;
@@ -494,7 +555,7 @@ impl SnowLook {
             }
             m
         }).collect();
-        any.then_some(Coarse { s, nk, c, st, h: hh, fl, o, g, rd, sl, tree })
+        any.then_some(Coarse { s, nk, c, st, h: hh, fl, ever, o, g, rd, sl, tree })
     }
 
     /// The photo with its snow (rgb (px, px, 3), row 0 north, covering the square), or None: no snow on it.
@@ -577,7 +638,8 @@ impl SnowLook {
         let inv_sn = 1.0 / sn as f64;
         let mut rn = vec![0.0f64; nn];
         // the coarse fields along this texel row (vertical lerp once a row; horizontal per texel)
-        let mut rows = vec![[0.0f64; 10]; nk];      // c, steep, o, g, slope, tree, vm, water share, height, flat
+        let mut rows = vec![[0.0f64; 11]; nk];      // c, steep, o, g, slope, tree, vm, water share, height, flat,
+                                                    // evergreen share
         let mut rr = vec![[0.0f64; RD]; nk];
         for i in 0..px {
             let (r0, wy) = (i / s, (i % s) as f64 * inv_s);
@@ -588,7 +650,7 @@ impl SnowLook {
             let lv = |v: &[f64], k: usize| v[a0 + k] * (1.0 - wy) + v[a1 + k] * wy;
             for k in 0..nk {
                 rows[k] = [lv(&cg.c, k), lv(&cg.st, k), lv(&cg.o, k), lv(&cg.g, k), lv(&cg.sl, k), lv(&cg.tree, k),
-                           lv(&vm, k), lv(&wf, k), lv(&cg.h, k), lv(&cg.fl, k)];
+                           lv(&vm, k), lv(&wf, k), lv(&cg.h, k), lv(&cg.fl, k), lv(&cg.ever, k)];
                 for q in 0..RD {
                     rr[k][q] = cg.rd[a0 + k][q] * (1.0 - wy) + cg.rd[a1 + k][q] * wy;
                 }
@@ -658,47 +720,15 @@ impl SnowLook {
                     None => (r, g, b, v, 0.0),
                 };
                 let tree = hl(5);
-                let mut dark_k = 0.0f64;
-                // a crown (green, darker than the stand round it or simply dark) keeps most of its colour; a shadow
-                // (not green) takes the snow, darker by the shading below
-                // (green over red; blue no more than a little above it: conifers are blue-green in Sentinel-2,
-                // shadows blue, meadows and rock red-grey)
-                let gr = (cgg - cr) * inv255;
-                if gr > p.canopy_green.0 && tree > 0.0 {
-                    let id = |x: f64| (x.round() as i64).clamp(-255, 255) as usize;
-                    let green = t_gr[id(cgg - cr) + 255] * t_gb[id(cgg - cb) + 255];
-                    if green > 0.0 {
-                        let rel = 1.0 - smooth(cv / vml, p.canopy_rel.0, p.canopy_rel.1);
-                        let dark = 1.0 - t_dark[((cv * 255.0).round() as usize).min(255)];
-                        let canopy = green * smooth(rel.max(dark), 0.15, 0.6) * tree;
-                        // (a grey, bare crown at a fine texel lets the snow under it show; seen from 10 m a stand of
-                        // bare trees is as dark as a conifer one, its trunks, twigs and shadows)
-                        let satk = p.canopy_sat_floor + (1.0 - p.canopy_sat_floor) * smooth(sat, p.canopy_sat.0, p.canopy_sat.1);
-                        dark_k = canopy * p.canopy_keep * (satk + (1.0 - satk) * coarse_w);
-                    }
-                }
-                // a textured texel (a town: streets, alleys, roofs, bare street trees and their shadows; a forest) keeps
-                // most of its colour at coarse texels; smooth ground (yards, parks, fields, ski runs) goes white
-                let crown_k = dark_k;
-                if coarse_w > 0.0 && tree > 0.0 {
-                    // (its darker part: a street, an alley, a roof's shaded side, a tree and its shadow; the bright
-                    // side of a texture, a ski run's or a yard's edge, takes the snow)
-                    let darker = 1.0 - smooth(v / vml, 0.9, 1.15);
-                    dark_k = dark_k.max(p.struct_keep * smooth(cvar, p.struct_cv.0, p.struct_cv.1) * darker * tree
-                                        * coarse_w);
-                }
-                let mut keep_mul = 1.0 - dark_k;
-                if v > p.white_v.0 {
-                    keep_mul *= 1.0 - t_white[mxi] * (1.0 - smooth(sat, p.white_sat, p.white_sat * 2.0));
-                }
-                // open water keeps the photo: the sea (by height) and moving water (a narrow body: a river, a canal);
-                // still water (a wide body: a lake, a pond's bay, a reservoir) whitens as far as the snow state says
-                // its ice is frozen and covered (the tables' ice share; W6 makes it drivable)
+                // water first (it wins over a crown): the map's where known; else the photo's dark blue water, or a
+                // hydro-flattened DEM surface where the photo is no brighter than water (a lake whatever its colour)
+                let mut keep_mul = 1.0;
+                let mut is_water = 0.0f64;
                 if let Some(wm) = wmask {
                     // the map's water: authoritative where it is known
                     match wm[i * px + j] {
-                        WATER_MOVING | WATER_SEA => keep_mul = 0.0,
-                        WATER_STILL => keep_mul *= hr(ROAD_CLASSES),
+                        WATER_MOVING | WATER_SEA => { keep_mul = 0.0; is_water = 1.0; }
+                        WATER_STILL => { keep_mul *= hr(ROAD_CLASSES); is_water = 1.0; }
                         _ => {}
                     }
                 } else {
@@ -706,11 +736,52 @@ impl SnowLook {
                     let dem = flat_water(ri, gi, bi, hl(9)) * (1.0 - smooth(cvar, p.flat_cv.0, p.flat_cv.1));
                     let water = hue.max(dem);
                     if water > 0.0 {
+                        // open: the sea (by height) and moving water (a narrow body: a river, a canal); still water (a
+                        // wide body: a lake, a reservoir) whitens as far as its ice is frozen and covered (the tables'
+                        // ice share; W6 makes it drivable)
                         let lake = smooth(hl(7), p.lake_frac.0, p.lake_frac.1);
                         let sea = 1.0 - smooth(hl(8), p.sea_h.0, p.sea_h.1);
                         let frozen = lake * hr(ROAD_CLASSES) * (1.0 - sea);
                         keep_mul *= 1.0 - water * (1.0 - frozen);
+                        is_water = water;
                     }
+                }
+                // a crown (green, darker than the stand round it or simply dark): an evergreen one keeps most of its
+                // colour (near black under snow); a deciduous one is a bare crown over the snow, a light grey-brown
+                // (the evergreen share: the climate's, the mountains' conifers; snow_evergreen)
+                let mut crown_k = 0.0f64;
+                let mut bare_t = 0.0f64;
+                let gr = (cgg - cr) * inv255;
+                if gr > p.canopy_green.0 && tree > 0.0 && is_water < 1.0 {
+                    let id = |x: f64| (x.round() as i64).clamp(-255, 255) as usize;
+                    let green = t_gr[id(cgg - cr) + 255] * t_gb[id(cgg - cb) + 255];
+                    if green > 0.0 {
+                        let rel = 1.0 - smooth(cv / vml, p.canopy_rel.0, p.canopy_rel.1);
+                        let dark = 1.0 - t_dark[((cv * 255.0).round() as usize).min(255)];
+                        let canopy = green * smooth(rel.max(dark), 0.15, 0.6) * tree * (1.0 - is_water);
+                        let ever = hl(10).clamp(0.0, 1.0);
+                        crown_k = canopy * p.canopy_keep * ever;
+                        bare_t = canopy * (1.0 - ever) * p.bare_k;
+                    }
+                }
+                // a leafless stand in a leaf-off photo (brown or grey, textured, darker than the open ground round it,
+                // at a coarse texel): a bare crown too (a field as dark is smooth, and goes white)
+                if coarse_w > 0.0 && tree > 0.0 && is_water < 1.0 && (cr - cb) * inv255 > -0.01 {
+                    let stand = smooth(cvar, 0.04, 0.08) * (1.0 - smooth(v / vml, 0.75, 0.97)) * tree * coarse_w
+                        * (1.0 - is_water);
+                    bare_t = bare_t.max(stand * p.bare_k);
+                }
+                // a textured coarse texel's darker part (a town's streets, alleys, roofs' shaded sides) keeps some of
+                // its colour; smooth ground (yards, parks, fields, ski runs) goes white
+                let mut dark_k = crown_k;
+                if coarse_w > 0.0 && tree > 0.0 {
+                    let darker = 1.0 - smooth(v / vml, 0.9, 1.15);
+                    dark_k = dark_k.max(p.struct_keep * smooth(cvar, p.struct_cv.0, p.struct_cv.1) * darker * tree
+                                        * coarse_w * (1.0 - is_water) * (1.0 - bare_t / p.bare_k.max(1e-6)));
+                }
+                keep_mul *= 1.0 - dark_k;
+                if v > p.white_v.0 {
+                    keep_mul *= 1.0 - t_white[mxi] * (1.0 - smooth(sat, p.white_sat, p.white_sat * 2.0));
                 }
                 let amt = a * hl(2) * keep_mul;
                 if amt <= 0.0 {
@@ -721,9 +792,13 @@ impl SnowLook {
                 let ka = (age.floor() as usize).min(2);
                 let wa = age - ka as f64;
                 let sh = (p.shade.0 + p.shade.1 * lum).min(p.shade.2);
-                let dim = 1.0 - p.winter_dark * crown_k * c.min(1.0);
+                let dim = 1.0 - p.ever_dark * crown_k * c.min(1.0);
+                let bt = bare_t * c.min(1.0);
+                // (a bare stand keeps its texture: crowns and gaps, lighter and darker than the stand's mean)
+                let bare_tex = (v / vml).clamp(0.7, 1.25);
                 for ch in 0..3 {
-                    let col = (p.colour[ka][ch] + (p.colour[ka + 1][ch] - p.colour[ka][ch]) * wa) * sh;
+                    let snow = (p.colour[ka][ch] + (p.colour[ka + 1][ch] - p.colour[ka][ch]) * wa) * sh;
+                    let col = snow + (p.bare[ch] * bare_tex - snow) * bt;
                     let sv = src[q + ch] as f64;
                     out[q + ch] = ((sv + (col - sv) * amt) * dim + 0.5).floor().clamp(0.0, 255.0) as u8;
                 }
@@ -910,17 +985,17 @@ impl SnowLook {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn new(area: (f64, f64, f64), origin: (f64, f64), u: PyReadonlyArray2<'_, f64>, uarea: (f64, f64, f64),
            geo: (PyReadonlyArray2<'_, f64>, PyReadonlyArray2<'_, f64>, PyReadonlyArray2<'_, f64>,
-                 PyReadonlyArray2<'_, f64>),
+                 PyReadonlyArray2<'_, f64>, PyReadonlyArray2<'_, f64>),
            field: Option<(f64, i64, i64, PyReadonlyArray2<'_, i32>, PyReadonlyArray3<'_, i32>, PyReadonlyArray2<'_, i32>)>,
            params: PyReadonlyArray1<'_, f64>, road: Option<PyReadonlyArray2<'_, u8>>,
            water: Option<PyReadonlyArray2<'_, u8>>) -> PyResult<Self> {
         let p = SnowParams::from_slice(params.as_slice()?)?;
         let u = u.as_array().to_owned();
         let g = [geo.0.as_array().to_owned(), geo.1.as_array().to_owned(), geo.2.as_array().to_owned(),
-                 geo.3.as_array().to_owned()];
+                 geo.3.as_array().to_owned(), geo.4.as_array().to_owned()];
         if u.shape()[0] < 2 || u.shape()[1] < 2 || !(uarea.2 > 0.0) || !(area.2 > 0.0)
             || g.iter().any(|a| a.shape() != g[0].shape() || a.shape()[0] < 2 || a.shape()[1] < 2) {
-            return Err(PyValueError::new_err("SnowLook: a 2 x 2 height grid or larger, spacing > 0, four geo grids alike"));
+            return Err(PyValueError::new_err("SnowLook: a 2 x 2 height grid or larger, spacing > 0, five geo grids alike"));
         }
         let field = match field {
             Some((res, ci0, cj0, idx, tables, counts)) => Some(SnowField::new(res, ci0, cj0, idx.as_array(),

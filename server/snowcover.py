@@ -97,8 +97,8 @@ PARAMS = np.array((
     0.08, 0.20, 0.65,       # canopy_sat, canopy_sat_floor: a grey (bare, the winter grade's) crown keeps 0.65 of it
                             # at a fine texel (at 10 m a bare stand is as dark as a conifer one)
     300.0,                  # treeline_band: m, crowns fade out about the climatic treeline
-    0.85,                   # struct_keep: the darker part of a textured coarse texel (a town's streets, alleys, roofs'
-                            # shaded sides, bare trees and their shadows) keeps 0.85 of its colour
+    0.55,                   # struct_keep: the darker part of a textured coarse texel (a town's streets, alleys, roofs'
+                            # shaded sides) keeps 0.55 of its colour
     0.05, 0.11,             # struct_cv: the value's coefficient of variation in 5 x 5 texels: smooth (yards, parks,
                             # fields, ski runs: white) .. textured (streets, roofs, trees and shadows: kept)
     1.5, 4.0,               # struct_texel: m a texel over which the window rules fade in (block photos: none)
@@ -107,10 +107,15 @@ PARAMS = np.array((
     0.35, 0.55,             # lake_frac: water with this share of water within lake_r_m is still water (a lake)
     400.0,                  # lake_r_m
     2.0, 6.0,               # sea_h: m, water below is the sea (open)
-    0.0, 0.0,               # flat: height steps per m between grid nodes of a hydro-flattened water surface (off:
-                            # flat valley fields read as water at Furano; the map's water decides where it is known)
+    0.0001, 0.0004,         # flat: height steps per m between grid nodes of a hydro-flattened water surface (a lake
+                            # is exactly flat in the DEMs; at 0.0008-0.0025 Furano's flat valley fields read as water)
     0.40, 0.55,             # flat_v: ... where the photo is no brighter than this
     0.05, 0.10,             # flat_cv: ... and smooth
+    700.0, 1400.0, 0.85,    # montane: mid-latitude crowns evergreen (spruce, fir, pine) from 700 m to 1,400 m, at most 0.85
+    128.0, 112.0, 96.0,     # bare: a leafless crown over snow at 10 m: brown-grey (Sentinel-2's Spessart beech and
+                            # oak under snow, 2021-02-13)
+    0.9,                    # bare_k: its share of a deciduous crown's texel under full cover
+    0.3,                    # ever_dark: an evergreen crown 0.3 darker under full cover (low winter sun)
 ), np.float64)
 
 
@@ -289,8 +294,13 @@ def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
         ela = np.asarray(fast._ef.snow_ela(lat, lon, climate._load(), climate.RES), np.float64)
     else:
         ela = np.full(lat.shape, 1.0e9)
+    import climate
+    # the evergreen share of the crowns by climate (snow_evergreen: Koppen; the mountains' conifers by height in the
+    # kernel): a deciduous crown under snow is a light bare crown, an evergreen one near black. A climate fallback until a
+    # leaf-type map is packed (MODIS MCD12C1 0.05 deg evergreen / deciduous shares, or ESA CCI land cover 300 m)
+    ever = np.asarray(fast._ef.snow_evergreen(lat, lon, climate._load(), climate.RES), np.float64)
     shp = (GEO_N, GEO_N)
-    geo = tuple(np.ascontiguousarray(a.reshape(shp)) for a in (lat, lon, zoff, ela))
+    geo = tuple(np.ascontiguousarray(a.reshape(shp)) for a in (lat, lon, zoff, ela, ever))
     field = None
     if spec.field is not None:
         res, ci0, cj0, idx, tables, counts = spec.field
