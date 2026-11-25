@@ -3021,6 +3021,7 @@ def _pier(p, origin, P, T, UV, M, mat):
 TUNNEL_SHOULDER = 1.2      # m of concrete floor between the road's edge and the wall
 TUNNEL_WALL_H = 4.6        # m of upright wall before the vault
 TUNNEL_H = 6.8             # m from the floor to the vault's top
+TUBE_KERB_M = 0.2          # (T1) m a record's tube's shoulders stand over its floor (tunnel(): the chunk's "rec")
 PORTAL_FRAME = 6.0         # m of portal face around the opening (hides the terrain hole's 2 m steps)
 TUNNEL_SIDE = DECK_SIDE    # the tube's concrete (portal faces) ...
 TUNNEL_INNER = "bne_tunnel_inner"   # ... and inside a full tube darker (tunnel.materials.json): lit by the sky as the
@@ -3224,6 +3225,11 @@ def tunnel(chunks, origin, walls=()):
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
         sec = _tunnel_section(hw, th, low, box=low and not stone and portals.ON)    # (a major road's low tube: a box)
+        if c.get("rec"):
+            # (T1: a tube of the road system's record has a kerb TUBE_KERB_M high along each wall: its shoulders were one
+            # with the floor's slab, two coplanar colliding faces over each lane cell (z-fighting; the Caldecott Tunnel))
+            sec = sec.copy()
+            sec[[0, 1, -2, -1], 1] = TUBE_KERB_M
         k, m = len(mid), len(sec)
         rows = np.empty((m, k, 3))
         for j, (off, h) in enumerate(sec):
