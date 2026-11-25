@@ -830,6 +830,8 @@ do
     and sm.wind.gustMs == 200 and sm.wind.fromDeg == 360 and sm.lat == nil and sm.tz == nil and sm.func == nil,
     'sanitizeMsg: clamped, no place, nothing foreign')
   check(W.sanitizeMsg('x') == nil and W.sanitizeMsg({}).cover == nil, 'sanitizeMsg: not a table; missing parts stay missing')
+  local th = W.sanitizeMsg({ code = 95, capeJkg = 2500, lpi = 3, rainMmH = 6 })
+  check(th.capeJkg == 2500 and th.lpi == 3 and W.thunderOf(th) == 2, 'sanitizeMsg: the thunder fields relayed (real-host lightning)')
   check(type(W.targets(W.sanitizeMsg({ code = 61 })).fogSigma) == 'number', 'a sanitized message gives targets')
 
   -- the radial ring's choices
