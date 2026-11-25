@@ -517,5 +517,53 @@ class ChecksPassTest(unittest.TestCase):
                 self.assertEqual(fails, [], name)
 
 
+class FormatIndependenceTest(unittest.TestCase):
+    """What a region holds does not depend on the plans' format number. The format is in every interchange's key (a hash),
+    and the pieces of a road that two interchanges give were put together in the keys' order: where two tie the first wins
+    (grading._Planner._shape_at), so another number was another road (A61 near Marignane: 326 steps at 95, 357 at 97)."""
+    ROAD = "road-a"
+    CENTRE = (LAT, LON)
+
+    def interchanges(self):
+        """Two interchanges over the same road and different streets: {name: (ids, the road's pieces)}."""
+        a = np.array([[0.0, 0.0], [20.0, 0.0]])
+        return {"first": (["deck:" + self.ROAD, "ground:street-a"], [(a, np.array([5.0, 5.0]), "deck")]),
+                "second": (["deck:" + self.ROAD, "ground:street-b"], [(a, np.array([6.0, 6.0]), "deck")])}
+
+    def region_at(self, number):
+        import plancache
+        sols = {}
+        with unittest.mock.patch.object(plancache, "PLANS_FORMAT", number), \
+                unittest.mock.patch.object(grading, "SHAPES_ON", True):
+            for name, (ids, items) in self.interchanges().items():
+                key = _gsh.interchange_key(ids, self.CENTRE, owner.version())
+                sols[key] = dict(key=key, roads={self.ROAD: items}, failed=None, pieces=1, crossings=0, owner="", pid=0,
+                                 secs=0.0, relaxed=0, rank=_gsh.interchange_rank(ids, self.CENTRE))
+
+            def find(planner, h_lo, h_hi, clock, taken):
+                taken.update(dict.fromkeys(sols, True))
+                return None, [], [], []
+            with unittest.mock.patch.object(pipeline.s2_extent, "find", find), \
+                    unittest.mock.patch.object(owner, "have", lambda planner, ik: sols[ik]):
+                prof = prof_of(overpass(), lambda p, h, k: pipeline.region(p, h, k), "fmt%d" % number)
+        return sols, prof
+
+    def formats(self):
+        """Two format numbers under which the two interchanges' keys sort the other way round: the first at which they
+        do, after 95."""
+        def keys_order(number):
+            return [sol["rank"][0][1] for _k, sol in sorted(self.region_at(number)[0].items())]
+        want = keys_order(95)
+        other = next((n for n in range(96, 200) if keys_order(n) != want), None)
+        self.assertIsNotNone(other, "some format number sorts the two keys the other way round")
+        return 95, other
+
+    def test_two_formats_the_same_pieces_in_the_same_order(self):
+        regions = [self.region_at(n)[1] for n in self.formats()]
+        self.assertEqual(len(regions[0][self.ROAD]), 2)
+        self.assertEqual(prof_bytes(regions[0]), prof_bytes(regions[1]))
+        self.assertEqual([float(z[0]) for _xy, z, _m in regions[0][self.ROAD]], [5.0, 6.0], "by the roads, street-a first")
+
+
 if __name__ == "__main__":
     unittest.main()

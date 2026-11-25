@@ -1616,6 +1616,15 @@ def interchange_key(ids, centre, version=""):
     return h.hexdigest()
 
 
+def interchange_rank(ids, centre):
+    """Where an interchange stands among the others: its sorted member ids (canonical_id), then where its centre is (the
+    key's grid, KEY_DEG), as lists so that a stored solution gives back the same. What the key is made of without the
+    version, and not the key: a key is a hash that changes with the plans' format, and nothing between interchanges may
+    be decided by it (the order of the pieces of a road that several of them give, where two of them tie). Two
+    interchanges of the same rank are the same interchange."""
+    return [sorted(ids), [round(centre[0] / KEY_DEG), round(centre[1] / KEY_DEG)]]
+
+
 def system_centre(net, sysm):
     """The middle of a system's seeds' bounding box (frame ENU): the point whose map cell owns the interchange."""
     pts = np.concatenate([net.lines[i] for i in sysm["seeds"]])

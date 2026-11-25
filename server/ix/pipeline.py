@@ -224,8 +224,11 @@ def region(planner, home, hk):
         found[got["key"]] = got
     t_owner = time.perf_counter() - t1
     prof = {}
-    for ik in sorted(found):
-        for fid, items in found[ik]["roads"].items():
+    # (the pieces of a road that several interchanges give are appended in the interchanges' rank, their roads and place
+    # (owner.rank_of), not their keys': a key is a hash of the plans' format too, and where two pieces tie the first
+    # wins (grading._Planner._shape_at), so the keys' order was another road for every format number)
+    for got in sorted(found.values(), key=lambda g: g["rank"]):
+        for fid, items in got["roads"].items():
             prof.setdefault(fid, []).extend(items)
     failed = sum(1 for g in found.values() if g["failed"])
     relaxed = sum(int(g.get("relaxed", 0)) for g in found.values())
