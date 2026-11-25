@@ -6,6 +6,8 @@
 -- "limit", the limit the game's road tracking already follows for it). The police's own speeding check (traffic
 -- vehicle.lua checkOffenses: 1.2x the limit, at least 60 km/h) stays out of reach (MAX_OVER), so speeders are not
 -- chased; the speed limits the game shows and checks the player against are untouched.
+-- In bad weather (beamngEarth_weather.trafficCap; the weather plan's 4.11) the cap comes down: x0.9 in rain, x0.8 in
+-- heavy rain or rain in fog, slower in snow, and in fog no faster than a car that stops within the visible distance.
 local M = {}
 
 M.ON = true
@@ -64,6 +66,15 @@ local function rough(obj)
   return ok and type(r) == 'table' and r.rough == true or false
 end
 M._rough = rough        -- (tests)
+
+-- The weather's cap for a cap (m/s): the cap itself with the weather off or without the weather extension.
+local function weatherCap(cap)
+  local w = rawget(_G, 'beamngEarth_weather')
+  if not (w and w.trafficCap) then return cap end
+  local ok, c = pcall(w.trafficCap, cap)
+  return (ok and tonumber(c)) or cap
+end
+M._weatherCap = weatherCap  -- (tests)
 
 local cars = {}         -- id -> { fast, street, sent, at, country }
 local timer, clock = 0, 0
@@ -163,6 +174,8 @@ function M.update(dt, graph)
         if wcap then cap = math.min(cap, wcap) end
         local obj = getObjectByID(id)
         if cap > limit * wf and rough(obj) then cap = math.min(cap, limit * wf) end   -- (a rough road: no speeding)
+        -- (the weather's cap from the same base, not on top of winter's factor: rain on a wet road slows once)
+        cap = math.min(cap, weatherCap(M.cap(limit, c.fast, c.street)))
         if not c.sent or math.abs(cap - c.sent) >= M.MIN_CHANGE or clock - c.at >= M.RESEND_S then
           if obj then
             obj:queueLuaCommand(string.format('ai.setSpeedMode("limit") ai.setSpeed(%.2f)', cap))

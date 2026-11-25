@@ -469,6 +469,27 @@ local function inTunnel(x, y, z)
 end
 M.inTunnel = inTunnel
 
+-- Shelter from rain and snow (weather.lua's precipitation owner): a roofed space (M.ROOFED) or a bridge's under-deck box
+-- (kind 1) holding (x, y, z): its space's name ('tunnel', 'bridge', ...), or nil in the open.
+M.SHELTER_NAMES = { [0] = 'tunnel', [1] = 'bridge', [2] = 'arch', [3] = 'parking' }
+function M.shelterAt(x, y, z)
+  for _, list in pairs(spaces) do
+    for _, sp in ipairs(list) do
+      local r = sp.row
+      local name = M.SHELTER_NAMES[r[1]]
+      if name then
+        local dx, dy = x - r[2], y - r[3]
+        local c, s = math.cos(r[8]), math.sin(r[8])
+        if math.abs(dx * c + dy * s) <= r[5] / 2 and math.abs(-dx * s + dy * c) <= r[6] / 2
+            and math.abs(z - r[4]) <= r[7] / 2 then
+          return name
+        end
+      end
+    end
+  end
+  return nil
+end
+
 -- The tunnels' lights at night (nightlights.lua's pool): along every tunnel box (kinds 0 and 2),
 -- every TUNNEL_LIGHT_M, TUNNEL_LIGHT_DROP_M under its roof.
 M.TUNNEL_LIGHT_M = 20

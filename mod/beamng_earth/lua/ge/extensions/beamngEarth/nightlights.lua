@@ -127,13 +127,21 @@ local lenses = {}        -- road tile key -> { {x, y, z}, ... }
 M.providers = {}
 local pool = {}          -- { id, at (lens table or nil) }
 
--- Whether it is night by the stock environment (nil when there is no time of day, as in the main menu).
+-- Whether it is night by the stock environment (nil when there is no time of day, as in the main menu), or dark enough
+-- by the weather before it (beamngEarth_weather.duskDark: a thick deck in rain widens the night window by up to 1.5 h,
+-- as street lamps' photocells switch on under a storm's sky; the weather plan's 4.11).
 function M.isNight()
   local env = rawget(_G, 'core_environment')
   if type(env) ~= 'table' or type(env.getLightState) ~= 'function' then return nil end
   local ok, st = pcall(env.getLightState)
   if not ok or type(st) ~= 'table' then return nil end
-  return st.isNight == true
+  if st.isNight == true then return true end
+  local w = rawget(_G, 'beamngEarth_weather')
+  if w and w.duskDark then
+    local okd, dark = pcall(w.duskDark, st)
+    if okd and dark then return true end
+  end
+  return false
 end
 
 -- Day / night and the night's step onto the materials, each set (and reloaded) only when its glow or map changes. (By
