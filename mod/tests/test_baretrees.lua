@@ -148,6 +148,7 @@ do
   if leafyRank then T.check(B.map(stock, leafyRank) == stock, 'a leafy tree: the stock shape') end
   T.check(B.map(ECA .. 'trees_douglasfir/tree_douglasfir_large_a', 0.01) == ECA .. 'trees_douglasfir/tree_douglasfir_large_a',
     'a conifer: itself')
+  T.check(B.reportLine():find('^bare trees: amount 0%.%d%d, %d+ bare') ~= nil, 'the log line: ' .. B.reportLine())
   seasonlook.restore()
   T.check(trees.bareMap == nil and B.status().amount == nil and not B.status().active, 'the level ended: stock trees')
   seasonlook.update(true, 39.29)

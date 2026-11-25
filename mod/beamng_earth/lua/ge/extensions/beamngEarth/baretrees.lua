@@ -195,6 +195,7 @@ function M.map(shape, rank)
     latched = M.amountFor(inputs.mode, tonumber(os.date('*t').yday), inputs.lat, inputs.snow, inputs.state)
     log('I', 'beamngEarth.baretrees', string.format('bare amount %.2f (season %s, lat %s)', latched,
       tostring(inputs.mode), tostring(inputs.lat)))
+    latchedAt, reported = os.clock(), false
   end
   if not M.isBare(sp, young, rank, latched) then M.stats.kept = M.stats.kept + 1; return shape end
   local c = copyOf(shape)
@@ -231,10 +232,33 @@ function M.set(snow, mode)
   if snow == nil then return M.restore() end
   return activate()
 end
+-- One line for the server's log (its perf_log: the file players send) REPORT_S after the amount was taken: what the
+-- level's trees became and the far pictures the engine baked for the copies so far.
+M.REPORT_S = 60
+local latchedAt, reported = nil, false
+function M.reportLine()
+  local imp = 0
+  if FS and FS.findFiles and M.ROOT then
+    local ok, files = pcall(FS.findFiles, FS, M.ROOT, '*imposter*', -1, true, false)
+    imp = ok and type(files) == 'table' and #files or -1
+  end
+  return string.format('bare trees: amount %s, %d bare, %d kept leafy, %d copies made, %d failed, %d imposter files',
+    latched and string.format('%.2f', latched) or 'none', M.stats.bare, M.stats.kept, M.stats.copied, M.stats.failed, imp)
+end
+
 -- seasonlook.lua's check (in our level): the season's mode, and winter back on in a level started again.
 function M.resume(mode)
   inputs.mode = mode
   if inputs.snow ~= nil and not active then activate() end
+  if active and latchedAt and not reported and os.clock() - latchedAt > M.REPORT_S then
+    reported = true
+    local line = M.reportLine()
+    log('I', 'beamngEarth.baretrees', line)
+    pcall(function()
+      local net = require('beamngEarth/net')
+      if net.isConnected() then net.send({ type = 'perf_log', lines = { line } }) end
+    end)
+  end
 end
 function M.setLat(lat) if lat then inputs.lat = lat end end
 function M.setState(state) if type(state) == 'table' then inputs.state = state end end
@@ -249,7 +273,7 @@ function M.restore()
       if trees.applySeason then trees.applySeason() end
     end
   end
-  active, latched, inputs.lat, inputs.state = false, nil, nil, nil
+  active, latched, inputs.lat, inputs.state, latchedAt = false, nil, nil, nil, nil
 end
 
 function M.status()
