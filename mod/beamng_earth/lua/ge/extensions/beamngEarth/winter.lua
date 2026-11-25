@@ -69,6 +69,8 @@ M.ICE_WARM, M.ICE_COLD = { -1, 0.08 }, { -15, 0.22 }    -- ice by pavement tempe
 -- AI soak (8 traffic cars, 6 min each, W Camelback Rd, the player parked off the road; crash = a car's damage up by
 -- 1000+): dry 0 crashes, median 39 mph; ice without the AI margins 13 crashes, 15.5 mph; with them (AI_MARGIN 0.75)
 -- 4, 3.6 mph; (1.0) 5, 9.2 mph; packed snow without 16, 19.1 mph; with (0.75) 7, 16.6 mph.
+-- With the planning-horizon patch (module swap, 8 of 8 cars): ice 2 and 0 crashes (9.4 / 6.5 mph), packed snow 3
+-- (22.2 mph). The fallback cap alone (every car unpatched): ice 0 and 0 (6.6 / 6.9 mph), packed snow 9 (20.8 mph).
 -- Open ground by depth bin D1..D6 (static, sliding, roughness): thin cover over grass to deep snow
 M.GROUND = { { 0.55, 0.45, 0.4 }, { 0.45, 0.38, 0.6 }, { 0.40, 0.35, 0.65 }, { 0.38, 0.33, 0.7 }, { 0.36, 0.32, 0.7 },
   { 0.35, 0.31, 0.7 } }
