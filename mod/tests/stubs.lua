@@ -56,6 +56,8 @@ function S.newObject(class)
   end
   function o:delete() S.objects[self.id] = nil; S.count('delete_' .. class) end
   function o:setHidden(h) self.hidden = h end
+  function o:isHidden() return self.hidden end
+  function o:updateInstanceRenderData() S.count("updateInstanceRenderData") end
   function o:setRenderEnabled(v) S.count('setRenderEnabled'); self.renderEnabled = v end
   -- SimGroup
   function o:addObject(c) S.objects[c.id] = c; self.children = self.children or {}; self.children[#self.children + 1] = c end

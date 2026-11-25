@@ -166,6 +166,22 @@ M.WIND_EPS_MS = 0.15
 -- matter, overcast leaves 0.3; probe at noon: 0.35 made the car's shadow faint).
 M.SUN_DIM_MAX, M.SUN_DIM_EXP = 0.7, 1.5
 M.SUN_EPS = 0.02           -- write only when the factor moved this much (each write is a postApply)
+-- Storm light (the weather plan's item 6, phase B; phase A's broker shots: a noon thunderstorm looked like a sunny day
+-- in grey haze, the auto exposure undoing every dimming of the sun and the sky): the gloom (0..1) of a thick deck, rain
+-- and thunder lowers the camera's exposure through the stock HDR's own bias (PostEffectLocalExposureObject's
+-- exposureBiasEV: the auto exposure adapts towards its biased target, so the offset holds; the player's own
+-- GraphicEVCompensation stays underneath) and the direct sun further (no sharp shadows under a storm deck). By day the
+-- full STORM_EV_MAX; at night (the eye adapted to the dark, the lamps the light) a share of it, NIGHT_EV_SHARE.
+-- gloom = DECK * deck^2 + RAIN * sqrt(min(1, rain / GLOOM_RAIN_MMH)) + THUNDER * class / 3
+M.GLOOM_DECK, M.GLOOM_RAIN, M.GLOOM_THUNDER, M.GLOOM_RAIN_MMH = 0.3, 0.3, 0.3, 8
+M.STORM_EV_MAX = 2.0       -- EV at gloom 1 by day (overcast ~-0.6, rain ~-1, a thunderstorm ~-1.6)
+M.NIGHT_EV_SHARE = 0.35
+M.GLOOM_SUN = 0.85         -- the direct sun's brightness factor times (1 - GLOOM_SUN * gloom)
+M.EV_EPS = 0.03            -- EV: written when it moved this much
+M.STORM_LIGHT = true       -- the settings' "Storm light" (off: none of the above)
+M.LIGHTNING = true         -- the settings' "Lightning and thunder"
+M.STREAKS = true           -- the settings' "Rain streaks" (rainstreaks.lua)
+M.WET_LOOK = true          -- the settings' "Wet look" (wetlook.lua)
 M.GRAVITY_ENABLED = true
 M.GRAVITY_EPS = 1e-4       -- m/s^2; ~30 m of climb (setGravity queues Lua into every vehicle)
 M.GRAVITY_CHECK_S = 1
@@ -322,6 +338,36 @@ function M.fogGreyFor(rain, snow, deck, fog)
   return clamp(g, 0, 1)
 end
 
+-- Pure: the thunder class (0..3) of a weather message (storm.lua's: the WMO code, the lightning potential, CAPE with
+-- rain), none in a message scaled below THUNDER_MIN_K (scaleMsg's noThunder).
+M.THUNDER_MIN_K = 0.25
+local storm = require('beamngEarth/storm')
+function M.thunderOf(msg)
+  if type(msg) ~= 'table' or msg.noThunder then return 0 end
+  return storm.thunderClass(msg)
+end
+
+-- Pure: the gloom (0..1) of a deck's sky fraction (0..1), rain (mm/h) and a thunder class (0..3).
+function M.gloomFor(deck, rain, thunder)
+  local d = clamp(tonumber(deck) or 0, 0, 1)
+  local r = clamp((tonumber(rain) or 0) / M.GLOOM_RAIN_MMH, 0, 1)
+  return clamp(M.GLOOM_DECK * d * d + M.GLOOM_RAIN * math.sqrt(r) + M.GLOOM_THUNDER * clamp(tonumber(thunder) or 0, 0, 3) / 3,
+    0, 1)
+end
+
+-- Pure: the daylight share (0 night .. 1 day) of core_environment's time of day (0 = noon, 0.5 = midnight).
+function M.dayShare(tod)
+  tod = tonumber(tod)
+  if not tod then return 1 end
+  return clamp(0.5 + 1.5 * math.cos(2 * math.pi * tod), 0, 1)
+end
+
+-- Pure: the exposure offset (EV, <= 0) for a gloom and a daylight share.
+function M.stormEV(gloom, day)
+  local d = clamp(tonumber(day) or 1, 0, 1)
+  return -M.STORM_EV_MAX * clamp(tonumber(gloom) or 0, 0, 1) * (M.NIGHT_EV_SHARE + (1 - M.NIGHT_EV_SHARE) * d)
+end
+
 -- The snow object's flake kind for the temperature (C) and hail.
 function M.flakeKind(tC, hail)
   if hail then return 'hail' end
@@ -439,6 +485,10 @@ function M.targets(msg, limitM)
     fogSigma = M.fogSigmaFor(msg, limitM == nil and M.FOG_LIMIT_M or limitM),
     fogHeight = msg.fog and M.FOG_HEIGHT_FOG or M.FOG_HEIGHT,
     fogGrey = M.fogGreyFor(msg.rainMmH, math.max(snow, hail), deck, msg.fog),
+    -- (phase B: the storm light, lightning, the wet look; no thunder under THUNDER_MIN_K intensity: scaleMsg)
+    thunder = M.thunderOf(msg),
+    gloom = M.gloomFor(deck, msg.rainMmH, M.thunderOf(msg)),
+    rainMmH = tonumber(msg.rainMmH) or 0,
     windMs = ms, gustMs = math.max(ms, tonumber(wind.gustMs) or ms),
     windDirX = wx, windDirY = wy,
     rainPct = M.precipPct(msg.rainMmH, M.RAIN_CURVE),
@@ -605,6 +655,7 @@ function M.scaleMsg(msg, k)
   local v = tonumber(m.visM) or M.FOG_VIS_DEFAULT
   m.visM = k > 0 and math.min(M.FOG_VIS_MAX, v / k) or M.FOG_VIS_MAX
   if k == 0 then m.fog = nil end
+  if k < M.THUNDER_MIN_K then m.noThunder = true end
   return m
 end
 
@@ -612,7 +663,8 @@ end
 -- fields the weather reads, each a number in its range (or the fog flag), so a malformed or hostile message can do no
 -- more than an odd weather; nil when it is not a table. No place, time zone or anything else is kept.
 local NUM_FIELDS = { code = { 0, 99 }, visM = { 0, 1e6 }, rainMmH = { 0, 500 }, snowCmH = { 0, 100 },
-  hailCmH = { 0, 100 }, slTempC = { -90, 60 }, tempC = { -90, 60 }, baseAglM = { 0, 20000 } }
+  hailCmH = { 0, 100 }, slTempC = { -90, 60 }, tempC = { -90, 60 }, baseAglM = { 0, 20000 }, capeJkg = { 0, 10000 },
+  lpi = { 0, 1000 } }
 local function inRange(v, r)
   v = tonumber(v)
   if not v or v ~= v then return nil end
@@ -776,6 +828,7 @@ local function resetState()
     switched = nil, -- the last switch to manual: { at, keys, bwm }
     inOurLevel = false,
     sun = { base = nil, applied = nil }, -- the level's ScatterSky.brightness, the value we wrote
+    ev = { applied = nil, ev = nil }, -- the storm light's exposure offset (writeExposure)
     shelter = 1, shelterTimer = 0, sheltered = false, shelterWhy = nil, precipTimer = 0, block = nil,
     flake = nil,    -- the snow object's flake kind applied (M.FLAKES)
     tint = nil,     -- the fog tint: { base = the sky's own values, applied = what we wrote }
@@ -925,9 +978,43 @@ local function applyFlakes(o, kind, st)
   st.pct = nil            -- (the share written again after the object is made again)
 end
 
+-- The near fade (phase B, M.NEAR_FADE; off until the probe shows it draws on DX11 and Vulkan): our own drop vertex
+-- shader (shaders/beamngEarth/precipNearV.hlsl: the stock one plus a fade from 2.5 m to 0.8 m from the camera, so a
+-- drop passing the lens is no blob) as a ShaderData of our own, named in both datablocks, the objects made again.
+-- Once per level, at the first drops.
+M.NEAR_FADE = false
+M.NEAR_SHADER = 'bngEarthPrecipNearShader'
+local function setupNearFade(o)
+  if not M.NEAR_FADE or S.nearFade ~= nil then return end
+  S.nearFade = false
+  if not scenetree.findObject(M.NEAR_SHADER) then
+    local sd = createObject('ShaderData')
+    if not sd then return end
+    sd.DXVertexShaderFile = 'shaders/beamngEarth/precipNearV.hlsl'
+    sd.DXPixelShaderFile = 'shaders/common/precipP.hlsl'
+    sd.pixVersion = 5.0
+    sd:registerObject(M.NEAR_SHADER)
+  end
+  for _, db in ipairs({ 'bngEarthRainDrop', 'bngEarthSnowflake' }) do
+    local d = scenetree.findObject(db)
+    if d then d:setField('dropShader', 0, M.NEAR_SHADER) end
+  end
+  for _, nm in ipairs({ M.RAIN_NAME, M.SNOW_NAME }) do
+    local p = M._precipObject(nm)
+    if p then
+      local dbName = p:getField('dataBlock', 0)
+      p:setField('dataBlock', 0, dbName)
+      p:postApply()
+    end
+  end
+  S.nearFade = true
+  log('I', 'beamngEarth', 'weather: near fade shader in use (' .. tostring(o and o:getField('dataBlock', 0)) .. ')')
+end
+
 local function drivePrecip(name, pct, pool, flake)
   local o = M._precipObject(name)
   if not o then return end
+  if pct > 0 and M.NEAR_FADE and S.nearFade == nil then pcall(setupNearFade, o) end
   if pct < M.PRECIP_NONE then pct = 0 end
   local st = S.precip[name]
   if pct > 0 and flake then applyFlakes(o, flake, st) end
@@ -1003,6 +1090,7 @@ local function ownPrecip(e, dt)
   S.block = block
   if block then rain, snow = 0, 0 end
   M.rainNow = rain                          -- (its sound: ambience.lua; api.weather)
+  M.rainMmHNow = (not block and c and tonumber(c.rainMmH)) or 0   -- (the rain sound's layers)
   M.snowNow = snow
   local falling = rain >= M.PRECIP_NONE or snow >= M.PRECIP_NONE
   local r, sn = S.precip[M.RAIN_NAME], S.precip[M.SNOW_NAME]
@@ -1057,6 +1145,38 @@ local function restoreSun()
   sun.applied = nil
 end
 M._restoreSun = function() restoreSun() end -- tests
+
+-- The storm's exposure offset (M.stormEV) on the stock HDR's bias: the player's own GraphicEVCompensation + ours. When
+-- the bias holds something else than we wrote (the player changed the option: graphic.lua writes it), the player's
+-- value is read again (it is always the base). Put back (to the player's value) only while it still holds ours.
+local function exposureObject() return scenetree.findObject and scenetree.findObject('PostEffectLocalExposureObject') end
+local function userEV()
+  local st = rawget(_G, 'settings')
+  local ok, v = pcall(function() return st and st.getValue and st.getValue('GraphicEVCompensation', 0) end)
+  return ok and tonumber(v) or 0
+end
+local function writeExposure(ev)
+  local o = exposureObject()
+  if not o then return end
+  local okh, have = pcall(function() return tonumber(o.exposureBiasEV) end)
+  if not okh then return end
+  local want = userEV() + ev
+  local e = S.ev
+  if e.applied and have and math.abs(have - want) <= M.EV_EPS and math.abs(have - e.applied) <= 1e-3 then return end
+  if not e.applied and math.abs(ev) < M.EV_EPS then return end
+  o.exposureBiasEV = want
+  e.applied = tonumber(o.exposureBiasEV) or want
+  e.ev = ev
+end
+local function restoreExposure()
+  local e = S.ev
+  if not e.applied then return end
+  local o = exposureObject()
+  local okh, have = pcall(function() return o and tonumber(o.exposureBiasEV) end)
+  if okh and have and math.abs(have - e.applied) <= 1e-3 then o.exposureBiasEV = userEV() end
+  e.applied, e.ev = nil, nil
+end
+M._restoreExposure = function() restoreExposure() end -- tests
 
 -- Grey fog in rain (the weather plan's item 5: the fog is a lit medium, shaders/common/sceneLitFog.h.hlsl, lit by the
 -- sky's physical atmosphere, so under a low sun a rainstorm's fog took the sunrise's orange, the study's LA
@@ -1241,7 +1361,15 @@ local viewFog       -- (below: a fixed view distance's fog)
 local function apply(e)
   local c = S.cur
   setIf(e.getCloudCover, e.setCloudCover, c.coverage, 0.005)
-  writeSun(c.sunDim)
+  local gloom = M.STORM_LIGHT and (c.gloom or 0) or 0
+  writeSun(c.sunDim * (1 - M.GLOOM_SUN * gloom))
+  -- (the storm's exposure: not over the 3D map; gloom 0 puts the player's own value back)
+  if gloom > 0 and not map3dOn() then
+    local tod = e.getTimeOfDay and e.getTimeOfDay()
+    writeExposure(M.stormEV(gloom, M.dayShare(type(tod) == 'table' and tod.time or nil)))
+  else
+    restoreExposure()
+  end
   setIf(e.getCloudCirrusCoverage, e.setCloudCirrusCoverage, c.cirrusCoverage, 0.005)
   setIf(e.getCloudCirrusDensity, e.setCloudCirrusDensity, c.cirrusDensity, 0.005)
   local l = math.sqrt(c.cloudDirX ^ 2 + c.cloudDirY ^ 2)
@@ -1336,6 +1464,7 @@ local function hidePrecip()
   M.snowNow = 0
   S.shelter, M.shelter = 1, 1
   pcall(restoreSun)
+  pcall(restoreExposure)
   pcall(restoreFogTint)
 end
 
@@ -1418,6 +1547,37 @@ local function precipShown()
   return false
 end
 
+-- Weather phase B, every frame (each part only while it has something to do: dry, calm and Off cost a few compares):
+-- the rain streak shells (rainstreaks.lua: the rain share the owner shows, after the shelter fade), lightning and
+-- thunder (storm.lua: the target's thunder class, none with the weather Off, in a mission, over the 3D map or the big
+-- map), the wet look (wetlook.lua: the rain shown, or W1's road state).
+local streaks = require('beamngEarth/rainstreaks')
+local wetlook = require('beamngEarth/wetlook')
+local function phaseB(e, dt)
+  local rain = (M.rainNow or 0) * (S.shelter or 1)
+  if (M.STREAKS and rain > 0) or streaks.shown() then
+    local ok, err = pcall(streaks.update, M.STREAKS and rain or 0, S.windSent, dt)
+    if not ok then log('W', 'beamngEarth', 'weather streaks: ' .. tostring(err)) end
+  end
+  local cls = 0
+  if M.LIGHTNING and mode ~= 'manual' and S.tgt and (S.tgt.thunder or 0) > 0 and not S.mission then
+    if not (map3dOn() or bigMapBusy()) then cls = S.tgt.thunder end
+  end
+  if cls > 0 or S.storming or storm.holdSpec then
+    local ok, on = pcall(storm.update, dt, cls, { groundZ = S.groundZ, sheltered = S.sheltered,
+      cloudAboveM = (S.cur and S.cur.cloudAboveKm or 1.5) * 1000 })
+    S.storming = ok and on or false
+    if not ok then log('W', 'beamngEarth', 'weather storm: ' .. tostring(on)) end
+  end
+  local wetOn = M.WET_LOOK and mode ~= 'manual' and not S.mission
+  if wetOn or S.wetActive then
+    local ok, on = pcall(wetlook.update, dt, S.cur and S.cur.rainMmH or 0, wetOn)
+    S.wetActive = ok and on or false
+    if not ok then log('W', 'beamngEarth', 'weather wet look: ' .. tostring(on)) end
+  end
+end
+M._phaseB = function(e, dt) phaseB(e, dt) end    -- (tests)
+
 local function update(dt)
   if not S.inOurLevel or not scenetree.MissionGroup then return end
   local e = env()
@@ -1453,6 +1613,7 @@ local function update(dt)
     if mode ~= 'manual' or precipShown() then ownPrecip(e, S.precipTimer) end
     S.precipTimer = 0
   end
+  phaseB(e, dt)
   -- traffic's headlights (wxtraffic): every TRAFFIC_S while the weather is on or the wrap is in
   S.trafficTimer = (S.trafficTimer or 0) + dt
   if S.trafficTimer >= M.TRAFFIC_S and (mode ~= 'manual' or wxtraffic.installed) then
@@ -1558,6 +1719,7 @@ function M.onAnyMissionChanged(state)
   if state == 'started' then
     S.mission = true
     pcall(restoreSun)
+    pcall(restoreExposure)
     pcall(restoreFogTint)
     if S.pending then -- the mission's own setup, just before 'started': no switch
       S.pending = nil
@@ -1580,6 +1742,7 @@ function M.onDeactivateBigMapCallback()
 end
 
 local function onLevel()
+  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset)
   resetState()
   S.inOurLevel = getCurrentLevelIdentifier and getCurrentLevelIdentifier() == M.LEVEL_ID
   local sk = sky()
@@ -1588,6 +1751,7 @@ end
 M.onClientStartMission = onLevel
 function M.onClientEndMission()
   pcall(wxtraffic.reset)
+  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset)
   resetState()
 end
 -- A Lua reload mid-level: settings.lua loads (and applies) before this extension, and no level
@@ -1645,6 +1809,12 @@ function M.setChangeSpeed(sec)
   choice.changeS = math.max(0, tonumber(sec) or M.LERP_S)
 end
 function M.setShowPrecip(on) choice.show = on and true or false end
+-- phase B's switches (the settings' Weather page): each takes effect in the next frame (a part switched off winds down:
+-- the exposure and the materials go back, a running flash ends)
+function M.setStormLight(on) M.STORM_LIGHT = on and true or false end
+function M.setLightning(on) M.LIGHTNING = on and true or false end
+function M.setStreaks(on) M.STREAKS = on and true or false end
+function M.setWetLook(on) M.WET_LOOK = on and true or false end
 function M.setRainVisibility(v) choice.visibility = clamp(tonumber(v) or M.RAIN_VISIBILITY, 0.25, 3) end
 -- the parts of the real weather kept (clouds, fog, wind, precip; false: as on a clear day)
 function M.setRealPart(part, on)
@@ -1668,6 +1838,10 @@ function M.loadChoices(get)
   if g('weatherPrecip') ~= nil then choice.show = g('weatherPrecip') ~= false end
   if g('rainVisibility') ~= nil then choice.visibility = clamp(tonumber(g('rainVisibility')) or M.RAIN_VISIBILITY, 0.25, 3) end
   if g('fogLimit') ~= nil then choice.fogLimitM = math.max(0, tonumber(g('fogLimit')) or 0) end
+  for key, f in pairs({ weatherStormLight = 'STORM_LIGHT', weatherLightning = 'LIGHTNING', weatherStreaks = 'STREAKS',
+      weatherWetLook = 'WET_LOOK' }) do
+    if g(key) ~= nil then M[f] = g(key) ~= false end
+  end
   for part, key in pairs({ clouds = 'realClouds', fog = 'realFog', wind = 'realWind', precip = 'realPrecip' }) do
     if g(key) ~= nil then choice.parts[part] = g(key) ~= false end
   end
@@ -1814,12 +1988,16 @@ function M.precipState()
     rain = S.precip[M.RAIN_NAME], snow = S.precip[M.SNOW_NAME] }
 end
 
+M.storm = storm         -- (the console: beamngEarth_weather.storm.hold({ d = 3000, bolt = 1 }) shows a held flash)
 function M.status()
   return dumps({ mode = mode, choices = M.choices(), server = preset and preset.preset, weatherHost = serverHost,
     pending = S.pending, switched = S.switched, bwmFighting = bwmNow(),
     gravityOverride = S.gravityOverride ~= nil, bigMap = bigMapBusy(), inOurLevel = S.inOurLevel, grace = math.max(0, S.graceUntil - S.clock), mission = S.mission,
     groundZ = S.groundZ, gravity = S.gravity, gravityMsg = lastGravity, temperatureCurve = S.temp.method, tempC = S.temp.value,
     precip = M.precipState(),
+    phaseB = { stormLight = M.STORM_LIGHT, exposure = S.ev, gloom = S.cur and S.cur.gloom, thunder = S.tgt and S.tgt.thunder,
+      storm = storm.status(), streaks = streaks.shown(), wet = { level = wetlook.level(), wetness = wetlook.wetness(),
+      source = wetlook.source, writes = wetlook.writes } },
     traffic = S.traffic, lights = S.lightsWant, lightsWrap = wxtraffic.installed, tint = S.tint,
     msg = lastMsg, shown = shownMsgOf(), target = S.tgt, current = S.cur, line = M.statusLine() })
 end
