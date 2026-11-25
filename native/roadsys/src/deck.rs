@@ -42,6 +42,8 @@ pub const COVER_DZ_M: f64 = 0.5;
 /// m outward from a free edge a structure face at its height makes a twin (the gap filled to its middle, no parapet)
 pub const TWIN_M: f64 = 3.0;
 const TWIN_STEP_M: f64 = 0.25;
+/// (M5) m a twin median's probed half gap is refined to
+const MEDIAN_TOL_M: f64 = 0.01;
 /// (M5) cos 25 deg: a twin found past TWIN_M runs this near parallel to the free edge
 const TWIN_PAR_COS: f64 = 0.9063077870366499;
 /// m a twin deck's face may lie above or below the free edge (decks side by side parting in height: no parapet
@@ -661,6 +663,36 @@ pub fn build_skewed(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> 
             };
             nrm.push(n);
             wv.push(w / c);
+        }
+        // (M5: a twin's median fill to the middle of the gap measured at each vertex along its own normal, refined to
+        // MEDIAN_TOL_M (the per-edge gaps and the miter left the two halves overlapping by decimetres where the twins
+        // are not quite parallel: 46 m2 of coplanar double owners at 973d))
+        for i in 0..k {
+            let (prev, next) = if *closed { (Some((i + nseg - 1) % nseg), Some(i % nseg)) } else {
+                (if i > 0 { Some(i - 1) } else { None }, if i < nseg { Some(i) } else { None })
+            };
+            let med = prev.map(|a| gaps[a] > 0.0).unwrap_or(false) || next.map(|b| gaps[b] > 0.0).unwrap_or(false);
+            if !med { continue; }
+            let gmax = prev.map(|a| gaps[a]).unwrap_or(0.0).max(next.map(|b| gaps[b]).unwrap_or(0.0));
+            let zi = m.v[ch[i] as usize][2] as f64 / 1000.0;
+            let mut hs3: Vec<(u32, f64)> = Vec::new();
+            let hit = |d: f64, hs3: &mut Vec<(u32, f64)>| -> bool {
+                kgrid.heights(&m.v, &m.t, add(p[i], scale(nrm[i], d)), hs3);
+                hs3.iter().any(|&(_t, z)| absf(z - zi) <= TWIN_DZ_M)
+            };
+            let (mut lo, mut hi) = (COVER_OUT_M, f64::NAN);
+            let mut d = COVER_OUT_M + TWIN_STEP_M;
+            while d <= gmax * 1.1 + TWIN_STEP_M {
+                if hit(d, &mut hs3) { hi = d; break; }
+                lo = d;
+                d += TWIN_STEP_M;
+            }
+            if !hi.is_finite() { continue; }
+            while hi - lo > MEDIAN_TOL_M {
+                let mid = 0.5 * (lo + hi);
+                if hit(mid, &mut hs3) { hi = mid; } else { lo = mid; }
+            }
+            wv[i] = wv[i].min(0.5 * (lo + hi) * 0.5);
         }
         let inner: Vec<u32> = ch.iter().map(|&i| vid(i, &mut out)).collect();
         let mut outer: Vec<u32> = Vec::with_capacity(k);

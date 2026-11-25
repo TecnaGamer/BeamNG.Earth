@@ -208,6 +208,14 @@ fn main() {
                     let runs: Vec<String> = o.runs.iter().map(|r| format!("[{}]", r.p.iter().map(|q| format!("[{:.3},{:.3},{:.3}]", q[0], q[1], q[2])).collect::<Vec<_>>().join(","))).collect();
                     std::fs::write(&path, format!("{{\"stats\":{},\"runs\":[{}]}}", o.json, runs.join(","))).ok();
                 }
+                // (tools: ROADSYS_DECKS_FACES=FILE writes the faces as JSON {"faces": {v, t, k, f}}, decks_*.json's shape)
+                if let Ok(path) = std::env::var("ROADSYS_DECKS_FACES") {
+                    let v: Vec<String> = o.v.iter().map(|q| format!("[{:.3},{:.3},{:.3}]", q[0], q[1], q[2])).collect();
+                    let t: Vec<String> = o.t.iter().map(|q| format!("[{},{},{}]", q[0], q[1], q[2])).collect();
+                    let k: Vec<String> = o.kind.iter().map(|x| x.to_string()).collect();
+                    let f: Vec<String> = o.feat.iter().map(|x| x.to_string()).collect();
+                    std::fs::write(&path, format!("{{\"faces\":{{\"v\":[{}],\"t\":[{}],\"k\":[{}],\"f\":[{}]}}}}", v.join(","), t.join(","), k.join(","), f.join(","))).ok();
+                }
                 // (tools: ROADSYS_DECKS_AT=x,y,r lists the faces whose middle lies within r of (x, y): kind, feature, z)
                 if let Ok(v) = std::env::var("ROADSYS_DECKS_AT") {
                     let f: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
