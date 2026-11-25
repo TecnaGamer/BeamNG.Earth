@@ -89,7 +89,22 @@ local function sendGrips(data, player, w)
         local obj = getObjectByID(id)
         if obj then
           obj:queueLuaCommand(M.gripCommand(p))
-          grips[id] = key ~= 'stock' and { key = key, at = clock } or nil
+          -- (the planning-horizon patch with the margins, taken off with them: winter.aiPatchCommand)
+          local patch = w and w.aiPatchCommand and w.aiPatchCommand(key ~= 'stock') or nil
+          if patch and (key == 'stock' or not (g and g.patched)) then obj:queueLuaCommand(patch) end
+          grips[id] = key ~= 'stock' and { key = key, at = clock, patched = patch ~= nil } or nil
+        end
+      end
+      -- the fallback cap while the patch is not confirmed (speeding off: the free cars' own cap path is not running)
+      if not M.ON and w and w.aiSpeedCap then
+        local cap = w.aiSpeedCap(id)
+        local gg = grips[id]
+        if cap and gg and (not gg.capped or math.abs(gg.capped - cap) >= M.MIN_CHANGE) then
+          local obj = getObjectByID(id)
+          if obj then
+            obj:queueLuaCommand(string.format('ai.setSpeedMode("limit") ai.setSpeed(%.2f)', cap))
+            gg.capped = cap
+          end
         end
       end
     end
@@ -144,8 +159,10 @@ function M.update(dt, graph)
       local limit = v.tracking and tonumber(v.tracking.speedLimit)
       if limit and limit > 4.2 then
         local cap = M.cap(limit, c.fast, c.street) * wf
+        local wcap = w and w.aiSpeedCap and w.aiSpeedCap(id)       -- (winter's fallback: no horizon patch on this car)
+        if wcap then cap = math.min(cap, wcap) end
         local obj = getObjectByID(id)
-        if cap > limit * wf and rough(obj) then cap = limit * wf end     -- (a rough road: no speeding there)
+        if cap > limit * wf and rough(obj) then cap = math.min(cap, limit * wf) end   -- (a rough road: no speeding)
         if not c.sent or math.abs(cap - c.sent) >= M.MIN_CHANGE or clock - c.at >= M.RESEND_S then
           if obj then
             obj:queueLuaCommand(string.format('ai.setSpeedMode("limit") ai.setSpeed(%.2f)', cap))

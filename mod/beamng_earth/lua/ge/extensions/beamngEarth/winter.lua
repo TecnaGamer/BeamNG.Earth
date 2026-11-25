@@ -296,6 +296,83 @@ function M.aiParamsFor(road)
 end
 function M.aiParams() return M.aiParamsFor((rows())) end
 
+-- The AI's planning horizon on low grip (vehicle extension beamngEarth_winterAi): stock ai.lua's getMinPlanLen floors
+-- the braking it plans for at 0.2 g, so on ice it looked ~60 % as far ahead as it needed to stop. While the road is
+-- slippery each AI car gets that one function with a 0.05 floor, after this exact stock text was found in the game's
+-- ai.lua (a game update that changed it: no patch). A car whose patch is not confirmed (the text changed, no debug
+-- library in its Lua, not reported yet) gets the fallback: its speed capped where its 20 m minimum plan covers its stop,
+-- sqrt(2 g mult 20 m) (~15 mph on ice, ~23 mph on packed snow; speeding.lua). Winter never runs without one of the two.
+-- tools/compat_check.py checks the text after a game update.
+M.AI_FLOOR = 0.05
+M.AI_PLAN_MIN_M = 20
+M.AI_STOCK_FN = table.concat({
+  'local function getMinPlanLen(limLow, speed, accelg)',
+  '  -- given current speed, distance required to come to a stop if I can decelerate at 0.2g',
+  '  limLow = limLow or 150',
+  '  speed = speed or ego.speed',
+  '  accelg = max(0.2, accelg or 0.2)',
+  '  return min(550, max(limLow, 0.5 * speed * speed / (accelg * g)))',
+  'end' }, '\n')
+
+-- Pure: the line the stock getMinPlanLen starts on in ai.lua's text, or nil when that exact function is not there.
+function M.aiPatchLine(text)
+  if type(text) ~= 'string' then return nil end
+  text = text:gsub('\r\n', '\n')
+  local i = text:find(M.AI_STOCK_FN, 1, true)
+  if not i then return nil end
+  local _, n = text:sub(1, i):gsub('\n', '')
+  return n + 1
+end
+
+local aiLine, aiChecked, aiWarned = nil, false, false
+local aiPatched = {}             -- vehicle id -> true (confirmed) / false (failed)
+local function warnOnce(msg)
+  if aiWarned then return end
+  aiWarned = true
+  if log then log('W', 'beamngEarth.winter', msg) end
+end
+function M.aiLine()
+  if not aiChecked then
+    aiChecked = true
+    local rf = rawget(_G, 'readFile')
+    local ok, text = pcall(function() return rf and rf('/lua/vehicle/ai.lua') end)
+    aiLine = M.aiPatchLine(ok and text or nil)
+    if not aiLine then
+      warnOnce('ai.lua getMinPlanLen not the known stock text (a game update?): AI traffic speed capped on snow and ice '
+        .. 'instead of the planning-horizon patch')
+    end
+  end
+  return aiLine
+end
+function M._setAiText(text) aiChecked, aiLine = true, M.aiPatchLine(text) end     -- (tests)
+
+-- The vehicle command that patches (line given) or unpatches its AI, or nil when the patch is unavailable.
+function M.aiPatchCommand(on)
+  local line = on and M.aiLine() or nil
+  if on and not line then return nil end
+  return string.format("if not beamngEarth_winterAi then extensions.load('beamngEarth_winterAi') end "
+    .. "if beamngEarth_winterAi then beamngEarth_winterAi.apply(%s, %.3f) end", line and tostring(line) or 'nil',
+    M.AI_FLOOR)
+end
+
+-- winterAi's answer (vehicle Lua -> game engine).
+function M.aiPatchResult(id, ok, wanted)
+  if wanted then
+    aiPatched[id] = ok == true
+    if not ok then warnOnce('a vehicle AI could not take the planning-horizon patch: its speed is capped on snow and ice') end
+  else
+    aiPatched[id] = nil
+  end
+end
+function M.aiPatchedCar(id) return aiPatched[id] end
+
+-- The fallback speed cap (m/s) for AI car id on the current road, or nil (no slippery road, or its patch confirmed).
+function M.aiSpeedCap(id)
+  local p = M.aiParams()
+  if not p or aiPatched[id] == true then return nil end
+  return math.sqrt(2 * 9.81 * p.staticFrictionCoefMult * M.AI_PLAN_MIN_M)
+end
+
 local function refreshReadout()
   local road, deck = rows()
   readoutText = M.composeReadout(road, deck, state and state.ground)

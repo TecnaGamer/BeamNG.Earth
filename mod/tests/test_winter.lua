@@ -188,6 +188,40 @@ speeding.update(1.0, { rules = { country = 'US' } })
 got = false
 for i = n + 1, #sent do if sent[i]:find('staticFrictionCoefMult = 0.950', 1, true) then got = true end end
 T.check(got, 'winter gone: stock AI grip back')
+-- the planning-horizon patch (stock ai.lua's getMinPlanLen floor) and its fallback cap
+local stockText = 'local M = {}\n\n' .. W.AI_STOCK_FN .. '\n\nreturn M\n'
+T.check(W.aiPatchLine(stockText) == 3, 'the stock function found: its line')
+T.check(W.aiPatchLine(stockText:gsub('\n', '\r\n')) == 3, 'CRLF too')
+T.check(W.aiPatchLine(stockText:gsub('max%(0%.2,', 'max(0.25,')) == nil, 'a changed line: not found')
+T.check(W.aiPatchLine(nil) == nil, 'no file')
+W._setAiText(stockText)
+speeding.winter = W
+W.force('ice')
+local cmd = W.aiPatchCommand(true)
+T.check(cmd and cmd:find('beamngEarth_winterAi.apply(3, 0.050)', 1, true), 'patch command with the line')
+T.check(W.aiPatchCommand(false):find('apply(nil', 1, true), 'unpatch command')
+local cap0 = W.aiSpeedCap(5)
+T.near(cap0, math.sqrt(2 * 9.81 * W.aiParams().staticFrictionCoefMult * 20), 1e-9, 'unconfirmed: the fallback cap')
+W.aiPatchResult(5, true, true)
+T.check(W.aiSpeedCap(5) == nil and W.aiPatchedCar(5) == true, 'confirmed: no cap')
+W.aiPatchResult(5, false, true)
+T.check(W.aiSpeedCap(5) ~= nil, 'a failed patch: capped')
+sent = {}
+speeding.update(1.0, { rules = { country = 'US' } })
+local sawPatch, sawCap = false, false
+for _, c in ipairs(sent) do
+  if c:find('beamngEarth_winterAi.apply(3', 1, true) then sawPatch = true end
+  local v = tonumber(c:match('ai.setSpeed%(([%d%.]+)%)'))
+  if v and v <= cap0 + 0.01 then sawCap = true end
+end
+T.check(sawPatch and sawCap, 'speeding: the patch sent, the unconfirmed car capped')
+W._setAiText('local M = {} return M')
+T.check(W.aiPatchCommand(true) == nil, 'pattern absent: no patch command')
+W.aiPatchResult(5, nil, false)
+T.check(W.aiSpeedCap(5) ~= nil, 'pattern absent: every car capped')
+W.force(nil)
+speeding.winter = nil
+speeding.reset()
 W._aggression(true)
 T.check(vars.baseAggression == 0.25, 'slippery: traffic aggression 0.25')
 W._aggression(false)
