@@ -6,6 +6,7 @@
 // reason; `cargo clippy` fails on a new one.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 mod cliffcuts;
+mod mapcells;
 mod cliffsurface;
 mod cliffappearance;
 mod cliffphoto;
@@ -7164,6 +7165,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(membudget::ram_desktop_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_effective_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_watch, m)?)?;
+    // 637: the swapped pages at the RAM they hold (zram), a far burst's room by the system's memory under Auto
+    m.add_function(wrap_pyfunction!(membudget::ram_swap_weight, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_counted_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_burst_room_mb, m)?)?;
+    // 637: the map cells of arrays of points (mapcells.cells_of / cell_of)
+    m.add_function(wrap_pyfunction!(mapcells::mapcells_xy, m)?)?;
+    m.add_function(wrap_pyfunction!(mapcells::mapcells_cell, m)?)?;
         // 259: tunnel entrances (portal: portal_mesh, tunnel_cover_mesh, portal_style)
     m.add_function(wrap_pyfunction!(portal::portal_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(portal::tunnel_cover_mesh, m)?)?;
@@ -7826,7 +7834,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 636 (the tunnel branch's 633 renumbered over dev's 635): tunnel plan T1 round 3, the tunnel record's lids under
     // a road crossing over the tube kept (tunnel.rs StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as
     // without the record: roadsys.pins_near legacy)
-    // 637: roadwear::puddle_plan (a tile's puddles: sags, gutters, ruts) and puddle_atlas_px (their masks)
-    m.add("VERSION", 637)?;
+    // 639 (638: the road landings port): roadwear::puddle_plan (a tile's puddles: sags, gutters, ruts) and
+    // puddle_atlas_px (their masks)
+    m.add("VERSION", 639)?;
     Ok(())
 }

@@ -29,7 +29,7 @@ def main():
     ap.add_argument("--preview", help="a PNG of the atlas")
     args = ap.parse_args()
     import fast
-    fast.require(637, "puddle_atlas_px")
+    fast.require(639, "puddle_atlas_px")
     px = np.asarray(fast._ef.puddle_atlas_px(args.size), np.uint8).reshape(args.size, args.size)
     img = Image.fromarray(px, "L").convert("RGB")
     if args.preview:

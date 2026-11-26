@@ -19,7 +19,7 @@
 //! The lane pass itself adds `opening_blocked_tunnel_m2` (the physics ground inside a tunnel lane's clearance: terrain
 //! across the mouth), `tube_breaks_upper_m2` (a tunnel part inside the envelope of a ground or bridge lane: a tube
 //! through the road over it) and `handover_lip_tunnel_*` (the hand-over lips of tunnel floors).
-use crate::audit::{Metrics, Scene, Tri, DOWN, STEEP, UP};
+use crate::audit::{collecting, note, Finding, Metrics, Scene, Tri, DOWN, STEEP, UP};
 use std::collections::BTreeMap;
 
 const COVER_BELOW: f64 = 1.0;   // m: a surface this far under a hole square's lowest corner still covers it
@@ -67,6 +67,7 @@ pub fn holes(sc: &Scene, f: &Faces, m: &mut Metrics) {
             if !(top >= cmin - COVER_BELOW) {
                 m.add("hole_open_squares", 1.0);
                 if dump { eprintln!("HO {:.1} {:.1} cmin {:.2} top {:.2}", cx, cy, cmin, top); }
+                if collecting() { note(Finding { z: cmin, ..Finding::at("HO", cx, cy) }); }
             }
             // the four edges: (neighbour square, the edge's two lattice nodes, the inward normal into this square)
             let edges: [(i64, i64, (usize, usize), (usize, usize), [f64; 2]); 4] = [
@@ -107,6 +108,7 @@ pub fn holes(sc: &Scene, f: &Faces, m: &mut Metrics) {
                 if closed { continue; }
                 m.add("hole_edge_open", 1.0);
                 if dump { eprintln!("HE {:.1} {:.1} ze {:.2} zh {:.2}", mx, my, ze, zh); }
+                if collecting() { note(Finding { z: ze, ..Finding::at("HE", mx, my) }); }
             }
         }
     }
@@ -152,9 +154,13 @@ pub fn mouths(sc: &Scene, heights: &Heights, roofed: &BTreeMap<(u32, i64, i64), 
             } }
             if !seen { continue; }     // (no ground lane mapped on from this end inside the tile)
             match zout {
-                None => m.add("tunnel_mouth_holes", 1.0),
+                None => {
+                    m.add("tunnel_mouth_holes", 1.0);
+                    if collecting() { note(Finding { z: zin, line: li, level: 2, ..Finding::at("MOUTHHOLE", p[0], p[1]) }); }
+                }
                 Some(z) => {
                     let step = (z - zin).abs();
+                    if collecting() { note(Finding { z: zin, v: step, line: li, level: 2, ..Finding::at("MOUTH", p[0], p[1]) }); }
                     m.add("tunnel_mouths", 1.0);
                     if step > MOUTH_STEP { m.add("tunnel_mouth_steps_over_10cm", 1.0); }
                     m.max("tunnel_mouth_step_max_m", step);

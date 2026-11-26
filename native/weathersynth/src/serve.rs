@@ -1,6 +1,7 @@
 //! `weathersynth live-serve`: the live weather sounds for the world server (server/liveaudio.py starts it).
 //!
-//! stdin: the mod's 'weather_audio', one JSON line each (proto.rs). EOF: fade out and exit.
+//! stdin: the mod's 'weather_audio', one JSON line each (proto.rs). EOF: fade out and exit. No Live line for
+//! LINGER_S (Pre-recorded, or the lines stopped): fade out and exit 0 by itself.
 //! stdout: a state line every STATE_S, {"state":"live","latencyMs":..,"underruns":.. (from 1 s in),"renderer":..,"rendered":..,
 //! "late":..,"dropped":..}, or {"state":"failed","reason":..} once before a non-zero exit (no device, the device lost).
 //! The server forwards each as 'audio_state'; the mod plays its pre-recorded sounds whenever they stop.
@@ -43,6 +44,17 @@ pub fn load_per_cpu() -> Option<f64> {
     let n = std::thread::available_parallelism().ok()?.get() as f64;
     Some(l / n)
 }
+/// After a Pre-recorded line (or no line at all) for this long the synth fades out and exits by itself (code 0). The
+/// server forwards Pre-recorded instead of closing the pipe, so a switch back to Live within it keeps this process:
+/// no new device open, the thunders already rendered kept (2026-11-26 playtest: three starts in two minutes, each
+/// a switch Live / Pre-recorded / Live on the Weather page).
+pub const LINGER_S: f64 = 60.0;
+
+/// Pure: has the synth lingered long enough without a Live line to exit (s since the last one)?
+pub fn linger_over(since_live_s: f64) -> bool {
+    since_live_s >= LINGER_S
+}
+
 /// the device buffer doubles on trouble (a stream error, or XRUN_GROW xruns within XRUN_WINDOW_S) up to this, and
 /// halves again (not below the first) after SHRINK_AFTER_S without trouble: a load burst does not keep the latency up
 pub const BUFFER_MAX: u32 = 2048;
@@ -79,8 +91,9 @@ pub fn mix_for(m: Option<&Msg>, stale: bool) -> (Controls, f64) {
         shelter: m.shelter,
         cabin: if m.cabin { 1.0 } else { 0.0 },
         volume: m.volume * m.duck,
-        // (in a tunnel the rain is not heard: the mod's own goes to its muffled layer, ours stays quiet for now)
-        muted: quiet || m.tunnel,
+        // (in a tunnel the rain is not heard: the mod's own goes to its muffled layer, ours stays quiet for now; and
+        // none while the game plays its own rain: synthRain false)
+        muted: quiet || m.tunnel || !m.synth_rain,
     };
     let muffle = if m.tunnel || m.shelter < 0.5 { MUFFLED } else { 1.0 };
     let thunder = if quiet { 0.0 } else { m.thunder_volume * muffle };
@@ -205,9 +218,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
     let started_at = Instant::now();
     eprintln!(
-        "live-serve: device {:?} {} Hz x{} {} buffer={:?} (load {:.2} per cpu) thunder={rname}",
-        out.device_name, out.sample_rate, out.channels, out.format, out.fixed_frames, load.unwrap_or(-1.0)
+        "live-serve: device {:?} {} Hz x{} {} buffer={:?} (load {:.2} per cpu) thunder={rname} worker={}",
+        out.device_name,
+        out.sample_rate,
+        out.channels,
+        out.format,
+        out.fixed_frames,
+        load.unwrap_or(-1.0),
+        crate::prio::describe(out.worker_prio.load(std::sync::atomic::Ordering::Relaxed))
     );
+    let mut prio_said = false;
     let b2 = bus.clone();
     let render = std::thread::Builder::new()
         .name("thunder-render".into())
@@ -216,6 +236,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let mut last: Option<Msg> = None;
     let mut last_at = Instant::now();
+    let mut live_at = Instant::now();
     let mut state_at = Instant::now() - Duration::from_secs(1);
     let mut bad_lines = 0u64;
     // underruns counted from 1 s in (the device's first callbacks prime its own buffer, larger than what is queued)
@@ -236,6 +257,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     for th in &m.thunders {
                         bus.offer(th);
                     }
+                    if m.live {
+                        live_at = Instant::now();
+                    }
                     last = Some(m);
                     last_at = Instant::now();
                 }
@@ -248,6 +272,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
             },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break, // EOF: the server stopped us
+        }
+        if linger_over(live_at.elapsed().as_secs_f64()) {
+            eprintln!("live-serve: no Live line for {LINGER_S:.0} s; ending");
+            break;
         }
         let stale = last_at.elapsed().as_secs_f64() > HEARTBEAT_S;
         let (rain, thunder) = mix_for(last.as_ref(), stale);
@@ -314,6 +342,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
             if base_underruns.is_none() && started.elapsed().as_secs_f64() >= 1.0 {
                 base_underruns = Some(u);
             }
+            if !prio_said && cfg!(target_os = "linux") && started.elapsed().as_secs_f64() >= 1.0 {
+                prio_said = true;
+                eprintln!(
+                    "live-serve: the device's callback thread: {}",
+                    crate::prio::describe(out.callback_prio.load(std::sync::atomic::Ordering::Relaxed))
+                );
+            }
 
             let ld = |a: &std::sync::atomic::AtomicU32| a.load(std::sync::atomic::Ordering::Relaxed);
             let buf = (ld(&out.callback_frames), ld(&out.target_frames), out.fixed_frames.is_some());
@@ -359,6 +394,14 @@ mod tests {
         assert_eq!(t, MUFFLED, "under a deck: muffled");
         let (r, t) = mix_for(Some(&m(r#"{"mode":"live","tunnel":true,"thunderVolume":1}"#)), false);
         assert!(r.muted && t == MUFFLED, "a tunnel: no rain, the thunder muffled");
+        let (r, t) = mix_for(Some(&m(r#"{"mode":"live","rainMmH":15,"thunderVolume":0.8,"synthRain":false}"#)), false);
+        assert!(r.muted && t == 0.8, "synthRain false: the game plays the rain, the synth only the thunder");
+    }
+
+    #[test]
+    fn lingers_then_ends() {
+        assert!(!linger_over(0.0) && !linger_over(LINGER_S - 0.1), "a switch back within LINGER_S keeps the process");
+        assert!(linger_over(LINGER_S));
     }
 
     #[test]

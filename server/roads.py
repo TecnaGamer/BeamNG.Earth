@@ -3480,6 +3480,14 @@ def _callable_key(fn):
     return (id(getattr(fn, "__self__", None)), getattr(fn, "__func__", fn))
 
 
+def clear_placements():
+    """The kept Placements let go (budget.register_shed): each holds its cells' map features, so a shed that dropped
+    the map data's cells kept them alive here (16 Placements, ~190 MB of a Baltimore road process after 80 geotiles,
+    2026-11-26)."""
+    with _PLACEMENT_LOCK:
+        _PLACEMENT_LRU.clear()
+
+
 def placement_context(cells, urban_fn=None, widths=None, left_hand=False):
     """The Placement of cells' roads with road_specs(feats, urban_fn, widths, left_hand)'s widths: one per tile (each
     caller moving the roads' lines by it: road tiles, grading, the traffic AI's lanes, the signs' rows, decks). The
@@ -11280,7 +11288,7 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     z = _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box)
     if roadsys.STRUCTURES:
         try:
-            z = roadsys.ground_cut(frame, cell_fn, la, lo, z)
+            z = roadsys.ground_cut(frame, cell_fn, la, lo, z, box)
         except Exception as ex:     # no drop rather than no ground (nothing built with it kept)
             (log.debug if isinstance(ex, OSError) else log.warning)("deck ends' hand-over: %s: %s", type(ex).__name__, ex)
             import revisit

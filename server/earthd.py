@@ -732,10 +732,21 @@ def v2_warm_dir():
 _V2_WARM_DIR = None
 
 
-def v2_pool(name, n, cls, lane=None, **kwargs):
-    """A worker process pool of n processes: pools.RespawningPool, or with BNE_V2_HOST (v2host.py) a pools.SlotPool
-    whose jobs the Rust scheduler starts by class and deadline (cls: its lane's own class; lane: the lane's name)."""
+# The road tiles' pool as one process a slot (pools.SlotPool without the v2 scheduler) while the v2 host is off: the
+# memory watchdog replaces its biggest process alone, its jobs never stranded behind a replaced executor. Its four
+# processes were never replaced (a pool with a backlog is not: a road pool while driving), so they grew to 3-4 GB each
+# and the watchdog replaced the block and far processes instead, ten times in 25 minutes (Baltimore 2026-11-26).
+# BNGE_ROAD_SLOTS=off: one executor of n processes, as before.
+ROAD_SLOTS = os.environ.get("BNGE_ROAD_SLOTS", "on").lower() not in ("off", "0", "false", "no")
+
+
+def v2_pool(name, n, cls, lane=None, slots=False, **kwargs):
+    """A worker process pool of n processes: pools.RespawningPool (slots: a pools.SlotPool of n single-process pools,
+    its jobs in order), or with BNE_V2_HOST (v2host.py) a pools.SlotPool whose jobs the Rust scheduler starts by class
+    and deadline (cls: its lane's own class; lane: the lane's name)."""
     if not v2host.ON:
+        if slots:
+            return poolsmod.SlotPool(None, name, n, **kwargs)
         return poolsmod.RespawningPool(name, n, **kwargs)
     return poolsmod.SlotPool(v2host.sched(), name, n, cls=cls, lane=lane or name, **kwargs)
 
@@ -4916,7 +4927,7 @@ class Server:
         if not revisitmod.ON or im is None or not hasattr(im, "chain") or not hasattr(anchor, "lat"):
             return None
         try:
-            return revisitmod.key("basephoto", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx),
+            return revisitmod.key("basephoto", *revisitmod.frame_parts(anchor.lat, anchor.lon), float(cx),
                                   float(cy), ("v", BASE_PHOTO_VERSION, BASE_SHIFT_M), self.layout.block,
                                   heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
                                   BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on,
@@ -6926,7 +6937,7 @@ class Server:
         gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, px)[2]
         gen = (genground.far_key(self.mapdata, getattr(self, "veg", None) is not None),) \
             if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, px) is not None else ()
-        return revisitmod.key("fartex", round(float(anchor.lat), 7), round(float(anchor.lon), 7), tile.key, px,
+        return revisitmod.key("fartex", *revisitmod.frame_parts(anchor.lat, anchor.lon), tile.key, px,
                               self.road_mask_px(tile.level) if self.road_masks else 0, [s.name for s in im.chain],
                               self.tone, im.leaf_on, seasonmod.season_key(im.season_mode, float(anchor.lat)),
                               self.tex_modes, roadsmod.ROADS_IN_GROUND,
@@ -12019,7 +12030,7 @@ async def main_async(args, restart=None):
     road_pool = None
     if ctx is not None and args.roads == "on" and args.road_processes > 0:
         road_pool = v2_pool(      # road tiles (blockworker.roads_tile)
-            "road tile", args.road_processes, v2host.P1, mp_context=ctx, initializer=blockworker.init,
+            "road tile", args.road_processes, v2host.P1, slots=ROAD_SLOTS, mp_context=ctx, initializer=blockworker.init,
             hung_s=ROAD_TILE_TIMEOUT_S + ROAD_HUNG_EXTRA_S,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,

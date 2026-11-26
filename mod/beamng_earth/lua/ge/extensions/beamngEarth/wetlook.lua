@@ -74,6 +74,10 @@ M.ROUGH_MIN = 0.06
 -- reflection at Normal, broker r9, and a dark film vanished on the wet asphalt) masks them by the atlas's depth: its alpha
 -- test threshold falls as the rain fills them (the deep sag pools first, the shallow ruts last) and rises as they dry,
 -- in PUDDLE_STEPS steps (one material write a step, never per frame).
+-- APPROXIMATION: the sky-grey base colour (puddles.materials.json, 0.36 0.39 0.44) stands in for the sky reflection
+-- the engine does not give our static meshes; physically the film is dark (~0.03) and its brightness is all
+-- reflection. With a real reflection source (a later job: an environment probe, or SSR where the preset has it) the
+-- base goes back to dark water. At night the grey reads a little light under the lamps.
 M.PUDDLE_MIN = 0.45
 M.PUDDLE_STEPS = 6
 M.PUDDLE_REF = { 250, 15 }  -- the alpha threshold just shown, soaked

@@ -7,6 +7,15 @@ use crate::m;
 
 /// The K-weighting pre-filter and RLB high-pass for any sample rate (libebur128's analog-prototype designs).
 pub fn kweight(x: &[f64], fs: f64) -> Vec<f64> {
+    let (mut s1, mut s2) = kweight_filters(fs);
+    let mut y = x.to_vec();
+    s1.run(&mut y);
+    s2.run(&mut y);
+    y
+}
+
+/// The two K-weighting stages (run in order: the shelf, then the high-pass), for a meter run block by block.
+pub fn kweight_filters(fs: f64) -> (Biquad, Biquad) {
     let f0 = 1681.974450955533;
     let g = 3.999843853973347;
     let q = 0.7071752369554196;
@@ -14,7 +23,7 @@ pub fn kweight(x: &[f64], fs: f64) -> Vec<f64> {
     let vh = m::pow(10.0, g / 20.0);
     let vb = m::pow(vh, 0.4996667741545416);
     let a0 = 1.0 + k / q + k * k;
-    let mut s1 = Biquad::new(
+    let s1 = Biquad::new(
         (vh + vb * k / q + k * k) / a0,
         2.0 * (k * k - vh) / a0,
         (vh - vb * k / q + k * k) / a0,
@@ -25,14 +34,11 @@ pub fn kweight(x: &[f64], fs: f64) -> Vec<f64> {
     let q = 0.5003270373238773;
     let k = m::tan(m::PI * f0 / fs);
     let d = 1.0 + k / q + k * k;
-    let mut s2 = Biquad::new(1.0, -2.0, 1.0, 2.0 * (k * k - 1.0) / d, (1.0 - k / q + k * k) / d);
-    let mut y = x.to_vec();
-    s1.run(&mut y);
-    s2.run(&mut y);
-    y
+    let s2 = Biquad::new(1.0, -2.0, 1.0, 2.0 * (k * k - 1.0) / d, (1.0 - k / q + k * k) / d);
+    (s1, s2)
 }
 
-fn lufs_of(ms: f64) -> f64 {
+pub fn lufs_of(ms: f64) -> f64 {
     -0.691 + 10.0 * m::log10(ms.max(1e-30))
 }
 

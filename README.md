@@ -179,8 +179,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   same weather in multiplayer), darker light under storm clouds, optional lit rain streaks around you, a wet look on streets,
   sidewalks, markings, bridges and buildings, puddles that fill in the low spots, along kerbs and in worn wheel ruts and
   dry up after the rain, and rain sounds that follow the rain's strength and go muffled under cover.
-  An experimental "Weather sounds: Live" setting has the app make the rain and thunder live, through your default audio
-  device at the game's volume, with the pre-recorded sounds as the fallback.
+  An experimental "Weather sounds: Live" setting has the app make the thunder live (the rain stays the pre-recorded
+  loops for now), through your default audio device at the game's volume, with the pre-recorded sounds as the fallback.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
   trees in winter where the photos were taken leaf-off).
 - **Real gravity**: the WGS84 gravity for your latitude and altitude plus the EGM2008 local anomalies, so

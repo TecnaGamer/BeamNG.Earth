@@ -311,7 +311,8 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
 # _geo_skin_build: the "puddle" part), which the mod shows only while the ground is wet (wetlook.lua: the material's
 # alpha threshold falls as the rain fills them, rises as they dry: a smooth water film, roughness 0.06, its colour the
 # overcast sky a puddle mirrors: broker r9, our static meshes got no sky reflection at Normal, a dark film vanished on
-# the wet asphalt). BNE_PUDDLES=off: none (keyed by the build switches).
+# the wet asphalt; an APPROXIMATION for the missing reflections until a real reflection source, a later job: see
+# wetlook.lua). BNE_PUDDLES=off: none (keyed by the build switches).
 PUDDLES = os.environ.get("BNE_PUDDLES", "on").strip().lower() not in ("off", "0", "no", "false")
 PUDDLE_MATERIAL = "bne_puddle"
 PUDDLE_CELLS = _grid(4, 4)
@@ -325,7 +326,7 @@ def puddle_chunks(roads, seen, box, has_sidewalks, exclude=None, skip=()):
         return []
     import fast
     import roads as roadsmod
-    fast.require(637, "puddle_plan")
+    fast.require(639, "puddle_plan")
     pts, off, rows, gut = [], [0], [], []
     for fid, spec, p, _lon in roads:
         p = np.asarray(p, np.float64)

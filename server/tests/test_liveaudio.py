@@ -21,7 +21,8 @@ import liveaudio  # noqa: E402
 TABLE = json.loads((Path(__file__).resolve().parents[1] / "protocol_table.json").read_text(encoding="utf-8"))
 
 # the stand-in: echoes each input line to a file, says live once per line; {"mode": "die"} exits with a stderr line;
-# argv[2] seconds of not reading stdin at the start (weathersynth opening a slow audio device)
+# {"mode": "end"} ends by itself (exit 0: serve.rs after LINGER_S without a Live line); argv[2] seconds of not reading
+# stdin at the start (weathersynth opening a slow audio device)
 FAKE = r'''
 import json, sys, time
 log = open(sys.argv[1], "a")
@@ -32,6 +33,9 @@ for line in sys.stdin:
     if d.get("mode") == "die":
         sys.stderr.write("no audio device: ALSA said no\n"); sys.stderr.flush()
         sys.exit(3)
+    if d.get("mode") == "end":
+        log.write("ENDED\n"); log.flush()
+        sys.exit(0)
     sys.stdout.write(json.dumps({"state": "live", "latencyMs": 21.5, "underruns": 0}) + "\n"); sys.stdout.flush()
 log.write("EOF\n")
 '''
@@ -115,8 +119,9 @@ class LiveAudioTest(unittest.TestCase):
         c = Conn()
         msg = {"type": "weather_audio", "mode": "live", "rainMmH": 4.0, "windMs": 3, "shelter": 1, "tunnel": False,
                "cabin": True, "volume": 0.5, "thunderVolume": 0.4, "muted": False, "duck": 1, "t": 1.7e9,
-               "junk": "dropped", "thunders": [{"id": "7@1.000", "at": 6.0, "d": 1715, "kind": "close", "gain": 0.6,
-                                                "seed": 7, "final": True, "x": 1}]}
+               "synthRain": False, "junk": "dropped",
+               "thunders": [{"id": "7@1.000", "at": 6.0, "d": 1715, "kind": "close", "gain": 0.6, "seed": 7,
+                             "final": True, "play": False, "x": 1}]}
         self.la.on_message(c, msg)
         self.assertTrue(c.wait(1), "a state line comes back")
         check_state(self, c.sent[0])
@@ -125,15 +130,37 @@ class LiveAudioTest(unittest.TestCase):
         self.assertNotIn("junk", got)
         self.assertNotIn("type", got)
         self.assertEqual(got["thunders"], [{"id": "7@1.000", "at": 6.0, "d": 1715, "kind": "close", "gain": 0.6,
-                                            "seed": 7, "final": True}])
+                                            "seed": 7, "final": True, "play": False}],
+                         "play reaches the synth (a final the game plays from its file: the synth must not play it too)")
+        self.assertIs(got["synthRain"], False, "synthRain reaches the synth (the game's rain in Live)")
         self.la.on_message(c, dict(msg, rainMmH=5.0, thunders=None))
         self.assertEqual(json.loads(self.lines(2)[1])["rainMmH"], 5.0)
         self.assertEqual(len(self.started), 1, "one child for the session")
-        # pre-recorded: the child gets EOF (it fades out and ends), the mod hears 'off'
+        # pre-recorded: the line goes to the child (it falls quiet and lingers), the mod hears 'off'
         self.la.on_message(c, {"type": "weather_audio", "mode": "prerecorded"})
-        self.assertEqual(self.lines(3)[-1], "EOF")
-        self.assertEqual(c.sent[-1], {"type": "audio_state", "state": "off"})
+        self.assertEqual(json.loads(self.lines(3)[2])["mode"], "prerecorded")
+        self.assertIn({"type": "audio_state", "state": "off"}, c.sent, "the mod told at once (the lingering child's live lines do not matter in Pre-recorded: liveNow needs the setting)")
+        self.assertIsNotNone(self.la.proc, "kept for a switch back")
+        # and Live again within its linger: the same child (the playtest's restarts were these switches)
+        self.la.on_message(c, dict(msg, thunders=None))
+        self.assertEqual(json.loads(self.lines(4)[3])["mode"], "live")
+        self.assertEqual(len(self.started), 1, "Live / Pre-recorded / Live: one process")
+
+    def test_a_child_that_ends_by_itself(self):
+        # (serve.rs: no Live line for LINGER_S, exit 0): no 'failed', no retry wait; the next Live starts another
+        c = Conn()
+        self.la.on_message(c, {"mode": "live"})
+        self.assertTrue(c.wait(1))
+        self.la.on_message(c, {"mode": "prerecorded"})
+        self.la.queue.put({"mode": "end"})
+        self.assertEqual(self.lines(3)[-1], "ENDED")
+        end = time.monotonic() + 5
+        while self.la.proc is not None and time.monotonic() < end:
+            time.sleep(0.02)
         self.assertIsNone(self.la.proc)
+        self.assertEqual(c.states("failed"), [], "its own end is not a failure")
+        self.la.on_message(c, {"mode": "live"})
+        self.assertEqual(len(self.started), 2, "Live later: a new child at once")
 
     def test_a_child_not_reading_never_blocks(self):
         # (the weather agent's la_block.py: a child that did not read for a while blocked on_message for 6 s)
@@ -287,6 +314,33 @@ class LiveAudioTest(unittest.TestCase):
             self.assertEqual(liveaudio.child_env(env, frozen=True), {"LD_LIBRARY_PATH": "/opt/lib", "HOME": "/h"})
             self.assertEqual(liveaudio.child_env({"LD_LIBRARY_PATH": "/tmp/_MEI/x"}, frozen=True), {},
                              "frozen without an original: none")
+
+    def test_synth_rain_cap_matches_the_game(self):
+        # native/weathersynth live.rs caps its rain at the level the game plays its own loops: its copies of
+        # ambience.lua RAIN_GAIN / RAIN_LAYERS, weather.lua RAIN_CURVE / PRECIP_OFF and SOURCES.md's loop loudness
+        import re
+        root = Path(__file__).resolve().parents[2]
+        ext = root / "mod/beamng_earth/lua/ge/extensions/beamngEarth"
+        amb = (ext / "ambience.lua").read_text(encoding="utf-8")
+        wea = (ext / "weather.lua").read_text(encoding="utf-8")
+        src = (root / "mod/beamng_earth/levels/beamng_earth/art/sound/weather/SOURCES.md").read_text(encoding="utf-8")
+        rs = (root / "native/weathersynth/src/live.rs").read_text(encoding="utf-8")
+        num = r"(-?[\d.]+)"
+
+        def pairs(text):
+            return [(float(a), float(b)) for a, b in re.findall(r"\(\s*" + num + r"\s*,\s*" + num + r"\s*\)", text)]
+        self.assertEqual(float(re.search(r"pub const RAIN_BED_GAIN: f64 = " + num, rs).group(1)),
+                         float(re.search(r"\b" + re.search(r"M\.MIX = '(\w+)'", amb).group(1) + r" = \{ rainGain = " + num, amb).group(1)),
+                         "live.rs RAIN_BED_GAIN = the rainGain of ambience.lua's M.MIX option")
+        layers = re.findall(r"\{ '(\w+)', '(bne_rain_\w+\.ogg)', " + num + r" \}", amb.split("M.RAIN_LAYERS =")[1][:300])
+        lufs = {f: float(v) for f, v in re.findall(r"\| (bne_rain_\w+\.ogg) \|[^\n]*\| " + num + r" LUFS \|", src)}
+        loops = pairs(re.search(r"pub const RAIN_LOOPS[^=]*= \[(.*?)\];", rs).group(1))
+        self.assertEqual(loops, [(float(r), lufs[f]) for _, f, r in layers])
+        curve = [(float(a), float(b)) for a, b in re.findall(r"\{ " + num + ", " + num + r" \}",
+                                                             re.search(r"M\.RAIN_CURVE = \{(.*)\}", wea).group(1))]
+        self.assertEqual(pairs(re.search(r"pub const RAIN_SHARE[^=]*= \[(.*?)\];", rs).group(1)), curve)
+        self.assertEqual(float(re.search(r"pub const PRECIP_OFF: f64 = " + num, rs).group(1)),
+                         float(re.search(r"M\.PRECIP_OFF = " + num, wea).group(1)))
 
 
 if __name__ == "__main__":
