@@ -38,8 +38,8 @@ const BIN_W: f64 = 0.01; // relative distance bin width
 /// close and strike renders sit in the recorded files' spectral balance (10 dB/oct with micro-tortuosity 0.06: centroid
 /// ~200-450 Hz at 1 km, recordings 336-644 Hz). WEATHERSYNTH_TILT overrides it (testing).
 const TILT_F: f64 = 150.0;
-fn tilt_db_oct() -> f64 {
-    std::env::var("WEATHERSYNTH_TILT").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0)
+fn tilt_db_oct(class_tilt: f64) -> f64 {
+    std::env::var("WEATHERSYNTH_TILT").ok().and_then(|v| v.parse().ok()).unwrap_or(class_tilt)
 }
 fn tilt_gain(f: f64, db_oct: f64) -> f64 {
     let x = f.min(8000.0) / TILT_F;
@@ -64,24 +64,67 @@ pub struct Class {
     pub fade_out_s: f64,
     /// the diffuse tail's reverberation time range (s)
     pub t60: (f64, f64),
+    /// the diffuse tail's energy re the direct sound (amplitude factor; was `echo` for every class)
+    pub tail: f64,
+    /// the source tilt (dB/oct above TILT_F); WEATHERSYNTH_TILT overrides every class
+    pub tilt: f64,
+    /// restore the pre-limiter envelope after limiting (see normalise_peak_class)
+    pub restore: bool,
+    /// the onset builds to the boom: starts `ramp_db` down, full after ~`ramp_s` (+/-30 % per seed); 0 dB: none
+    pub ramp_db: f64,
+    pub ramp_s: f64,
+    /// soft saturation (tanh to the ceiling) before the limiter: lower crest factor without flattening the envelope
+    pub saturate: bool,
+    /// the near-field micro-crack layer: its gain (0: none), R0 (m) and the height of channel it covers (m)
+    pub micro_gain: f64,
+    pub micro_r0: f64,
+    pub micro_height: f64,
+    /// the bang (the main channel's boom) held ~12 dB down for this long after the first arrival (s); 0: none
+    pub bang_delay: f64,
+    /// a low shelf below `low_shelf_hz` (dB; 0: none): less of a blast's thump
+    pub low_shelf_db: f64,
+    pub low_shelf_hz: f64,
+    /// a late horizontal side channel whose sound arrives ~`late_t` s after the flash (+/-15 % per seed): the second
+    /// roll of a close strike's peal (0: none); its gain
+    pub late_t: f64,
+    pub late_gain: f64,
 }
 
 pub fn class(name: &str) -> Option<Class> {
     let c = match name {
         "strike" => Class {
+            // fix3 (fix1 "like bombs going off", fix2 "like gunshots"; matched to the user's reference recording on
+            // band shares, centroid, attack and the envelope): a fast 60 ms attack from -6 dB, the bang at the onset, a
+            // full low-mid body (tilt 7, only -4 dB below 50 Hz), a hint of micro-crackle (0.03), a rolling peal
+            // (echo / tail 0.5, T60 3-4.5 s) with a second roll ~3.5 s in (a late side channel); soft saturation and
+            // a fast limiter (no held-up plateau)
             name: "strike",
             d_min: 60.0,
             d_max: 280.0,
             length_s: 14.0,
             target_lufs: -9.5,
             ceil_db: -1.3,
-            attack_s: 0.004,
-            release_s: 0.2,
-            echo: 0.55,
+            attack_s: 0.001,
+            release_s: 0.04,
+            echo: 0.5,
             excess: 0.0,
             fade_in_s: 0.003,
             fade_out_s: 4.0,
-            t60: (3.5, 5.5),
+            t60: (3.0, 4.5),
+            tail: 0.5,
+            tilt: 7.0,
+            restore: false,
+            ramp_db: -6.0,
+            ramp_s: 0.06,
+            saturate: true,
+            micro_gain: 0.03,
+            micro_r0: 0.25,
+            micro_height: 250.0,
+            bang_delay: 0.0,
+            low_shelf_db: -4.0,
+            low_shelf_hz: 50.0,
+            late_t: 3.5,
+            late_gain: 0.8,
         },
         "close" => Class {
             name: "close",
@@ -97,6 +140,20 @@ pub fn class(name: &str) -> Option<Class> {
             fade_in_s: 0.01,
             fade_out_s: 3.5,
             t60: (4.0, 6.0),
+            tail: 0.5,
+            tilt: 10.0,
+            restore: false,
+            ramp_db: 0.0,
+            ramp_s: 0.0,
+            saturate: false,
+            micro_gain: 0.0,
+            micro_r0: 0.25,
+            micro_height: 250.0,
+            bang_delay: 0.0,
+            low_shelf_db: 0.0,
+            low_shelf_hz: 80.0,
+            late_t: 0.0,
+            late_gain: 0.0,
         },
         "mid" => Class {
             name: "mid",
@@ -112,6 +169,20 @@ pub fn class(name: &str) -> Option<Class> {
             fade_in_s: 0.05,
             fade_out_s: 3.5,
             t60: (5.0, 8.0),
+            tail: 0.45,
+            tilt: 10.0,
+            restore: false,
+            ramp_db: 0.0,
+            ramp_s: 0.0,
+            saturate: false,
+            micro_gain: 0.0,
+            micro_r0: 0.25,
+            micro_height: 250.0,
+            bang_delay: 0.0,
+            low_shelf_db: 0.0,
+            low_shelf_hz: 80.0,
+            late_t: 0.0,
+            late_gain: 0.0,
         },
         "far" => Class {
             name: "far",
@@ -127,9 +198,72 @@ pub fn class(name: &str) -> Option<Class> {
             fade_in_s: 0.2,
             fade_out_s: 3.5,
             t60: (6.0, 9.0),
+            tail: 0.45,
+            tilt: 10.0,
+            restore: false,
+            ramp_db: 0.0,
+            ramp_s: 0.0,
+            saturate: false,
+            micro_gain: 0.0,
+            micro_r0: 0.25,
+            micro_height: 250.0,
+            bang_delay: 0.0,
+            low_shelf_db: 0.0,
+            low_shelf_hz: 80.0,
+            late_t: 0.0,
+            late_gain: 0.0,
         },
         _ => return None,
     };
+    let mut c = c;
+    // WEATHERSYNTH_STRIKE="echo,tail,t60lo,t60hi,tilt,attack_s,release_s[,restore[,d_min,d_max]]" (testing)
+    if c.name == "strike" {
+        if let Ok(v) = std::env::var("WEATHERSYNTH_STRIKE") {
+            let f: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            if f.len() >= 7 {
+                c.echo = f[0];
+                c.tail = f[1];
+                c.t60 = (f[2], f[3]);
+                c.tilt = f[4];
+                c.attack_s = f[5];
+                c.release_s = f[6];
+            }
+            if f.len() >= 8 {
+                c.restore = f[7] > 0.5;
+            }
+            if f.len() >= 10 {
+                c.d_min = f[8];
+                c.d_max = f[9];
+            }
+        }
+        // WEATHERSYNTH_STRIKE_FIX2="micro_gain,micro_r0,micro_height,bang_delay,low_shelf_db[,low_shelf_hz]" (testing)
+        if let Ok(v) = std::env::var("WEATHERSYNTH_STRIKE_FIX2") {
+            let f: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            if f.len() >= 5 {
+                c.micro_gain = f[0];
+                c.micro_r0 = f[1];
+                c.micro_height = f[2];
+                c.bang_delay = f[3];
+                c.low_shelf_db = f[4];
+            }
+            if f.len() >= 6 {
+                c.low_shelf_hz = f[5];
+            }
+            if f.len() >= 8 {
+                c.late_t = f[6];
+                c.late_gain = f[7];
+            }
+        }
+        // WEATHERSYNTH_STRIKE_SHAPE="ramp_db,ramp_s,saturate" (testing)
+        if let Ok(v) = std::env::var("WEATHERSYNTH_STRIKE_SHAPE") {
+            let f: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            if f.len() >= 3 {
+                c.ramp_db = f[0];
+                c.ramp_s = f[1];
+                c.saturate = f[2] > 0.5;
+            }
+        }
+    }
     Some(c)
 }
 
@@ -191,6 +325,8 @@ struct Layer {
     r0: f64,
     gain: f64,
     t_off: f64,
+    /// the near-field micro-crack layer (strike class): not held back by the bang delay, its own group live
+    micro: bool,
 }
 
 /// A tortuous walk: macro segments (direction change `macro_sigma`, pulled toward `bias` by `pull`), each made of meso
@@ -246,7 +382,11 @@ fn micro_sigma() -> f64 {
 /// `min`: the smallest piece (m). The live renderer uses coarser pieces (fewer to sum; the crack above ~3 kHz then
 /// rests on fewer, larger kinks).
 fn fractalise_to(rng: &mut Rng, pts: &[V3], min: f64) -> Vec<V3> {
-    fn rec(rng: &mut Rng, a: V3, b: V3, out: &mut Vec<V3>, min: f64) {
+    fractalise_sigma(rng, pts, min, micro_sigma())
+}
+
+fn fractalise_sigma(rng: &mut Rng, pts: &[V3], min: f64, sigma: f64) -> Vec<V3> {
+    fn rec(rng: &mut Rng, a: V3, b: V3, out: &mut Vec<V3>, min: f64, sigma: f64) {
         let d = sub(b, a);
         let l = len(d);
         if l <= min {
@@ -257,14 +397,14 @@ fn fractalise_to(rng: &mut Rng, pts: &[V3], min: f64) -> Vec<V3> {
         let helper = if dir[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
         let u = norm(cross(dir, helper));
         let v = cross(dir, u);
-        let s = micro_sigma() * l;
+        let s = sigma * l;
         let mid = add(sc(add(a, b), 0.5), add(sc(u, s * rng.normal()), sc(v, s * rng.normal())));
-        rec(rng, a, mid, out, min);
-        rec(rng, mid, b, out, min);
+        rec(rng, a, mid, out, min, sigma);
+        rec(rng, mid, b, out, min, sigma);
     }
     let mut out = vec![pts[0]];
     for w in pts.windows(2) {
-        rec(rng, w[0], w[1], &mut out, min);
+        rec(rng, w[0], w[1], &mut out, min, sigma);
     }
     out
 }
@@ -291,7 +431,7 @@ fn make_channel_at(seed: u64, cl: &Class, at: Option<(f64, f64)>, micro_min: f64
     let mut micro = Rng::new(seed, &format!("thunder-micro-{}", cl.name));
     let meso = walk(&mut rng, ground, up, up, 0.35, 20000.0, &|p: V3| p[2] >= top);
     let main = fractalise(&mut micro, &meso);
-    let mut layers = vec![Layer { pts: main.clone(), r0, gain: 1.0, t_off: 0.0 }];
+    let mut layers = vec![Layer { pts: main.clone(), r0, gain: 1.0, t_off: 0.0, micro: false }];
 
     // Return strokes down the same channel. The wind carries the hot channel between strokes (5-15 m/s, more aloft),
     // so each stroke's small-scale shape is its own: exact copies would comb-filter the sum at 1 / (stroke interval).
@@ -310,7 +450,7 @@ fn make_channel_at(seed: u64, cl: &Class, at: Option<(f64, f64)>, micro_min: f64
             })
             .collect();
         let pts = fractalise(&mut micro, &shifted);
-        layers.push(Layer { pts, r0: r0 * brng.range(0.5, 0.8), gain: brng.range(0.4, 0.8), t_off: t });
+        layers.push(Layer { pts, r0: r0 * brng.range(0.5, 0.8), gain: brng.range(0.4, 0.8), t_off: t, micro: false });
     }
 
     // downward branches from the main channel
@@ -326,7 +466,7 @@ fn make_channel_at(seed: u64, cl: &Class, at: Option<(f64, f64)>, micro_min: f64
         let blen = brng.lognormal(500.0, 0.5).clamp(100.0, 2000.0);
         let pts = walk(&mut brng, main[i], out, norm(out), 0.25, blen, &|p: V3| p[2] < 30.0);
         let pts = fractalise(&mut micro, &pts);
-        layers.push(Layer { pts, r0: r0 * 0.45, gain: 0.5, t_off: 0.0 });
+        layers.push(Layer { pts, r0: r0 * 0.45, gain: 0.5, t_off: 0.0, micro: false });
     }
 
     // horizontal in-cloud channels from the top
@@ -340,7 +480,33 @@ fn make_channel_at(seed: u64, cl: &Class, at: Option<(f64, f64)>, micro_min: f64
         let zhi = top + 1500.0;
         let pts = walk(&mut brng, topp, h, norm(h), 0.6, ilen, &|p: V3| p[2] < zlo || p[2] > zhi);
         let pts = fractalise(&mut micro, &pts);
-        layers.push(Layer { pts, r0: r0 * 0.55, gain: 0.45, t_off: brng.range(0.0, 0.05) });
+        layers.push(Layer { pts, r0: r0 * 0.55, gain: 0.45, t_off: brng.range(0.0, 0.05), micro: false });
+    }
+    // The late side channel (strike): leaves the main channel where its sound arrives ~late_t s after the flash and
+    // runs sideways 400-1200 m at about that height, so its pieces arrive together: a second swell of the peal.
+    if cl.late_t > 0.0 && cl.late_gain > 0.0 {
+        let mut lrng = Rng::new(seed, &format!("thunder-late-{}", cl.name));
+        let want = cl.late_t * lrng.range(0.85, 1.15) * SOUND;
+        let obs: V3 = [0.0, 0.0, OBS_H];
+        if let Some(i) = meso.iter().position(|p| len(sub(*p, obs)) >= want) {
+            let az = lrng.range(0.0, m::TAU);
+            let h = [m::cos(az), m::sin(az), lrng.range(-0.05, 0.05)];
+            let blen = lrng.lognormal(700.0, 0.4).clamp(400.0, 1200.0);
+            let pts = walk(&mut lrng, meso[i], h, norm(h), 0.5, blen, &|p: V3| p[2] < 50.0);
+            let pts = fractalise(&mut micro, &pts);
+            layers.push(Layer { pts, r0, gain: cl.late_gain, t_off: 0.0, micro: false });
+        }
+    }
+    // The near-field micro-crack layer (strike): the lowest `micro_height` m of the main channel again, fractalised far
+    // finer and rougher, its pieces short N-waves (R0 `micro_r0`): many sub-millisecond shocks arriving in quick
+    // succession, the instant crack and the ripping tear of a strike close by.
+    if cl.micro_gain > 0.0 {
+        let mut mrng = Rng::new(seed, &format!("thunder-microcrack-{}", cl.name));
+        let low: Vec<V3> = meso.iter().cloned().take_while(|p| p[2] < cl.micro_height).collect();
+        if low.len() >= 2 {
+            let pts = fractalise_sigma(&mut mrng, &low, 0.02, 0.3);
+            layers.push(Layer { pts, r0: cl.micro_r0, gain: cl.micro_gain, t_off: 0.0, micro: true });
+        }
     }
     Geometry { layers, ground, seed }
 }
@@ -353,6 +519,19 @@ fn nwave_len(r: f64, r0: f64) -> f64 {
 }
 fn shock_g(r: f64, r0: f64) -> f64 {
     (1.0 + 0.5 * m::ln(r / (10.0 * r0))).max(1.0)
+}
+
+/// nwave_spec with e^{-i w T} given (the live renderer's recurrence).
+fn nwave_spec_e(w: f64, t: f64, e: C) -> C {
+    let wt = w * t;
+    if wt < 0.05 {
+        return C::new(w * w * t * t * t / 12.0, w * t * t / 6.0 - w * w * w * t * t * t * t / 40.0);
+    }
+    let one_m_e = C::new(1.0 - e.re, -e.im);
+    let term1 = one_m_e.mul(C::new(0.0, -1.0 / w));
+    let inner = e.mul(C::new(1.0 / (w * w), t / w));
+    let term2 = C::new(inner.re - 1.0 / (w * w), inner.im).scale(2.0 / t);
+    C::new(term1.re - term2.re, term1.im - term2.im)
 }
 
 /// Spectrum of the N-wave p(t) = 1 - 2t/T on [0, T] at angular frequency w.
@@ -424,20 +603,63 @@ fn atten_db(f: f64, r: f64, excess: f64) -> f64 {
 }
 
 /// Render the dry channel sound (no echoes), time 0 = the flash. Returns the signal and the first arrival (s).
-fn render_dry(geo: &Geometry, cl: &Class, total_s: f64) -> (Vec<f64>, f64) {
+/// `fast` (the live renderer): 3 % distance bins instead of 1 %, and the N-wave spectrum by a complex recurrence
+/// instead of a sin / cos per frequency bin (no longer bit-identical to the offline render; differences ~1e-12).
+fn render_dry(geo: &Geometry, cl: &Class, total_s: f64, fast: bool, max_t: f64) -> (Vec<f64>, f64) {
     let obs: V3 = [0.0, 0.0, OBS_H];
     let img: V3 = [0.0, 0.0, -OBS_H];
     let n_out = (total_s * FS) as usize;
     let mut out = vec![0.0; n_out];
     let r_lo = 20.0;
-    let lbin = m::ln(1.0 + BIN_W);
+    let lbin = m::ln(1.0 + if fast { 0.03 } else { BIN_W });
     let r0_main = geo.layers[0].r0;
+    // the first arrival over every layer (bins starting more than max_t after it are not rendered: the live renderer
+    // keeps only its window)
     let mut first = f64::INFINITY;
+    for layer in geo.layers.iter() {
+        for p in layer.pts.iter() {
+            first = first.min(len(sub(*p, obs)) / SOUND + layer.t_off);
+        }
+    }
     let mut amin_cache: HashMap<(usize, usize), Vec<C>> = HashMap::new();
     let mut tilt_cache: HashMap<usize, Vec<f64>> = HashMap::new();
-    let tdb = tilt_db_oct();
-    for (li, layer) in geo.layers.iter().enumerate() {
+    let tdb = tilt_db_oct(cl.tilt);
+    // Groups of layers rendered together: one per layer offline; in the fast (live) mode two, the main channel with its
+    // return strokes and the thin channels (branches, in-cloud), each with a representative R0 (gain-weighted), so
+    // the per-bin work is done twice instead of once per layer. Each piece keeps its own weight and time offset.
+    let groups: Vec<(usize, Vec<usize>, f64)> = if fast {
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        let mut c = Vec::new();
+        for (li, l) in geo.layers.iter().enumerate() {
+            if l.micro {
+                c.push(li)
+            } else if l.r0 >= 0.6 * r0_main {
+                a.push(li)
+            } else {
+                b.push(li)
+            }
+        }
+        let rep = |v: &Vec<usize>| {
+            let w: f64 = v.iter().map(|&i| geo.layers[i].gain).sum();
+            v.iter().map(|&i| geo.layers[i].r0 * geo.layers[i].gain).sum::<f64>() / w.max(1e-12)
+        };
+        let mut g = vec![(0, a.clone(), rep(&a))];
+        if !b.is_empty() {
+            g.push((1, b.clone(), rep(&b)));
+        }
+        if !c.is_empty() {
+            g.push((2, c.clone(), rep(&c)));
+        }
+        g
+    } else {
+        geo.layers.iter().enumerate().map(|(li, l)| (li, vec![li], l.r0)).collect()
+    };
+    for (li, members, group_r0) in groups.iter() {
+        let li = *li;
         let mut bins: Vec<Vec<Entry>> = Vec::new();
+        for &mi in members.iter() {
+        let layer = &geo.layers[mi];
         for w in layer.pts.windows(2) {
             let (a, b) = (w[0], w[1]);
             let seg = sub(b, a);
@@ -451,22 +673,31 @@ fn render_dry(geo: &Geometry, cl: &Class, total_s: f64) -> (Vec<f64>, f64) {
                 let r = len(sub(mid, obs));
                 let ri = len(sub(mid, img));
                 let ws = m::sqrt(shock_g(1000.0, layer.r0) / shock_g(r, layer.r0));
-                let wgt = layer.gain * (layer.r0 / r0_main) * ds / r * ws;
+                let mut wgt = layer.gain * (layer.r0 / r0_main) * ds / r * ws;
+                if cl.bang_delay > 0.0 && !layer.micro {
+                    // the bang held back: ~12 dB down until bang_delay after the first arrival, rising over 0.1 s
+                    let dt = len(sub(mid, obs)) / SOUND + layer.t_off - first;
+                    let u = ((dt - (cl.bang_delay - 0.1)) / 0.1).clamp(0.0, 1.0);
+                    wgt *= 0.25 + 0.75 * u * u * (3.0 - 2.0 * u);
+                }
                 let bi = (m::ln(r.max(r_lo) / r_lo) / lbin).floor() as usize;
                 if bins.len() <= bi {
                     bins.resize_with(bi + 1, Vec::new);
                 }
                 let t0 = len(sub(p0, obs)) / SOUND + layer.t_off;
                 let t1 = len(sub(p1, obs)) / SOUND + layer.t_off;
-                first = first.min(t0.min(t1));
                 bins[bi].push(Entry { t0: t0.min(t1), t1: t0.max(t1), w: wgt, img: false });
                 let ti0 = len(sub(p0, img)) / SOUND + layer.t_off;
                 let ti1 = len(sub(p1, img)) / SOUND + layer.t_off;
                 bins[bi].push(Entry { t0: ti0.min(ti1), t1: ti0.max(ti1), w: wgt * r / ri, img: true });
             }
         }
+        }
         for (bi, ents) in bins.iter().enumerate() {
             if ents.is_empty() {
+                continue;
+            }
+            if ents.iter().map(|e| e.t0).fold(f64::INFINITY, f64::min) > first + max_t {
                 continue;
             }
             let rb = r_lo * m::exp((bi as f64 + 0.5) * lbin);
@@ -475,7 +706,7 @@ fn render_dry(geo: &Geometry, cl: &Class, total_s: f64) -> (Vec<f64>, f64) {
             // (near k / T) as steady stripes through the whole file.
             let mut vr = Rng::new(geo.seed ^ ((li as u64) << 32) ^ bi as u64, "thunder-r0-variation");
             let r0v = vr.lognormal(1.0, 0.25).clamp(0.55, 1.8);
-            let tn = nwave_len(rb, layer.r0 * r0v);
+            let tn = nwave_len(rb, group_r0 * r0v);
             let tmin = ents.iter().map(|e| e.t0).fold(f64::INFINITY, f64::min);
             let tmax = ents.iter().map(|e| e.t1).fold(0.0, f64::max);
             let start = (tmin * FS).floor() as isize - 2;
@@ -504,6 +735,9 @@ fn render_dry(geo: &Geometry, cl: &Class, total_s: f64) -> (Vec<f64>, f64) {
             let mut z: Vec<C> = buf.iter().zip(ibuf.iter()).map(|(&a, &b)| C::new(a, b)).collect();
             dsp::fft(&mut z, false);
             let mut x = vec![C::default(); n];
+            let delta = m::TAU * FS / n as f64 * tn;
+            let step = C::new(m::cos(delta), -m::sin(delta));
+            let mut e = C::new(1.0, 0.0);
             for k in 0..=n / 2 {
                 let zk = z[k];
                 let zc = z[(n - k) % n];
@@ -513,7 +747,9 @@ fn render_dry(geo: &Geometry, cl: &Class, total_s: f64) -> (Vec<f64>, f64) {
                 let im = C::new(0.5 * (zk.im - zc.im), -0.5 * (zk.re - zc.re));
                 let f = k as f64 * FS / n as f64;
                 let w = m::TAU * f;
-                let s = nwave_spec(w, tn).scale(FS * tilt[k]).mul(amin[k]);
+                let ns = if fast { nwave_spec_e(w, tn, e) } else { nwave_spec(w, tn) };
+                e = e.mul(step);
+                let s = ns.scale(FS * tilt[k]).mul(amin[k]);
                 x[k] = d.add(im.scale(ground_gain(f))).mul(s).scale(r0v);
                 if k > 0 && k < n / 2 {
                     x[n - k] = C::new(x[k].re, -x[k].im);
@@ -622,7 +858,7 @@ fn add_reverb(x: &[f64], seed: u64, cl: &Class) -> Vec<f64> {
         i0 = i1;
     }
     let e: f64 = h.iter().map(|v| v * v).sum();
-    let g = cl.echo / m::sqrt(e.max(1e-30));
+    let g = cl.tail / m::sqrt(e.max(1e-30));
     for v in h.iter_mut() {
         *v *= g;
     }
@@ -649,16 +885,30 @@ pub fn render_live(seed: u64, dist: f64, az: f64, micro_min: f64, length_s: f64)
         "far"
     };
     let cl = class(name).unwrap();
+    let timing = std::env::var("WEATHERSYNTH_TIMING").is_ok();
+    let t0 = std::time::Instant::now();
     let geo = make_channel_at(seed, &cl, Some((dist, az)), micro_min);
+    let t1 = t0.elapsed().as_secs_f64();
     let horizon = dist / SOUND + length_s + 9.0;
-    let (dry, first) = render_dry(&geo, &cl, horizon);
+    let (dry, first) = render_dry(&geo, &cl, horizon, true, length_s + 0.5);
+    let t2 = t0.elapsed().as_secs_f64();
     let s0 = (((first - 0.01) * FS).floor() as isize).max(0) as usize;
     let nlen = (length_s * FS) as usize;
     let dry: Vec<f64> = (0..nlen).map(|i| dry.get(s0 + i).copied().unwrap_or(0.0)).collect();
     let echoed = add_echoes(&dry, seed, &cl);
+    let t3 = t0.elapsed().as_secs_f64();
     let mut y = add_reverb(&echoed, seed, &cl);
+    let t4 = t0.elapsed().as_secs_f64();
+    if timing {
+        let pieces: usize = geo.layers.iter().map(|l| l.pts.len()).sum();
+        eprintln!("render_live dist={dist:.0} geometry={t1:.3}s ({pieces} points) dry={:.3}s echoes={:.3}s reverb={:.3}s", t2 - t1, t3 - t2, t4 - t3);
+    }
     let mut hp = Biquad::highpass(FS, 25.0, 0.7071);
     hp.run(&mut y);
+    if cl.low_shelf_db != 0.0 {
+        let mut ls = Biquad::lowshelf(FS, cl.low_shelf_hz, cl.low_shelf_db);
+        ls.run(&mut y);
+    }
     let fo = (3.0 * FS) as usize;
     for i in 0..fo.min(nlen) {
         let k = nlen - fo + i;
@@ -672,7 +922,7 @@ pub fn render(seed: u64, cl: &Class) -> Rendered {
     let gd = len(sub(geo.ground, [0.0, 0.0, 0.0]));
     let total_len: f64 = geo.layers.iter().map(|l| l.pts.windows(2).map(|w| len(sub(w[1], w[0]))).sum::<f64>()).sum();
     let horizon = gd / SOUND + cl.length_s + 9.0;
-    let (dry, first) = render_dry(&geo, cl, horizon);
+    let (dry, first) = render_dry(&geo, cl, horizon, false, f64::INFINITY);
     // Cut where the sound becomes audible: the first arrival, or later if that is only a faint precursor (a branch
     // nearer than the main channel): the first 10 ms that reach 24 dB under the loudest. The game delays the file
     // by the strike's distance after the flash.
@@ -685,10 +935,22 @@ pub fn render(seed: u64, cl: &Class) -> Rendered {
     let s0 = ((start * FS).floor() as isize).max(0) as usize;
     let nlen = (cl.length_s * FS) as usize;
     let dry: Vec<f64> = (0..nlen).map(|i| dry.get(s0 + i).copied().unwrap_or(0.0)).collect();
+    // the onset's rip builds into the boom (real close strikes peak ~0.5 s after the onset): applied after the
+    // saturation and the limiter (normalise_peak_class), which would flatten it
+    let ramp = if cl.ramp_db < 0.0 && cl.ramp_s > 0.0 {
+        let mut rr = Rng::new(seed, "thunder-ramp");
+        Some((m::undb(cl.ramp_db), (cl.ramp_s * rr.range(0.7, 1.3) * FS) as usize))
+    } else {
+        None
+    };
     let echoed = add_echoes(&dry, seed, cl);
     let mut y = add_reverb(&echoed, seed, cl);
     let mut hp = Biquad::highpass(FS, 25.0, 0.7071);
     hp.run(&mut y);
+    if cl.low_shelf_db != 0.0 {
+        let mut ls = Biquad::lowshelf(FS, cl.low_shelf_hz, cl.low_shelf_db);
+        ls.run(&mut y);
+    }
     let fi = (cl.fade_in_s * FS) as usize;
     for (i, v) in y.iter_mut().enumerate().take(fi) {
         *v *= i as f64 / fi as f64;
@@ -703,7 +965,7 @@ pub fn render(seed: u64, cl: &Class) -> Rendered {
         let pk = y.iter().fold(0.0f64, |a, v| a.max(v.abs())).max(1e-30);
         (y.iter().map(|v| v * 0.9 / pk).collect(), m::db(0.9 / pk))
     } else {
-        normalise_peak_class(&y, cl)
+        normalise_peak_class(&y, cl, ramp)
     };
     let info = format!(
         "class={} seed={} ground_distance_m={:.0} channel_m={:.0} layers={} r0_m={:.2} first_arrival_s={:.3} file_start_s={:.3} makeup_gain_db={:.1}",
@@ -722,15 +984,55 @@ pub fn render(seed: u64, cl: &Class) -> Rendered {
 
 /// Gain into the limiter until the loudest 3 s reach the class's loudness (bisection; the loudness never falls as the
 /// gain rises).
-fn normalise_peak_class(x: &[f64], cl: &Class) -> (Vec<f64>, f64) {
+fn normalise_peak_class(x: &[f64], cl: &Class, ramp: Option<(f64, usize)>) -> (Vec<f64>, f64) {
     let env = loudness::tp_envelope(x, false);
     let ceil = m::undb(cl.ceil_db);
     let attack = (cl.attack_s * FS).round() as usize;
+    let env400_x = if cl.restore { env400(x) } else { Vec::new() };
     let apply = |gdb: f64| -> Vec<f64> {
         let g = m::undb(gdb);
-        let e: Vec<f64> = env.iter().map(|v| v * g).collect();
-        let gc = loudness::limiter_gain(&e, ceil, attack, cl.release_s, FS);
-        x.iter().zip(gc.iter()).map(|(a, b)| a * g * b).collect()
+        let y: Vec<f64> = if cl.saturate {
+            // tanh to the ceiling, then the limiter catches what tanh's inter-sample peaks leave
+            let sat: Vec<f64> = x.iter().map(|v| ceil * libm::tanh(v * g / ceil)).collect();
+            let e = loudness::tp_envelope(&sat, false);
+            let gc = loudness::limiter_gain(&e, ceil, attack, cl.release_s, FS);
+            sat.iter().zip(gc.iter()).map(|(a, b)| a * b).collect()
+        } else {
+            let e: Vec<f64> = env.iter().map(|v| v * g).collect();
+            let gc = loudness::limiter_gain(&e, ceil, attack, cl.release_s, FS);
+            x.iter().zip(gc.iter()).map(|(a, b)| a * g * b).collect()
+        };
+        let y: Vec<f64> = match ramp {
+            Some((g0, npk)) => y
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    if i >= npk {
+                        *v
+                    } else {
+                        let u = i as f64 / npk as f64;
+                        v * (g0 + (1.0 - g0) * u * u * (3.0 - 2.0 * u))
+                    }
+                })
+                .collect(),
+            None => y,
+        };
+        if !cl.restore {
+            return y;
+        }
+        // Envelope restoration: the limiter squashes the waveform's peaks but also lifts the tail against the peak
+        // (the "held up" plateau). A smooth 400 ms gain puts the pre-limiter envelope shape back: never above 1, so
+        // no peak grows; the crack hits and the tail falls away as recorded.
+        let e1 = env400(&y);
+        let m0 = env400_x.iter().cloned().fold(0.0, f64::max).max(1e-30);
+        let m1 = e1.iter().cloned().fold(0.0, f64::max).max(1e-30);
+        y.iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let r = (env400_x[i] / m0) / (e1[i] / m1).max(1e-12);
+                v * r.min(1.0)
+            })
+            .collect()
     };
     let (mut lo, mut hi) = (-80.0, 80.0);
     for _ in 0..32 {
@@ -743,6 +1045,37 @@ fn normalise_peak_class(x: &[f64], cl: &Class) -> (Vec<f64>, f64) {
     }
     let g = 0.5 * (lo + hi);
     (apply(g), g)
+}
+
+/// 400 ms RMS envelope per sample (centred, linear between 10 ms steps).
+fn env400(x: &[f64]) -> Vec<f64> {
+    let n = x.len();
+    let hop = (0.01 * FS) as usize;
+    let half = (0.2 * FS) as usize;
+    let mut pre = Vec::with_capacity(n + 1);
+    pre.push(0.0f64);
+    let mut acc = 0.0;
+    for v in x {
+        acc += v * v;
+        pre.push(acc);
+    }
+    let pts: Vec<f64> = (0..=n / hop)
+        .map(|k| {
+            let c = k * hop;
+            let lo = c.saturating_sub(half);
+            let hi = (c + half).min(n);
+            m::sqrt(((pre[hi] - pre[lo]) / (hi - lo).max(1) as f64).max(0.0))
+        })
+        .collect();
+    (0..n)
+        .map(|i| {
+            let k = i / hop;
+            let fr = (i % hop) as f64 / hop as f64;
+            let a = pts[k.min(pts.len() - 1)];
+            let b = pts[(k + 1).min(pts.len() - 1)];
+            a + (b - a) * fr
+        })
+        .collect()
 }
 
 #[cfg(test)]
