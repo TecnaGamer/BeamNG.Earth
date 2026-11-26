@@ -312,10 +312,24 @@ fn run() -> Result<(), String> {
                 "far" => methodb::BClass::Far,
                 _ => return Err("bad --class".into()),
             };
-            let dist = methodb::final_dist(class, seed);
+            let dist: f64 = match arg(&args, "--dist") {
+                Some(v) => v.parse().map_err(|_| "bad --dist")?,
+                None => methodb::final_dist(class, seed),
+            };
             let t0 = std::time::Instant::now();
-            let (_y, st) = methodb::render(seed, dist, &methodb::settings(class), true);
+            let mut set = methodb::settings(class);
+            if let Some(v) = arg(&args, "--micro-w") {
+                set.micro_w = v.parse().map_err(|_| "bad --micro-w")?;
+            }
+            set.fast = args.iter().any(|a| a == "--fast");
+            set.threads = arg(&args, "--threads").and_then(|v| v.parse().ok()).unwrap_or(1);
+            let (_y, st) = methodb::render(seed, dist, &set, true);
             println!("{cls} seed {seed} dist {dist:.6} m: render {:.2} s", t0.elapsed().as_secs_f64());
+            if let Some(path) = arg(&args, "--dump") {
+                // the final signal, f64 little-endian (for bit-for-bit comparisons across platforms and thread counts)
+                let b: Vec<u8> = st.fin.iter().flat_map(|v| v.to_le_bytes()).collect();
+                std::fs::write(&path, b).map_err(|e| format!("{path}: {e}"))?;
+            }
             let load = |name: &str| -> Option<Vec<f64>> {
                 let b = std::fs::read(format!("{dir}/{cls}_{seed}_{name}.f64")).ok()?;
                 Some(b.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect())
@@ -336,6 +350,87 @@ fn run() -> Result<(), String> {
                 let pk = r.iter().fold(0.0f64, |a, v| a.max(v.abs()));
                 println!("  {name:7} len {} / {}  max |diff| {md:.3e} at {at} ({:.3} s)  ref peak {pk:.3e}  rel {:.3e}",
                     r.len(), mine.len(), at as f64 / 44100.0, md / pk.max(1e-300));
+            }
+        }
+        "methodb-render" => {
+            // one method B thunder: --class C --seed N [--dist M (default: the class's distance for the seed)]
+            // [--micro-w W] [--fast [--threads T]] --out FILE (.wav: 32-bit float; .f64: raw little-endian f64)
+            let class = methodb::BClass::from_str(&arg(&args, "--class").ok_or("--class")?).ok_or("bad --class")?;
+            let seed: u64 = arg(&args, "--seed").ok_or("--seed")?.parse().map_err(|_| "bad --seed")?;
+            let dist: f64 = match arg(&args, "--dist") {
+                Some(v) => v.parse().map_err(|_| "bad --dist")?,
+                None => methodb::final_dist(class, seed),
+            };
+            let mut set = methodb::settings(class);
+            if let Some(v) = arg(&args, "--micro-w") {
+                set.micro_w = v.parse().map_err(|_| "bad --micro-w")?;
+            }
+            set.fast = args.iter().any(|a| a == "--fast");
+            set.threads = arg(&args, "--threads").and_then(|v| v.parse().ok()).unwrap_or(1);
+            let out = arg(&args, "--out").ok_or("--out")?;
+            let t0 = std::time::Instant::now();
+            let (y, _) = methodb::render(seed, dist, &set, false);
+            if out.ends_with(".f64") {
+                let b: Vec<u8> = y.iter().flat_map(|v| v.to_le_bytes()).collect();
+                std::fs::write(&out, b).map_err(|e| format!("{out}: {e}"))?;
+            } else {
+                wav::write_f32(&out, &y, 44100).map_err(|e| e.to_string())?;
+            }
+            println!("{out}: seed {seed} dist {dist:.3} m, {:.2} s", t0.elapsed().as_secs_f64());
+        }
+        "methodb-set" => {
+            // the shipped method B files (methodb::SHIPPED), rendered on the exact path (--fast: the fast one) as the
+            // approved ones were: Ogg q5, decoded and measured, limited again with a lower ceiling while its true peak
+            // is over -1.0 dBTP. --out DIR [--names strike1,far3] [--no-ogg]; writes DIR/NAME.ogg, DIR/wav/NAME.wav
+            // (32-bit float) and DIR/raw/NAME.f64 (the render before Vorbis, for the checks).
+            let dir = arg(&args, "--out").ok_or("--out")?;
+            let names: Option<Vec<String>> = arg(&args, "--names").map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
+            let ogg = !args.iter().any(|a| a == "--no-ogg");
+            let fast = args.iter().any(|a| a == "--fast");
+            for sub in ["wav", "raw"] {
+                std::fs::create_dir_all(format!("{dir}/{sub}")).map_err(|e| e.to_string())?;
+            }
+            for (name, class, seed, micro_w) in methodb::SHIPPED {
+                if names.as_ref().is_some_and(|n| !n.iter().any(|x| x == name)) {
+                    continue;
+                }
+                let t0 = std::time::Instant::now();
+                let dist = methodb::final_dist(class, seed);
+                let mut set = methodb::settings(class);
+                set.micro_w = micro_w;
+                set.fast = fast;
+                let (mut y, _) = methodb::render(seed, dist, &set, false);
+                let rb: Vec<u8> = y.iter().flat_map(|v| v.to_le_bytes()).collect();
+                std::fs::write(format!("{dir}/raw/bne_thunder_{name}.f64"), rb).map_err(|e| e.to_string())?;
+                let w = format!("{dir}/wav/bne_thunder_{name}.wav");
+                let o = format!("{dir}/bne_thunder_{name}.ogg");
+                let mut ceil = -1.5f64;
+                let mut tp = f64::NAN;
+                for _ in 0..4 {
+                    wav::write_f32(&w, &y, 44100).map_err(|e| e.to_string())?;
+                    if !ogg {
+                        break;
+                    }
+                    encode_ogg(&w, &o, "5")?;
+                    let chk = format!("{dir}/wav/bne_thunder_{name}.check.wav");
+                    let st = Command::new("ffmpeg")
+                        .args(["-y", "-hide_banner", "-loglevel", "error", "-i", &o, "-ac", "1", "-c:a", "pcm_f32le", &chk])
+                        .status()
+                        .map_err(|e| format!("ffmpeg: {e}"))?;
+                    if !st.success() {
+                        return Err(format!("ffmpeg could not decode {o}"));
+                    }
+                    let (x, _) = wav::read(&chk)?;
+                    let _ = std::fs::remove_file(&chk);
+                    tp = methodb::true_peak_db(&x);
+                    if tp <= -1.0 {
+                        break;
+                    }
+                    ceil -= (tp + 1.0) + 0.1;
+                    y = methodb::smooth_tp_limit(&y, ceil, 2.0, 25.0).0;
+                }
+                println!("bne_thunder_{name}\tseed={seed} dist={dist:.3} micro_w={micro_w} ogg_true_peak_dbtp={tp:.2} \
+                          ceil_db={ceil:.2} render_s={:.1}", t0.elapsed().as_secs_f64());
             }
         }
         "grainbank-pack" => {

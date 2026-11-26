@@ -215,4 +215,22 @@ impl NpRng {
 mod tests {
     use super::*;
     include!("nprng_vectors.rs");
+
+    /// The vendored ziggurat tables (npzig.rs: constants in the crate, never read from a numpy install) hold numpy's
+    /// values: a few known entries and the structure (fi falls from 1 to the tail, x_i = wi_i 2^52 rises to x_255 = r, and
+    /// fi_i = exp(-x_i^2 / 2) between).
+    #[test]
+    fn vendored_ziggurat_tables() {
+        assert_eq!(KI[0], 0x000e_f33d_8025_ef6a);
+        assert_eq!(KI[1], 0);
+        assert_eq!(FI[0], 1.0);
+        assert_eq!(WI[0], 8.683627060801306e-16);
+        assert_eq!(WI[255], 8.113849337656484e-16);
+        assert!((WI[255] * 4503599627370496.0 - crate::npzig::ZIG_R).abs() < 1e-9 * crate::npzig::ZIG_R);
+        for i in 1..255 {
+            let x = WI[i] * 4503599627370496.0;
+            assert!((FI[i] - libm::exp(-0.5 * x * x)).abs() < 1e-12, "fi {i}");
+            assert!(FI[i + 1] < FI[i], "fi falls {i}");
+        }
+    }
 }

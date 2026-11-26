@@ -37,23 +37,78 @@ pub struct Settings {
     pub quiet_tear: bool,
     pub tilt_lp: Option<f64>,
     pub rumble_target: Option<f64>,
+    /// the fast path (the bins by scatter and short minimum-phase responses) and its worker threads (1: none)
+    pub fast: bool,
+    pub threads: usize,
+}
+
+impl BClass {
+    pub fn from_str(s: &str) -> Option<BClass> {
+        match s {
+            "strike" => Some(BClass::Strike),
+            "close" => Some(BClass::Close),
+            "mid" => Some(BClass::Mid),
+            "far" => Some(BClass::Far),
+            _ => None,
+        }
+    }
 }
 
 pub fn settings(class: BClass) -> Settings {
     use crate::methodb_data::*;
     match class {
         BClass::Strike => Settings { class, target_lufs: -13.0, eq: CORPUS_STRIKE, rise_s: 0.00005, micro_w: 0.30,
-            quiet_tear: true, tilt_lp: None, rumble_target: None },
+            quiet_tear: true, tilt_lp: None, rumble_target: None, fast: false, threads: 1 },
         BClass::Close => Settings { class, target_lufs: -14.0, eq: CORPUS_CLOSE, rise_s: 0.00005, micro_w: 0.12,
-            quiet_tear: true, tilt_lp: None, rumble_target: None },
+            quiet_tear: true, tilt_lp: None, rumble_target: None, fast: false, threads: 1 },
         BClass::Mid => Settings { class, target_lufs: -18.0, eq: CORPUS_MID, rise_s: 0.00025, micro_w: 0.0,
-            quiet_tear: false, tilt_lp: None, rumble_target: None },
+            quiet_tear: false, tilt_lp: None, rumble_target: None, fast: false, threads: 1 },
         BClass::Far => Settings { class, target_lufs: -22.0, eq: CORPUS_FAR, rise_s: 0.00025, micro_w: 0.0,
-            quiet_tear: false, tilt_lp: Some(1500.0), rumble_target: Some(151.0) },
+            quiet_tear: false, tilt_lp: Some(1500.0), rumble_target: Some(151.0), fast: false, threads: 1 },
     }
 }
 
 /// The distance range per class and finalB's distance for a seed (np.random.default_rng(seed + 1000).uniform(range)).
+/// The shipped method B set (the user's approval, 2026-11-25; finalB's JSONs): name, class, seed, micro-shock weight.
+/// The distance is final_dist(class, seed). Strikes 3-6 carry the micro-shock weight their trim chose (exact, from
+/// each file's r3c.micro_shock_w); the others the class's.
+pub const SHIPPED: [(&str, BClass, u64, f64); 24] = [
+    ("strike1", BClass::Strike, 11, 0.30),
+    ("strike2", BClass::Strike, 12, 0.30),
+    ("strike3", BClass::Strike, 13, 0.35037933025593665),
+    ("strike4", BClass::Strike, 14, 0.13814117727323846),
+    ("strike5", BClass::Strike, 15, 0.2156791924966626),
+    ("strike6", BClass::Strike, 16, 0.11342771119642776),
+    ("close1", BClass::Close, 21, 0.12),
+    ("close2", BClass::Close, 22, 0.12),
+    ("close3", BClass::Close, 23, 0.12),
+    ("close4", BClass::Close, 24, 0.12),
+    ("close5", BClass::Close, 25, 0.12),
+    ("close6", BClass::Close, 26, 0.12),
+    ("mid1", BClass::Mid, 31, 0.0),
+    ("mid2", BClass::Mid, 32, 0.0),
+    ("mid3", BClass::Mid, 33, 0.0),
+    ("mid4", BClass::Mid, 34, 0.0),
+    ("mid5", BClass::Mid, 35, 0.0),
+    ("mid6", BClass::Mid, 36, 0.0),
+    ("far1", BClass::Far, 41, 0.0),
+    ("far2", BClass::Far, 42, 0.0),
+    ("far3", BClass::Far, 43, 0.0),
+    ("far4", BClass::Far, 44, 0.0),
+    ("far5", BClass::Far, 45, 0.0),
+    ("far6", BClass::Far, 46, 0.0),
+];
+
+/// The true peak (dBTP) by 4x FFT oversampling (artefacts.true_peak's measure).
+pub fn true_peak_db(x: &[f64]) -> f64 {
+    let n = x.len();
+    let xf = rfft(x, n);
+    let mut yf = vec![C::default(); n * 2 + 1];
+    yf[..xf.len()].copy_from_slice(&xf);
+    let y = irfft(&yf, n * 4);
+    20.0 * m::log10(y.iter().fold(0.0f64, |a, v| a.max((v * 4.0).abs())))
+}
+
 pub fn class_range(class: BClass) -> (f64, f64) {
     match class {
         BClass::Strike => (60.0, 280.0),
@@ -276,6 +331,63 @@ pub fn oversampled_peak(x: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+
+// ------------------------------------------------------------------ the fast path's switch and its exact helpers
+
+thread_local! {
+    static FAST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+fn fast_mode() -> bool {
+    FAST.with(|f| f.get())
+}
+
+/// The sliding minimum (or maximum) over windows of w values of `a` (van Herk / Gil-Werman: exact, O(n)): out[i] =
+/// min(a[i .. i + w]).
+fn sliding_extreme(a: &[f64], w: usize, max: bool) -> Vec<f64> {
+    let n = a.len();
+    if n < w {
+        return Vec::new();
+    }
+    let pick = |x: f64, y: f64| if max { x.max(y) } else { x.min(y) };
+    let mut pre = vec![0.0f64; n];
+    let mut suf = vec![0.0f64; n];
+    for i in 0..n {
+        pre[i] = if i % w == 0 { a[i] } else { pick(pre[i - 1], a[i]) };
+    }
+    for i in (0..n).rev() {
+        suf[i] = if i % w == w - 1 || i == n - 1 { a[i] } else { pick(suf[i + 1], a[i]) };
+    }
+    (0..=n - w).map(|i| pick(suf[i], pre[i + w - 1])).collect()
+}
+
+/// The centred extreme over [i - l, i + l], the values beyond the edges `lo_pad` / `hi_pad`.
+fn centred_extreme(a: &[f64], l: usize, max: bool, lo_pad: f64, hi_pad: f64) -> Vec<f64> {
+    let mut p = vec![lo_pad; l];
+    p.extend_from_slice(a);
+    p.extend(std::iter::repeat(hi_pad).take(l));
+    sliding_extreme(&p, 2 * l + 1, max)
+}
+
+/// numpy's convolve 'same' through overlap-add (the same sums within rounding).
+fn convolve_same_fast(a: &[f64], v: &[f64]) -> Vec<f64> {
+    let full_len = a.len() + v.len() - 1;
+    let full = conv_crop(a, v, full_len);
+    let k = v.len().min(a.len());
+    let la = a.len().max(v.len());
+    let off = (k.max(1) - 1) / 2;
+    full[off..off + la].to_vec()
+}
+
+/// A minimum-phase filter over a whole signal: the straight path's min_phase_floor, or (fast) its response designed at
+/// 65536 points, cut, and applied by overlap-add.
+fn mp_apply(x: &[f64], mag: &dyn Fn(f64) -> f64) -> Vec<f64> {
+    if fast_mode() {
+        conv_crop(x, &min_phase_ir(mag, 65536), x.len())
+    } else {
+        min_phase_floor(x, mag)
+    }
+}
+
 /// synth_b3.centred_min: min over [i - L, i + L], padded with 1.0.
 pub fn centred_min(a: &[f64], l: usize) -> Vec<f64> {
     (0..a.len())
@@ -293,11 +405,15 @@ pub fn centred_min(a: &[f64], l: usize) -> Vec<f64> {
 
 /// synth_b3.smooth_tp_limit: (y, max gain reduction dB).
 pub fn smooth_tp_limit(x: &[f64], ceil_db: f64, look_ms: f64, rel_ms: f64) -> (Vec<f64>, f64) {
+    smooth_tp_limit_op(x, &oversampled_peak(x), ceil_db, look_ms, rel_ms)
+}
+
+/// smooth_tp_limit with x's oversampled peak given.
+fn smooth_tp_limit_op(x: &[f64], op: &[f64], ceil_db: f64, look_ms: f64, rel_ms: f64) -> (Vec<f64>, f64) {
     let ceil = m::pow(10.0, ceil_db / 20.0);
     let l = 2usize.max((look_ms * SR / 1000.0) as usize);
-    let op = oversampled_peak(x);
     let req: Vec<f64> = op.iter().map(|p| (ceil / p.max(1e-12)).min(1.0)).collect();
-    let mn = centred_min(&req, l);
+    let mn = if fast_mode() { centred_extreme(&req, l, false, 1.0, 1.0) } else { centred_min(&req, l) };
     let hw = hanning(l + 2);
     let h: Vec<f64> = hw[1..hw.len() - 1].to_vec();
     let hs: f64 = np_sum(&h);
@@ -305,7 +421,7 @@ pub fn smooth_tp_limit(x: &[f64], ceil_db: f64, look_ms: f64, rel_ms: f64) -> (V
     let mut mp = vec![mn[0]; l];
     mp.extend_from_slice(&mn);
     mp.extend(std::iter::repeat(*mn.last().unwrap()).take(l));
-    let g = convolve_same(&mp, &hn);
+    let g = if fast_mode() { convolve_same_fast(&mp, &hn) } else { convolve_same(&mp, &hn) };
     let g: Vec<f64> = g[l..l + mn.len()].iter().zip(&req).map(|(a, b)| a.min(*b)).collect();
     let a = m::exp(-1.0 / (rel_ms / 1000.0 * SR));
     let mut s = 1.0f64;
@@ -326,14 +442,24 @@ pub fn normalise_tp(x: &[f64], target: f64, ceil_db: f64) -> (Vec<f64>, f64) {
     };
     let mut z = Vec::new();
     let mut l = 0.0;
+    // fast: the oversampled peak is linear in the gain, so the first one, scaled, serves every pass (the same values
+    // within rounding)
+    let op0 = if fast_mode() { oversampled_peak(&y) } else { Vec::new() };
+    let mut c = 1.0f64;
     for _ in 0..8 {
-        z = smooth_tp_limit(&y, ceil_db, 2.0, 25.0).0;
+        z = if fast_mode() {
+            let op: Vec<f64> = op0.iter().map(|v| v * c).collect();
+            smooth_tp_limit_op(&y, &op, ceil_db, 2.0, 25.0).0
+        } else {
+            smooth_tp_limit(&y, ceil_db, 2.0, 25.0).0
+        };
         l = max_short_term_lufs(&z);
         if (l - target).abs() < 0.2 {
             break;
         }
         let g = m::pow(10.0, (target - l) / 20.0);
         y = y.iter().map(|v| v * g).collect();
+        c *= g;
     }
     (z, l)
 }
@@ -393,7 +519,10 @@ pub fn compress(x: &[f64], thr_db: f64, ratio: f64, att_ms: f64, rel_ms: f64, wi
     let hs: f64 = np_sum(&h);
     let hn: Vec<f64> = h.iter().map(|v| v / hs).collect();
     let nn = grs.len();
-    let cm: Vec<f64> = (0..nn)
+    let cm: Vec<f64> = if fast_mode() {
+        centred_extreme(&grs, l, true, grs[0], grs[nn - 1])
+    } else {
+        (0..nn)
         .map(|i| {
             let lo = i as isize - l as isize;
             let hi = i + l;
@@ -404,11 +533,12 @@ pub fn compress(x: &[f64], thr_db: f64, ratio: f64, att_ms: f64, rel_ms: f64, wi
             }
             mx
         })
-        .collect();
+        .collect()
+    };
     let mut gp = vec![cm[0]; l];
     gp.extend_from_slice(&cm);
     gp.extend(std::iter::repeat(cm[nn - 1]).take(l));
-    let sm = convolve_same(&gp, &hn);
+    let sm = if fast_mode() { convolve_same_fast(&gp, &hn) } else { convolve_same(&gp, &hn) };
     grs = sm[l..l + nn].to_vec();
     let y: Vec<f64> = x.iter().zip(&grs).map(|(v, g)| v * m::pow(10.0, -g / 20.0)).collect();
     (y, out.iter().fold(f64::NEG_INFINITY, |a, v| a.max(*v)))
@@ -691,6 +821,7 @@ struct Contrib {
 
 /// synth_b3.render_dry3: (dry, the micro-shock layer, rr.min()).
 pub fn render_dry3(rng: &mut NpRng, seed: u64, dist: f64, length_s: f64, st: &Settings) -> (Vec<f64>, Vec<f64>, f64) {
+    let t_start = std::time::Instant::now();
     let ch = macro_channel3(rng, seed, dist);
     let _n_strokes0 = rng.integers(2, 6);
     let mut ss = sub_rng(seed, 3);
@@ -786,6 +917,10 @@ pub fn render_dry3(rng: &mut NpRng, seed: u64, dist: f64, length_s: f64, st: &Se
         }
         t_stroke += (m::pow(10.0, m::log10(0.065) + 0.36 * ss.standard_normal())).clamp(0.003, 0.5);
     }
+    if std::env::var("WEATHERSYNTH_TIMING").is_ok() {
+        eprintln!("  methodb channel + pieces: {} pieces, {:.2} s", contribs.iter().map(|c| c.t.len()).sum::<usize>(),
+            t_start.elapsed().as_secs_f64());
+    }
     // the pieces, binned by distance x N-wave length x shadow depth
     let cat = |f: &dyn Fn(&Contrib) -> &Vec<f64>| -> Vec<f64> { contribs.iter().flat_map(|c| f(c).iter().copied()).collect() };
     let tt0 = cat(&|c| &c.t);
@@ -815,8 +950,26 @@ pub fn render_dry3(rng: &mut NpRng, seed: u64, dist: f64, length_s: f64, st: &Se
     let mut keys: Vec<i64> = key.clone();
     keys.sort();
     keys.dedup();
-    for kk in keys {
-        let sel: Vec<usize> = (0..tt.len()).filter(|&i| key[i] == kk).collect();
+    let mut fast_bins: Vec<BinIn> = Vec::new();
+    let mut span_total = 0usize;
+    let mut kern_total = 0usize;
+    let nbins = keys.len();
+    // each key's piece indices, ascending (the same as filtering by key)
+    let mut order: Vec<usize> = (0..tt.len()).collect();
+    order.sort_by_key(|&i| (key[i], i));
+    let mut groups: Vec<Vec<usize>> = Vec::with_capacity(keys.len());
+    {
+        let mut j = 0;
+        for &kk in &keys {
+            let mut g = Vec::new();
+            while j < order.len() && key[order[j]] == kk {
+                g.push(order[j]);
+                j += 1;
+            }
+            groups.push(g);
+        }
+    }
+    for sel in groups {
         let tsel: Vec<f64> = sel.iter().map(|&i| tt[i]).collect();
         let tmin = tsel.iter().fold(f64::INFINITY, |a, v| a.min(*v));
         let tmax = tsel.iter().fold(f64::NEG_INFINITY, |a, v| a.max(*v));
@@ -861,6 +1014,43 @@ pub fn render_dry3(rng: &mut NpRng, seed: u64, dist: f64, length_s: f64, st: &Se
         let tm = median(&sel.iter().map(|&i| tn[i]).collect::<Vec<_>>());
         let rm = median(&sel.iter().map(|&i| rr[i]).collect::<Vec<_>>());
         let smean = np_mean(&sel.iter().map(|&i| sh[i]).collect::<Vec<_>>());
+        if st.fast {
+            // the same boxes as the buffers above hold, and the micro-shock impulses (the same draws)
+            let nbuf = l + 2;
+            let mut boxes: [Vec<(usize, usize, f64)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+            for (bi, gain) in [(0usize, 1.0f64), (1, 0.85), (2, 0.85)] {
+                let bl = if bi == 0 { nbuf } else { glen } as i64;
+                for (j, &i) in sel.iter().enumerate() {
+                    let extra = match bi {
+                        0 => 0.0,
+                        1 => gdelay[i],
+                        _ => gdelay[i] + jit[j],
+                    };
+                    let sv = (tsel[j] - i0 as f64 / SR + extra) * SR;
+                    let wsm = (wd[i] * SR).max(1.0);
+                    let e = sv + wsm;
+                    let a = amp[i] * gain / wsm;
+                    let si = (sv as i64).clamp(0, bl - 1) as usize;
+                    let ei = (e as i64).clamp(0, bl - 1) as usize;
+                    boxes[bi].push((si, ei, a));
+                }
+            }
+            let kl = nwave_soft(tm, st.rise_s).len();
+            let mut micro = Vec::new();
+            if st.micro_w > 0.0 {
+                let mut mr = NpRng::new(&[seed, 5151, i0 as u64, sel.len() as u64]);
+                let pos: Vec<f64> =
+                    tsel.iter().map(|tv| ((tv - i0 as f64 / SR) + mr.uniform(-5e-5, 5e-5)) * SR).collect();
+                let signs: Vec<f64> = (0..sel.len()).map(|_| if mr.choice_index(2) == 0 { -1.0 } else { 1.0 }).collect();
+                let hl = (nbuf + kl - 1) as i64;
+                for (j, &i) in sel.iter().enumerate() {
+                    let wr = m::exp(-(rr[i] - rmin) / 400.0);
+                    micro.push(((pos[j] as i64).clamp(0, hl - 1) as usize, amp[i] * wr * signs[j]));
+                }
+            }
+            fast_bins.push(BinIn { i0, nbuf, glen, boxes, micro, tm, rm, smean });
+            continue;
+        }
         let kern = nwave_soft(tm, st.rise_s);
         let ab = absorb_mag(rm);
         let sig = convolve_full(&buf, &kern);
@@ -896,6 +1086,8 @@ pub fn render_dry3(rng: &mut NpRng, seed: u64, dist: f64, length_s: f64, st: &Se
             }
         }
         let l2 = sig.len().max(gsig.len()) + (0.3 * SR) as usize;
+        span_total += l2;
+        kern_total += kern.len() * sel.len();
         let mut tot = vec![0.0f64; l2];
         for (i, v) in sig.iter().enumerate() {
             tot[i] += v;
@@ -916,8 +1108,321 @@ pub fn render_dry3(rng: &mut NpRng, seed: u64, dist: f64, length_s: f64, st: &Se
             out[i] += tot[i - i0];
         }
     }
+    if st.fast {
+        if std::env::var("WEATHERSYNTH_TIMING").is_ok() {
+            eprintln!("  methodb bins collected: {:.2} s", t_start.elapsed().as_secs_f64());
+        }
+        let (o2, m2) = bins_fast_run(fast_bins, st, n, st.threads);
+        return (o2, m2, rmin);
+    }
+    if std::env::var("WEATHERSYNTH_TIMING").is_ok() {
+        eprintln!("  methodb bins {nbins}, span total {span_total} samples ({:.0} s), pieces x kernel {kern_total}",
+            span_total as f64 / SR);
+    }
     (out, micro_out, rmin)
 }
+
+// ------------------------------------------------------------------ the fast path (the same results within the
+// truncation of short responses; checked against the straight path above)
+
+/// The minimum-phase impulse response of a magnitude (the floor 1e-7, as min_phase_floor), designed at `nd` points and
+/// cut where the tail's energy is under 1e-14 of the whole.
+pub fn min_phase_ir(mag: &dyn Fn(f64) -> f64, nd: usize) -> Vec<f64> {
+    let f = rfftfreq(nd);
+    let lm: Vec<C> = f.iter().map(|&fr| C::new(m::ln(mag(fr).max(1e-7)), 0.0)).collect();
+    let mut c = irfft(&lm, nd);
+    for v in c.iter_mut().take(nd / 2).skip(1) {
+        *v *= 2.0;
+    }
+    for v in c.iter_mut().skip(nd / 2 + 1) {
+        *v = 0.0;
+    }
+    let ch = rfft(&c, nd);
+    let hf: Vec<C> = ch.iter().map(|z| z.expc()).collect();
+    let h = irfft(&hf, nd);
+    trim_tail(h, trim_rel(), 16)
+}
+
+/// The energy fraction a cut response may leave out.
+fn trim_rel() -> f64 {
+    1e-14
+}
+
+fn trim_tail(h: Vec<f64>, rel: f64, min_len: usize) -> Vec<f64> {
+    let total: f64 = h.iter().map(|v| v * v).sum();
+    let mut tail = 0.0;
+    let mut keep = h.len();
+    for i in (0..h.len()).rev() {
+        tail += h[i] * h[i];
+        if tail > total * rel {
+            keep = i + 1;
+            break;
+        }
+    }
+    let keep = keep.max(min_len).min(h.len());
+    h[..keep].to_vec()
+}
+
+/// A zero-phase filter's two-sided impulse response (tlib.fft_filter's), designed at `nd` points: (taps, half-width P;
+/// tap i is at time i - P).
+fn zero_phase_ir(mag: &dyn Fn(f64) -> f64, nd: usize) -> (Vec<f64>, usize) {
+    let f = rfftfreq(nd);
+    let hf: Vec<C> = f.iter().map(|&fr| C::new(mag(fr), 0.0)).collect();
+    let h = irfft(&hf, nd);
+    // h[k] for k >= 0 and h[nd - k] for -k; cut both sides where the remaining energy is under 1e-14
+    let half = nd / 2;
+    let total: f64 = h.iter().map(|v| v * v).sum();
+    let mut p = half;
+    let mut tail = 0.0;
+    for k in (1..half).rev() {
+        tail += h[k] * h[k] + h[nd - k] * h[nd - k];
+        if tail > total * trim_rel() {
+            p = k;
+            break;
+        }
+    }
+    let mut taps = Vec::with_capacity(2 * p + 1);
+    for k in (1..=p).rev() {
+        taps.push(h[nd - k]);
+    }
+    for k in 0..=p {
+        taps.push(h[k]);
+    }
+    (taps, p)
+}
+
+/// Linear convolution of x with h, the first `out_len` samples (direct for short h, overlap-add by FFT otherwise).
+pub fn conv_crop(x: &[f64], h: &[f64], out_len: usize) -> Vec<f64> {
+    let mut y = vec![0.0f64; out_len];
+    if h.len() <= 32 {
+        for (i, &xi) in x.iter().enumerate() {
+            if xi == 0.0 {
+                continue;
+            }
+            for (k, &hk) in h.iter().enumerate() {
+                let t = i + k;
+                if t >= out_len {
+                    break;
+                }
+                y[t] += xi * hk;
+            }
+        }
+        return y;
+    }
+    // blocks of 4x the response, or one transform of the whole when that is no bigger than two blocks
+    let ola = crate::dsp::next_pow2(h.len() * 4).max(2048);
+    let need = x.len().min(out_len) + h.len() - 1;
+    let single = crate::dsp::next_pow2(need);
+    let mm = if single <= 2 * ola { single } else { ola };
+    let hop = mm - h.len() + 1;
+    let hfft = rfft(h, mm);
+    let mut s = 0;
+    while s < x.len() && s < out_len {
+        let e = (s + hop).min(x.len());
+        if x[s..e].iter().all(|v| *v == 0.0) {
+            s = e;
+            continue;
+        }
+        let xf = rfft(&x[s..e], mm);
+        let prod: Vec<C> = xf.iter().zip(&hfft).map(|(a, b)| a.mul(*b)).collect();
+        let blk = irfft(&prod, mm);
+        for (i, v) in blk.iter().enumerate() {
+            let t = s + i;
+            if t >= out_len {
+                break;
+            }
+            y[t] += v;
+        }
+        s = e;
+    }
+    y
+}
+
+/// One bin's input for the fast path.
+struct BinIn {
+    i0: usize,
+    nbuf: usize,
+    glen: usize,
+    /// per piece: (s, e, amplitude) for buf, gbuf, gbuf2 (the clamped box starts / ends and heights)
+    boxes: [Vec<(usize, usize, f64)>; 3],
+    micro: Vec<(usize, f64)>,
+    tm: f64,
+    rm: f64,
+    smean: f64,
+}
+
+struct BinOut {
+    i0: usize,
+    tot: Vec<f64>,
+    micro: Vec<f64>,
+}
+
+/// The box (s .. e) of height a convolved with a kernel through its prefix sums ps (ps[k] = sum of taps 0..=k; tap i
+/// sits at time i - p), added into y (cropped to y's length).
+fn scatter_box(y: &mut [f64], s: usize, e: usize, a: f64, ps: &[f64], p: usize) {
+    if e <= s {
+        return;
+    }
+    let klen = ps.len();
+    let tot = ps[klen - 1];
+    let lo = s as isize - p as isize;
+    let hi = (e + klen - 1) as isize - p as isize; // exclusive
+    let lo = lo.max(0) as usize;
+    let hi = (hi.max(0) as usize).min(y.len());
+    let pref = |k: isize| -> f64 {
+        if k < 0 {
+            0.0
+        } else if k as usize >= klen {
+            tot
+        } else {
+            ps[k as usize]
+        }
+    };
+    for t in lo..hi {
+        let base = t as isize + p as isize;
+        y[t] += a * (pref(base - s as isize) - pref(base - e as isize));
+    }
+}
+
+fn prefix(k: &[f64]) -> Vec<f64> {
+    let mut ps = Vec::with_capacity(k.len());
+    let mut acc = 0.0;
+    for v in k {
+        acc += v;
+        ps.push(acc);
+    }
+    ps
+}
+
+/// A minimum-phase response: designed at 4096 or 16384 points when the cut response fills under an eighth of that (the
+/// cepstrum's wrap-around is then negligible), otherwise at `nd_ref`, the length the straight path designs at (so a
+/// long response is the same one, cut).
+/// (the response, and whether it is a short design: then it serves any reference length)
+fn min_phase_ir_auto(mag: &dyn Fn(f64) -> f64, nd_ref: usize) -> (Vec<f64>, bool) {
+    for nd in [ND_MP0, 4 * ND_MP0] {
+        if nd_ref > nd {
+            let h = min_phase_ir(mag, nd);
+            if h.len() * 8 <= nd {
+                return (h, true);
+            }
+        }
+    }
+    (min_phase_ir(mag, nd_ref), false)
+}
+
+const ND_MP0: usize = 4096;
+
+fn bin_fast(b: &BinIn, st: &Settings, g1: &(Vec<f64>, usize), g2: &(Vec<f64>, usize), dk: &[f64]) -> BinOut {
+    let kern = nwave_soft(b.tm, st.rise_s);
+    let n_sig = b.nbuf + kern.len() - 1;
+    let n_g = b.glen + kern.len() - 1;
+    let l2 = n_sig.max(n_g) + (0.3 * SR) as usize;
+    let mut tot = vec![0.0f64; l2];
+    // sig = buf (x) kern
+    let ps0 = prefix(&kern);
+    for &(s, e, a) in &b.boxes[0] {
+        scatter_box(&mut tot[..n_sig], s, e, a, &ps0, 0);
+    }
+    // gsig = fft_filter(gbuf (x) kern, H1) + fft_filter(gbuf2 (x) kern, H2), each cropped to n_g
+    let k1 = convolve_full(&kern, &g1.0);
+    let k2 = convolve_full(&kern, &g2.0);
+    let ps1 = prefix(&k1);
+    let ps2 = prefix(&k2);
+    for &(s, e, a) in &b.boxes[1] {
+        scatter_box(&mut tot[..n_g], s, e, a, &ps1, g1.1);
+    }
+    for &(s, e, a) in &b.boxes[2] {
+        scatter_box(&mut tot[..n_g], s, e, a, &ps2, g2.1);
+    }
+    let rm = b.rm;
+    let smean = b.smean;
+    let need_micro = st.micro_w > 0.0 && !b.micro.is_empty();
+    // the straight path's design lengths: min_phase_floor over the bin (l2) and over the micro-shock buffer
+    let nd_tot = crate::dsp::next_pow2(l2 + 32768);
+    let mlen = n_sig + (0.05 * SR) as usize;
+    let nd_micro = crate::dsp::next_pow2(mlen + 32768);
+    let h_abs = if smean <= 0.01 { Some(min_phase_ir_auto(&absorb_mag(rm), nd_tot)) } else { None };
+    let h = if smean > 0.01 {
+        let ab = absorb_mag(rm);
+        min_phase_ir_auto(&move |f: f64| ab(f) * m::pow(10.0, -smean * (10.0 + 15.0 * (m::log2(f.max(1.0) / 100.0) / 5.0).clamp(0.0, 1.0)) / 20.0), nd_tot).0
+    } else {
+        h_abs.as_ref().unwrap().0.clone()
+    };
+    let tot = conv_crop(&tot, &h, l2);
+    let mut micro = Vec::new();
+    if need_micro {
+        let mut mb = vec![0.0f64; mlen];
+        let half = (dk.len() - 1) / 2;
+        for &(q, a) in &b.micro {
+            // convolve 'same' over n_sig: impulse at q gives dk[t + half - q] at t in [q - half, q + half]
+            for (j, &dj) in dk.iter().enumerate() {
+                let t = q as isize + j as isize - half as isize;
+                if t >= 0 && (t as usize) < n_sig {
+                    mb[t as usize] += a * dj;
+                }
+            }
+        }
+        let hm = match &h_abs {
+            Some((h, short)) if nd_micro == nd_tot || *short => h.clone(),
+            _ => min_phase_ir_auto(&absorb_mag(rm), nd_micro).0,
+        };
+        micro = conv_crop(&mb, &hm, mlen);
+    }
+    BinOut { i0: b.i0, tot, micro }
+}
+
+/// The bins on `threads` workers, summed in key order (the result is the same for any number of threads).
+fn bins_fast_run(bins: Vec<BinIn>, st: &Settings, n: usize, threads: usize) -> (Vec<f64>, Vec<f64>) {
+    let g1 = zero_phase_ir(&|f: f64| 0.85 / m::sqrt(1.0 + m::pow(f / 300.0, 4.0)), 65536);
+    let g2 = zero_phase_ir(&|f: f64| 0.5 * (1.0 - 1.0 / m::sqrt(1.0 + m::pow(f / 300.0, 4.0))), 65536);
+    let sg = 0.00004 * SR;
+    let lim = (4.0 * sg) as i64;
+    let kx: Vec<f64> = (-lim - 1..lim + 2).map(|v| v as f64).collect();
+    let dk: Vec<f64> = kx.iter().map(|v| -v * m::exp(-0.5 * (v / sg) * (v / sg))).collect();
+    let dn = m::sqrt(np_sum(&dk.iter().map(|v| v * v).collect::<Vec<_>>()));
+    let dk: Vec<f64> = dk.iter().map(|v| v / dn).collect();
+    let mut out = vec![0.0f64; n];
+    let mut micro_out = vec![0.0f64; n];
+    let nb = bins.len();
+    let threads = threads.max(1).min(nb.max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, BinOut)>();
+    std::thread::scope(|sc| {
+        for _ in 0..threads {
+            let tx = tx.clone();
+            let (bins, next, g1, g2, dk) = (&bins, &next, &g1, &g2, &dk);
+            sc.spawn(move || loop {
+                let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if k >= nb {
+                    break;
+                }
+                let r = bin_fast(&bins[k], st, g1, g2, dk);
+                if tx.send((k, r)).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(tx);
+        let mut pending: std::collections::BTreeMap<usize, BinOut> = std::collections::BTreeMap::new();
+        let mut want = 0usize;
+        for (k, r) in rx {
+            pending.insert(k, r);
+            while let Some(r) = pending.remove(&want) {
+                let e_ = n.min(r.i0 + r.tot.len());
+                for i in r.i0..e_ {
+                    out[i] += r.tot[i - r.i0];
+                }
+                let e2 = n.min(r.i0 + r.micro.len());
+                for i in r.i0..e2 {
+                    micro_out[i] += r.micro[i - r.i0];
+                }
+                want += 1;
+            }
+        }
+    });
+    (out, micro_out)
+}
+
 
 /// synth_b.corpus_eq with the class median (the mod: min_phase_floor).
 fn corpus_eq(x: &[f64], onset: usize, eq: &[(f64, f64)]) -> Vec<f64> {
@@ -942,6 +1447,7 @@ fn corpus_eq(x: &[f64], onset: usize, eq: &[(f64, f64)]) -> Vec<f64> {
     let med = median(&g);
     let g: Vec<f64> = g.iter().map(|v| (v - med).clamp(-18.0, 18.0)).collect();
     let lf: Vec<f64> = fcs.iter().map(|v| m::log2(*v)).collect();
+    // (exact in both paths: its long low-frequency response needs the full design; a 65536-point one was 5e-4 off)
     min_phase_floor(x, &move |fr: f64| m::pow(10.0, npx::interp(m::log2(fr.max(1.0)), &lf, &g) / 20.0))
 }
 
@@ -968,7 +1474,7 @@ fn sparse_echoes(rng: &mut NpRng, dry: &[f64]) -> Vec<f64> {
         let g = m::pow(10.0, (rng.uniform(-16.0, -9.0) - 3.0 * d) / 20.0);
         let ab = absorb_mag(extra);
         let lp = lowpass_mag(fc, 1);
-        let e = min_phase_floor(dry, &move |f| ab(f) * lp(f));
+        let e = mp_apply(dry, &move |f| ab(f) * lp(f));
         let e = decorrelate_allpass(&e, rng, 3, 8.0);
         let i = (d * SR) as usize;
         for j in i..out.len() {
@@ -1019,9 +1525,18 @@ pub struct Stages {
 
 /// One method B strike (offline: the file's 14 s with the 0.5 s lead), as render3c / render3b do it.
 pub fn render(seed: u64, dist: f64, st: &Settings, keep: bool) -> (Vec<f64>, Stages) {
+    let timing = std::env::var("WEATHERSYNTH_TIMING").is_ok();
+    let t0 = std::time::Instant::now();
+    let lap = |what: &str| {
+        if timing {
+            eprintln!("  methodb {what}: {:.2} s", t0.elapsed().as_secs_f64());
+        }
+    };
     let mut stages = Stages::default();
+    FAST.with(|f| f.set(st.fast));
     let mut rng = NpRng::new(&[seed]);
     let (dry, micro, _rmin) = render_dry3(&mut rng, seed, dist, LENGTH_S - PRE_S, st);
+    lap("dry");
     let n = (LENGTH_S * SR) as usize;
     let o = (PRE_S * SR) as usize;
     let mut x = vec![0.0f64; n];
@@ -1038,6 +1553,7 @@ pub fn render(seed: u64, dist: f64, st: &Settings, keep: bool) -> (Vec<f64>, Sta
             *a += b * g;
         }
     }
+    lap("eq");
     if keep {
         stages.dry = dry;
         stages.micro = micro;
@@ -1052,16 +1568,18 @@ pub fn render(seed: u64, dist: f64, st: &Settings, keep: bool) -> (Vec<f64>, Sta
     if let (Some(lp), Some(target)) = (st.tilt_lp, st.rumble_target) {
         x3 = rumble_tilt_lp(&x3, o, target, lp);
     }
+    lap("compress + tilt");
     if keep {
         stages.comp = x3.clone();
     }
     let ech = sparse_echoes(&mut rng, &x3);
     let x4: Vec<f64> = x3.iter().zip(&ech).map(|(a, b)| a + b).collect();
+    lap("echoes");
     if keep {
         stages.echoes = x4.clone();
     }
     let hp = highpass_mag(28.0, 2);
-    let mut x5 = min_phase_floor(&x4, &hp);
+    let mut x5 = min_phase_floor(&x4, &hp); // (exact: the 28 Hz response is long; 65536 points were 1.6e-2 off)
     let fo = (3.0 * SR) as usize;
     let ls = linspace(0.0, m::PI / 2.0, fo);
     let s0 = x5.len() - fo;
@@ -1069,16 +1587,19 @@ pub fn render(seed: u64, dist: f64, st: &Settings, keep: bool) -> (Vec<f64>, Sta
         let c = m::cos(ls[i]);
         x5[s0 + i] *= c * c;
     }
+    lap("high-pass");
     if keep {
         stages.hp = x5.clone();
     }
     let (mut z, _l) = normalise_tp(&x5, st.target_lufs, -1.5);
+    lap("normalise");
     if keep {
         stages.level = z.clone();
     }
     if st.quiet_tear && dist <= 600.0 {
         z = quiet_tear(&z, seed);
     }
+    lap("tear");
     if keep {
         stages.fin = z.clone();
     }
