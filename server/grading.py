@@ -1033,7 +1033,7 @@ def field_heights(frame, elev, xy, r, sigma):
 
 
 def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None,
-               rings=None, landings=None, part_ids=None, ext_ids=None, bank_through=None, rough=None, land_of=None):
+               rings=None, landings=None, part_ids=None, ext_ids=None, bank_through=None, rough=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
@@ -1048,10 +1048,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     (FAST_GAP: gap_line, gap_apply), or None; part_ids, ext_ids: the features of the parts and of their extensions (per
     part (before, after), None unknown), whose samples a landing then takes by their road (gap_apply); bank_through(xy
     (2,)) -> bool (BNE_ROADSHAPE=decks: Grader._deck_end_simple): a banked road's end onto a bridge whose deck banks
-    with it (a simple structure's, roadshape) keeps its curve's context and is not faded level there. land_of: per
-    part, the indices of the landings its samples may take, in order (Grader._stronger_groups: each part planned in a
-    batch with its own landings alone, as planned on its own), or None: every one. Pure given elev, obs and
-    bank_through."""
+    with it (a simple structure's, roadshape) keeps its curve's context and is not faded level there. Pure given elev,
+    obs and bank_through."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -1172,7 +1170,7 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             eid = ext_ids[j] if ext_ids is not None else (None, None)
             pid_ = None if part_ids is None or part_ids[j] is None else str(part_ids[j])   # (None: no known piece)
             sid = [eid[0]] * nb + [pid_] * len(xy) + [eid[1]] * na
-            for ap_, c_, own_, other_, ids_, v_, ln_ in (lines_ if land_of is None else [lines_[i] for i in land_of[j]]):
+            for ap_, c_, own_, other_, ids_, v_, ln_ in lines_:
                 if c_ == spec.cls and ln_ is not None:
                     zx = gap_apply(zx, q_, ap_, ln_, own_, other_, sid, ids_, v_)
         # Curvature and its runoff need the joined-road context too. Computing
@@ -3396,15 +3394,14 @@ class _Planner:
                 fids = [asks[n][0][5] for n, _p in jobs]
                 ext, eids = self._extensions(parts, fids, with_ids=True) if FAST_GAP else \
                     (self._extensions(parts, fids), None)
-                # (BNE_ROADSYS=surface, roads.MAPPED_RANGES: each part with its own landings, as planned alone
-                # (_stronger_z): the batch's union held other cells' copies of a deck's end (~1e-5 m apart), the least
-                # of them taken, so a pin depended on which parts were planned with it, which a re-plan after
-                # _strong_memo or the road stages were evicted changes: Castlegar 5e-6 m, M5 round 7)
-                lands, land_of = self._landings_each(parts) if roadsmod.MAPPED_RANGES() else \
-                    (self._landings_of(parts), None)
+                # (the batch's landings: the union round all its parts. Each landing touching a part is found round
+                # that part alone too, and under BNE_ROADSYS=surface it is the same whichever cells were read
+                # (_landings_in: its end at its 0.1 m key), so each pin is the same planned alone (_stronger_z) or in
+                # any batch, also after _strong_memo or the road stages were evicted: the least of the copies read was
+                # taken, and Castlegar's 0a58d21e differed by 5e-6 m between batch and alone, M5 round 7)
                 plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
-                                   landings=lands, part_ids=[asks[n][0][6] for n, _p in jobs],
-                                   ext_ids=eids, land_of=land_of,
+                                   landings=self._landings_of(parts), part_ids=[asks[n][0][6] for n, _p in jobs],
+                                   ext_ids=eids,
                                    **self._strong_args(cell, parts[0][0]))
                 for (n, (part, last, whole)), p in zip(jobs, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
@@ -6659,6 +6656,11 @@ class _Planner:
     def _landings_of(self, parts):
         """plan_roads' landings for parts [(lonlat, spec)] (FAST_GAP: _fast_landings round every point of the fast
         ones), or None."""
+        cells = self._landing_cells(parts)
+        return None if cells is None else (self._landings_in(cells) or None)
+
+    def _landing_cells(self, parts):
+        """The cells _landings_of(parts) reads the deck ends of (_gap_cells round the fast parts' points), or None."""
         if not FAST_GAP or not parts:
             return None
         want = [np.asarray(ll, np.float64) for ll, sp in parts if sp is not None and sp.cls in FAST_GAP_CLASSES
@@ -6666,22 +6668,7 @@ class _Planner:
         if not want:
             return None
         allp = np.concatenate(want)
-        return self._fast_landings(allp[:, 1], allp[:, 0]) or None
-
-    def _landings_each(self, parts):
-        """(landings, land_of) for plan_roads: per part [(lonlat, spec)] its own _landings_of, as it has them planned
-        alone, in their order; the landings each once (by deck end, direction and class: _landing_chain's key)."""
-        lands, idx, land_of = [], {}, []
-        for part in parts:
-            own = []
-            for r in self._landings_of([part]) or ():
-                k = (float(r[0][0, 0]), float(r[0][0, 1]), float(r[5][0]), float(r[5][1]), r[1])
-                if k not in idx:
-                    idx[k] = len(lands)
-                    lands.append(r)
-                own.append(idx[k])
-            land_of.append(own)
-        return (lands or None), land_of
+        return tuple(self._gap_cells(allp[:, 1], allp[:, 0], FAST_GAP_CHAIN_M + FAST_GAP_FAR_M))
 
     def _memo_get(self, name, key):
         """(True, entry) of self.<name>[key] (its marks said: _marks_seen), or (False, None)."""
@@ -6832,37 +6819,15 @@ class _Planner:
         if got:
             return res
         ends = []                       # (end, direction into the deck, class, the cell whose copy it is)
-
-        def read(k):
-            got = []
+        for k in cells:
             for b, cls, link in self._raw_lines(k)["bridges"]:
                 for at0 in (True, False):
                     e = b[0] if at0 else b[-1]
-                    got.append((np.asarray(e, np.float64), roadsmod._dir_at(b, True) if at0
-                                else -roadsmod._dir_at(b, False), None if link else cls, str(k)))
-            return got
-        for k in cells:
-            ends += read(k)
-        home = None
-        if roadsmod.MAPPED_RANGES():
-            # (BNE_ROADSYS=surface: each deck end's copy from the cell the end lies in, read when not among the cells:
-            # every map cell has its own copy, ~1e-5 m from the others', and the least of those read was taken, so
-            # two neighbouring cells' plans took other copies of one end and met apart at their seam, M5 round 7. That
-            # cell's ends within a metre of one asked come too: a joint's other deck, seen whichever cells were read)
-            fk = sorted({(round(float(e[0]), 1), round(float(e[1]), 1)) for e, _d, c, _k in ends
-                         if c in FAST_GAP_CLASSES})
-            if fk:
-                fa = np.asarray(fk, np.float64)
-                la_, lo_, _ = self.frame.enu_to_geodetic(fa[:, 0], fa[:, 1], 0.0)
-                hc = mapcells.cells_of(np.asarray(la_, np.float64), np.asarray(lo_, np.float64))
-                home = {kk: str(h) for kk, h in zip(fk, hc)}
-                have = {str(k) for k in cells}
-                for h in sorted({h for h in hc if str(h) not in have}, key=str):
-                    for row in read(h):
-                        if float(np.min(dnp.hypot(*(fa - row[0]).T))) <= 1.0:
-                            ends.append(row)
+                    ends.append((np.asarray(e, np.float64), roadsmod._dir_at(b, True) if at0
+                                 else -roadsmod._dir_at(b, False), None if link else cls, str(k)))
+        snap = roadsmod.MAPPED_RANGES()
         best = {}                       # (end rounded to 0.1 m -> its copy: the least by its values, whoever asks)
-        for e, d, c, ck in ends:
+        for e, d, c, _ck in ends:
             if c not in FAST_GAP_CLASSES:
                 continue
             # (a joint: another deck's end here, that deck going on the way this one comes from)
@@ -6870,12 +6835,17 @@ class _Planner:
                    for e2, d2, _c2, _k2 in ends):
                 continue
             key = (round(float(e[0]), 1), round(float(e[1]), 1))
-            row = (float(e[0]), float(e[1]), -float(d[0]), -float(d[1]), str(c))
-            # (surface: the home cell's copy before any other, then the least)
-            rank = (home is not None and home.get(key) != ck, row)
-            if key not in best or rank < best[key][0]:
-                best[key] = (rank, row)
-        best = {kk: v[1] for kk, v in best.items()}
+            if snap:
+                # (BNE_ROADSYS=surface: the end at its key and its direction to 1e-4, the same whichever copy: every
+                # map cell has its own copy of a deck, ~1e-5 m from the others', and the least of those read was taken,
+                # so two neighbouring cells' plans, each reading round its own points, took other copies of one end
+                # and met apart at their seam, M5 round 7. Reading the end's own cell for its copy cost 4x the CPU at
+                # Express, every cell past a place's edge read for its ends)
+                row = (key[0], key[1], round(-float(d[0]), 4), round(-float(d[1]), 4), str(c))
+            else:
+                row = (float(e[0]), float(e[1]), -float(d[0]), -float(d[1]), str(c))
+            if key not in best or row < best[key]:
+                best[key] = row
         out = []
         for _k, r in sorted(best.items()):
             got = self._landing_chain(r[0], r[1], r[2], r[3], r[4])

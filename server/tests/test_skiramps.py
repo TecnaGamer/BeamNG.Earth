@@ -966,8 +966,9 @@ class PinBatch(unittest.TestCase):
     are each the pin's own: the same bytes as planned alone (_stronger_z), and as planned again in another batch after
     the kept ones are evicted (_strong_memo cleared, as at 4096 entries or a road stage made again). Each map cell has
     its own copy of a deck (~1e-5 m from the others'; here each fixture cell's bridges moved by a few 1e-5 m): the
-    batch's landings were the union round all its parts, the least copy of each deck end taken, so a part took another
-    cell's copy than its own: Castlegar's 0a58d21e 5e-6 m apart, batch against alone."""
+    batch's landings are the union round all its parts, and the least copy of each deck end was taken, so a part took
+    another cell's copy than its own: Castlegar's 0a58d21e 5e-6 m apart, batch against alone. Now each end is at its
+    0.1 m key whichever copy (_landings_in)."""
 
     SITE = "castlegar_939"
 
@@ -1032,12 +1033,13 @@ class PinBatch(unittest.TestCase):
 
 
 class LandingHomeCopy(unittest.TestCase):
-    """BNE_ROADSYS=surface (roads.MAPPED_RANGES), M5 round 7: a deck end's landing is the copy of the cell the end lies
-    in, whichever cells were read round the points asked. A motorway deck ends 50 m inside one cell and runs on into
-    its east neighbour, which has its own copy 2e-5 m off: the plans of points 400 m into either cell (neither reading
-    the other's cell) took each its own cell's copy, so the two cells' plans met apart at their seam."""
+    """BNE_ROADSYS=surface (roads.MAPPED_RANGES), M5 round 7: a deck end's landing is the same whichever cells were
+    read round the points asked (the end at its 0.1 m key, its direction to 1e-4). A motorway deck ends 50 m inside one
+    cell and runs on into its east neighbour, which has its own copy 2e-5 m off: the plans of points 400 m into either
+    cell (neither reading the other's cell) took each its own cell's copy, so the two cells' plans met apart at their
+    seam."""
 
-    def test_both_sides_take_the_home_copy(self):
+    def test_both_sides_take_one_landing(self):
         import geodesy
         import mapcells
         g = object.__new__(grading._Planner)
@@ -1075,13 +1077,13 @@ class LandingHomeCopy(unittest.TestCase):
             return got
         got = sides(True)
         self.assertEqual(repr(got[1]), repr(got[0]), "the same landing from either side")
-        self.assertEqual(got[0][0][0][0], end.tolist(), "the home cell's copy")
+        self.assertEqual(got[0][0][0][0], [round(float(end[0]), 1), round(float(end[1]), 1)], "the end at its key")
         # (off: each side its own cell's copy, as before; the landings kept per cell set, _landings_in: the east
         # side's read never answered with the west side's kept one)
         off = sides(False)
         self.assertEqual(off[0][0][0][0], end.tolist())
         self.assertEqual(off[1][0][0][0], (end + shift[str(b)]).tolist())
-        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 10)
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 11)
 
 
 class UnderSpeed(unittest.TestCase):
