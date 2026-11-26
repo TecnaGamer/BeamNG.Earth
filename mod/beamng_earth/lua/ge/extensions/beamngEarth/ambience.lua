@@ -514,6 +514,12 @@ local function layerFile(name)
   for _, l in ipairs(M.RAIN_LAYERS) do if l[1] == name then return l[2] end end
 end
 
+-- The file-based layers' channel: an SFXEmitter given a fileName and no description plays on no slider but Master
+-- (in-game probe, 2026-11-25); these put it on the Environment slider like the stock weather (the FMOD-track
+-- emitters keep their bank's buses: useTrackDescriptionOnly). Set before registerObject.
+M.LAYER_DESC = 'AudioEnvironment'
+M.LAYER_GROUP = 'AudioChannelEnvironment'
+
 local function setLayer(name, vol)
   local e = layerEm[name]
   if e and not simObjectExists(e) then e = nil; layerEm[name] = nil end
@@ -527,6 +533,8 @@ local function setLayer(name, vol)
     e:setField('is3D', 0, '0')
     e:setField('isStreaming', 0, '1')
     e:setField('volume', 0, '0')
+    e:setField('description', 0, M.LAYER_DESC)
+    e:setField('sourceGroup', 0, M.LAYER_GROUP)
     e.canSave = false
     e:registerObject('')
     e:play()

@@ -288,7 +288,7 @@
    }
   },
   "weather_audio": {
-   "doc": "live weather sounds (liveaudio.lua -> server/liveaudio.py -> native/weathersynth live-serve; additive): the Weather page's Weather sounds ('live' / 'prerecorded') and, while live, what the live synth plays from, every 0.25 s and at once on a change (the server's synth fades out when they stop for 1 s: a hung or closed game). volume / thunderVolume: the game's master x Other / master x Environment channel volumes 0..1 (the channels the mod's own rain and thunder play on). thunders: [{id, at (UTC s the sound reaches the listener), d m, kind strike / close / mid / far, gain 0..1, seed, final}]: final = false a look-ahead hint the synth renders early, final = true the strike as it happened (only these play)",
+   "doc": "live weather sounds (liveaudio.lua -> server/liveaudio.py -> native/weathersynth live-serve; additive): the Weather page's Weather sounds ('live' / 'prerecorded') and, while live, what the live synth plays from, every 0.25 s and at once on a change (the server's synth fades out when they stop for 1 s: a hung or closed game). volume / thunderVolume: the game's master x Environment channel volume 0..1 for each (the channel the mod's own rain layers and thunder play on). thunders: [{id, at (UTC s the sound reaches the listener), d m, kind strike / close / mid / far, gain 0..1, seed, final}]: final = false a look-ahead hint the synth renders early, final = true the strike as it happened (only these play)",
    "fields": {
     "mode": {"type": "str"},
     "rainMmH": {"type": "num"},

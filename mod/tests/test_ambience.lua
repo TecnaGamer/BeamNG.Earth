@@ -212,6 +212,8 @@ clock = 381; amb.update(3, seaV)
 local me = layer('bne_rain_medium.ogg')
 T.check(me and me.fields.isLooping == '1' and math.abs(me.vol - amb.RAIN_GAIN / amb.RAIN_FADE_S) < 1e-9, 'rain layers: medium fading in')
 T.check(layer('bne_rain_heavy.ogg') == nil and layer('bne_rain_light.ogg') == nil, 'only the layer of the rate')
+T.check(me.fieldsAtRegister.description == 'AudioEnvironment' and me.fieldsAtRegister.sourceGroup == 'AudioChannelEnvironment',
+  'rain layers: on the Environment channel, set before registerObject')
 for i = 1, 8 do clock = 381 + i * 0.5; amb.update(3, seaV) end
 T.check(math.abs(me.vol - amb.RAIN_GAIN) < 1e-9, 'rain layers: full')
 beamngEarth_weather.shelter = 0
