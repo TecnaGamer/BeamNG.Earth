@@ -839,7 +839,11 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
         # "noslab", drawn as one already) against anything)
         # (deck ribbons alone: never a marking's or a sidewalk's ribbon, which a tile draws in its window only;
         # Codex review of P3d)
-        ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("tunnel") or c.get("surface_ref"))
+        # (T1, BNE_ROADSYS_TUNNELS: a record's tunnel floor ("rec") is a face of the one profile too, and the record
+        # holds twin carriageways at one floor: two parallel bores 7 m apart (the Caldecott Tunnel) were two slabs over
+        # each other at one height, 500 m2 of lanes with two owners; a legacy tunnel floor stays out as before)
+        ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("surface_ref")
+                                                    or (c.get("tunnel") and not c.get("rec")))
                        for (r, c) in list(rb) + list(context) if r[5] is not None], bool)
         if ok.any():
             pick = np.flatnonzero(ok)

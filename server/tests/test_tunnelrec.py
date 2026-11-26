@@ -43,5 +43,56 @@ class TunnelRecordTest(unittest.TestCase):
         self.assertEqual(tunnelrec.holes(np.zeros((n, n), bool), u, -20.0, -20.0, 1.0, [other], {}, {}), [other])
 
 
+class TwinFloors(unittest.TestCase):
+    def test_twin_record_floors_at_one_height_end_on_one_seam(self):
+        # (633) two bores' floors 7 m apart, 9 m wide, at one height (the record holds twins at one floor: the Caldecott
+        # Tunnel): a record's floors are cut on the seam between them (one owner per lane point); legacy tunnel floors
+        # are left as they were
+        import roadmesh
+
+        def chunk(y, rec):
+            c = {"m": "road_asphalt_2lane", "w": 9.0, "tl": 0, "p": 0, "deck": True, "fixed": True, "tunnel": True,
+                 "fid": f"t{y}", "n": [[float(x), y, 10.0] for x in range(0, 101, 10)]}
+            if rec:
+                c["rec"] = True
+            return c
+
+        def reach(rec):
+            rb = [(r, c) for r, c in roadmesh.ribbon_pairs([chunk(0.0, rec), chunk(7.0, rec)]) if r[5] is not None]
+            out = roadmesh.trim_overlaps(rb, (), None, coplanar=True)
+            (l0, r0, *_), _c0 = out[0]
+            (l1, r1, *_), _c1 = out[1]
+            return float(max(l0[:, 1].max(), r0[:, 1].max())), float(min(l1[:, 1].min(), r1[:, 1].min()))
+        a, b = reach(True)
+        self.assertAlmostEqual(a, 3.5, places=3)
+        self.assertAlmostEqual(b, 3.5, places=3)
+        a, b = reach(False)
+        self.assertGreater(a, 4.4)
+        self.assertLess(b, 2.6)
+
+
+class LegacyPins(unittest.TestCase):
+    def test_round_a_tunnel_the_record_does_not_build_the_targets_are_the_old_ones(self):
+        # (633) a line with the record's dig at a mouth (low 1) and its legacy variant (the tunnel fade, no mouth low):
+        # pins_near takes the legacy one only when legacy() says its nearest tunnel is left off the record (under water)
+        import roadsys
+        old = roadsys._square_pins
+        self.addCleanup(setattr, roadsys, "_square_pins", old)
+        la = np.linspace(40.0, 40.0005, 6)
+        lo = np.full(6, -74.0)
+        line = (np.zeros((6, 2)), la, lo, np.full(6, 5.0), 4.0, np.ones(6), np.ones(6), np.zeros(6), np.ones(6),
+                np.zeros(6), np.zeros(6), "tun", 10.0, 40.0, -74.0)
+        roadsys._square_pins = lambda fid, frame, sq, cell_fn, ground_ll: [line]
+
+        def today(a, b):
+            return np.full(len(a), 7.0)            # (the plans 2 m over the profile: a dig)
+        dug = roadsys.pins_near(40.0, -74.0, 40.0005, -74.0, 5.0, None, today)
+        self.assertTrue(dug)
+        same = roadsys.pins_near(40.0, -74.0, 40.0005, -74.0, 5.0, None, today, legacy=lambda f, a, b: False)
+        self.assertEqual(repr(dug), repr(same))
+        old_ = roadsys.pins_near(40.0, -74.0, 40.0005, -74.0, 5.0, None, today, legacy=lambda f, a, b: f == "tun")
+        self.assertEqual(old_, [], "no dig round a tunnel left off the record")
+
+
 if __name__ == "__main__":
     unittest.main()

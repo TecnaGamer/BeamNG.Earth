@@ -139,6 +139,33 @@ class Entrance(unittest.TestCase):
         inside = ends & (np.abs(cen[:, 1]) < 4.0) & (cen[:, 2] > 0.2) & (cen[:, 2] < 4.0)
         self.assertFalse(inside.any(), "an end cap across the tube's opening")
 
+    def test_a_record_s_cover_lies_under_the_ground_it_follows(self):
+        # (T1) the ground 7.5 m over the floor: under th + COVER_NEED (bare), over th + COVER_OVER (the top follows it):
+        # a record's tube's top FOLLOW_DIP under it (at the ground it was a second surface under the terrain: Seal
+        # Beach), the same rows bare; a legacy tube's top as before
+        import roadsys
+        old = roadsys.TUNNELS
+        self.addCleanup(setattr, roadsys, "TUNNELS", old)
+        mid = np.c_[np.arange(0.0, 50.0, 5.0), np.zeros(10)]
+        left = np.tile([0.0, 1.0], (10, 1))
+        z = np.zeros(10)
+        g = np.full(10, 20.0)
+        g[3:7] = 7.5
+        sec = roadmesh._tunnel_section(5.0, 6.8)
+
+        def soil_top(rec, on):
+            roadsys.TUNNELS = on
+            P, T, UV, C = portals.cover(mid, left, z, g, 5.0, 6.8, (False, False), 4.0, 1.0, sec, rec=rec)
+            tri = P[np.asarray(T)][np.asarray(C) == 1]
+            tri = tri[(tri[:, :, 0].min(1) >= 15.0 - 1e-6) & (tri[:, :, 0].max(1) <= 30.0 + 1e-6)]     # (the thin rows)
+            return float(tri[:, :, 2].max()), (float(P[:, 0].min()), float(P[:, 0].max()))
+        top, span = soil_top(True, True)
+        self.assertAlmostEqual(top, 7.5 - portals.FOLLOW_DIP, places=6)
+        top0, span0 = soil_top(True, False)
+        self.assertAlmostEqual(top0, 6.8 + portals.COVER_OVER, places=6)
+        self.assertEqual(span, span0, "the same rows bare")
+        self.assertAlmostEqual(soil_top(False, True)[0], 6.8 + portals.COVER_OVER, places=6)
+
     def test_styles_from_the_ground(self):
         import fast
         fast.require(portals.VERSION, "portal_style")

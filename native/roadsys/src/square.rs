@@ -35,6 +35,12 @@ const MATCH_M: f64 = 3.0;               // m a deck vertex may lie off its struc
 const ROAD_MATCH_M: f64 = 1.0;          // m a point of a road may lie off the same road's knots in another square
 const MATCH_COS: f64 = 0.7071067811865476;
 const SUP_TOL_M: f64 = 3.0;
+const HELD_SIN: f64 = 0.3;              // (633, T1) a road over a tunnel: its crossing's sine at least this ...
+const HELD_PAD_M: f64 = 2.0;            // ... and this past its half width either side: the stretch the tube stays a lid ...
+// ... where the cover there takes the road's lowest lid (roads.MAJOR_LOW_H on the classes of roads.CONCRETE_WALL_CLASSES,
+// else net::TUNNEL_LID_MIN_M = roads.TUNNEL_LOW_H)
+const HELD_MAJOR: [&str; 6] = ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"];
+const HELD_MAJOR_LOW_M: f64 = 5.0;
 const DECK_PAST_M: f64 = 60.0;          // (M5) m past a mapped structure end a deck of the deck builder still takes its profile
 const FEAT_TOL_M: f64 = 2.0;
 const PIN_STEP_M: f64 = 2.5;
@@ -503,7 +509,31 @@ fn tunnel_record(net: &Net, si: usize, pr: &prof::Profiles, ends: &[Vec<usize>],
             so.sup.iter().any(|u| u.kind == SUP_TUNNEL && e >= u.s0 - SUP_TOL_M && e <= u.s1 + SUP_TOL_M)
         })
     };
-    let inp = StrokeIn { s: &s, z, g, side_l: &side_l, side_r: &side_r, ranges: &ranges, joined0: joined(st.n0), joined1: joined(st.n1), kmh: st.kmh };
+    // (633) the roads crossing over its tunnels on the ground (the floors net.rs holds): each one's footprint along this
+    // stroke, its half width over the crossing's sine (at least HELD_SIN) + HELD_PAD_M either side
+    let mut held: Vec<(f64, f64)> = Vec::new();
+    for c in net.crossings.iter() {
+        if c.along || c.stacked { continue; }
+        let (lo, s_lo, s_up) = if c.upper == c.a { (c.b, c.sb, c.sa) } else { (c.a, c.sa, c.sb) };
+        if lo != si || st.support_at(s_lo).kind != SUP_TUNNEL { continue; }
+        let up = &net.strokes[c.upper];
+        up.offsets(s_up, &mut offs);
+        let half = if offs.is_empty() { 3.5 } else { offs[0].max(-offs[offs.len() - 1]) };
+        let (t_lo, t_up) = (st.line.at(s_lo).1, up.line.at(s_up).1);
+        let sin = absf(t_lo[0] * t_up[1] - t_lo[1] * t_up[0]).max(HELD_SIN);
+        let r = half / sin + HELD_PAD_M;
+        // (only where a lid fits under that road with its soil: thinner, the mesher's lowest lid stands over the ground
+        // and the terrain is raised over it, the road on top with it (Milchbuck's south mouth, 5.7 m): the full tube's
+        // cover as before)
+        let k = ((s_lo / h).floor().max(0.0) as usize).min(m - 2);
+        let u = clampf((s_lo - s[k]) / (s[k + 1] - s[k]).max(1e-9), 0.0, 1.0);
+        let cov = (g[k] - z[k]) * (1.0 - u) + (g[k + 1] - z[k + 1]) * u;
+        let low_h = if HELD_MAJOR.contains(&st.cls_s.as_str()) { HELD_MAJOR_LOW_M } else { net::TUNNEL_LID_MIN_M };
+        if !(cov >= low_h) { continue; }
+        held.push((s_lo - r, s_lo + r));
+    }
+    held.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let inp = StrokeIn { s: &s, z, g, side_l: &side_l, side_r: &side_r, ranges: &ranges, joined0: joined(st.n0), joined1: joined(st.n1), kmh: st.kmh, held: &held };
     stroke_record(&inp)
 }
 
@@ -719,7 +749,11 @@ pub fn blend(squares: &BTreeMap<(i64, i64), &Square>, q: P2, t: Option<P2>, feat
 }
 
 pub struct PinRaw { pub feat: String, pub pts: Vec<P2>, pub tan: Vec<P2>, pub w: Vec<f64>, pub share: Vec<f64>, pub half: f64,
-                   pub hand: Vec<f64>, pub low: Vec<f64> }
+                   pub hand: Vec<f64>, pub low: Vec<f64>,
+                   // (633, T1) the same line as a tunnel left off the record would have it (TunnelProfiles under water, T3): the
+                   // weight with the tunnel fade, the lows without the record's mouths; the nearest tunnel range on its stroke (its
+                   // feature, the distance along to it, its nearest end), "" none
+                   pub w_leg: Vec<f64>, pub low_leg: Vec<f64>, pub tfeat: String, pub tdist: f64, pub tp: P2 }
 
 /// The square's terrain targets (see the module's comment): the ground runs of its Tier B sections whose stations lie
 /// in the square (and the first one past it on either side: neighbours' lines meet), each run cut where its map feature
@@ -735,6 +769,12 @@ pub fn pins(sqr: &Square) -> Vec<PinRaw> {
         let near = |s: f64| -> f64 { st.anchors.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))) };
         let hand_w = |s: f64| -> f64 { let d = st.hand.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))); if d.is_finite() { smooth(1.0 - d / st.hand_m.max(1.0)) } else { 0.0 } };
         let low_w = |s: f64| -> f64 { let d = st.lows.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))); if d.is_finite() { smooth(1.0 - d / st.hand_m.max(1.0)) } else { 0.0 } };
+        // (633) the record's mouths among the lows, and the lows without them (a tunnel left off the record: low_leg)
+        let mouths: Vec<f64> = st.tun.iter().flat_map(|r| [(r.mouth0, r.s0), (r.mouth1, r.s1)]).filter(|m| m.0).map(|m| m.1).collect();
+        let low_leg_w = |s: f64| -> f64 {
+            let d = st.lows.iter().filter(|&&x| !mouths.iter().any(|&m| absf(x - m) < 1e-9)).fold(f64::INFINITY, |m, &x| m.min(absf(s - x)));
+            if d.is_finite() { smooth(1.0 - d / st.hand_m.max(1.0)) } else { 0.0 }
+        };
         let line_at = |s: f64| -> (P2, P2) {
             let n = st.s.len();
             let k = st.s.partition_point(|&x| x <= s).saturating_sub(1).min(n - 2);
@@ -788,10 +828,23 @@ pub fn pins(sqr: &Square) -> Vec<PinRaw> {
                     let wf = if df.is_finite() { smooth(df / fade) } else { 1.0 };
                     let dt = tunnels.iter().fold(f64::INFINITY, |m, &(a, b)| m.min(if s < a { a - s } else if s > b { s - b } else { 0.0 }));
                     // (T1: the record's floor is this profile: the approach takes it right up to the portal, no fade)
-                    let wt = if sqr.tunnels { 1.0 } else if dt.is_finite() { smooth(dt / TUNNEL_FADE_M) } else { 1.0 };
-                    let c = cur.get_or_insert_with(|| PinRaw { feat: feat.clone(), pts: Vec::new(), tan: Vec::new(), w: Vec::new(), share: Vec::new(), half: 0.0, hand: Vec::new(), low: Vec::new() });
+                    let wt_leg = if dt.is_finite() { smooth(dt / TUNNEL_FADE_M) } else { 1.0 };
+                    let wt = if sqr.tunnels { 1.0 } else { wt_leg };
+                    let c = cur.get_or_insert_with(|| PinRaw { feat: feat.clone(), pts: Vec::new(), tan: Vec::new(), w: Vec::new(), share: Vec::new(), half: 0.0, hand: Vec::new(), low: Vec::new(),
+                                                               w_leg: Vec::new(), low_leg: Vec::new(), tfeat: String::new(), tdist: f64::INFINITY, tp: [0.0, 0.0] });
                     c.hand.push(hand_w(s));
                     c.low.push(low_w(s));
+                    c.low_leg.push(low_leg_w(s));
+                    c.w_leg.push(wf.max(hand_w(s)) * wt_leg);
+                    // (the nearest tunnel range on the stroke: first of the nearest in station order)
+                    for &(a, b) in &tunnels {
+                        let d = if s < a { a - s } else if s > b { s - b } else { 0.0 };
+                        if d < c.tdist {
+                            c.tdist = d;
+                            c.tfeat = st.feature_at(0.5 * (a + b)).unwrap_or("").to_string();
+                            c.tp = line_at(if s < a { a } else if s > b { b } else { s }).0;
+                        }
+                    }
                     c.pts.push(p);
                     c.tan.push(t);
                     // (never faded at the deck end it hands over to, M3: a section's free end there left the approach 1 m

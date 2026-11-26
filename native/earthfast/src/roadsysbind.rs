@@ -301,6 +301,16 @@ impl RoadsysSquare {
         }
         Ok(out)
     }
+
+    /// (633, T1) per line of pins(), in its order: (the weight with the tunnel fade, the lows without the record's mouths:
+    /// the line as a tunnel left off the record has it; the nearest tunnel range on its stroke: its map feature ("" none),
+    /// the distance along to it, its nearest end (x, y)).
+    #[allow(clippy::type_complexity)]
+    fn tunnel_pins<'py>(&self, py: Python<'py>) -> Vec<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, String, f64, (f64, f64))> {
+        roadsys::square::pins(&self.sq).into_iter()
+            .map(|p| (PyArray1::from_vec(py, p.w_leg), PyArray1::from_vec(py, p.low_leg), p.tfeat, p.tdist, (p.tp[0], p.tp[1])))
+            .collect()
+    }
 }
 
 /// The square's window (its read box in the region frame) and the squares whose weight reaches a box.

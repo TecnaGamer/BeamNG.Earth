@@ -7810,6 +7810,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
     // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
     // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
-    m.add("VERSION", 631)?;
+    // 633: (tunnel plan T1) the tunnel record's lids under a road crossing over the tube kept however short (tunnel.rs
+    // StrokeIn.held)
+    m.add("VERSION", 633)?;
     Ok(())
 }

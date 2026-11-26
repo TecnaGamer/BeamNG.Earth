@@ -22,7 +22,7 @@ import roadsys
 
 log = logging.getLogger("earthd.tunnelrec")
 
-KERNEL = 631                # earthfast roadsys_square(tunnels=), roadsys_tunnel_kinds / _mouths, tunnel_record_holes (631: mouths dig the approach)
+KERNEL = 633                # earthfast roadsys_square(tunnels=), roadsys_tunnel_kinds / _mouths, tunnel_record_holes (631: mouths dig the approach; 633: lids under a road over the tube kept)
 JOIN_M = 2.0                # m: two parts' ends this close are one joint of the network (no portal there)
 MOUTH_NEAR_M = 6.0          # m a record portal may lie from a section's end vertex to be that end's
 HOLE_MARGIN_M = 0.5         # m round the tube's footprint the holes reach (tunnel plan 4.4)
