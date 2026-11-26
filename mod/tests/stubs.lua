@@ -39,7 +39,12 @@ function S.newObject(class)
   local o = { id = S.nextId, class = class, fields = {}, pos = vec3(), rot = quat(), hidden = false }
   function o:getID() return self.id end
   function o:setName(n) self.name = n end
-  function o:registerObject(n) self.name = n or self.name; S.objects[self.id] = self end
+  function o:registerObject(n)
+    self.name = n or self.name
+    S.objects[self.id] = self
+    self.fieldsAtRegister = {}
+    for k, v in pairs(self.fields) do self.fieldsAtRegister[k] = v end
+  end
   function o:setField(k, _, v) self.fields[k] = v end
   function o:getField(k) return self.fields[k] end
   function o:flush() S.count('flush_' .. class) end

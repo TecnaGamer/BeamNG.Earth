@@ -566,6 +566,11 @@ function M.load(path, squareSize, maxHeight, x, y, z, layers, base, baseSize)
       layers = nil
     end
   end
+  if layers then          -- (the paved layers' wet maps before the import binds them: weather phase C)
+    local names = {}
+    for i, nm in ipairs(layers.materials) do names[i] = nm[1] end
+    pcall(M.applyWet, names)
+  end
   local ok, err = importMaps(tb, path, squareSize, maxHeight, true, layers)
   if not ok then
     -- Ground without a material still collides; it just renders as the placeholder.
@@ -606,6 +611,7 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
   local sw = stopwatch.new()
   local saved = {}
   local ok, err = pcall(function()
+    M.applyWet(slots)        -- (the wet look of the paved layers rides on the swap's own rebind: weather phase C)
     if base ~= nil then
       local path = base or nil
       local tex, size = baseFields(path, baseSize)
@@ -698,8 +704,101 @@ function M.delete()
   if tb then tb:delete() end
 end
 
+-- Wet carriageways (weather phase C, the weather plan 4.4 route 1): the city's roads are terrain layers under the
+-- aerial photo, and a terrain material change costs an updateMaterial (~1 s) on its own. But every block swap rebinds
+-- all its layers anyway (terrainFile + postApply): the paved layers' flat roughness and ambient-occlusion base maps are
+-- switched just before that. The maps are the level's own (flat base maps every layer already uses, read as other
+-- values: the normal map's red 127 = roughness 0.5, the height map's 175 = 0.69; the zero heightmap PNG as a black
+-- colour map), so no first-use load (probe P4 on the Deck: wet maps of their own cost the first wet swap +285 ms, their
+-- decode). The step (0 dry, 1 damp, 2 wet) comes from wetlook.lua; it shows from the next swap (driving: every few
+-- hundred metres; standing still: when the next block comes).
+M.WET_LAYERS = { '^bngEarthGroundAsphalt', '^bngEarthGroundCobble', '^bngEarthGroundPavers', '^bngEarthGroundBrick' }
+-- Each step: the fields set on the paved layers ({ field, value, layers = a name pattern or nil for all of them }). A
+-- '.png' value is one of the level's maps (a flat base map at the ground photo's size); anything else is set as it is
+-- (the strengths are plain numbers in the material's constants). The shader adds (2 t - 1) x strength of the detail and
+-- macro maps to the base value, then clamps:
+--   - the colour: real wet asphalt is darker (water fills the pores; only the far road, seen at a grazing angle, shines
+--     with the sky). The macro colour map becomes the black PNG at strength 0.3 near / 0.2 at 100 m: the photo less
+--     0.3 (broker wc15 against the rain photos b_2-b_4: roughness and AO alone left the road pale, the sky's reflection
+--     outweighing them);
+--   - the stock asphalt AO detail (mean 0.84) at its 0.8 near strength adds +0.54 and clamps the AO to 1 within the
+--     detail distance: it goes while wet (the tile layers' AO details are offsets about 0.45 and stay);
+--   - the roughness: 0.5 wet, 0.69 damp; the asphalt's roughness grain at 0.3 (it added +0.11).
+-- Never aoBaseTex: the game packs the block's photo with it (RGB photo + A AO) into one cache texture keyed by both
+-- paths (server/terraincache.py); the server writes that pack for the level's own AO map, and another AO map made the
+-- game pack every block's photo again, a cache file per block that nothing removes (probe wc20 on the Deck: +1 file a
+-- wet teleport). The roughness and macro maps are the level's flat maps: one pack each, made once.
+local WET_A = '^bngEarthGroundAsphalt'
+M.WET_BLACK = 'beamngEarth_flat_1024.png'
+M.WET_FIELDS = {
+  [1] = {                                                         -- damp
+    { 'roughnessBaseTex', 'bngEarth_base_h.png' },
+    { 'baseColorMacroTex', M.WET_BLACK },
+    { 'baseColorMacroStrength', '0.15 0.1' },
+  },
+  [2] = {                                                         -- wet
+    { 'roughnessBaseTex', 'bngEarth_base_nm.png' },
+    { 'roughnessDetailStrength', '0.3 0.1', layers = WET_A },
+    { 'aoDetailStrength', '0 0', layers = WET_A },
+    { 'baseColorMacroTex', M.WET_BLACK },
+    { 'baseColorMacroStrength', '0.3 0.2' },
+  },
+}
+local wetWant = 0
+local wetHave, wetOrig = {}, {}     -- layer name -> the field list on it; -> { field = its own value }
+M.wetSets = 0
+
+-- Pure: is a terrain material one of the paved layers?
+function M.isWetLayer(name)
+  name = tostring(name or '')
+  for _, p in ipairs(M.WET_LAYERS) do if name:find(p) then return true end end
+  return false
+end
+
+-- The step wanted (0..2); applied at the next swap.
+function M.setWet(step)
+  wetWant = math.max(0, math.min(2, math.floor(tonumber(step) or 0)))
+end
+function M.wetStep() return wetWant end
+
+-- Pure: the value a wet field entry sets.
+function M.wetValue(v)
+  if type(v) == 'string' and v:match('%.png$') then return M.baseMapFor(TERRAIN_DIR .. v, M.BASE_TEX_SIZE) end
+  return v
+end
+
+-- The paved layers among `slots` set to the wanted step (only those not on it yet: the step's field list, a changed
+-- list too). Fields the list leaves out get the layer's own value back. Called inside the swap, before the block's file
+-- is set.
+function M.applyWet(slots)
+  local list = M.WET_FIELDS[wetWant] or false
+  for _, name in ipairs(slots or {}) do
+    if M.isWetLayer(name) and (wetHave[name] or false) ~= list then
+      local m = scenetree.findObject(name)
+      if m then
+        local orig = wetOrig[name] or {}
+        wetOrig[name] = orig
+        local want = {}
+        for _, e in ipairs(list or {}) do
+          if not e.layers or name:find(e.layers) then want[e[1]] = M.wetValue(e[2]) end
+        end
+        for f in pairs(want) do
+          if orig[f] == nil then orig[f] = m:getField(f, 0) or '' end
+        end
+        for f, v in pairs(orig) do
+          local nv = want[f] or M.baseMapFor(v, M.BASE_TEX_SIZE)     -- (its own, at the photo size now)
+          if tostring(m:getField(f, 0)) ~= tostring(nv) then m:setField(f, 0, nv) end
+        end
+        wetHave[name] = list
+        M.wetSets = M.wetSets + 1
+      end
+    end
+  end
+end
+
 function M.onLevelChanged()
   materialsChecked = false
+  wetHave, wetOrig = {}, {}
 end
 
 return M

@@ -147,6 +147,7 @@ mod underdeck;
 mod deckground;
 mod railseam;
 mod stageshare;
+mod terrainpacks;
 mod classgrid;
 mod frontage;
 mod furnstations;
@@ -7817,6 +7818,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 631: the tunnel plan T1 round 2 (tunnel records' portals and floors)
     // 632: RoadsysCeil counts a ground road beside a deck within the deck's own need (ceil.rs allow), whatever other
     // decks were read (roadsys.ceil_of_cell's box)
-    m.add("VERSION", 632)?;
+    // 635 (633 and 634 kept for the tunnel and winter W3 branches): tpacks_* (terrainpacks.rs: the ledger, prune, cap
+    // and one-time wipe of our photo packs in the game's terrain texture cache, server/terrainpacks.py)
+    terrainpacks::register(m)?;
+    // 636 (the tunnel branch's 633 renumbered over dev's 635): tunnel plan T1 round 3, the tunnel record's lids under
+    // a road crossing over the tube kept (tunnel.rs StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as
+    // without the record: roadsys.pins_near legacy)
+    m.add("VERSION", 636)?;
     Ok(())
 }

@@ -183,31 +183,37 @@ seaV.shores = nil
 -- rain in layers (weather phase B): the weights by rate, the mix under a roof, in a tunnel and in the car
 local w0 = amb.rainWeights(0.1)
 T.check(w0.light == 1 and w0.medium == 0 and w0.heavy == 0, 'drizzle: the light layer only')
-local w3 = amb.rainWeights(3)
-T.check(math.abs(w3.medium - 1) < 1e-9, '3 mm/h: the medium layer')
-local w6 = amb.rainWeights(6)
-T.check(w6.medium > 0 and w6.heavy > 0 and math.abs(w6.medium + w6.heavy - 1) < 1e-9 and w6.light == 0, '6 mm/h: medium into heavy')
+local w3 = amb.rainWeights(5)
+T.check(math.abs(w3.medium - 1) < 1e-9, '5 mm/h: the medium layer')
+local w6 = amb.rainWeights(10)
+T.check(w6.medium > 0 and w6.heavy > 0 and math.abs(w6.medium + w6.heavy - 1) < 1e-9 and w6.light == 0, '10 mm/h: medium into heavy')
 T.check(amb.rainWeights(50).heavy == 1, 'a downpour: heavy')
-local mx = amb.rainMix(0.5, 3, 1, false, false)
-T.check(math.abs(mx.medium - 0.5) < 1e-9 and mx.muffled == 0 and mx.roof == 0, 'in the open: the layer at the volume')
-mx = amb.rainMix(0.5, 3, 0, false, false)
+local mx = amb.rainMix(0.5, 5, 1, false, false)
+T.check(math.abs(mx.medium - 0.5) < 1e-9 and mx.muffled == 0 and mx.roof_medium == 0, 'in the open: the layer at the volume')
+mx = amb.rainMix(0.5, 5, 0, false, false)
 T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_UNDER_ROOF) < 1e-9, 'under a roof: muffled')
-mx = amb.rainMix(0.5, 3, 1, true, false)
+mx = amb.rainMix(0.5, 5, 1, true, false)
 T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_IN_TUNNEL) < 1e-9, 'in a tunnel: muffled, quieter')
-mx = amb.rainMix(0.5, 3, 1, false, true)
-T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roof - 0.5 * amb.RAIN_ROOF) < 1e-9, 'in the car: on the roof')
+mx = amb.rainMix(0.5, 5, 1, false, true)
+T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roof_medium - 0.5 * amb.RAIN_ROOF) < 1e-9
+  and mx.roof_light == 0 and mx.roof_heavy == 0, 'in the car: on the roof')
+mx = amb.rainMix(0.5, 13, 1, false, true)
+T.check(mx.roof_medium > 0 and mx.roof_heavy > 0 and math.abs(mx.roof_medium + mx.roof_heavy - 0.5 * amb.RAIN_ROOF) < 1e-9,
+  'heavier rain on the roof: the medium and heavy roof loops crossfaded')
 
 local rainParticles = S.newObject('Precipitation')
 rainParticles:registerObject('bngEarthRain')
 local function layer(file)
   for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.fileName == amb.RAIN_DIR .. file then return o end end
 end
-beamngEarth_weather = { rainNow = 1, rainMmHNow = 3, shelter = 1 }
+beamngEarth_weather = { rainNow = 1, rainMmHNow = 5, shelter = 1 }
 clock = 380; amb.update(3, seaV)
 clock = 381; amb.update(3, seaV)
 local me = layer('bne_rain_medium.ogg')
 T.check(me and me.fields.isLooping == '1' and math.abs(me.vol - amb.RAIN_GAIN / amb.RAIN_FADE_S) < 1e-9, 'rain layers: medium fading in')
 T.check(layer('bne_rain_heavy.ogg') == nil and layer('bne_rain_light.ogg') == nil, 'only the layer of the rate')
+T.check(me.fieldsAtRegister.description == 'AudioEnvironment' and me.fieldsAtRegister.sourceGroup == 'AudioChannelEnvironment',
+  'rain layers: on the Environment channel, set before registerObject')
 for i = 1, 8 do clock = 381 + i * 0.5; amb.update(3, seaV) end
 T.check(math.abs(me.vol - amb.RAIN_GAIN) < 1e-9, 'rain layers: full')
 beamngEarth_weather.shelter = 0
@@ -226,6 +232,38 @@ local t0 = os.clockhp()
 amb.duck(3, 0.35)
 T.check(math.abs(amb.duckFactor(t0) - 0.35) < 1e-9 and math.abs(amb.duckFactor(t0 + 2.5) - (0.35 + 0.65 * 0.5)) < 0.02
   and amb.duckFactor(t0 + 3.1) == 1, 'the rain ducked under a strike, back after 3 s')
+
+-- the scheduled duck (CLOSE_STRIKE_AND_LOUDNESS.md): the depth by distance, a pre-dip from the flash, a 15 ms ramp
+-- ending at the crack, the hold, the release; the music on the same envelope, back to the player's setting at the end
+T.check(amb.duckDepthDb(60) == -10 and amb.duckDepthDb(280) == -5 and amb.duckDepthDb(20) == -10
+  and math.abs(amb.duckDepthDb(170) - -7.5) < 1e-9, 'depth: -10 dB at 60 m to -5 dB at 280 m')
+local ev = { flash = 100, t0 = 100.5, depth = -10 }
+local pre = amb.PREDIP_DB / -10
+T.check(amb.duckEnvelope(ev, 99.9) == 0, 'before the flash: nothing')
+T.check(math.abs(amb.duckEnvelope(ev, 100.2) - pre) < 1e-12, 'flash to the ramp: the pre-dip')
+T.check(math.abs(amb.duckEnvelope(ev, 100.5 - amb.DUCK_RAMP_S / 2) - (pre + (1 - pre) / 2)) < 1e-9, 'the ramp, half way')
+T.check(amb.duckEnvelope(ev, 100.5) == 1 and amb.duckEnvelope(ev, 100.5 + amb.DUCK_HOLD_S - 0.01) == 1, 'held from the crack')
+local e, over = amb.duckEnvelope(ev, 100.5 + amb.DUCK_HOLD_S + amb.DUCK_RELEASE_S / 2)
+T.check(math.abs(e - 0.5) < 1e-9 and not over, 'released linearly (in dB)')
+e, over = amb.duckEnvelope(ev, 100.5 + amb.DUCK_HOLD_S + amb.DUCK_RELEASE_S + 0.01)
+T.check(e == 0 and over, 'over after the release')
+local musicSet = {}
+Engine.Audio = { getChannelVolume = function(ch, actual) return 0.8 end,
+  setChannelVolume = function(ch, v, temp) musicSet[#musicSet + 1] = { ch, v, temp } end }
+local c0 = os.clockhp()
+amb.scheduleDuck(c0, c0 + 0.5, 60)
+T.check(math.abs(amb.duckFactor(c0 + 0.6) - 10 ^ (-10 / 20)) < 1e-9, 'the rain at -10 dB under a 60 m crack')
+amb._updateDucks(c0 + 0.6)
+local last = musicSet[#musicSet]
+T.check(last and last[1] == 'AudioChannelMusic' and math.abs(last[2] - 0.8 * 10 ^ (amb.MUSIC_DB / 20)) < 1e-9 and last[3] == true,
+  'the music ducked on the same envelope, from the player\'s setting, temporarily')
+amb._updateDucks(c0 + 0.5 + amb.DUCK_HOLD_S + amb.DUCK_RELEASE_S + 0.1)
+last = musicSet[#musicSet]
+T.check(math.abs(last[2] - 0.8) < 1e-9, 'the duck over: the music back to the player\'s setting')
+local n = #musicSet
+amb._updateDucks(c0 + 10)
+T.check(#musicSet == n, 'no duck: nothing set')
+Engine.Audio = nil
 
 amb._setLayersOk(false)
 local function rainEm()
@@ -251,4 +289,18 @@ beamngEarth_weather = nil
 
 amb.clear()
 T.check(#S.liveOf('SFXEmitter') == 0 and af.enabled == false, 'clear: the room tone goes')
+-- clear (the level, the connection): a running duck's music back to the player's setting
+do
+  local set = {}
+  Engine.Audio = { getChannelVolume = function() return 0.7 end,
+    setChannelVolume = function(ch, v, temp) set[#set + 1] = { ch, v, temp } end }
+  local c = os.clockhp()
+  amb.scheduleDuck(c, c + 0.5, 60)
+  amb._updateDucks(c + 0.6)
+  amb.clear()
+  T.check(#set >= 2 and math.abs(set[#set][2] - 0.7) < 1e-9, 'clear: the music back')
+  T.check(math.abs(amb.duckFactor(c + 10) - 1) < 1e-9, 'clear: no duck left')
+  Engine.Audio = nil
+end
+
 T.done('test_ambience')

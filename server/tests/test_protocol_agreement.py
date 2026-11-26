@@ -132,6 +132,7 @@ WEATHER_NESTED = {name.split(".", 1)[1]: keys for name, keys in NESTED.items() i
 EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises success/error/busy replies
                      "far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
                        "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
+                       "audio_state",                                # live weather sounds: a weathersynth child (test_liveaudio)
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
@@ -230,7 +231,7 @@ def mod_sends():
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
                               "addons.lua", "api.lua", "terrainfiles.lua", "winterlook.lua"), r"net(?:'\))?\.send\(\{"),
-                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
+                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua", "liveaudio.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
@@ -246,7 +247,7 @@ def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
     for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "winter.lua", "credits.lua", "roads.lua", "mpsession.lua",
-                 "addons.lua", "api.lua", "reportsend.lua", "terrainfiles.lua"):
+                 "addons.lua", "api.lua", "reportsend.lua", "terrainfiles.lua", "liveaudio.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}

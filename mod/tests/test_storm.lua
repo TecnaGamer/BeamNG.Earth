@@ -69,6 +69,22 @@ check(th.kind == 'mid' and storm.thunderFor(500).kind == 'close' and storm.thund
 check(storm.thunderFor(storm.HEAR_M + 1) == nil, 'too far to hear')
 local sk = storm.thunderFor(200)
 check(sk.kind == 'strike' and sk.delay == 0 and sk.gain == 1 and #storm.THUNDER.strike == 2, 'a strike within STRIKE_M: its own sound, at once, full')
+-- the file sets: as many files as exist, the recorded set or the generated one, never the same file twice in a row
+local have = { ['bne_thunder_close1.ogg'] = true, ['bne_thunder_close2.ogg'] = true, ['bne_thunder_close3.ogg'] = true,
+  ['bne_thunder_rec_far1.ogg'] = true }
+local ex = function(p) return have[p:match('[^/]+$')] == true end
+storm._resetRecOk()
+check(#storm.thunderFiles('close', 'generated', ex) == 3, 'generated: the three close files found')
+check(storm.thunderFiles('close', 'recorded', ex)[1] == 'bne_thunder_close1.ogg', 'recorded without files: the generated set')
+check(storm.thunderFiles('far', 'recorded', ex)[1] == 'bne_thunder_rec_far1.ogg', 'recorded: its own files')
+local fl = storm.thunderFiles('close', 'generated', ex)
+check(storm.pickFile(fl, 4, nil) == 'bne_thunder_close2.ogg', 'the seed picks')
+check(storm.pickFile(fl, 4, 'bne_thunder_close2.ogg') == 'bne_thunder_close3.ogg', 'not the last one again')
+check(storm.pickFile({ 'a.ogg' }, 4, 'a.ogg') == 'a.ogg', 'one file: that one')
+storm._resetRecOk()
+-- the playback gain: never above 1
+check(storm.playVolume(1, false) == 1 and storm.playVolume(2, false) == 1 and storm.playVolume(1, true) == storm.MUFFLED,
+  'thunder volume never above 1.0')
 check(storm.thunderFor(storm.STRIKE_M + 1).kind == 'close', 'past STRIKE_M: a close crack')
 check(storm.thunderFor(500).gain > storm.thunderFor(10000).gain, 'nearer is louder')
 -- the stand-in distance inside the fog
@@ -163,7 +179,7 @@ clock = first.t + th1.delay + 0.05
 storm.update(0.016, 0, { groundZ = 0 })
 local heard = false
 for i = nBefore + 1, #played do
-  if played[i][2]:find('bne_thunder_' .. th1.kind) and played[i][1] == 'AudioGui' then heard = true end
+  if played[i][2]:find('bne_thunder_' .. th1.kind) and played[i][1] == 'AudioEnvironment' then heard = true end
 end
 check(heard, 'its thunder (' .. th1.kind .. ') after ' .. string.format('%.1f', th1.delay) .. ' s')
 -- the storm gone, the queue empty: the module says it is done
@@ -171,5 +187,49 @@ clock = clock + 120
 check(storm.update(0.016, 0, {}) == false, 'class 0 and nothing queued: done')
 storm.reset()
 check(#S.liveOf('TSStatic') == 0 and #S.liveOf('PointLight') == 0, 'reset: the objects deleted')
+
+-- live, the generated set: a strike or close within 1400 m is hinted LIVE_LOOKAHEAD_S ahead (its crack at once); the
+-- synth plays the final when it listed it ready, else the game plays the file (play = false, at its file's crack)
+local la = require('beamngEarth/liveaudio')
+local near
+for _, s in ipairs(strikes) do
+  local g = beamngEarth_api.game(s.lat, s.lon)
+  local d = math.sqrt(g.x * g.x + g.y * g.y)
+  if d < 1400 and s.t > first.t + 60 then near = { s = s, d = d } break end
+end
+check(near ~= nil, 'a strike within 1400 m later in the hour')
+local sent = {}
+la.onThunder = function(t) sent[#sent + 1] = t end
+la.isLive = function() return true end
+la.setMode('live')
+la.setThunderSet('generated')
+local function liveRun(readyD)
+  sent, played = {}, {}
+  storm.reset()
+  la.onAudioState({ state = 'live', thunderSets = { 'generated', 'recorded' } })
+  clock = near.s.t - storm.LIVE_LOOKAHEAD_S - 0.5
+  run(1.0)
+  local id = la.thunderId(near.s)
+  local hint
+  for _, t in ipairs(sent) do if t.id == id and not t.final then hint = t end end
+  if readyD then la.onAudioState({ state = 'live', thunderSets = { 'generated', 'recorded' }, readyThunders = { { id, readyD } } }) end
+  clock = near.s.t - 0.1
+  run(0.2 + storm.thunderFor(near.d).delay + 0.6)
+  local fin, nfin, nhint = nil, 0, 0
+  for _, t in ipairs(sent) do
+    if t.id == id and t.final then fin = t; nfin = nfin + 1 end
+    if t.id == id and not t.final then nhint = nhint + 1 end
+  end
+  check(nfin == 1 and nhint == 1, 'one hint and one final per strike (the 30 s window is not looked up again each check)')
+  return hint, fin
+end
+local hint, fin = liveRun(near.d)
+check(hint and hint.at == near.s.t + storm.thunderFor(near.d).delay, 'hinted ' .. storm.LIVE_LOOKAHEAD_S .. ' s ahead, its crack at once')
+check(fin and fin.play == true and #played == 0, 'ready: the synth plays the final, no file')
+hint, fin = liveRun(nil)
+check(fin and fin.play == false and fin.at == near.s.t + storm.thunderFor(near.d).delay + la.FILE_ONSET_S and #played == 1,
+  'not ready: the file plays (play = false, at its file\'s crack)')
+la.setMode('prerecorded')
+storm.reset()
 
 T.done('test_storm')

@@ -2339,7 +2339,7 @@ def shoulder(spec):
     return SHOULDER_M
 
 
-def _twin_trimmed(secs):
+def _twin_trimmed(secs, rec=None):
     """secs ([(fid, spec, xy, z, kind)]) with the covered sections of twin tunnels (roads.twin_tunnels: side by side,
     one tube round both) cut to the stretch they share: one twin's portal a few metres deeper than the other's, the
     other's ground kept as it is over it (TUNNEL_KEEP_M wide) left the deeper one's approach on the hill there, its road
@@ -2350,7 +2350,7 @@ def _twin_trimmed(secs):
     parts = [(secs[n][0], secs[n][1], np.asarray(secs[n][2], np.float64), np.asarray(secs[n][3], np.float64), 0.0)
              for n in cov]
     out = list(secs)
-    for i, j, _mid, _w in roadsmod.twin_tunnels(parts):
+    for i, j, _mid, _w in roadsmod.twin_tunnels(parts, rec):
         for a, b in ((i, j), (j, i)):
             xa, xb = parts[a][2], parts[b][2]
             ub = xb[-1] - xb[0]
@@ -2682,7 +2682,8 @@ class _Planner:
         covers, opens = [], []
         if feats is not None and len(feats):
             portals = {}
-            secs = self._tunnel_sections(feats, key, portals=portals)
+            rec_subs = set()
+            secs = self._tunnel_sections(feats, key, portals=portals, rec=rec_subs)
             covered = {f.rsplit("#", 1)[0] for f, _s, _xy, _z, k in secs if k}
             for fid, spec, xy, z, k in secs:
                 if k == 0:
@@ -2696,7 +2697,7 @@ class _Planner:
                     p.open_tunnel = OPEN_TUNNEL_EASE and fid.rsplit("#", 1)[0] not in covered
                     plans.append((fid + TUNNEL_TAG, p))
             plans.extend(self._mouth_plans(secs, portals))
-            covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in _twin_trimmed(secs) if k]
+            covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in _twin_trimmed(secs, rec_subs) if k]
             opens = [(xy, spec) for _f, spec, xy, _z, k in secs if k == 0]
         return plans, keeps, covers, opens
 
@@ -7263,7 +7264,7 @@ class _Planner:
         with holder.lock:
             return holder.__dict__.setdefault("_tunnel_cs", cs)
 
-    def _tunnel_sections(self, feats, key=None, road_plans=(), portals=None):
+    def _tunnel_sections(self, feats, key=None, road_plans=(), portals=None, rec=None):
         """[(fid, spec, xy, z, kind)] of the tunnels' sections, as the tunnel networks have them (_tunnel_chains: the
         floor and the sections the road tiles draw and the terrain blocks cut their holes for): kind 0 an open road at
         z, 1 a low arch, 2 a full tunnel; z the plans' (the terrain's datum: the floor less ROAD_LIFT, which apply
@@ -7317,6 +7318,8 @@ class _Planner:
                     pxy = np.stack([np.asarray(e_, np.float64), np.asarray(n_, np.float64)], axis=1)
                     # (by the section's own id, the networks' fid.part#section: its mouths are the networks' too)
                     out.append((str(sub), ts[i], pxy, np.asarray(h, np.float64) - ROAD_LIFT, kind))
+                    if rec is not None and str(sub) in st.holes:    # (T1: a sub-part of the road system's record)
+                        rec.add(str(sub))
                     if kind and portals is not None:
                         for at, is_mouth in zip((0, -1), st.mouth(sub)):
                             portals[(str(sub), tuple(np.round(pxy[at], 3)))] = bool(is_mouth)
