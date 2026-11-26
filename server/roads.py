@@ -3496,6 +3496,14 @@ def _callable_key(fn):
     return (id(getattr(fn, "__self__", None)), getattr(fn, "__func__", fn))
 
 
+def clear_placements():
+    """The kept Placements let go (budget.register_shed): each holds its cells' map features, so a shed that dropped
+    the map data's cells kept them alive here (16 Placements, ~190 MB of a Baltimore road process after 80 geotiles,
+    2026-11-26)."""
+    with _PLACEMENT_LOCK:
+        _PLACEMENT_LRU.clear()
+
+
 def placement_context(cells, urban_fn=None, widths=None, left_hand=False):
     """The Placement of cells' roads with road_specs(feats, urban_fn, widths, left_hand)'s widths: one per tile (each
     caller moving the roads' lines by it: road tiles, grading, the traffic AI's lanes, the signs' rows, decks). The
@@ -9515,9 +9523,10 @@ class BridgeProfiles:
                         # first part's region), or None: this one
     region_of = None    # region_of(self, comp, pool) -> owner_of's region, with no side effect (ChainStore._region_of)
 
-    def parts_todo(self, todo, solved_only=False, part_ids=False):
+    def parts_todo(self, todo, solved_only=False, part_ids=False, retry=True):
         """[(fid, spec, xy, z, lon)] of the parts todo [((fid, j), feats, i)], each solved with its chain (once);
-        solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
+        solved_only: only those solved already; part_ids: return (fid, j) rather than fid; retry=False: a part published
+        short is taken as it is (its note: the reader is short too), never solved again for this reader (_retry_due)."""
         out = []
         for key, feats, i in todo:
             ring = None
@@ -9530,7 +9539,7 @@ class BridgeProfiles:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 if not self._held_in(key, ring):
                     continue
-            if not solved_only and self.__dict__.get("profile_retry"):
+            if not solved_only and retry and self.__dict__.get("profile_retry"):
                 self._retry_due(key)    # (P3c: a short profile's chain asked again when due; Codex review of P3c)
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
@@ -10554,6 +10563,13 @@ class TunnelProfiles(BridgeProfiles):
         bank was built, an open trench across the avenue with its mouth at the river; GitHub #128)."""
         if self.wet is None:
             return
+        wet = self._chain_wet(comp, pool)
+        with self.lock:
+            for k in comp:
+                self._drowned[self._part_id(k)] = wet
+
+    def _chain_wet(self, comp, pool):
+        """_mark_drowned's test (pure, nothing marked): is a part of the chain comp under water?"""
         wet = False
         gfn = self._raw_ground if self.raw is not None else self._ground
         low = None                      # (the lowest ground at the parts' ends: the lower portal's)
@@ -10577,9 +10593,7 @@ class TunnelProfiles(BridgeProfiles):
             if w.mean() > TUNNEL_WET_SHARE or wet_run_inside(xy, w) >= TUNNEL_WET_RUN_M:
                 wet = True
                 break
-        with self.lock:
-            for k in comp:
-                self._drowned[self._part_id(k)] = wet
+        return wet
 
     def drowned(self, key, ring):
         """Is tunnel part key (fid, j) (ring: its lon/lat points) in a chain with a part under water
@@ -10601,6 +10615,35 @@ class TunnelProfiles(BridgeProfiles):
         self._mark_drowned(self._resolve(key, pool, ground, loaded), pool)
         with self.lock:
             return bool(self._drowned.get(pid))
+
+    def feature_drowned(self, feat, lat, lon):
+        """(T1, BNE_ROADSYS_TUNNELS) Is a tunnel part of the road system's map feature feat (roadsys.feature) in the
+        cell of (lat, lon) in a chain under water (drowned: left on this store's solve until T3)? The grading takes the
+        profile squares' terrain targets round such a tunnel as they were without the record (roadsys.pins_near
+        legacy): the record's portal digs are for the floors it builds."""
+        import roadsys
+        if self.wet is None:
+            return False
+        ck = mapcells.cell_of(float(lat), float(lon))
+        mk = (feat, str(ck))
+        with self.lock:
+            got = self.__dict__.setdefault("_feat_wet", {}).get(mk)
+        if got is not None:
+            return got
+        pool, ground = {}, {}
+        self._load(ck, pool, ground)
+        wet = False
+        for key in sorted(pool, key=str):
+            if roadsys.feature(key[0]) != feat or len(pool[key][1]) < 2:
+                continue
+            # (the chain's own test, pure: never the parts' marks, which a solve's underwater membership rewrites)
+            comp = self._resolve(key, pool, ground, {str(ck)})
+            if self._chain_wet(comp, pool):
+                wet = True
+                break
+        with self.lock:
+            self._feat_wet[mk] = wet
+        return wet
 
     def _chain_pins(self, comp, pool, ground):
         """{key: (start, end)}: the floor height (this frame's z, NaN at a portal) at each end of the chain comp's parts
@@ -11620,6 +11663,12 @@ class ChainView:
         """Bridge parts with their stable (fid, part index), including when tiles ask for different spans."""
         return self._parts(cells_feats, box, part_ids=True)
 
+    def parts_published(self, cells_feats, box):
+        """parts_with_ids, a part published short taken as it is (BridgeProfiles.parts_todo retry=False: its reader is
+        short, never kept; the chain solved again only for the readers that keep what they build: the under-deck
+        ceiling's boxes asked a short chain again every PROFILE_RETRY_S, M5 r5)."""
+        return self._parts(cells_feats, box, part_ids=True, retry=False)
+
     def parts_shaped(self, cells_feats, box):
         """parts() with each part's shape (roadshape, BNE_ROADSHAPE=decks; None without one) as a sixth field, from
         the store its line comes from and mapped as that line is."""
@@ -11709,6 +11758,15 @@ class ChainView:
             with st.lock:
                 out.extend(st.__dict__.get("profiles", {}).values())
         return out
+
+    def depth_of_part(self, key):
+        """(M5) m of structure under part key's road as its chain's solve gave it (None: not solved here)."""
+        for st in self._stores():
+            with st.lock:
+                d = st.__dict__.get("depth", {}).get(key)
+            if d is not None:
+                return float(d)
+        return None
 
     def depth_of(self, fid):
         ds = []
@@ -11937,11 +11995,12 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     """arch_raise for ground heights at the points (la, lo) of a block in the anchor-frame box (x0, y0, x1, y1),
     the tunnels from the map cells under it. z as it was when the cells are not at hand. BNE_ROADSYS=structures: then
     the ground under the decks' ground ends lowered (roadsys.handover_drop: every evaluator of the physics ground is
-    one of this function's callers, so the blocks, the skins and the decks' hand-over agree node for node)."""
+    one of this function's callers, so the blocks, the skins and the decks' hand-over agree node for node);
+    BNE_ROADSYS=surface: and nowhere over a deck's soffit less 0.3 m (roadsys.ground_cut)."""
     z = _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box)
     if roadsys.STRUCTURES:
         try:
-            z = np.asarray(z, np.float64) - roadsys.handover_drop(frame, cell_fn, la, lo)
+            z = roadsys.ground_cut(frame, cell_fn, la, lo, z, box)
         except Exception as ex:     # no drop rather than no ground (nothing built with it kept)
             (log.debug if isinstance(ex, OSError) else log.warning)("deck ends' hand-over: %s: %s", type(ex).__name__, ex)
             import revisit
@@ -13121,10 +13180,12 @@ def _line_near(xy, other):
     return out_d, out_q
 
 
-def twin_tunnels(parts):
+def twin_tunnels(parts, rec=None):
     """Pairs of tunnel parts ([(fid, spec, xy, z, lon)]) side by side: [(i, j, midline (k, 3), width)] with i < j their
     indices, the midline along part i (each point halfway to j's line, the floors' mean) and the width of a road
-    surface covering both carriageways (the tube round both: roadmesh.tunnel). Each part in one pair at most. Pure."""
+    surface covering both carriageways (the tube round both: roadmesh.tunnel). Each part in one pair at most. rec (T1):
+    the fids of the road system's record (TunnelProfiles.holes); a pair of two of them is paired by the record's rule.
+    Pure."""
     import roadmesh
     taken, out = set(), []
     for i, (fa, sa, xa, za, _) in enumerate(parts):
@@ -13154,6 +13215,15 @@ def twin_tunnels(parts):
             if near.mean() < TWIN_SHARE:
                 continue
             tb = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xb, axis=0).T))]
+            if roadsys.TUNNELS and rec is not None and fa in rec and fb in rec:
+                # (T1: and b beside a for that share of b's length too (two parts of the record; a network left on the
+                # old solve, under water, paired as before: Tromsoysund's twin bores lost their floor at the mouth): the tube round both runs along a only, and a
+                # short section of one carriageway paired with the other's long one left the long one without a tube
+                # (Moscow's Garden Ring, its twin floors held together by the record))
+                sb_ = np.linspace(0.0, tb[-1], max(2, int(tb[-1] / TWIN_STEP_M) + 1))
+                Pb = np.c_[dnp.interp(sb_, tb, xb[:, 0]), dnp.interp(sb_, tb, xb[:, 1])]
+                if (_line_near(Pb, xa)[0] < reach).mean() < TWIN_SHARE:
+                    continue
             _, qb = _line_near(q, xb)           # (q on xb: its floor by the arc to it)
             sb_at = np.array([tb[k] + dnp.hypot(*(qb[n] - xb[k])) for n, k in enumerate(
                 [int(np.argmin(dnp.hypot(*(xb[:-1] - p).T) + dnp.hypot(*(xb[1:] - p).T))) for p in qb])])
@@ -13194,19 +13264,23 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                             out.append(_chunk(look, w, c))
     parts = [p for p in tunnels.parts(cells, exact) if np.isfinite(p[3]).all()]
     layouts = rampmerges.plans([(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in parts])
-    twins = twin_tunnels(parts)
+    # (T1: the sub-parts the road system's record built (its holes): their cover meets the ground, portals.cover; a
+    # network on the legacy solve keeps its cover as before)
+    rec = set(getattr(tunnels, "holes", None) or ()) if roadsys.TUNNELS else set()
+    twins = twin_tunnels(parts, rec)
     twinned = {k for i, j, _, _ in twins for k in (i, j)}
     jobs = []                                   # (fid, its ends, [(look, width, line)])
     for i, j, mid, width in twins:              # the tube round both, with the first's portals
         if len(mid) >= 2:
-            jobs.append((parts[i][0], (mid[0, :2], mid[-1, :2]), [({**TUNNEL, "tunnel": True, "tube_only": True}, width, mid)],
-                         parts[i][1]))
+            jobs.append((parts[i][0], (mid[0, :2], mid[-1, :2]),
+                         [({**TUNNEL, "tunnel": True, "tube_only": True, "rec": parts[i][0] in rec}, width, mid)], parts[i][1]))
     for n, (fid, spec, xy, z, lon) in enumerate(parts):
         pts = np.c_[xy, z]
         # A covered road needs its own colliding floor even when its mapped surface normally belongs to the
         # terrain paint (rock/grass). That paint lies on the hill/seabed above the bore, never inside it.
         look = _deck_look(spec)
-        lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
+        lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned, "rec": fid in rec},
+                                          spec.width, pts)]
         for look, w, line in rampmerges.trim(fid, extras(spec, pts, lon, defer_dashes=True), layouts):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))
@@ -13240,7 +13314,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                             ch["tunnel_len"] = round(length, 1)             # (the whole sub-part's: sound_boxes)
                             if spec.cls in CONCRETE_WALL_CLASSES:
                                 ch["concrete"] = True   # (a major road's low arch: concrete, as its cutting's walls)
-                            for flag in ("no_tube", "tube_only"):
+                            for flag in ("no_tube", "tube_only", "rec"):
                                 if look.get(flag):
                                     ch[flag] = True
                             if getattr(tunnels, "height", None) is not None:

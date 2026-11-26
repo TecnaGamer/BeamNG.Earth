@@ -49,7 +49,8 @@ pub struct Snap { pub mapped: f64, pub built: f64, pub cut: f64 }
 /// The inputs of one stroke: knot stations s (h apart from 0, the last at the stroke's length), the profile z, the
 /// ground over the axis g, the side ground (left / right, one per SIDE_OFFS, NaN where not read), its mapped tunnel
 /// ranges (stations), whether each range end at the stroke's start / end goes on into another stroke's tunnel, and its
-/// design speed.
+/// design speed. held (636): the station intervals under a road crossing over it on the ground (net.rs crossings' floors):
+/// a lid there stays a lid however short (MIN_RUN_M never joins it to a full tube).
 pub struct StrokeIn<'a> {
     pub s: &'a [f64],
     pub z: &'a [f64],
@@ -60,6 +61,7 @@ pub struct StrokeIn<'a> {
     pub joined0: bool,
     pub joined1: bool,
     pub kmh: f64,
+    pub held: &'a [(f64, f64)],
 }
 
 fn cover_at(inp: &StrokeIn, i: usize) -> f64 { inp.g[i] - inp.z[i] }
@@ -133,6 +135,10 @@ pub fn stroke_record(inp: &StrokeIn) -> (Vec<Run>, Vec<Snap>) {
         // the knots inside [a, b] (both ends as stations of their own)
         let mut st: Vec<f64> = vec![a];
         for &x in inp.s.iter() { if x > a + 1e-6 && x < b - 1e-6 { st.push(x); } }
+        // (636: and the held intervals' ends, so a road over the tube between two knots has stations of its own)
+        for &(h0, h1) in inp.held.iter() { for x in [h0, h1] { if x > a + 1e-6 && x < b - 1e-6 { st.push(x); } } }
+        st.sort_by(|p, q| p.total_cmp(q));
+        st.dedup_by(|p, q| (*p - *q).abs() <= 1e-6);
         st.push(b);
         let interp = |arr: &dyn Fn(usize) -> f64, x: f64| -> f64 {
             let k = knot_of(inp.s, x).min(n - 2);
@@ -175,15 +181,20 @@ pub fn stroke_record(inp: &StrokeIn) -> (Vec<Run>, Vec<Snap>) {
             rr.push((j, e, kind[j]));
             j = e + 1;
         }
+        // (636: a lid under a road crossing over the tube (held) is never joined to a full tube: a full tube's 6.8 m
+        // through the 6.6 m under the I-405 at Seal Beach's connector mouth stood in its lanes)
+        let held = |r: &(usize, usize, u8)| -> bool {
+            r.2 == 1 && (r.0..=r.1).any(|j| inp.held.iter().any(|&(h0, h1)| st[j] >= h0 - 1e-6 && st[j] <= h1 + 1e-6))
+        };
         let mut merged: Vec<(usize, usize, u8)> = Vec::new();
         for r in rr {
-            let short = st[r.1] - st[r.0] < MIN_RUN_M && r.2 != 0;
+            let short = st[r.1] - st[r.0] < MIN_RUN_M && r.2 != 0 && !held(&r);
             if short {
                 if let Some(l) = merged.last_mut() { l.1 = r.1; continue; }
             }
             if let Some(l) = merged.last_mut() {
                 if l.2 == r.2 { l.1 = r.1; continue; }
-                if l.2 != 0 && st[l.1] - st[l.0] < MIN_RUN_M { l.1 = r.1; l.2 = r.2; continue; }
+                if l.2 != 0 && st[l.1] - st[l.0] < MIN_RUN_M && !held(l) { l.1 = r.1; l.2 = r.2; continue; }
             }
             merged.push(r);
         }
@@ -234,7 +245,7 @@ mod tests {
         let z = vec![100.0; 201];
         let g: Vec<f64> = s.iter().map(|&x| if x < 300.0 || x > 700.0 { 100.0 } else { 100.0 + 60.0 * (1.0 - ((x - 500.0) / 200.0).abs()) }).collect();
         let side: Vec<[f64; 3]> = g.iter().map(|&v| [v, v, v]).collect();
-        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(320.0, 680.0)], joined0: false, joined1: false, kmh: 80.0 };
+        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(320.0, 680.0)], joined0: false, joined1: false, kmh: 80.0, held: &[] };
         let (runs, snaps) = stroke_record(&inp);
         assert!(snaps.is_empty(), "{:?}", snaps);
         // thin cover at the ends (lid) then a full tube
@@ -255,14 +266,14 @@ mod tests {
         let z = vec![100.0; 101];
         let mut g = vec![101.0; 101];         // 1 m of cover all along (I-395 under its lid)
         let mut side: Vec<[f64; 3]> = g.iter().map(|&v| [v, v, v]).collect();
-        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(50.0, 450.0)], joined0: false, joined1: false, kmh: 50.0 };
+        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(50.0, 450.0)], joined0: false, joined1: false, kmh: 50.0, held: &[] };
         let (runs, _) = stroke_record(&inp);
         // the side ground is 1 m over the floor too: a candidate gap all along, but one touching both ends is no gap
         assert_eq!(runs.len(), 1, "{:?}", runs);
         assert_eq!(runs[0].kind, 1);
         // now a valley in the middle (200..300 m) with the ground on both sides low: a daylight gap
         for i in 0..101 { if s[i] >= 200.0 && s[i] <= 300.0 { g[i] = 100.5; side[i] = [100.5, 100.5, 100.5]; } else { g[i] = 110.0; side[i] = [110.0, 110.0, 110.0]; } }
-        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(50.0, 450.0)], joined0: false, joined1: false, kmh: 50.0 };
+        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(50.0, 450.0)], joined0: false, joined1: false, kmh: 50.0, held: &[] };
         let (runs, _) = stroke_record(&inp);
         let kinds: Vec<u8> = runs.iter().map(|r| r.kind).collect();
         assert_eq!(kinds, vec![2, 0, 2], "{:?}", runs);
@@ -276,16 +287,38 @@ mod tests {
         // the ground stays 20 m over the floor for 20 m past the mapped start (200 m), then drops
         let g: Vec<f64> = s.iter().map(|&x| if x >= 180.0 { 120.0 } else { 101.0 }).collect();
         let side: Vec<[f64; 3]> = g.iter().map(|&v| [v, v, v]).collect();
-        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(200.0, 400.0)], joined0: false, joined1: false, kmh: 80.0 };
+        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(200.0, 400.0)], joined0: false, joined1: false, kmh: 80.0, held: &[] };
         let (runs, snaps) = stroke_record(&inp);
         assert_eq!(snaps.len(), 2, "{:?}", snaps);       // (the far end too: the hill goes on past 400 m)
         assert_eq!(snaps[0].built, 180.0);
         assert_eq!(runs[0].s0, 180.0);
         assert_eq!(runs.last().unwrap().s1, 430.0);       // X_MAX past the mapped end
         // a town road: the same 20 m cut is over D_CUT_TOWN too; joined ends never move
-        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(0.0, 400.0)], joined0: true, joined1: false, kmh: 30.0 };
+        let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(0.0, 400.0)], joined0: true, joined1: false, kmh: 30.0, held: &[] };
         let (runs, _) = stroke_record(&inp);
         assert_eq!(runs[0].s0, 0.0);
         assert!(!runs[0].mouth0);
+    }
+
+    #[test]
+    fn a_short_lid_under_a_road_over_the_tube_stays_a_lid() {
+        // a 110 m tube under deep ground but for 8 m of thin cover at its end, where a road crosses over it (Seal
+        // Beach's connector under the I-405): the thin stretch is shorter than MIN_RUN_M
+        let s = line(23, 5.0);
+        let z = vec![100.0; 23];
+        let g: Vec<f64> = s.iter().map(|&x| if x >= 102.0 { 106.6 } else { 110.0 }).collect();
+        let side: Vec<[f64; 3]> = g.iter().map(|&v| [v, v, v]).collect();
+        let run = |held: &[(f64, f64)]| {
+            let inp = StrokeIn { s: &s, z: &z, g: &g, side_l: &side, side_r: &side, ranges: &[(0.0, 110.0)], joined0: false, joined1: false, kmh: 80.0, held };
+            stroke_record(&inp).0
+        };
+        // not held: joined to the full tube before it (the tube through the road over it)
+        let free = run(&[]);
+        assert_eq!(free.iter().map(|r| r.kind).collect::<Vec<u8>>(), vec![2], "{:?}", free);
+        // held: a lid of its own at the end, sized by its own cover
+        let held = run(&[(103.0, 109.0)]);
+        assert_eq!(held.iter().map(|r| r.kind).collect::<Vec<u8>>(), vec![2, 1], "{:?}", held);
+        assert!(held[1].cmin < 7.0 && held[1].mouth1 && !held[1].mouth0, "{:?}", held);
+        assert!(held[0].s1 <= 103.0 && held[1].s1 == 110.0, "{:?}", held);
     }
 }
