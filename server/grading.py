@@ -8178,12 +8178,10 @@ class _Planner:
             pad = 30.0 / 111320.0
             keys = sorted(set(mapcells.cells_for_points(la, lo, pad, pad / max(0.05, dmath.cos(math.radians(float(la[0])))))),
                           key=str)
-            cells = [self.md.cell(kk, layers=("roads",), kind="demand").layers.get("roads") for kk in keys]
-            box = (float(b[:, 0].min()), float(b[:, 1].min()), float(b[:, 0].max()), float(b[:, 1].max()))
-            cls = []
-            got = railwaysmod.road_underpasses(self.frame, cells, box, 10.0, classes=cls)
-            tun = [np.asarray(xy, np.float64)[:, :2] for (xy, _h), c in zip(got, cls)
-                   if len(xy) >= 2 and str(c) not in APPROACH_SKIP]
+            # (its cells' short tunnels, each cell's made once: a tunnel crossing the bridge is in a cell of its points;
+            # one in two cells is there twice, which changes no crossing)
+            got = [u for kk in keys for u in self._cell_underpasses(kk)]
+            tun = [xy for xy, c in got if c not in APPROACH_SKIP]
 
             def mid(hits):
                 return any(APPROACH_MIN_CROSS_M <= float(c[1]) <= L - APPROACH_MIN_CROSS_M for c in hits)
@@ -8195,8 +8193,7 @@ class _Planner:
                 cs = [self._cell_enu(kk) for kk in keys]
                 hard = [np.asarray(line, np.float64)[:, :2] for c in cs for line, _h, gc in c["ground"]
                         if str(gc) in APPROACH_SKIP and len(line) >= 2]
-                hard += [np.asarray(xy, np.float64)[:, :2] for (xy, _h), c in zip(got, cls)
-                         if len(xy) >= 2 and str(c) in APPROACH_SKIP]
+                hard += [xy for xy, c in got if c in APPROACH_SKIP]
                 hard += [np.asarray(r, np.float64)[:, :2] for c in cs for r in c.get("rail_ground", ()) if len(r) >= 2]
                 res = not (hard and mid(roadsmod._crossings([b], hard)))
         with self.lock:
@@ -8204,6 +8201,28 @@ class _Planner:
                 memo.clear()
             memo[k] = res
         return res
+
+    def _cell_underpasses(self, k):
+        """Cell k's short road tunnels (railways.road_underpasses over the whole cell, gradesep's open underpasses
+        included) as [(xy (k, 2), road class)], made once a cell: each bridge _over_mapped_underpass was asked of read its
+        cells and looked for them again, 1,844 times over Yokohama's 110 cells (21 s of a growth's reads). A cell whose
+        roads are not there is not kept."""
+        memo = self.__dict__.setdefault("_underpass_cells", {})
+        with self.lock:
+            got = memo.get(str(k))
+        if got is not None:
+            return got
+        feats = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        cls = []
+        inf = float("inf")
+        got = railwaysmod.road_underpasses(self.frame, [feats], (-inf, -inf, inf, inf), 10.0, classes=cls)
+        out = [(np.asarray(xy, np.float64)[:, :2], str(c)) for (xy, _h), c in zip(got, cls) if len(xy) >= 2]
+        if feats is not None and len(feats):
+            with self.lock:
+                if len(memo) > 1024:
+                    memo.clear()
+                memo[str(k)] = out
+        return out
 
     def _end_lift_raw_calc(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)

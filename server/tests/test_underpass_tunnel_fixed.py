@@ -90,6 +90,27 @@ class OverMappedUnderpassTest(unittest.TestCase):
                 got = planner()._over_mapped_underpass(BRIDGE)
             self.assertEqual(got, hc["ground"] != [] and hc["ground"][0][2] == "residential", hc)
 
+    def test_a_cell_s_underpasses_are_read_once_for_every_bridge_over_it(self):
+        """The short tunnels are looked for once a cell (_cell_underpasses), over the whole cell: every bridge asked reads
+        its cells' list, and a tunnel of the cell away from a bridge is no underpass of it (1,844 reads of Yokohama's 110
+        cells for its 2,715 decks were 21 s of a growth's reads)."""
+        tunnel = np.array([[-10.0, 22.0], [10.0, 20.0]])
+        far = np.array([[290.0, 22.0], [310.0, 20.0]])              # (under the third bridge only)
+        calls = []
+
+        def fake(frame, cells, box, reach=None, classes=None):
+            calls.append(box)
+            return underpasses(tunnel, far)(frame, cells, box, reach, classes)
+        p = planner()
+        p.md._C.layers = {"roads": [object()]}                       # (a cell whose roads are there: kept)
+        self.addCleanup(setattr, p.md._C, "layers", {"roads": None})
+        bridges = [BRIDGE, BRIDGE + [0.0, 1.0], BRIDGE + [300.0, 0.0], BRIDGE + [150.0, 0.0]]
+        with mock.patch.object(grading.railwaysmod, "road_underpasses", fake):
+            got = [p._over_mapped_underpass(b) for b in bridges]
+        self.assertEqual(got, [True, True, True, False])
+        self.assertEqual(len(calls), len(p._underpass_cells), "one read a cell")
+        self.assertTrue(all(b[0] == -np.inf and b[2] == np.inf for b in calls))
+
     def test_switched_off(self):
         tunnel = np.array([[-10.0, 22.0], [10.0, 20.0]])
         with mock.patch.object(grading.railwaysmod, "road_underpasses", underpasses(tunnel)), \
