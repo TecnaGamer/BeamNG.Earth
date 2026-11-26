@@ -37,10 +37,34 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "rain_moderate_003_157433",
+   "id": "rain_light_003_640655",
+   "class": "rain_light",
+   "source_id": 640655,
+   "file": "blocks/rain_light_003_640655.ogg",
+   "seconds": 15.0,
+   "title": "Soft rain.WAV",
+   "author": "barkenov",
+   "page": "https://freesound.org/s/640655/",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "checked": "2026-11-26"
+  },
+  {
+   "id": "rain_light_004_162572",
+   "class": "rain_light",
+   "source_id": 162572,
+   "file": "blocks/rain_light_004_162572.ogg",
+   "seconds": 15.0,
+   "title": "Mild rain",
+   "author": "remcovs",
+   "page": "https://freesound.org/s/162572/",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "checked": "2026-11-26"
+  },
+  {
+   "id": "rain_moderate_005_157433",
    "class": "rain_moderate",
    "source_id": 157433,
-   "file": "blocks/rain_moderate_003_157433.ogg",
+   "file": "blocks/rain_moderate_005_157433.ogg",
    "seconds": 15.0,
    "title": "Medium Rain.aif",
    "author": "timgormly",
@@ -49,10 +73,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "rain_moderate_004_708557",
+   "id": "rain_moderate_006_708557",
    "class": "rain_moderate",
    "source_id": 708557,
-   "file": "blocks/rain_moderate_004_708557.ogg",
+   "file": "blocks/rain_moderate_006_708557.ogg",
    "seconds": 9.5,
    "title": "Moderate_rain_ext",
    "author": "AMCINGSOUNDS",
@@ -61,10 +85,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "rain_moderate_005_573336",
+   "id": "rain_moderate_007_573336",
    "class": "rain_moderate",
    "source_id": 573336,
-   "file": "blocks/rain_moderate_005_573336.ogg",
+   "file": "blocks/rain_moderate_007_573336.ogg",
    "seconds": 15.0,
    "title": "Medium Rain Ambience_edlarez_vsnr.wav",
    "author": "visionear",
@@ -73,10 +97,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "rain_heavy_006_818934",
+   "id": "rain_heavy_008_818934",
    "class": "rain_heavy",
    "source_id": 818934,
-   "file": "blocks/rain_heavy_006_818934.ogg",
+   "file": "blocks/rain_heavy_008_818934.ogg",
    "seconds": 15.0,
    "title": "woodlands downpour Ekelund part 3",
    "author": "forestfjord",
@@ -85,10 +109,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "rain_heavy_007_243586",
+   "id": "rain_heavy_009_243586",
    "class": "rain_heavy",
    "source_id": 243586,
-   "file": "blocks/rain_heavy_007_243586.ogg",
+   "file": "blocks/rain_heavy_009_243586.ogg",
    "seconds": 15.0,
    "title": "heavy-rain_outside_2014.wav",
    "author": "jalbrecht_d",
@@ -97,10 +121,10 @@
    "checked": "2026-11-26"
   },
   {
-   "id": "rain_heavy_008_651189",
+   "id": "rain_heavy_010_651189",
    "class": "rain_heavy",
    "source_id": 651189,
-   "file": "blocks/rain_heavy_008_651189.ogg",
+   "file": "blocks/rain_heavy_010_651189.ogg",
    "seconds": 9.5,
    "title": "Heavy Rain Regen Starkregen Raining Atmosphere Ambient Forest Wald",
    "author": "Borgory",
@@ -109,10 +133,10 @@
    "checked": "2026-11-26"
   },
   {
-   "id": "roof_light_009_448125",
+   "id": "roof_light_011_448125",
    "class": "roof_light",
    "source_id": 448125,
-   "file": "blocks/roof_light_009_448125.ogg",
+   "file": "blocks/roof_light_011_448125.ogg",
    "seconds": 14.5,
    "title": "Inside a car in the rain",
    "author": "derjuli",
@@ -121,10 +145,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "roof_light_010_838007",
+   "id": "roof_light_012_838007",
    "class": "roof_light",
    "source_id": 838007,
-   "file": "blocks/roof_light_010_838007.ogg",
+   "file": "blocks/roof_light_012_838007.ogg",
    "seconds": 15.0,
    "title": "rain variations on car 1",
    "author": "bruno.auzet",
@@ -133,10 +157,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "roof_light_011_838008",
+   "id": "roof_light_013_838008",
    "class": "roof_light",
    "source_id": 838008,
-   "file": "blocks/roof_light_011_838008.ogg",
+   "file": "blocks/roof_light_013_838008.ogg",
    "seconds": 9.5,
    "title": "rain variations on car 2",
    "author": "bruno.auzet",
@@ -145,10 +169,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "roof_012_838007",
+   "id": "roof_014_838007",
    "class": "roof",
    "source_id": 838007,
-   "file": "blocks/roof_012_838007.ogg",
+   "file": "blocks/roof_014_838007.ogg",
    "seconds": 15.0,
    "title": "rain variations on car 1",
    "author": "bruno.auzet",
@@ -157,10 +181,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "roof_013_838008",
+   "id": "roof_015_838008",
    "class": "roof",
    "source_id": 838008,
-   "file": "blocks/roof_013_838008.ogg",
+   "file": "blocks/roof_015_838008.ogg",
    "seconds": 15.0,
    "title": "rain variations on car 2",
    "author": "bruno.auzet",
@@ -169,10 +193,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "roof_014_672703",
+   "id": "roof_016_672703",
    "class": "roof",
    "source_id": 672703,
-   "file": "blocks/roof_014_672703.ogg",
+   "file": "blocks/roof_016_672703.ogg",
    "seconds": 15.0,
    "title": "Rain on the roof of car inside 5",
    "author": "Cinetony",
@@ -181,10 +205,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "roof_heavy_015_448125",
+   "id": "roof_heavy_017_448125",
    "class": "roof_heavy",
    "source_id": 448125,
-   "file": "blocks/roof_heavy_015_448125.ogg",
+   "file": "blocks/roof_heavy_017_448125.ogg",
    "seconds": 9.5,
    "title": "Inside a car in the rain",
    "author": "derjuli",
@@ -193,10 +217,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "roof_heavy_016_838007",
+   "id": "roof_heavy_018_838007",
    "class": "roof_heavy",
    "source_id": 838007,
-   "file": "blocks/roof_heavy_016_838007.ogg",
+   "file": "blocks/roof_heavy_018_838007.ogg",
    "seconds": 15.0,
    "title": "rain variations on car 1",
    "author": "bruno.auzet",
@@ -205,10 +229,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "roof_heavy_017_838008",
+   "id": "roof_heavy_019_838008",
    "class": "roof_heavy",
    "source_id": 838008,
-   "file": "blocks/roof_heavy_017_838008.ogg",
+   "file": "blocks/roof_heavy_019_838008.ogg",
    "seconds": 15.0,
    "title": "rain variations on car 2",
    "author": "bruno.auzet",
@@ -217,10 +241,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "wind_light_018_524203",
+   "id": "wind_light_020_524203",
    "class": "wind_light",
    "source_id": 524203,
-   "file": "blocks/wind_light_018_524203.ogg",
+   "file": "blocks/wind_light_020_524203.ogg",
    "seconds": 15.0,
    "title": "Forest Wind 04.wav",
    "author": "FilmmakersManual",
@@ -229,10 +253,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "wind_light_019_139337",
+   "id": "wind_light_021_139337",
    "class": "wind_light",
    "source_id": 139337,
-   "file": "blocks/wind_light_019_139337.ogg",
+   "file": "blocks/wind_light_021_139337.ogg",
    "seconds": 15.0,
    "title": "Wind is blowing in the grass of a patagonian plain. Wind is blowing in the trees in background. (Tierra del fuego, Argentina).",
    "author": "felix.blume",
@@ -241,10 +265,10 @@
    "checked": "2026-11-26"
   },
   {
-   "id": "wind_light_020_454360",
+   "id": "wind_light_022_454360",
    "class": "wind_light",
    "source_id": 454360,
-   "file": "blocks/wind_light_020_454360.ogg",
+   "file": "blocks/wind_light_022_454360.ogg",
    "seconds": 15.0,
    "title": "wind light calm soft breeze deep big gusty.flac",
    "author": "kyles",
@@ -253,10 +277,10 @@
    "checked": "2026-11-26"
   },
   {
-   "id": "wind_moderate_021_574549",
+   "id": "wind_moderate_023_574549",
    "class": "wind_moderate",
    "source_id": 574549,
-   "file": "blocks/wind_moderate_021_574549.ogg",
+   "file": "blocks/wind_moderate_023_574549.ogg",
    "seconds": 15.0,
    "title": "Wind forest slow shifts fairly strong trees bright Irving Nature Park 190929.flac",
    "author": "TRP",
@@ -265,10 +289,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "wind_moderate_022_875243",
+   "id": "wind_moderate_024_875243",
    "class": "wind_moderate",
    "source_id": 875243,
-   "file": "blocks/wind_moderate_022_875243.ogg",
+   "file": "blocks/wind_moderate_024_875243.ogg",
    "seconds": 15.0,
    "title": "the sound of the forest gusts of wind",
    "author": "rozhkovkirill",
@@ -277,10 +301,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "wind_moderate_023_553733",
+   "id": "wind_moderate_025_553733",
    "class": "wind_moderate",
    "source_id": 553733,
-   "file": "blocks/wind_moderate_023_553733.ogg",
+   "file": "blocks/wind_moderate_025_553733.ogg",
    "seconds": 15.0,
    "title": "wind open field",
    "author": "Globofonia",
@@ -289,10 +313,10 @@
    "checked": "2026-11-26"
   },
   {
-   "id": "wind_strong_024_784275",
+   "id": "wind_strong_026_784275",
    "class": "wind_strong",
    "source_id": 784275,
-   "file": "blocks/wind_strong_024_784275.ogg",
+   "file": "blocks/wind_strong_026_784275.ogg",
    "seconds": 15.0,
    "title": "Very strong gusts of wind New Years Day England.",
    "author": "mudflea2",
@@ -301,10 +325,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "wind_strong_025_215853",
+   "id": "wind_strong_027_215853",
    "class": "wind_strong",
    "source_id": 215853,
-   "file": "blocks/wind_strong_025_215853.ogg",
+   "file": "blocks/wind_strong_027_215853.ogg",
    "seconds": 15.0,
    "title": "Wind blowing in dry grass, in a field in Texas, USA.",
    "author": "felix.blume",
@@ -313,10 +337,10 @@
    "checked": "2026-11-26"
   },
   {
-   "id": "wind_strong_026_454370",
+   "id": "wind_strong_028_454370",
    "class": "wind_strong",
    "source_id": 454370,
-   "file": "blocks/wind_strong_026_454370.ogg",
+   "file": "blocks/wind_strong_028_454370.ogg",
    "seconds": 15.0,
    "title": "wind strong gusty storm blow through crispy fall trees in alley2 more center.flac",
    "author": "kyles",
@@ -325,10 +349,10 @@
    "checked": "2026-11-26"
   },
   {
-   "id": "rain_under_027_567564",
+   "id": "rain_under_029_567564",
    "class": "rain_under",
    "source_id": 567564,
-   "file": "blocks/rain_under_027_567564.ogg",
+   "file": "blocks/rain_under_029_567564.ogg",
    "seconds": 15.0,
    "title": "Medium Rain Under Porch",
    "author": "e9118586020",
@@ -337,10 +361,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "rain_under_028_849799",
+   "id": "rain_under_030_849799",
    "class": "rain_under",
    "source_id": 849799,
-   "file": "blocks/rain_under_028_849799.ogg",
+   "file": "blocks/rain_under_030_849799.ogg",
    "seconds": 15.0,
    "title": "Rain falling - Awning",
    "author": "prtsfr",
@@ -349,10 +373,10 @@
    "checked": "2026-11-25"
   },
   {
-   "id": "rain_under_029_467173",
+   "id": "rain_under_031_467173",
    "class": "rain_under",
    "source_id": 467173,
-   "file": "blocks/rain_under_029_467173.ogg",
+   "file": "blocks/rain_under_031_467173.ogg",
    "seconds": 15.0,
    "title": "FIELD_LA Rain_Park_Under stone bridge_04.wav",
    "author": "WilliamJMeyer",

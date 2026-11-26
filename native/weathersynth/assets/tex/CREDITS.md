@@ -6,6 +6,7 @@ Every block comes from a field recording released under Creative Commons Zero (C
 |---|---|---|---|---|---|
 | [139337](https://freesound.org/s/139337/) | Wind is blowing in the grass of a patagonian plain. Wind is blowing in the trees in background. (Tierra del fuego, Argentina). | felix.blume | CC0 1.0 | 2026-11-26 | 1 (15 s: wind_light) |
 | [157433](https://freesound.org/s/157433/) | Medium Rain.aif | timgormly | CC0 1.0 | 2026-11-25 | 1 (15 s: rain_moderate) |
+| [162572](https://freesound.org/s/162572/) | Mild rain | remcovs | CC0 1.0 | 2026-11-26 | 1 (15 s: rain_light) |
 | [192441](https://freesound.org/s/192441/) | Light rain to drizzle | CraigSnedeker | CC0 1.0 | 2026-11-25 | 1 (10 s: rain_light) |
 | [215853](https://freesound.org/s/215853/) | Wind blowing in dry grass, in a field in Texas, USA. | felix.blume | CC0 1.0 | 2026-11-26 | 1 (15 s: wind_strong) |
 | [243586](https://freesound.org/s/243586/) | heavy-rain_outside_2014.wav | jalbrecht_d | CC0 1.0 | 2026-11-26 | 1 (15 s: rain_heavy) |
@@ -20,6 +21,7 @@ Every block comes from a field recording released under Creative Commons Zero (C
 | [573336](https://freesound.org/s/573336/) | Medium Rain Ambience_edlarez_vsnr.wav | visionear | CC0 1.0 | 2026-11-25 | 1 (15 s: rain_moderate) |
 | [574549](https://freesound.org/s/574549/) | Wind forest slow shifts fairly strong trees bright Irving Nature Park 190929.flac | TRP | CC0 1.0 | 2026-11-25 | 1 (15 s: wind_moderate) |
 | [607070](https://freesound.org/s/607070/) | Light rain | morsine | CC0 1.0 | 2026-11-25 | 1 (15 s: rain_light) |
+| [640655](https://freesound.org/s/640655/) | Soft rain.WAV | barkenov | CC0 1.0 | 2026-11-26 | 1 (15 s: rain_light) |
 | [651189](https://freesound.org/s/651189/) | Heavy Rain Regen Starkregen Raining Atmosphere Ambient Forest Wald | Borgory | CC0 1.0 | 2026-11-26 | 1 (10 s: rain_heavy) |
 | [672703](https://freesound.org/s/672703/) | Rain on the roof of car inside 5 | Cinetony | CC0 1.0 | 2026-11-25 | 1 (15 s: roof) |
 | [708557](https://freesound.org/s/708557/) | Moderate_rain_ext | AMCINGSOUNDS | CC0 1.0 | 2026-11-25 | 1 (10 s: rain_moderate) |

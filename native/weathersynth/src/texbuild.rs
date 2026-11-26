@@ -954,7 +954,9 @@ pub fn run_live(args: &[String]) -> Result<(), String> {
                 let Some(&k) = v.get(round) else { continue };
                 any = true;
                 let s = &bank.blocks[k].samples;
-                let want = ((maxb.min(per - total)) * SR) as usize;
+                // (light rain: room for every take, its sparse close-drop ones too: the user's light B)
+                let per_c = if c == "rain_light" { per.max(75.0) } else { per };
+                let want = ((maxb.min(per_c - total)) * SR) as usize;
                 if want < (14.0 * SR) as usize {
                     break 'outer;
                 }
