@@ -265,10 +265,11 @@ function M.playVolume(g, muffled)
   return math.max(0, math.min(1, v))
 end
 M.MUFFLED = 0.45          -- the thunder's volume in a tunnel or under a deck
--- the SFXDescription the files play through. 'AudioGui' is the UI channel: it follows the UI volume slider and the
--- FMOD bank's "UI Ducking" snapshot. Kept until an in-game probe names a description on the Environment channel
--- (the probe: ~/bnge-tests/weather/live/probe_thunder_channel.lua).
-M.THUNDER_DESC = 'AudioGui'
+-- the SFXDescription the files play through: 'AudioEnvironment', whose source group is AudioChannelEnvironment, so
+-- thunder follows the game's Environment volume slider like the stock weather. (In-game probes on Windows and the
+-- Deck, 2026-11-25: 'AudioGui' and 'AudioDefault3D' play on AudioChannelGui, a channel no slider sets, so they
+-- followed only Master; AudioAmbience / AudioEffect / AudioDefault do not exist.)
+M.THUNDER_DESC = 'AudioEnvironment'
 -- the flash's light: as bright at the camera as a strike of LIGHT_LM lumens d m away (~50 lux at 3 km: a night lit up,
 -- lost in daylight as a real flash is), but put LIGHT_NEAR_M from the camera towards the strike and LIGHT_UP_M up, its
 -- lumens scaled by the distance squared (a light kilometres away drew nothing on the ground in the broker shots: the

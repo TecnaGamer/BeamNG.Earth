@@ -69,6 +69,19 @@ local saved = { AudioMasterVol = 0.5, AudioOtherVol = 0.5 }
 near(la.channelVolume(nil, function(k) return saved[k] end, 'AudioChannelOther', 'AudioOtherVol'), 0.25, 1e-12, 'volume: settings')
 near(la.channelVolume(function() error('no') end, nil, 'AudioChannelOther', 'AudioOtherVol'), 1, 1e-12, 'volume: neither: full')
 near(la.channelVolume(function(c) return c == 'AudioChannelMaster' and 3 or 0.5 end, nil, 'x', 'y'), 0.5, 1e-12, 'volume: clamped')
+-- the thunder's volume is the Environment slider's (storm.THUNDER_DESC 'AudioEnvironment' plays there), not the UI's
+-- and not the missing Gui channel's (whose getChannelVolume answers 1)
+do
+  local oldEngine = rawget(_G, 'Engine')
+  local vols = { AudioChannelMaster = 0.5, AudioChannelOther = 0.6, AudioChannelEnvironment = 0.4, AudioChannelUi = 0.9,
+    AudioChannelGui = 1 }
+  _G.Engine = { Audio = { getChannelVolume = function(c) return vols[c] or 1 end } }
+  local rain, thunder = la.gameVolumes()
+  _G.Engine = oldEngine
+  near(rain, 0.3, 1e-12, 'game volumes: rain = master x Other')
+  near(thunder, 0.2, 1e-12, 'game volumes: thunder = master x Environment')
+  check(require('beamngEarth/storm').THUNDER_DESC == 'AudioEnvironment', 'the thunder files play through AudioEnvironment')
+end
 
 -- the runtime
 local sent = {}

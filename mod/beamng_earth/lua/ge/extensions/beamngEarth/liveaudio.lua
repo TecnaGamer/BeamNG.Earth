@@ -193,15 +193,17 @@ function M.ownFactor(now)
   return 1 - fade
 end
 
--- The game's volumes: rain on the Other channel, thunder on the UI channel (the channels the mod's own play on: the
--- thunder files through 'AudioGui', the UI channel; core/settings/audio.lua: AudioChannelUi, pref AudioUiVol).
+-- The game's volumes: rain on the Other channel, thunder on the Environment channel (the channels the mod's own play
+-- on: the thunder files through storm.THUNDER_DESC 'AudioEnvironment'; core/settings/audio.lua:
+-- AudioChannelEnvironment, pref AudioEnvironmentVol).
+M.THUNDER_CHANNEL = { 'AudioChannelEnvironment', 'AudioEnvironmentVol' }
 function M.gameVolumes()
   local au = Engine and Engine.Audio
   local getChannel = au and au.getChannelVolume and function(c) return au.getChannelVolume(c, false) end or nil
   local s = rawget(_G, 'settings')
   local getSetting = s and s.getValue and function(k) return s.getValue(k) end or nil
   return M.channelVolume(getChannel, getSetting, 'AudioChannelOther', 'AudioOtherVol'),
-    M.channelVolume(getChannel, getSetting, 'AudioChannelUi', 'AudioUiVol')
+    M.channelVolume(getChannel, getSetting, M.THUNDER_CHANNEL[1], M.THUNDER_CHANNEL[2])
 end
 
 function M.paused()

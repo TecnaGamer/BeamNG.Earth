@@ -179,7 +179,7 @@ clock = first.t + th1.delay + 0.05
 storm.update(0.016, 0, { groundZ = 0 })
 local heard = false
 for i = nBefore + 1, #played do
-  if played[i][2]:find('bne_thunder_' .. th1.kind) and played[i][1] == 'AudioGui' then heard = true end
+  if played[i][2]:find('bne_thunder_' .. th1.kind) and played[i][1] == 'AudioEnvironment' then heard = true end
 end
 check(heard, 'its thunder (' .. th1.kind .. ') after ' .. string.format('%.1f', th1.delay) .. ' s')
 -- the storm gone, the queue empty: the module says it is done
