@@ -35,7 +35,7 @@ pub fn seed_words(entropy: &[u64]) -> Vec<u32> {
 /// SeedSequence's pool (pool size 4) for the entropy words.
 pub fn seed_pool(ent: &[u32]) -> [u32; 4] {
     let mut h = INIT_A;
-    let mut hm = |v: u32, h: &mut u32| -> u32 {
+    let hm = |v: u32, h: &mut u32| -> u32 {
         let mut v = v ^ *h;
         *h = h.wrapping_mul(MULT_A);
         v = v.wrapping_mul(*h);

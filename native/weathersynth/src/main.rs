@@ -27,6 +27,12 @@ mod m;
 #[allow(dead_code)]
 mod nprng;
 #[allow(dead_code)]
+mod npx;
+#[allow(dead_code)]
+mod methodb;
+#[allow(dead_code)]
+mod methodb_data;
+#[allow(dead_code)]
 mod npzig;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod outbus;
@@ -294,6 +300,44 @@ fn run() -> Result<(), String> {
             }
         }
         "live-serve" => serve::run(&args)?,
+        "methodb-check" => {
+            // the Rust port of method B against the Python reference's stages (dump_b_stages.py)
+            let dir = arg(&args, "--ref").ok_or("--ref")?;
+            let cls = arg(&args, "--class").ok_or("--class")?;
+            let seed: u64 = arg(&args, "--seed").ok_or("--seed")?.parse().map_err(|_| "bad --seed")?;
+            let class = match cls.as_str() {
+                "strike" => methodb::BClass::Strike,
+                "close" => methodb::BClass::Close,
+                "mid" => methodb::BClass::Mid,
+                "far" => methodb::BClass::Far,
+                _ => return Err("bad --class".into()),
+            };
+            let dist = methodb::final_dist(class, seed);
+            let t0 = std::time::Instant::now();
+            let (_y, st) = methodb::render(seed, dist, &methodb::settings(class), true);
+            println!("{cls} seed {seed} dist {dist:.6} m: render {:.2} s", t0.elapsed().as_secs_f64());
+            let load = |name: &str| -> Option<Vec<f64>> {
+                let b = std::fs::read(format!("{dir}/{cls}_{seed}_{name}.f64")).ok()?;
+                Some(b.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect())
+            };
+            for (name, mine) in [("dry", &st.dry), ("micro", &st.micro), ("eq", &st.eq), ("comp", &st.comp),
+                ("echoes", &st.echoes), ("hp", &st.hp), ("level", &st.level), ("fin", &st.fin)] {
+                let Some(r) = load(name) else { println!("  {name:7} (no reference)"); continue };
+                let n = r.len().min(mine.len());
+                let mut md = 0.0f64;
+                let mut at = 0;
+                for i in 0..n {
+                    let d = (r[i] - mine[i]).abs();
+                    if d > md {
+                        md = d;
+                        at = i;
+                    }
+                }
+                let pk = r.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+                println!("  {name:7} len {} / {}  max |diff| {md:.3e} at {at} ({:.3} s)  ref peak {pk:.3e}  rel {:.3e}",
+                    r.len(), mine.len(), at as f64 / 44100.0, md / pk.max(1e-300));
+            }
+        }
         "grainbank-pack" => {
             let man = arg(&args, "--manifest").unwrap_or_else(|| "assets/grains/manifest.json".into());
             let out = arg(&args, "--out").unwrap_or_else(|| format!("assets/{}", grainbank::BANK_FILE));

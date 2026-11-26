@@ -47,6 +47,10 @@ pub fn undb(d: f64) -> f64 {
 
 pub const LN_10: f64 = std::f64::consts::LN_10;
 
+pub fn log2(x: f64) -> f64 {
+    libm::log2(x)
+}
+
 pub fn tanh(x: f64) -> f64 {
     libm::tanh(x)
 }
