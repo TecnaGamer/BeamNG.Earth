@@ -80,6 +80,7 @@ mod underpass;
 mod coarseease;
 mod junctionsnap;
 mod landings;
+mod embank;
 mod tunnelcover;
 mod tunnelchain;
 mod tunnelrec;
@@ -7848,6 +7849,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
     // 643 (641 wet grip, 642 tunnels): roadsys_kept_ends / roadsys_approach_run / roadsys_ramp_dz (M5 round 8: a short
     // chain keeps its profile's deck end where its approach ground lies in a hollow; the approach is ramped to it)
-    m.add("VERSION", 643)?;
+    // 644: embank_lift (embank.rs, M5 round 8: a mapped road's embankment the surface model's ground filter cut)
+    m.add_function(wrap_pyfunction!(embank::embank_lift, m)?)?;
+    m.add("VERSION", 644)?;
     Ok(())
 }

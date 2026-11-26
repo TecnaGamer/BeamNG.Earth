@@ -751,6 +751,22 @@ ABUT_MAX_M = 8.0            # m filled at most
 # bridge near Rostock is 10 m deep and wider than the mapped bridge: filled 8 m at most, both ends stood 2 m low and
 # the 16-19 m decks joined them at 13-20 % (5.35 g); the A7 over the B 27 at Thulba ran 1.2 m into its hole 4 m short of
 # its deck (a 9 % deck, 1.5 g). BNE_FAST_GAP=on.
+# (M5 round 8, BNE_ROADSYS=surface 13, earthfast 644) A road's embankment in the surface model's ground: the plans of a
+# road of these classes read their ground plus dsmground's cut where that cut is the road's own (_Planner._embank_obs):
+EMBANK_CLASSES = ("motorway", "trunk", "primary", "secondary", "tertiary")
+EMBANK_KERNEL = 644
+EMBANK_MATCH_M = 0.5        # m: the sample's ground within this of the filtered z12 (the filter's ground, no lidar)
+EMBANK_CUT_MIN = 0.5        # m: a cut at least this ...
+EMBANK_MAX_M = 10.0         # ... and at most this (deeper: a tree stand's or a town's, no embankment)
+EMBANK_SIDE_M = 35.0        # m either side the raw model's cross-section is read ...
+EMBANK_CREST_MIN = 1.0      # ... its centre over its sides' mean by this (nothing to the whole cut at EMBANK_CREST_FULL)
+EMBANK_CREST_FULL = 2.0
+EMBANK_BUILDING_M = 30.0    # m: no building wall within this of the sample (a town's blocks, never an embankment)
+EMBANK_MIN_LIFT = 0.05
+_EMBANK_DIRS = np.array([[1.0, 0.0], [0.7071067811865476, 0.7071067811865476], [0.0, 1.0],
+                         [-0.7071067811865476, 0.7071067811865476], [-1.0, 0.0],
+                         [-0.7071067811865476, -0.7071067811865476], [0.0, -1.0],
+                         [0.7071067811865476, -0.7071067811865476]])
 FAST_GAP = os.environ.get("BNE_FAST_GAP", "off") == "on"
 FAST_GAP_CLASSES = ("motorway", "trunk")
 FAST_GAP_ON_M = 3.0         # m off a landing's approach line a sample of no known road is on it at most ...
@@ -3536,9 +3552,103 @@ class _Planner:
         return out
 
     def _obs(self, key, lonlat=None):
-        """plan_roads' obs: the measured heights of ground roads (roadz.PROVIDER, level 0) where cell key's (or the
-        part's) elevation is only the coarse global model (dem.coarse_at): on lidar terrain the DTM is the better
-        height (decimetres; BD TOPO's Z is 1.5-2.5 m), so None there, as when roadz is off."""
+        """plan_roads' obs: the measured heights of ground roads (_obs_measured) and, under BNE_ROADSYS=surface, where
+        none is measured, a road's embankment in the surface model's ground (_embank_obs)."""
+        base = self._obs_measured(key, lonlat)
+        emb = self._embank_obs()
+        if emb is None:
+            return base
+        if base is None:
+            return emb
+
+        def both(xy, spec):
+            o, e = base(xy, spec), emb(xy, spec)
+            if o is None or e is None:
+                return e if o is None else o
+            return np.where(np.isfinite(o), o, e)
+        if hasattr(base, "prepare"):
+            both.prepare = base.prepare
+        return both
+
+    def _embank_obs(self):
+        """(M5 round 8, BNE_ROADSYS=surface 13, earthfast 644) plan_roads' obs of a road's embankment in the surface model's
+        ground, or None (off; no DEM with the ground filter and its raw z12; no buildings to tell an embankment from
+        a town): at each sample of a road of EMBANK_CLASSES, its ground plus the filter's cut there where that cut is
+        the road's own (earthfast embank_lift: the sample's ground the filtered z12's within EMBANK_MATCH_M, the raw
+        model's bulge at the road over its sides' mean EMBANK_SIDE_M off, no building within EMBANK_BUILDING_M, the cut over
+        EMBANK_CUT_MIN; at most EMBANK_MAX_M), NaN elsewhere (the plans' own). dsmground's opening took the trunk's
+        embankment at 0bff with the trees round it, 7-9 m (the raw model and the street photos: the road high and
+        gentle on its embankment); the plans graded the road into that trench and its bridge into it at 18-20 %. Only
+        the roads' plans read it: the terrain away from them is the filter's as before, the terrain beside them follows
+        the plans (an embankment's slopes)."""
+        import roadsys
+        if not roadsys.SURFACE:
+            return None
+        dem = getattr(self, "dem", None) or getattr(self.md, "dem", None)
+        if dem is None or not getattr(dem, "ground_filter", False) or not hasattr(dem, "sample_raw12"):
+            return None
+        widths = getattr(getattr(self, "widths", None), "__self__", getattr(self, "widths", None))
+        if widths is None or not hasattr(widths, "_walls"):
+            return None
+        import fast
+        import revisit
+        frame, elev = self.frame, self.elev
+
+        def emb(xy, spec):
+            if spec is None or getattr(spec, "cls", None) not in EMBANK_CLASSES or spec.kind not in roadsmod.BUILT:
+                return None
+            xy = np.asarray(xy, np.float64)[:, :2]
+            if len(xy) < 2:
+                return None
+            la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+            la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+            try:
+                fine = np.asarray(elev(la, lo), np.float64)
+                g12 = np.asarray(dem.sample(la, lo, 12), np.float64)
+                raw = np.asarray(dem.sample_raw12(la, lo), np.float64)
+            except Exception as e:      # (the plans' own ground rather than no grading: not kept)
+                _caught(e)
+                revisit.fault()
+                return None
+            cand = np.isfinite(raw) & (raw - g12 > EMBANK_CUT_MIN) & (np.abs(fine - g12) <= EMBANK_MATCH_M)
+            if not cand.any():
+                return None
+            idx = np.flatnonzero(cand)
+            nrm = _normals(xy)[idx]
+            side = np.concatenate([xy[idx] + nrm * EMBANK_SIDE_M, xy[idx] - nrm * EMBANK_SIDE_M])
+            sla, slo, _ = frame.enu_to_geodetic(side[:, 0], side[:, 1], 0.0)
+            short = [False]
+            try:
+                rs = np.asarray(dem.sample_raw12(np.asarray(sla, np.float64), np.asarray(slo, np.float64)), np.float64)
+                k = len(idx)
+                org = np.repeat(xy[idx], len(_EMBANK_DIRS), axis=0)
+                dirs = np.tile(_EMBANK_DIRS, (k, 1))
+                hit = self._batter_rays(widths, org, dirs, EMBANK_BUILDING_M, short)
+            except Exception as e:
+                _caught(e)
+                revisit.fault()
+                return None
+            if short[0]:
+                revisit.fault(here=True)
+            near = np.isfinite(hit).reshape(k, len(_EMBANK_DIRS)).any(axis=1)
+            fast.require(EMBANK_KERNEL, "embank_lift")
+            lift = np.asarray(fast._ef.embank_lift(np.ascontiguousarray(fine[idx]), np.ascontiguousarray(g12[idx]),
+                                                   np.ascontiguousarray(raw[idx]), np.ascontiguousarray(rs[:k]),
+                                                   np.ascontiguousarray(rs[k:]), np.ascontiguousarray(near, bool),
+                                                   (EMBANK_MATCH_M, EMBANK_CUT_MIN, EMBANK_CREST_MIN, EMBANK_CREST_FULL,
+                                                    EMBANK_MAX_M)), np.float64)
+            out = np.full(len(xy), np.nan)
+            on = lift > EMBANK_MIN_LIFT
+            if not on.any():
+                return None
+            out[idx[on]] = fine[idx[on]] + lift[on]
+            return out
+        return emb
+
+    def _obs_measured(self, key, lonlat=None):
+        """The measured heights of ground roads (roadz.PROVIDER, level 0) where cell key's (or the part's) elevation
+        is only the coarse global model (dem.coarse_at): on lidar terrain the DTM is the better height (decimetres; BD
+        TOPO's Z is 1.5-2.5 m), so None there, as when roadz is off."""
         import roadz
         prov = roadz.PROVIDER
         if prov is None or not prov.enabled:

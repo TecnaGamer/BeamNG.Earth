@@ -157,6 +157,7 @@ BIAS_BLOCK = 16 * 1024
 BIAS_STEP_M = 64.0          # m between the lidar rows sampled (a point every half of it along them)
 BIAS_COARSE_M = 4.0         # m: the older tiled flights' overviews are good enough for a level
 GROUND_MARGIN = 96          # px of the neighbouring z12 tiles the ground filter sees around a tile
+RAW12_KEPT = 16             # raw z12 tiles sample_raw12 keeps decoded (1 MB each)
 MAX_LAT = 85.0511287798     # Web Mercator limit
 MAX_TILES_PER_SAMPLE = 1024
 SPARSE_MIN_TILES = 16       # a sample's box of more tiles than this with points in fewer than 1 / SPARSE_RATIO of them
@@ -1551,6 +1552,36 @@ class Dem:
         """(dem_sample's fetch) the float32 heights of tiles keys (a list of (z, x, y)), in their order."""
         got = self.tiles(keys, progress)
         return [np.asarray(got[k], np.float32) for k in keys]
+
+    def sample_raw12(self, lat, lon):
+        """Bilinear heights (m) of the raw z12 surface model (Mapterhorn's z12 tiles as they are: no ground filter, no
+        deeper data) at lat/lon arrays: grading's road embankments (the filter's cut along a road, grading._embank_obs).
+        NaN where a tile can't be had. The decoded tiles kept per process (RAW12_KEPT)."""
+        lat = np.asarray(lat, dtype=np.float64)
+        lon = np.asarray(lon, dtype=np.float64)
+        shape = lat.shape
+        fast.require(484, "dem_sample")
+
+        def fetch(keys):
+            out = []
+            for _z, x, y in keys:
+                k = (int(x), int(y))
+                with self._lock:
+                    memo = self.__dict__.setdefault("_raw12_kept", OrderedDict())
+                    a = memo.get(k)
+                    if a is not None:
+                        memo.move_to_end(k)
+                if a is None:
+                    a = self._raw12(x, y)
+                    a = np.full((TILE, TILE), np.nan, np.float32) if a is None else np.asarray(a, np.float32)
+                    with self._lock:
+                        memo[k] = a
+                        while len(memo) > RAW12_KEPT:
+                            memo.popitem(last=False)
+                out.append(a)
+            return out
+        return fast._ef.dem_sample(lat.ravel(), lon.ravel(), GLOBAL_ZOOM, TILE, polardem.FROM_LAT, MAX_TILES_PER_SAMPLE,
+                                   SPARSE_MIN_TILES, SPARSE_RATIO, SPARSE_GROUP, fetch, lambda la, lo: None).reshape(shape)
 
     def _polar_heights(self, lat, lon, zoom):
         """(dem_sample's polar) heights at points past polardem.FROM_LAT, None when the polar DEM can't be had."""

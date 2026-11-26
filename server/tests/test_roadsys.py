@@ -390,6 +390,32 @@ class KeptEndsTest(unittest.TestCase):
         self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 12)
 
 
+class EmbankTest(unittest.TestCase):
+    """(M5 round 8, surface 13) A road's embankment in the surface model's ground (grading._Planner._embank_obs,
+    earthfast embank_lift): the ground filter's cut given back where it is the road's own (0bff: filtered 68.4, raw 76.6
+    at the road on its crest, 75.0 / 73.2 at 35 m beside: 8.2 m); nothing in a trough, beside a building, over lidar,
+    for a cut deeper than EMBANK_MAX_M; and nothing at all outside BNE_ROADSYS=surface."""
+
+    def test_lift(self):
+        import grading
+        fast.require(grading.EMBANK_KERNEL, "test")
+        prm = (grading.EMBANK_MATCH_M, grading.EMBANK_CUT_MIN, grading.EMBANK_CREST_MIN, grading.EMBANK_CREST_FULL,
+               grading.EMBANK_MAX_M)
+        a = lambda *v: np.array(v, np.float64)      # noqa: E731
+        got = np.asarray(fast._ef.embank_lift(a(68.4, 68.4, 68.4, 71.0, 99.0), a(68.4, 68.4, 68.4, 68.4, 99.0),
+                                              a(76.6, 70.0, 76.6, 76.6, 125.0), a(75.0, 75.0, 75.0, 75.0, 123.0),
+                                              a(73.2, 73.2, 73.2, 73.2, 123.5), np.array([0, 0, 1, 0, 0], bool), prm))
+        self.assertAlmostEqual(got[0], 8.2)
+        self.assertEqual(got[1:].tolist(), [0.0, 0.0, 0.0, 0.0], "trough, building, lidar, a 26 m cut")
+
+    def test_off_outside_surface(self):
+        import grading
+        import roadsys
+        pl = object.__new__(grading._Planner)
+        with mock.patch.object(roadsys, "SURFACE", False):
+            self.assertIsNone(pl._embank_obs())
+
+
 class StructureDepthTest(unittest.TestCase):
     def test_some_bridges_are_thicker_than_others(self):
         """(M5) roadsys.structure_depth: a through truss's floor system whatever its span, a deck truss a tenth of its
