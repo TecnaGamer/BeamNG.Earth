@@ -416,6 +416,7 @@ local function loadBlock(tr, aid)
   end
   local ter = M.TER_SWAP and type(tr.ter) == 'string'
   if ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
+    M._rewetDrop(tr.ter)
     st.blockLoads = (st.blockLoads or 0) + 1      -- (M.groundSerial)
     roads.terrainSwapped()      -- its collision follows by itself next frame: no other rebuild meanwhile
     groundcover.afterBlockChange()
@@ -435,6 +436,51 @@ local function loadBlock(tr, aid)
     st.blockMsg = tr
   end
   return ok, err
+end
+
+-- Wet city streets at once (the 2026-11-26 playtest: "ground dosnt look super wet"): wetlook.lua's step reaches the
+-- terrain's paved layers at a block swap (terrain.applyWet: their wet maps ride on the swap's own rebind; a terrain
+-- material change of its own, updateMaterial, costs ~1 s), and a car standing in the rain saw no swap. So the block in
+-- use is swapped in again from a second name of its .ter (a copy beside it: the engine skips a terrainFile it already
+-- has; the next re-wet goes back to the first name): one swap's cost per wet step, a few per rain. Only while the car
+-- stands still (REWET_STILL_MS): a moving car's next block swap brings the step anyway within a few hundred metres, and
+-- a swap's next frame can be slow (RenderShadows). The copy goes when the next block comes (_rewetDrop).
+M.REWET_STILL_MS = 2
+M._rewetAlt = nil       -- the copy made (its path), until the next block
+function M._rewetDrop(ter)
+  local alt = M._rewetAlt
+  if alt and alt ~= ter then
+    M._rewetAlt = nil
+    pcall(function() if FS:fileExists(alt) then FS:removeFile(alt) end end)
+  end
+end
+-- Called every frame (a flag test while nothing waits); force: also while moving (probes). -> what it did.
+function M._rewetBlock(force)
+  if not terrain.wetDirty then return 'clean' end
+  local tr = st.blockMsg
+  if not (st.inOurLevel and M.TER_SWAP and type(tr) == 'table' and type(tr.ter) == 'string' and st.block
+      and tr.cx == st.block.cx and tr.cy == st.block.cy and tr.anchorId == st.anchorId) then return 'no block' end
+  if st.swap or M._loadCover() then return 'busy' end
+  if not terrain.wetPending() then terrain.wetDirty = false; return 'on step' end
+  local p = st.player
+  if not force and p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) > M.REWET_STILL_MS then return 'moving' end
+  local orig = tr.terOrig or tr.ter
+  local alt = orig:gsub('%.ter$', '') .. '_wet.ter'
+  local tb = terrain.get()
+  local want = (tb and tb:getField('terrainFile', 0) == alt) and orig or alt
+  if want == alt and not FS:fileExists(alt) then
+    local okc, res = pcall(function() return FS:copyFile(orig, alt) end)
+    if not (okc and (res == true or res == 0) and FS:fileExists(alt)) then
+      terrain.wetDirty = false          -- (no copy possible: the next block swap brings the step)
+      return 'no copy'
+    end
+  end
+  if not terrain.reswap(want) then terrain.wetDirty = false; return 'failed' end
+  if want == alt then M._rewetAlt = alt end
+  roads.terrainSwapped()      -- (its collision follows by itself next frame, the same heights)
+  groundcover.afterBlockChange()
+  terrain.wetDirty = false
+  return 'rewet'
 end
 
 -- M1h: in horizon mode LevelInfo.visibleDistance follows the server's radius (+10 %, with
@@ -3037,6 +3083,7 @@ local function onUpdate(dtReal, dtSim)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
+  if terrain.wetDirty then pcall(M._rewetBlock) end        -- (the wet streets' step: a flag test otherwise)
   t = mark('ui', t)
   local frameMs = frameMs0
   statusbar.frame(frameMs0)
