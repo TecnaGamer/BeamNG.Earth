@@ -2888,9 +2888,10 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     return res
 
 
-def _snow_lines(frame, bbox, ground_only=False):
+def _snow_lines(frame, bbox, ground_only=False, bridges=False):
     """Winter W3's lane sheet round a skin's box (snowroad.road_lines of the roads layer's cells within
-    snowroad.LINE_MARGIN_M, in the anchor's frame): every part (ground_only: the ground parts, the banks')."""
+    snowroad.LINE_MARGIN_M, in the anchor's frame): every part (ground_only: the ground parts, the banks'; bridges: the
+    bridge parts, the banks' cut lines)."""
     import mapcells
     import snowroad
     m = snowroad.LINE_MARGIN_M
@@ -2911,7 +2912,7 @@ def _snow_lines(frame, bbox, ground_only=False):
             feats.append(f)
     surf = getattr(_s, "surface", None)
     return snowroad.road_lines(feats, frame, getattr(surf, "urban", None), getattr(_s, "widths", None), ground_only,
-                               (x0 - m, y0 - m, x1 + m, y1 + m))
+                               (x0 - m, y0 - m, x1 + m, y1 + m), bridges)
 
 
 def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, wear=None):
@@ -2972,7 +2973,8 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
             "q": float(q) if q else 0.0}
     if snow is not None:
         bm = snowroad.bank_mesh(snow, _snow_lines(frame, bbox, True), snowroad.crossing_cuts(chunks), bbox,
-                                lambda xy: roadmeshmod.drawn_ground(frame, drawn, xy, q), origin)
+                                lambda xy: roadmeshmod.drawn_ground(frame, drawn, xy, q), origin,
+                                _snow_lines(frame, bbox, bridges=True))
         bm = _clip_mesh(bm, origin, quad) if bm is not None else None
         if bm is not None:
             cdae.write(os.path.join(out_dir, names["bank"]), bm[0], bm[1], uvs=bm[2], material=bm[3],

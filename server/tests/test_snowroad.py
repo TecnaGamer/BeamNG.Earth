@@ -108,6 +108,12 @@ class Remaps(unittest.TestCase):
         snow = {"q": 1, "banks": [0, 2, 0, 1, 0]}
         cuts = snowroad.crossing_cuts([{"m": "crossing_white", "w": 3.0, "n": [[-60, -6, 0], [-60, 6, 0]]}])
         self.assertEqual(cuts.shape, (1, 3))
+        # (the skin's chunks carry numpy points: the game's first W3 run failed every skin on `n or ()`)
+        cuts2 = snowroad.crossing_cuts([{"m": "bne_snow_crossing_white_p3", "w": 3.0,
+                                         "n": np.array([[-60.0, -6, 0], [-60, 6, 0]])}, {"m": "crossing_white"}])
+        self.assertTrue(np.allclose(cuts, cuts2))
+        out = snowroad.remap_chunks([{"m": "line_white", "n": np.array([[-50.0, 0, 0], [-40, 0, 0]])}], self.lines)
+        self.assertEqual(out[0]["m"], "bne_snow_line_white_p1")
         mesh = snowroad.bank_mesh(snow, self.lines, cuts, (-100, -100, 100, 100),
                                   lambda xy: np.full(len(xy), 10.0), (0.0, 0.0, 5.0))
         self.assertIsNotNone(mesh)
@@ -120,6 +126,11 @@ class Remaps(unittest.TestCase):
         self.assertFalse(near_junction.any())
         at_crossing = (np.abs(P[:, 0] + 60) < 1.0) & (P[:, 2] > 5.01)
         self.assertFalse(at_crossing.any())
+        # the drawn ground unknown west of x = 0: those triangles left out, no NaN in the mesh
+        half = snowroad.bank_mesh(snow, self.lines, cuts, (-100, -100, 100, 100),
+                                  lambda xy: np.where(np.asarray(xy)[:, 0] < 0, np.nan, 10.0), (0.0, 0.0, 5.0))
+        self.assertTrue(np.isfinite(half[0][np.unique(half[1])]).all())
+        self.assertLess(len(half[1]), len(T))
         self.assertIsNone(snowroad.bank_mesh({"q": 1, "banks": [0] * 5}, self.lines, cuts, (-100, -100, 100, 100),
                                              lambda xy: np.zeros(len(xy)), (0, 0, 0)))
 

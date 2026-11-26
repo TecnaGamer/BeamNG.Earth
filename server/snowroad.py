@@ -87,10 +87,10 @@ def wear_snow(look):
 # ---------------------------------------------------------------------------------------------------------------------
 # The lane sheet from the map's road features
 
-def road_lines(feats_list, frame, urban=None, widths=None, ground_only=True, bounds=None):
+def road_lines(feats_list, frame, urban=None, widths=None, ground_only=True, bounds=None, bridges=False):
     """The roads of feats_list as a line set in frame m: (pts (n, 2), off (L + 1,) int64, hw (L,), cls (L,) uint8,
     lanes (L,) uint8, oneway (L,) bool, fids [L]); ground_only: their ground parts (no deck, no tunnel; the banks'),
-    else every part (any point's class). bounds (x0, y0, x1, y1): lines with no point inside it grown by their half
+    else every part (any point's class); bridges: their bridge parts alone (the banks' cut lines). bounds (x0, y0, x1, y1): lines with no point inside it grown by their half
     width are left out. Each feature once (its first copy)."""
     import mapgeom
     import roads as roadsmod
@@ -107,7 +107,8 @@ def road_lines(feats_list, frame, urban=None, widths=None, ground_only=True, bou
             if sp is None or fid in seen:
                 continue
             seen.add(fid)
-            parts = roadsmod.ground_parts(feats, i) if ground_only else feats.parts(i)
+            parts = roadsmod.bridge_parts(feats, i) if bridges else roadsmod.ground_parts(feats, i) if ground_only \
+                else feats.parts(i)
             for ring in parts:
                 ring = np.asarray(ring[0] if len(ring) and np.ndim(ring[0]) == 2 else ring, np.float64)
                 if len(ring) < 2:
@@ -228,7 +229,10 @@ def crossing_cuts(chunks):
     for c in chunks:
         m = c.get("m")
         if m in CROSSING_MATERIALS or (isinstance(m, str) and m.startswith("bne_snow_crossing")):
-            a = np.asarray(c.get("n") or (), np.float64)
+            n = c.get("n")
+            if n is None:
+                continue
+            a = np.asarray(n, np.float64)
             if a.ndim != 2 or len(a) == 0:
                 continue
             ctr = a[:, :2].mean(axis=0)
@@ -237,20 +241,34 @@ def crossing_cuts(chunks):
     return np.asarray(out, np.float64).reshape(-1, 3)
 
 
-def bank_mesh(snow, lines, cuts, bbox, ground, origin):
+def bank_mesh(snow, lines, cuts, bbox, ground, origin, decks=None):
     """The snowbanks of a skin: (P relative to origin, tris, uvs, materials, tri material) or None. snow: the wear's
-    winter part; ground(xy (n, 2)) -> z of the drawn ground."""
+    winter part; ground(xy (n, 2)) -> z of the drawn ground; decks: the bridge parts' line set (road_lines bridges=True:
+    no bank at an abutment or under a deck)."""
     draw = _ef().SNOWROAD_BANK_DRAW_MM
     bins = list(snow.get("banks") or ())[:CLASSES] + [0] * CLASSES
     heights = [draw[min(max(int(b), 0), 4)] / 1000.0 for b in bins[:CLASSES]]
     if not any(heights) or len(lines[2]) == 0:
         return None
+    over = None if decks is None or len(decks[2]) == 0 else (decks[0], decks[1], decks[2])
     got = _ef().snowroad_banks(lines[0], lines[1], lines[2], lines[3], heights,
-                               np.ascontiguousarray(cuts, np.float64).reshape(-1, 3), tuple(float(v) for v in bbox))
+                               np.ascontiguousarray(cuts, np.float64).reshape(-1, 3), tuple(float(v) for v in bbox),
+                               over)
     if got is None:
         return None
     xy, h, tris, uv, tcls = got
-    z = np.asarray(ground(np.asarray(xy, np.float64)), np.float64) + np.asarray(h, np.float64)
+    g = np.asarray(ground(np.asarray(xy, np.float64)), np.float64)
+    bad = ~np.isfinite(g)
+    if bad.all():
+        return None
+    if bad.any():                   # (a point the drawn ground cannot answer: its triangles left out)
+        tris = np.asarray(tris)
+        keep = ~bad[tris].any(axis=1)
+        tris, tcls = tris[keep], np.asarray(tcls)[keep]
+        g = np.where(bad, 0.0, g)
+        if not len(tris):
+            return None
+    z = g + np.asarray(h, np.float64)
     P = np.c_[np.asarray(xy) - np.asarray(origin[:2], np.float64), z - float(origin[2])]
     mats = [bank_name(c) for c in range(CLASSES)]
     return P, np.asarray(tris, np.int64), np.asarray(uv, np.float64), mats, np.asarray(tcls, np.int64)

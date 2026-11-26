@@ -398,6 +398,13 @@ pub fn class_at(points: &[[f64; 2]], lines: &Lines, extra: f64) -> Vec<(i32, u8,
 /// with ends + 2 x inner vertices >= 3 (a road continuing in another feature is 2 ends: no junction), and its radius
 /// (the widest half width there + JUNCTION_CLEAR_M: the corner's curb return).
 pub const JUNCTION_CLEAR_M: f64 = 4.0;
+/// cos 35 degrees: two features meeting end to end bend more than this at a corner (a junction for the banks)
+pub const CORNER_COS: f64 = 0.819;
+
+fn close2(a: [f64; 2], b: [f64; 2]) -> bool {
+    (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) <= 0.25
+}
+
 pub fn junctions(lines: &Lines) -> Vec<([f64; 2], f64)> {
     // every vertex with its line, whether it is an end, the line's half width
     let mut v: Vec<([f64; 2], usize, bool)> = Vec::new();
@@ -448,7 +455,22 @@ pub fn junctions(lines: &Lines) -> Vec<([f64; 2], f64)> {
             }
         }
         let score: i32 = per.iter().map(|e| e.1).sum();
-        if per.len() >= 2 && score >= 3 {
+        // (two ends meeting at a corner, one road turning into another feature: their bodies overlap inside the bend
+        // as at a junction)
+        let corner = per.len() == 2 && score == 2 && {
+            let dir = |l: usize| -> [f64; 2] {
+                let ln = lines.line(l);
+                let (a, b) = if close2(ln[0], p) { (ln[0], ln[1.min(ln.len() - 1)]) }
+                             else { (ln[ln.len() - 1], ln[ln.len().saturating_sub(2)]) };
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let n = (dx * dx + dy * dy).sqrt().max(1e-9);
+                [dx / n, dy / n]
+            };
+            let (a, b) = (dir(per[0].0), dir(per[1].0));
+            // straight on: the two leave the point in opposite directions (dot -1); a bend of more than 35 degrees
+            a[0] * b[0] + a[1] * b[1] > -CORNER_COS
+        };
+        if per.len() >= 2 && (score >= 3 || corner) {
             let r = per.iter().map(|e| lines.hw[e.0]).fold(0.0, f64::max) + JUNCTION_CLEAR_M;
             out.push((p, r));
             for &j in &members {
@@ -497,17 +519,22 @@ pub const BANK_STEP_M: f64 = 2.5;
 pub const BANK_INSET_M: f64 = 0.15;   // the bank's inner foot this far inside the carriageway's edge (the gutter)
 pub const BANK_TAPER_M: f64 = 3.0;
 pub const BANK_CLEAR_M: f64 = 1.0;    // ... and no bank within this of another road's carriageway
+pub const BANK_END_M: f64 = 4.0;      // ... nor this near an open end
+pub const DUP_M: f64 = 1.0;           // a line within this of another everywhere is a copy of it
 pub const BANK_PROFILE: [(f64, f64); 5] = [(0.0, 0.0), (0.22, 0.62), (0.5, 1.0), (0.78, 0.62), (1.0, 0.0)];
 
 /// Snowbanks along the plowed roads' edges: lines (the roads' ground parts: none on decks or in tunnels), the drawn
-/// height (m) per class (0: none), cut discs (x, y, r: crossings, a driveway's mouth) and the junctions of the lines
-/// themselves (junctions()); each side of each line in BANK_STEP_M sections of a rounded ridge (BANK_PROFILE across
+/// height (m) per class (0: none), cut discs (x, y, r: crossings, a driveway's mouth), cut lines `over` (the bridge
+/// decks: none at a deck's abutment or under a deck overhead, BANK_CLEAR_M past its half width) and the junctions of
+/// the lines themselves (junctions(): corners too); none within BANK_END_M of an open end (a deck's or tunnel's
+/// abutment, a dead end); each side of each line in BANK_STEP_M sections of a rounded ridge (BANK_PROFILE across
 /// a base of 2.4 h, its crest varying +-15 % along), tapered over BANK_TAPER_M at every cut and open end, only inside
 /// the box (x0, y0, x1, y1).
-pub fn banks(lines: &Lines, height: &[f64; CLASSES], cuts: &[[f64; 3]], bbox: [f64; 4]) -> BankMesh {
+pub fn banks(lines: &Lines, height: &[f64; CLASSES], cuts: &[[f64; 3]], over: &Lines, bbox: [f64; 4]) -> BankMesh {
     let mut m = BankMesh { xy: Vec::new(), h: Vec::new(), tris: Vec::new(), uv: Vec::new(), tri_cls: Vec::new() };
     let junc = junctions(lines);
     let grid = SegGrid::new(lines, BANK_CLEAR_M + 4.0);
+    let over_grid = SegGrid::new(over, BANK_CLEAR_M + 4.0);
     // each line's continuations: lines with an end meeting one of its ends away from any junction (one road carried
     // on by another feature: their bodies overlap at the joint, no cut there); a junction's partners are not skipped:
     // their bodies cut the bank wherever they reach it (a side street at a slant reaches past the junction's disc)
@@ -531,9 +558,23 @@ pub fn banks(lines: &Lines, height: &[f64; CLASSES], cuts: &[[f64; 3]], bbox: [f
         }
         t
     }).collect();
+    // a line mapped twice (every point of it within DUP_M of an earlier line, and the earlier one's of it): the copy
+    // draws no bank and cuts none (else each copy's bank stood in the other's carriageway, or both were cut away)
+    let near_line = |p: [f64; 2], o: usize| -> bool {
+        grid.near(p).iter().any(|&(q, i2)| {
+            q as usize == o && seg_dist(p, lines.line(o)[i2 as usize], lines.line(o)[i2 as usize + 1]).0 <= DUP_M
+        })
+    };
+    let dup: Vec<bool> = (0..lines.count()).map(|l| {
+        let ln = lines.line(l);
+        !ln.is_empty() && (0..l).any(|o| {
+            let lo = lines.line(o);
+            !lo.is_empty() && ln.iter().all(|&p| near_line(p, o)) && lo.iter().all(|&p| near_line(p, l))
+        })
+    }).collect();
     for l in 0..lines.count() {
         let c = lines.cls[l] as usize;
-        if c >= CLASSES || !(height[c] > 0.0) {
+        if c >= CLASSES || !(height[c] > 0.0) || dup[l] {
             continue;
         }
         let hgt = height[c];
@@ -576,8 +617,12 @@ pub fn banks(lines: &Lines, height: &[f64; CLASSES], cuts: &[[f64; 3]], bbox: [f
                 *n = [-dy / len * side, dx / len * side];
             }
             let off0 = lines.hw[l] - BANK_INSET_M;
+            let total = s_pts[ns - 1].1;
             let cut: Vec<bool> = (0..ns).map(|i| {
                 let p = s_pts[i].0;
+                if (open0 && s_pts[i].1 < BANK_END_M) || (open1 && total - s_pts[i].1 < BANK_END_M) {
+                    return true;
+                }
                 let crest = [p[0] + nrm[i][0] * (off0 + 0.5 * base), p[1] + nrm[i][1] * (off0 + 0.5 * base)];
                 if crest[0] < bbox[0] - base || crest[0] > bbox[2] + base || crest[1] < bbox[1] - base
                     || crest[1] > bbox[3] + base {
@@ -596,12 +641,23 @@ pub fn banks(lines: &Lines, height: &[f64; CLASSES], cuts: &[[f64; 3]], bbox: [f
                     }
                 }
                 for &(o, i2) in grid.near(crest) {
-                    if o as usize == l || touch[l].contains(&(o as usize)) {
+                    if o as usize == l || dup[o as usize] {
                         continue;
                     }
                     let lo = lines.line(o as usize);
                     let (d, _) = seg_dist(crest, lo[i2 as usize], lo[i2 as usize + 1]);
-                    if d <= lines.hw[o as usize] + BANK_CLEAR_M + 0.5 * base {
+                    // (a continuation of the same road: only where its carriageway is wider than this one's and
+                    // reaches the bank's inner slope (a road widening at a feature joint); a same-width joint keeps
+                    // its bank running through)
+                    let clear = if touch[l].contains(&(o as usize)) { 0.3 * base } else { BANK_CLEAR_M + 0.5 * base };
+                    if d <= lines.hw[o as usize] + clear {
+                        return true;
+                    }
+                }
+                for &(o, i2) in over_grid.near(crest) {
+                    let lo = over.line(o as usize);
+                    let (d, _) = seg_dist(crest, lo[i2 as usize], lo[i2 as usize + 1]);
+                    if d <= over.hw[o as usize] + BANK_CLEAR_M + 0.5 * base {
                         return true;
                     }
                 }
@@ -741,10 +797,13 @@ pub mod py {
 
     /// The bank mesh (banks): (xy (n, 2), height (n), tris (m, 3) uint32, uv (n, 2) float32, class per tri) or None.
     #[pyfunction]
+    #[pyo3(signature = (pts, off, hw, cls, height, cuts, bbox, over=None))]
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub fn snowroad_banks<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
                                hw: PyReadonlyArray1<'py, f64>, cls: PyReadonlyArray1<'py, u8>, height: Vec<f64>,
-                               cuts: PyReadonlyArray2<'py, f64>, bbox: (f64, f64, f64, f64))
+                               cuts: PyReadonlyArray2<'py, f64>, bbox: (f64, f64, f64, f64),
+                               over: Option<(PyReadonlyArray2<'py, f64>, PyReadonlyArray1<'py, i64>,
+                                             PyReadonlyArray1<'py, f64>)>)
                                -> PyResult<Option<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>,
                                                    Bound<'py, PyArray2<u32>>, Bound<'py, PyArray2<f32>>,
                                                    Bound<'py, PyArray1<u8>>)>> {
@@ -762,7 +821,17 @@ pub mod py {
         }
         let cuts: Vec<[f64; 3]> = cv.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
         let b = [bbox.0, bbox.1, bbox.2, bbox.3];
-        let mesh = py.detach(|| banks(&Lines { pts: &lp, off: &o, hw: &hw, cls: &cls }, &h, &cuts, b));
+        let (op, oo, ohw) = match over {
+            Some((p, o2, h2)) => {
+                let pv = pts_of(&p)?;
+                let ov = off_of(&o2, pv.len())?;
+                (pv, ov, h2.as_array().to_vec())
+            }
+            None => (Vec::new(), vec![0usize], Vec::new()),
+        };
+        let ocls = vec![0u8; ohw.len()];
+        let mesh = py.detach(|| banks(&Lines { pts: &lp, off: &o, hw: &hw, cls: &cls }, &h, &cuts,
+                                      &Lines { pts: &op, off: &oo, hw: &ohw, cls: &ocls }, b));
         if mesh.tris.is_empty() {
             return Ok(None);
         }
@@ -932,7 +1001,8 @@ mod tests {
         let (pts, off, hw, cls) = cross_lines();
         let l = Lines { pts: &pts, off: &off, hw: &hw, cls: &cls };
         let h = [0.0, 0.6, 0.0, 0.3, 0.0];
-        let m = banks(&l, &h, &[[-100.0, 6.0, 4.0]], [-300.0, -300.0, 300.0, 300.0]);
+        let none = Lines { pts: &[], off: &[0], hw: &[], cls: &[] };
+        let m = banks(&l, &h, &[[-100.0, 6.0, 4.0]], &none, [-300.0, -300.0, 300.0, 300.0]);
         assert!(!m.tris.is_empty());
         assert_eq!(m.xy.len(), m.h.len());
         let crest = |x: f64, y: f64| {
@@ -949,9 +1019,29 @@ mod tests {
         // every triangle's class is a plowed class with a height
         assert!(m.tri_cls.iter().all(|&c| c == 1 || c == 3));
         // deterministic
-        let m2 = banks(&l, &h, &[[-100.0, 6.0, 4.0]], [-300.0, -300.0, 300.0, 300.0]);
+        let m2 = banks(&l, &h, &[[-100.0, 6.0, 4.0]], &none, [-300.0, -300.0, 300.0, 300.0]);
+        // a deck overhead across the P1 at x = -150: no bank under it
+        let dpts = [[-150.0, -50.0], [-150.0, 50.0]];
+        let deck = Lines { pts: &dpts, off: &[0, 2], hw: &[6.0], cls: &[0] };
+        let m3 = banks(&l, &h, &[], &deck, [-300.0, -300.0, 300.0, 300.0]);
+        let under = m3.xy.iter().zip(&m3.h).any(|(p, h)| (p[0] + 150.0).abs() < 6.5 && *h > 1e-9 && p[1] > 0.0);
+        assert!(!under);
         assert_eq!(m.xy, m2.xy);
         assert_eq!(m.tris, m2.tris);
+    }
+
+    #[test]
+    fn banks_at_a_widening_joint_and_a_copy() {
+        // a 5 m half width road continuing as a 9 m one at (0, 0); a copy of the narrow one
+        let pts = [[-100.0, 0.0], [0.0, 0.0], [0.0, 0.0], [100.0, 0.0], [-100.0, 0.3], [0.0, 0.3]];
+        let l = Lines { pts: &pts, off: &[0, 2, 4, 6], hw: &[5.0, 9.0, 5.0], cls: &[3, 3, 3] };
+        let none = Lines { pts: &[], off: &[0], hw: &[], cls: &[] };
+        let m = banks(&l, &[0.0, 0.0, 0.0, 0.6, 0.0], &[], &none, [-300.0, -300.0, 300.0, 300.0]);
+        // no bank vertex of the narrow road inside the wide road's carriageway (x > 0, |y| < 9)
+        assert!(!m.xy.iter().zip(&m.h).any(|(p, h)| *h > 0.03 && p[0] > 0.5 && p[1].abs() < 8.75));
+        // the narrow road keeps its bank away from the joint, drawn once (not twice by its copy)
+        let near = m.xy.iter().zip(&m.h).filter(|(p, h)| **h > 0.3 && (p[0] + 50.0).abs() < 1.3 && p[1] > 0.0).count();
+        assert!(near > 0 && near <= 3, "{near}"); // (one section of three crest-ish points; its copy would double it)
     }
 
     #[test]
