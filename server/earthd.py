@@ -188,6 +188,7 @@ import protocol  # noqa: E402
 msgs = protocol.ef  # noqa: E402  (made in Rust: far_tile, far_swap, far_remove, far_done, status, load_progress)
 import weather as weathermod  # noqa: E402
 import snow as snowmod  # noqa: E402
+import liveaudio as liveaudiomod  # noqa: E402
 
 PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
@@ -1503,6 +1504,8 @@ class Server:
         self.weather = weather
         # Winter W1 (snow.py): a snowmod.Service when BNE_WINTER is set (main), else None: no snowstate at all
         self.snow = None
+        # Live weather sounds (liveaudio.py): the weathersynth child, started by a 'weather_audio' with mode 'live'
+        self.liveaudio = liveaudiomod.LiveAudio()
         # Real gravity at the player (gravity.py): a gravitymod.Provider, or None (--gravity off)
         self.gravity = gravity
         # On-screen data credits (credits.py): a creditsmod.Credits, or None (--credits off; Server()'s default)
@@ -9091,6 +9094,7 @@ class Connection:
             self.closing = True
             self.route_dl_version += 1          # (a running route_download stops: no one to show its bar to)
             self.s.connections.discard(self)
+            self.s.liveaudio.on_close(self)     # (the live weather sounds stop with their game)
             if not self.s.stream_leases.detach(self):
                 self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
@@ -9629,6 +9633,8 @@ class Connection:
                 self.roads.close()
                 self.roads = road_tracker(self)
                 self.signs.refresh()
+        elif kind == "weather_audio":           # the Weather page's Weather sounds: live (weathersynth) or pre-recorded
+            self.s.liveaudio.on_message(self, msg)
         elif kind == "snow_mode":               # winter (BNE_WINTER): another snow state live (a preset; dev / tests)
             if snowcovermod.set_mode(msg.get("mode")):
                 self.s.snow_changed()
