@@ -6,8 +6,11 @@ rain and the thunder out of the default audio device. Its state lines ({"state":
 0.5 s, or {"state": "failed", "reason": ...}) come back to the mod as 'audio_state'. All synthesis, scheduling and
 fading is in Rust; this file only starts, feeds and stops the process (glue, per the Rust-first rule).
 
-- **Owner:** one child per server, owned by the connection that last asked for 'live'. 'prerecorded', the owner's
-  disconnect or the server's end stop it.
+- **Owner:** one child per server, owned by the connection that last asked for 'live'. The owner's disconnect or the
+  server's end stop it. 'prerecorded' goes to the child like any line: it falls quiet and, with no 'live' line for
+  its LINGER_S (60 s, serve.rs), ends by itself (exit 0); a switch back to Live before that keeps the same child (the
+  2026-11-26 playtest's three starts in two minutes were Live / Pre-recorded / Live switches, each a new process and
+  a new device open).
 - **Never blocking:** the event loop never writes to the child. Its lines go into a small bounded queue that a writer
   thread drains. When the queue is full the oldest line is dropped, and its thunders ride on in the next one.
 - **Missing binary:** 'off' with a reason, no retry.
@@ -34,8 +37,10 @@ SERVER = os.path.dirname(os.path.abspath(__file__))
 EXE = "weathersynth.exe" if os.name == "nt" else "weathersynth"
 # the fields passed on to the synth (protocol_table.json weather_audio; anything else is dropped)
 FIELDS = ("mode", "rainMmH", "windMs", "shelter", "tunnel", "cabin", "volume", "thunderVolume", "muted", "duck", "t",
-          "thunderSet", "thunders")
-THUNDER_FIELDS = ("id", "at", "d", "kind", "gain", "seed", "final")
+          "thunderSet", "synthRain", "thunders")
+# (play: a final the game plays from its file, the synth only ducks; dropped here before 2026-11-26, so the synth
+# played those too, a second thunder up to LATE_MAX_S after the file's)
+THUNDER_FIELDS = ("id", "at", "d", "kind", "gain", "seed", "final", "play")
 STATE_FIELDS = ("state", "reason", "latencyMs", "thunderSets", "readyThunders")
 MAX_THUNDERS = 32            # per message (a hint burst is a few)
 QUEUE_MAX = 8                # lines waiting for the child (2 s of heartbeats)
@@ -203,8 +208,9 @@ class LiveAudio:
     def on_message(self, conn, msg):
         if msg.get("mode") != "live":
             self.forget(conn)
+            if self.owner is conn and self.proc is not None:
+                self.queue.put(clean(msg))      # (quiet; it ends by itself after LINGER_S unless Live comes back)
             if self.owner is conn or self.owner is None:
-                self.stop()
                 if msg.get("mode") == "prerecorded":
                     conn.send({"type": "audio_state", "state": "off"})
             return
@@ -316,7 +322,9 @@ class LiveAudio:
                 call(self._forward, proc, conn, m)
         rc = proc.wait()
         proc.stdout.close()
-        if not getattr(proc, "stopping", False):
+        if rc == 0 and not getattr(proc, "stopping", False):
+            call(self._ended, proc)             # (its own end: no Live line for LINGER_S; a new Live starts another)
+        elif not getattr(proc, "stopping", False):
             reason = tail[0] if tail else f"weathersynth exited ({rc})"
             call(self._died, proc, conn, reason)
 
@@ -329,6 +337,11 @@ class LiveAudio:
         if m["state"] == "failed":
             return                          # (the exit that follows reports it, with its retry)
         conn.send(m)
+
+    def _ended(self, proc):
+        if proc is self.proc:
+            self.proc, self.queue, self.owner = None, None, None
+            log.info("weathersynth live-serve ended by itself (no Live line for a while)")
 
     def _died(self, proc, conn, reason):
         if proc is not self.proc:
