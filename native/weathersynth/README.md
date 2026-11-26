@@ -245,6 +245,21 @@ clean stretches ("blocks"), not events.
     0.1 per second, all at one gain, so only the rate falls as the mod crossfades them.
   - **Live:** livetex follows all of this through the new `roofNear` and `enclosed` fields. Its blocks are levelled at
     -30 LUFS each, and a segment never outgrows its blocks.
+- **After the second listen (2026-11-26):**
+  - **Drips:** the recorded drops carried their take's noise in and out.
+    - `drips_1/2/3` are now synthetic: rain.rs's drop model, with big slow drops onto a puddle (with a Minnaert
+      bubble), the road or leaves. There is exact silence between drops.
+    - `drips_rec_1/2/3` keep the recorded drops for an A/B, cleaned by `impact_grains`. The take's noise is measured
+      in the gap just before each hit and subtracted, then the grain is gated to exact zeros 40 dB under its peak.
+  - **Wind:** it sounded like rain.
+    - `patter.tsv` measures every window's 2-8 kHz share. Rain, leaf patter and hiss measure about -9 to -3 dB; wind
+      measures -14 to -30 dB.
+    - Wind windows above -12 dB are rejected.
+  - **Hail:** it sounded like rain.
+    - `hail_hit` grains are bright, isolated hits cut from the hail takes and cleaned.
+    - The hail loop schedules them as sparse hard hits (7 per second, about a third bouncing) over a little rain,
+      14 dB under the hits.
+    - `hail_texture` is the old wash, kept for comparison.
 - **The procedural live rain's level:** `live::file_match_db` brings it to the files' level. Before, it was 13.5 /
   22.3 / 24.0 dB louder at 0.7 / 5 / 35 mm/h than the loop the mod plays at the same volume, and it had no `rainVol`.
   The bus limiter crushed it.

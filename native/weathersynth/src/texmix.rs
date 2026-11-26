@@ -63,6 +63,8 @@ pub struct LoopSpec {
     /// a texture under an event loop (its bank class) and how far under the events (dB)
     pub bed: &'static str,
     pub bed_db: f64,
+    /// level by the sample peak (dBFS) instead of the loudness: hits whose transients a limiter must not touch (hail)
+    pub peak_db: f64,
 }
 
 /// The roof heard from inside the car (the user, 2026-11-26: "INSIDE the car ... a muffled version of the roof"):
@@ -79,7 +81,7 @@ pub fn cabin_filter(x: &mut [f64]) {
 }
 
 const fn tex(name: &'static str, class: &'static str, secs: f64, lufs: f64) -> LoopSpec {
-    LoopSpec { name, class, secs, lufs, lowpass: &[], cabin: false, events: 0.0, gain_of: "", synth: false, bounce: 0.0, bed: "", bed_db: 0.0 }
+    LoopSpec { name, class, secs, lufs, lowpass: &[], cabin: false, events: 0.0, gain_of: "", synth: false, bounce: 0.0, bed: "", bed_db: 0.0, peak_db: 0.0 }
 }
 
 pub const LOOPS: [LoopSpec; 23] = [
@@ -114,7 +116,8 @@ pub const LOOPS: [LoopSpec; 23] = [
     tex("wind_moderate", "wind_moderate", 60.0, -30.0),
     tex("wind_strong", "wind_strong", 60.0, -24.0),
     // hail (the user, 2026-11-26: "sounds similar to rain"): hard ice hits with gaps, some bouncing, over a little rain
-    LoopSpec { events: 7.0, bounce: 0.35, bed: "rain_moderate", bed_db: 14.0, ..tex("hail", "hail_hit", 30.0, -20.0) },
+    // (levelled by its peak, -3 dBFS: no limiter on the hits; its loudness is reported)
+    LoopSpec { events: 7.0, bounce: 0.35, bed: "rain_moderate", bed_db: 14.0, peak_db: -3.0, ..tex("hail", "hail_hit", 30.0, -20.0) },
     // (the round-4 hail, a texture of the hail takes, for comparison)
     tex("hail_texture", "hail", 30.0, -20.0),
 ];
@@ -409,6 +412,7 @@ pub fn render_loop(bank: &Bank, spec: &LoopSpec, seed: u64, fixed_gain: Option<f
     for _ in 0..4 {
         let g = match fixed_gain {
             Some(fg) => fg / total,
+            None if spec.peak_db != 0.0 => m::undb(spec.peak_db) / m::undb(loudness::true_peak_db(&x, true).max(-200.0)),
             None => m::undb(spec.lufs - loudness::integrated(&x, SR, true)),
         };
         for v in x.iter_mut() {
