@@ -610,6 +610,44 @@ class RawLinesShort(unittest.TestCase):
         self.assertEqual(f.__dict__["_level_ranges"], {}, "nothing written into the layer being loaded")
         self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
 
+    def test_mapped_ranges_never_wait_for_a_busy_layer(self):
+        # (BNE_ROADSYS=surface, roads.MAPPED_RANGES, M5 round 6: the pieces are the map's tags alone, so a layer
+        # another thread is still making its ranges for, or one marked short, is read whole and kept: the same lines,
+        # the same landings, whichever thread touched the layer first. Read short and empty, the landings of Seal
+        # Beach's and railramp's fast roads, the pins planned with them and the bridge chains' end heights on those
+        # plans differed by ~0.2 mm between two runs of one build)
+        import mapcells
+        site, key = self.layer()
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+
+        def fresh(state=None, short=None):
+            f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+            f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+            if state is not None:
+                f.__dict__["_ranges_state"] = state
+                f.__dict__["_level_ranges"] = {}
+            if short is not None:
+                f.__dict__["_ranges_short_until"] = short
+            return f
+        got = []
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), mock.patch.object(roads, "MAPPED_RANGES", lambda: True):
+            for f in (fresh(), fresh("busy"), fresh("done", 1e18)):
+                g = self.planner(f)
+                la, lo, _ = g.frame.enu_to_geodetic(np.array([5.0]), np.array([-25.0]), 0.0)
+                with revisit.scope() as b:
+                    lines = g._raw_lines(k)
+                    lands = g._fast_landings(la, lo)
+                self.assertFalse(b.n, f.__dict__.get("_ranges_state"))
+                self.assertIn(str(k), g._raw_lines_memo)
+                if f.__dict__.get("_ranges_state") == "busy":
+                    self.assertEqual(f.__dict__["_level_ranges"], {}, "nothing written into the layer being made")
+                got.append((repr([(np.round(x[0], 9).tolist(),) + tuple(x[1:]) for kind in ("bridges", "ground")
+                                  for x in lines[kind]]),
+                            repr([(np.round(r[0], 9).tolist(), r[1]) for r in lands])))
+        self.assertTrue(got[0][0].count("motorway") or got[0][0].count("trunk"), "a fast road read")
+        self.assertEqual(got[1], got[0], "busy: the same lines and landings")
+        self.assertEqual(got[2], got[0], "marked short: the same")
+
     def test_bridge_restored_with_the_clean_copy(self):
         # (Codex review of round 5: the short home copy had no bridge, the layer's kept bridge_specs say none; the clean
         # copy restores it: the retry emits and keeps its deck, its eligibility from the ranges read, not those specs)
