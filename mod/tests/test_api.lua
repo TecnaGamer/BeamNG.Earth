@@ -54,8 +54,8 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 8,
-  'version 1.8 (routeSteps, rebase from 1.7; cachedPlaces)')
+T.check(api.version() == 1 and select(2, api.version()) == 11,
+  'version 1.11 (routeSteps, rebase from 1.7; cachedPlaces 1.8; placeDetails, placePhotos 1.11)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -273,6 +273,75 @@ api.onUpdate(2)
 T.check(#late == 1 and late[1].error == 'timed out' and late[1].pending == false, 'places: timed out once')
 api.onUpdate(api.PLACES_TIMEOUT_S * 2)
 T.check(#late == 1, 'places: only once')
+
+-- 1.11: place details for rows an api.places answer gave (the app's place_details_result, server placedetails.py)
+T.check(api.has('placeDetails') and select(2, api.version()) >= 9, 'placeDetails: has()')
+local got = nil
+local row = { id = 'p1', name = 'Glebe\'s Barber Shop', category = 'personal_or_beauty_service', lat = 45.40,
+  lon = -75.69, confidence = 0.99, open = '' }
+local did = api.placeDetails({ row, { id = 'p2', lat = '45.41', lon = -75.68 } }, function(r) got = r end)
+local dq = sent[#sent]
+T.check(did and dq.type == 'place_details' and dq.id == did and #dq.places == 2 and dq.places[1].id == 'p1'
+  and dq.places[1].name == nil and dq.places[2].lat == 45.41, 'placeDetails: only id, lat, lon sent')
+api._onPlaceDetails({ id = did + 100, details = {} })
+T.check(got == nil, 'placeDetails: another request\'s answer not ours')
+api._onPlaceDetails({ id = did, details = { { id = 'p1', name = 'Glebe\'s Barber Shop',
+  address = { freeform = '738 Bank St' }, phones = { '+16134060705' } } }, missing = { 'p2' } })
+T.check(got and got.details[1].address.freeform == '738 Bank St' and got.missing[1] == 'p2' and got.error == nil,
+  'placeDetails: the answer')
+got = nil
+api._onPlaceDetails({ id = did, details = {} })
+T.check(got == nil, 'placeDetails: one answer only')
+local tooMany = {}
+for i = 1, api.DETAILS_MAX + 1 do tooMany[i] = { id = 'p' .. i, lat = 1, lon = 2 } end
+local n2, why2 = api.placeDetails(tooMany, print)
+T.check(n2 == nil and why2:find('at most'), 'placeDetails: too many refused')
+T.check(api.placeDetails({}, print) == nil, 'placeDetails: none refused')
+T.check(api.placeDetails({ row }) == nil, 'placeDetails: no callback refused')
+local n3, why3 = api.placeDetails({ { id = 'p1', lat = 1 } }, print)
+T.check(n3 == nil and why3:find('place 1'), 'placeDetails: a row without lon refused')
+connected = false
+T.check(api.placeDetails({ row }, print) == nil, 'placeDetails: not connected')
+connected = true
+local dlate = {}
+api.placeDetails({ row }, function(r) dlate[#dlate + 1] = r error('a broken callback') end)
+api.onUpdate(api.DETAILS_TIMEOUT_S - 1)
+T.check(#dlate == 0, 'placeDetails: not timed out yet')
+api.onUpdate(2)
+T.check(#dlate == 1 and dlate[1].error == 'timed out' and #dlate[1].details == 0, 'placeDetails: timed out once')
+api.onUpdate(api.DETAILS_TIMEOUT_S * 2)
+T.check(#dlate == 1, 'placeDetails: only once')
+
+-- 1.11: place photos (the app's place_photos_result, server placephotos.py)
+T.check(api.has('placePhotos'), 'placePhotos: has()')
+local pgot = nil
+local pid = api.placePhotos({ row, { id = 'p2', lat = 45.41, lon = -75.68 } }, { mapillaryToken = 'MLY|1|ab' },
+  function(r) pgot = r end)
+local pq = sent[#sent]
+T.check(pid and pq.type == 'place_photos' and pq.id == pid and #pq.places == 2 and pq.places[1].name == row.name
+  and pq.places[2].name == '' and pq.places[1].category == nil and pq.mapillaryToken == 'MLY|1|ab',
+  'placePhotos: id, lat, lon, name and the token sent')
+api._onPlacePhotos({ id = pid, photos = { { id = 'p1', file = '/temp/beamngEarth/photos/a.jpg', source = 'Mapillary',
+  by = 'u1', licence = 'CC BY-SA 4.0', fx = 0.7, zoom = 1.3 } }, missing = { 'p2' } })
+T.check(pgot and pgot.photos[1].file == '/temp/beamngEarth/photos/a.jpg' and pgot.missing[1] == 'p2' and pgot.error == nil,
+  'placePhotos: the answer')
+pgot = nil
+api._onPlacePhotos({ id = pid, photos = {} })
+T.check(pgot == nil, 'placePhotos: one answer only')
+local pid2 = api.placePhotos({ row }, function(r) pgot = r end)
+T.check(pid2 and sent[#sent].mapillaryToken == nil, 'placePhotos: opts may be left out (no token)')
+local tooManyP = {}
+for i = 1, api.PHOTOS_MAX + 1 do tooManyP[i] = { id = 'p' .. i, lat = 1, lon = 2 } end
+T.check(api.placePhotos(tooManyP, {}, print) == nil, 'placePhotos: too many refused')
+T.check(api.placePhotos({ { id = 'p1', lat = 1 } }, {}, print) == nil, 'placePhotos: a row without lon refused')
+T.check(api.placePhotos({ row }, {}) == nil, 'placePhotos: no callback refused')
+connected = false
+T.check(api.placePhotos({ row }, {}, print) == nil, 'placePhotos: not connected')
+connected = true
+local plate = {}
+api.placePhotos({ row }, {}, function(r) plate[#plate + 1] = r end)
+api.onUpdate(api.PHOTOS_TIMEOUT_S + 1)
+T.check(#plate == 1 and plate[1].error == 'timed out', 'placePhotos: timed out once')
 
 -- the posted speed limit (1.5, GitHub #1061): the link's posted field, else its speed; nil off the road
 T.check(api.has('speedLimit'), 'has speedLimit')

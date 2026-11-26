@@ -118,6 +118,8 @@ import placepreview as placepreviewmod  # noqa: E402
 import placenames as placenamesmod  # noqa: E402
 import maplabels as maplabelsmod  # noqa: E402
 import places as placesmod  # noqa: E402
+import placedetails as placedetailsmod  # noqa: E402
+import placephotos as placephotosmod  # noqa: E402
 import runtimeprofiler
 import streamleases
 import pools as poolsmod  # noqa: E402
@@ -1371,6 +1373,9 @@ class Server:
         # the modding API's places (places.py): their own thread, so an add-on asking often never holds up the status
         # bar's names or the 3D map's labels on place_pool
         self.api_pool = ThreadPoolExecutor(1, thread_name_prefix="api-places")
+        # (place photos: network lookups of seconds, kept off api_pool so places and details still answer at once)
+        self.api_photo_pool = ThreadPoolExecutor(2, thread_name_prefix="api-photos")  # (not photo_pool: the blocks' process pool)
+        self.place_photos = None            # placephotos.Photos (the first request)
         self._place_names_lock = threading.Lock()
         # (a thread per helper slot too: a far thread waits for its tile's builder, here or on a helper)
         self.cache_dir = cache_dir
@@ -8729,6 +8734,65 @@ class Connection:
         blds = placesmod.building_rows(got["buildings"], lat, lon, req["radius"]) if req["buildings"] else None
         return keyed, blds, complete and state["complete"]
 
+    def _place_lookup(self):
+        """The place details' lookup over the places archive's tiles on disk (placedetails.py), made once; None
+        without map data or when the cells come from parquet (no tiles to read the details back from)."""
+        md = self.s.mapdata
+        pmt = getattr(md, "pmtiles", None) if md is not None else None
+        if pmt is None:
+            return None
+        lk = getattr(self.s, "_place_lookup", None)
+        if lk is None or lk[0] is not pmt:
+            lk = self.s._place_lookup = (pmt, placedetailsmod.Lookup(pmt.archive("places").cached))
+        return lk[1]
+
+    async def place_details(self, msg):
+        """The modding API's place details {"id", "places": [{"id", "lat", "lon"}]} -> place_details_result {"id",
+        "details", "missing", "error"} (placedetails.py; api.placeDetails in the mod): the address, phones,
+        websites, socials, brand and category path of places an add-on got from api.places, read back from the
+        place tiles on disk. One answer, nothing fetched for it."""
+        rid = msg.get("id")
+        wanted, why = placedetailsmod.request(msg)
+        if wanted is None:
+            self.send({"type": "place_details_result", "id": rid, "details": [], "missing": [], "error": why})
+            return
+        lookup = self._place_lookup()
+        if lookup is None:
+            self.send({"type": "place_details_result", "id": rid, "details": [], "missing": [w[0] for w in wanted],
+                       "error": "no place tiles (BeamNG.Earth's roads are off, or BNGE_MAP_SOURCE=parquet)"})
+            return
+        try:
+            found, missing = await asyncio.get_running_loop().run_in_executor(self.s.api_pool, lookup.find, wanted)
+        except Exception as e:
+            log.info("place_details: %s: %s", type(e).__name__, e)
+            self.send({"type": "place_details_result", "id": rid, "details": [], "missing": [w[0] for w in wanted],
+                       "error": f"{type(e).__name__}"})
+            return
+        self.send({"type": "place_details_result", "id": rid, "details": found, "missing": missing})
+
+    async def place_photos(self, msg):
+        """The modding API's place photos {"id", "places": [{"id", "lat", "lon", "name"}], "mapillaryToken"} ->
+        place_photos_result {"id", "photos", "missing", "error"} (placephotos.py; api.placePhotos in the mod): a photo
+        of each place (Wikimedia Commons by name, else Mapillary's street-level one with the player's token) as a
+        JPEG under the session root's photos/ (the UI shows it by its /temp path), with its credit. The token is only
+        passed on, in the request header, never kept or logged."""
+        rid = msg.get("id")
+        wanted, token = placephotosmod.request(msg)
+        if wanted is None:
+            self.send({"type": "place_photos_result", "id": rid, "photos": [], "missing": [], "error": token})
+            return
+        ph = self.s.place_photos
+        if ph is None:
+            ph = self.s.place_photos = placephotosmod.Photos(self.s.net, self.s.root)
+        try:
+            found, missing = await asyncio.get_running_loop().run_in_executor(self.s.api_photo_pool, ph.find, wanted, token)
+        except Exception as e:
+            log.info("place_photos: %s: %s", type(e).__name__, e)
+            self.send({"type": "place_photos_result", "id": rid, "photos": [], "missing": [w[0] for w in wanted],
+                       "error": f"{type(e).__name__}"})
+            return
+        self.send({"type": "place_photos_result", "id": rid, "photos": found, "missing": missing})
+
     async def places(self, msg):
         """The modding API's places {"id", "lat", "lon", "radius", "categories", "limit", "cursor", "buildings",
         "minConfidence", "cachedOnly"} -> places_result {"id", "places", "buildings", "complete", "pending", "next",
@@ -9540,6 +9604,10 @@ class Connection:
             self.spawn(self.map_labels(msg))
         elif kind == "places":                  # the modding API's places round a point (places.py; api.places)
             self.spawn(self.places(msg))
+        elif kind == "place_details":           # the modding API's place details (placedetails.py; api.placeDetails)
+            self.spawn(self.place_details(msg))
+        elif kind == "place_photos":            # the modding API's place photos (placephotos.py; api.placePhotos)
+            self.spawn(self.place_photos(msg))
         elif kind == "map_focus":               # the 3D map flying: where the view will end (map3d.flyHint)
             self.on_map_focus(msg)
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)

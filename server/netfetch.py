@@ -376,6 +376,17 @@ POLICIES.update({f"{lang}.wikipedia.org": HostPolicy(rate=4.0, burst=8.0, max_co
                                                      cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0,
                                                      max_attempts=1, optional=True, gzip=True)
                  for lang in WIKIPEDIA_LANGS})
+# Place photos for add-ons (placephotos.py, api.placePhotos): one lookup per place a card shows, on demand only
+POLICIES.update({
+    "commons.wikimedia.org": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                        max_wait=3.0, timeout=8.0, max_attempts=1, optional=True),
+    "upload.wikimedia.org": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                       max_wait=3.0, timeout=10.0, max_attempts=2, optional=True),
+    "thumb.wikimedia.org": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                      max_wait=3.0, timeout=10.0, max_attempts=2, optional=True),
+    "graph.mapillary.com": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                      max_wait=3.0, timeout=8.0, max_attempts=1, optional=True),
+})
 # Any other host: the conservative WMS-type row of §5.2 (2/s, 2 at once, no prefetch).
 # Regional orthophoto services (imagery_regional.py): tile caches at a modest shared rate, exports one at a time.
 # Optional: the global imagery stands in while one is down (Lower Saxony's WMS answered a maintenance page for hours,
@@ -531,6 +542,10 @@ ROLES = {
 
 
 ROLES.update({f"{lang}.wikipedia.org": "landmarks in the map's search" for lang in WIKIPEDIA_LANGS})
+ROLES.update({"commons.wikimedia.org": "photos of places for add-ons (none meanwhile)",
+              "upload.wikimedia.org": "photos of places for add-ons (none meanwhile)",
+              "thumb.wikimedia.org": "photos of places for add-ons (none meanwhile)",
+              "graph.mapillary.com": "street photos of places for add-ons (none meanwhile)"})
 
 
 def role_of(host):

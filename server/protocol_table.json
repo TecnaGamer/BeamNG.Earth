@@ -453,6 +453,21 @@
     "cachedOnly": {"type": "bool", "doc": "only the cells on disk, a wide radius then allowed (places.py)"}
    }
   },
+  "place_details": {
+   "doc": "the modding API's place details: address, phones, websites, socials, brand, category path of up to 20 places a places answer gave (api.lua placeDetails; placedetails.py)",
+   "fields": {
+    "id": {"type": "int"},
+    "places": {"type": "list", "doc": "[{id, lat, lon}]"}
+   }
+  },
+  "place_photos": {
+   "doc": "the modding API's place photos: a photo of each of up to 8 places, Wikimedia Commons or Mapillary (api.lua placePhotos; placephotos.py)",
+   "fields": {
+    "id": {"type": "int"},
+    "places": {"type": "list", "doc": "[{id, lat, lon, name}]"},
+    "mapillaryToken": {"type": "str", "optional": true, "doc": "the player's own client token, sent to Mapillary in a header only, kept nowhere"}
+   }
+  },
   "map_focus": {
    "doc": "the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)",
    "fields": {
@@ -765,6 +780,24 @@
     "buildings": {"type": "list", "optional": true},
     "next": {"type": "str", "optional": true},
     "truncated": {"type": "bool", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "place_details_result": {
+   "doc": "the modding API's place details (placedetails.py rows; missing: the ids with no details to be had)",
+   "fields": {
+    "id": {"type": "int"},
+    "details": {"type": "list"},
+    "missing": {"type": "list"},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "place_photos_result": {
+   "doc": "the modding API's place photos (placephotos.py: a JPEG file path and its credit per place; missing: the ids with none)",
+   "fields": {
+    "id": {"type": "int"},
+    "photos": {"type": "list"},
+    "missing": {"type": "list"},
     "error": {"type": "str", "optional": true}
    }
   },

@@ -303,6 +303,15 @@ class Archive:
     def _tile_path(self, z, x, y):
         return os.path.join(self.dir, "tiles", str(z), str(x), f"{y}.mvt")
 
+    def cached(self, z, x, y):
+        """A tile's bytes as stored from memory or disk only (b"" when the archive has none), None when neither has
+        it: never the network (placedetails.py reads the tiles a cell was built from, nothing more)."""
+        k = (z, x, y)
+        b = self.r.mem_get((self.theme, k))
+        if b is None:
+            b = _read(self._tile_path(*k))
+        return b
+
     def tiles(self, zxys, kind):
         """{(z, x, y): tile bytes as stored (b"" when the archive has none)}: memory, disk, else the network, tiles
         near each other in the archive in one range."""
