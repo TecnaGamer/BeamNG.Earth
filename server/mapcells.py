@@ -133,56 +133,34 @@ def _lon_of(x, n):
     return x / n * 360.0 - 180.0
 
 
-def _exact_col(xf, lon, n):
-    x = int(math.floor(xf))
-    if xf - x < EDGE_EPS and lon < _lon_of(x, n):
-        x -= 1
-    elif x + 1 - xf < EDGE_EPS and lon >= _lon_of(x + 1, n):
-        x += 1
-    return x
-
-
-def _exact_row(yf, lat, n):
-    y = min(n - 1, max(0, int(math.floor(yf))))
-    if yf - y < EDGE_EPS and y > 0 and lat > _lat_of(y, n):
-        y -= 1
-    elif y + 1 - yf < EDGE_EPS and y < n - 1 and lat <= _lat_of(y + 1, n):
-        y += 1
-    return y
+MAPCELLS_KERNEL = 637       # earthfast mapcells_xy / mapcells_cell (native/earthfast/src/mapcells.rs)
 
 
 def cell_of(lat, lon, z=ZOOM):
     """The cell containing lat/lon (a point on an edge belongs to the cell east / south of it, exactly
-    as CellKey.bounds() puts the edge; 180 E wraps to x = 0)."""
-    if not (-MAX_LAT <= lat <= MAX_LAT):
-        raise ValueError(f"latitude {lat} is beyond the Web-Mercator limit {MAX_LAT}")
-    n = 1 << z
-    x, y = tile_xy(lat, lon, z)
-    return CellKey(z, _exact_col(float(x), float(lon), n) % n, _exact_row(float(y), float(lat), n))
+    as CellKey.bounds() puts the edge; 180 E wraps to x = 0). Native: mapcells.rs mapcells_cell."""
+    import fast
+    x, y = fast._ef.mapcells_cell(float(lat), float(lon), int(z))
+    return CellKey(z, x, y)
+
+
+def cells_xy(lat, lon, z=ZOOM):
+    """(x, y) int64 arrays of the cells of arrays of points at zoom z: cell_of's cells (the tile formula, its exact
+    edge rules within EDGE_EPS of an edge), no Python object a point (native: mapcells.rs mapcells_xy; road planning
+    asked cell_of point by point ~60000 times per 16 city road tiles, 2026-10-26; the ground under the decks grouped
+    its points one CellKey each, 2026-11-26). ValueError for a latitude beyond MAX_LAT."""
+    import fast
+    lat = np.ascontiguousarray(np.asarray(lat, np.float64).ravel())
+    lon = np.ascontiguousarray(np.asarray(lon, np.float64).ravel())
+    if not len(lat):
+        return np.zeros(0, np.int64), np.zeros(0, np.int64)
+    return fast._ef.mapcells_xy(lat, lon, int(z))
 
 
 def cells_of(lat, lon, z=ZOOM):
-    """[cell_of(lat[i], lon[i])] for arrays of points, at once: the tile formula for all, cell_of's exact edge rules for
-    the few within EDGE_EPS of an edge (the same cells; road planning asked cell_of point by point ~60000 times per 16
-    city road tiles, 2026-10-26)."""
-    lat = np.asarray(lat, np.float64).ravel()
-    lon = np.asarray(lon, np.float64).ravel()
-    if not len(lat):
-        return []
-    if not ((lat >= -MAX_LAT) & (lat <= MAX_LAT)).all():
-        bad = lat[~((lat >= -MAX_LAT) & (lat <= MAX_LAT))][0]
-        raise ValueError(f"latitude {bad} is beyond the Web-Mercator limit {MAX_LAT}")
-    n = 1 << z
-    x, y = tile_xy(lat, lon, z)
-    xi = np.floor(x)
-    yi = np.clip(np.floor(y), 0, n - 1)
-    edge = (x - xi < EDGE_EPS) | (xi + 1 - x < EDGE_EPS) | (y - yi < EDGE_EPS) | (yi + 1 - y < EDGE_EPS)
-    xs = (xi.astype(np.int64) % n).tolist()
-    ys = yi.astype(np.int64).tolist()
-    out = [CellKey(z, cx, cy) for cx, cy in zip(xs, ys)]
-    for i in np.flatnonzero(edge).tolist():
-        out[i] = cell_of(float(lat[i]), float(lon[i]), z)
-    return out
+    """[cell_of(lat[i], lon[i])] for arrays of points, at once (cells_xy)."""
+    xs, ys = cells_xy(lat, lon, z)
+    return [CellKey(z, cx, cy) for cx, cy in zip(xs.tolist(), ys.tolist())]
 
 
 def cells_for_bbox(lat0, lon0, lat1, lon1, z=ZOOM, max_cells=4096):
@@ -286,9 +264,10 @@ def owner(lon_c, lat_c, z=ZOOM):
     ox = np.floor(x).astype(np.int64)
     oy = np.clip(np.floor(y).astype(np.int64), 0, n - 1)
     near = np.flatnonzero((np.abs(x - np.round(x)) < EDGE_EPS) | (np.abs(y - np.round(y)) < EDGE_EPS))
-    for i in near:                  # on an edge (rare): the exact rule
-        ox.flat[i] = _exact_col(float(x.flat[i]), float(lon.flat[i]), n)
-        oy.flat[i] = _exact_row(float(y.flat[i]), float(np.clip(lat.flat[i], -MAX_LAT, MAX_LAT)), n)
+    import fast
+    for i in near:                  # on an edge (rare): the exact rule (cell_of's, its column before it wraps)
+        ox.flat[i], oy.flat[i] = fast._ef.mapcells_cell(float(np.clip(lat.flat[i], -MAX_LAT, MAX_LAT)),
+                                                        float(lon.flat[i]), int(z), False)
     ox = np.where(ox == n, n - 1, ox)                       # 180 E: the last column
     return ox % n, oy
 
