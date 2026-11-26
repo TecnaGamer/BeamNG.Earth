@@ -146,6 +146,24 @@ class MeasureTest(unittest.TestCase):
         self.assertIsNone(st)
         self.assertFalse(missing)
 
+    def test_a_404_in_the_miss_index_is_known(self):
+        # (the imagery fetcher remembers a 404 in its column's index, missindex.py, not as a <y>.404 file: read as
+        # not known, the tile was waited for for good, every read of the road's specs a fault)
+        import missindex
+        with tempfile.TemporaryDirectory() as d:
+            fx, fy = photosurface.tile_of(LAT, LON)
+            marks = []
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    p = os.path.join(d, "czechia", "17", str(int(fx) + dx))
+                    os.makedirs(p, exist_ok=True)
+                    marks.append(os.path.join(p, f"{int(fy) + dy}.404"))
+            missindex.record(marks)
+            self.assertFalse(any(os.path.exists(m) for m in marks))
+            st, missing = photosurface.measure(line_east(LAT, LON, 40.0), root=d)
+        self.assertIsNone(st)
+        self.assertFalse(missing)
+
     def test_outside_every_regional_box(self):
         with tempfile.TemporaryDirectory() as empty:
             st, missing = photosurface.measure(line_east(49.03376, 28.71176, 60.0), root=empty)   # Vinnytsia
@@ -229,6 +247,24 @@ class HookTest(unittest.TestCase):
 class SpecsKeyTest(unittest.TestCase):
     def test_tag(self):
         self.assertTrue(photosurface.TAG)
+
+
+class GeneratedGroundTest(unittest.TestCase):
+    def on_with(self, **env):
+        import subprocess
+        e = {k: v for k, v in os.environ.items() if k not in ("BNE_PHOTO_SURFACE", "BNE_GEN_GROUND")}
+        e.update(env)
+        out = subprocess.run([sys.executable, "-c", "import photosurface; print(photosurface.ON)"], env=e,
+                             cwd=str(Path(__file__).resolve().parents[1]), capture_output=True, text=True, check=True)
+        return out.stdout.strip()
+
+    def test_off_with_the_generated_ground(self):
+        # (no 1 m photo is fetched with it on, so no regional tile ever comes to the disk: as buildings._photo_sources,
+        # none is read; read, every candidate stayed "not known yet" and nothing built from the roads was kept, a
+        # player's downtown Baltimore of 2026-11-26)
+        self.assertEqual(self.on_with(BNE_PHOTO_SURFACE="1"), "True")
+        self.assertEqual(self.on_with(BNE_PHOTO_SURFACE="1", BNE_GEN_GROUND="on"), "False")
+        self.assertEqual(self.on_with(BNE_GEN_GROUND="on"), "False")
 
 
 if __name__ == "__main__":

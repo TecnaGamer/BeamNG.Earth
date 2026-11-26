@@ -54,6 +54,10 @@ What changed in each release of BeamNG.Earth, newest first.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed
+- Reduced the chance of a city taking minutes to load with the Experimental "Road surface from aerial photos" and
+  "Generated ground" both on (downtown Baltimore took about 10 minutes for its first ground and road tiles). The road surfaces now read no aerial photo while the generated ground is on, as roofs already did; before,
+  the roads waited for photos that never came, and everything built from them was made again over and over and never
+  kept.
 - Reduced the chance of the game's terrain texture cache (`temp/art/terrainmaterialcache` in BeamNG's user folder)
   filling up with old ground photos: they now go with their session, and a one-time clean-up at the next start removes
   the ones earlier versions left behind (several GB on long-time test machines).
