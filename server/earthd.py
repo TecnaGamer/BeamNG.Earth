@@ -4916,7 +4916,7 @@ class Server:
         if not revisitmod.ON or im is None or not hasattr(im, "chain") or not hasattr(anchor, "lat"):
             return None
         try:
-            return revisitmod.key("basephoto", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx),
+            return revisitmod.key("basephoto", *revisitmod.frame_parts(anchor.lat, anchor.lon), float(cx),
                                   float(cy), ("v", BASE_PHOTO_VERSION, BASE_SHIFT_M), self.layout.block,
                                   heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
                                   BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on,
@@ -6926,7 +6926,7 @@ class Server:
         gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, px)[2]
         gen = (genground.far_key(self.mapdata, getattr(self, "veg", None) is not None),) \
             if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, px) is not None else ()
-        return revisitmod.key("fartex", round(float(anchor.lat), 7), round(float(anchor.lon), 7), tile.key, px,
+        return revisitmod.key("fartex", *revisitmod.frame_parts(anchor.lat, anchor.lon), tile.key, px,
                               self.road_mask_px(tile.level) if self.road_masks else 0, [s.name for s in im.chain],
                               self.tone, im.leaf_on, seasonmod.season_key(im.season_mode, float(anchor.lat)),
                               self.tex_modes, roadsmod.ROADS_IN_GROUND,
