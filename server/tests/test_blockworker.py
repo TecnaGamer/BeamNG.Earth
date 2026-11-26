@@ -839,6 +839,27 @@ class MainProcessPinsTest(unittest.TestCase):
             _s, got = self.main_heights()       # (AttributeError: 'NoneType' object has no attribute 'lock' before)
         self.assertTrue(np.isfinite(got).all())
 
+    def test_server_state_never_kept_alive(self):
+        """The server's state is read while the server lives: after it, none (as before attach_main), and this module's
+        memos hold nothing of its grading (the first stage's frame views are kept on its own store)."""
+        import gc
+        s, _ = self.main_heights()
+        self.assertIs(blockworker._st()._server(), s)
+        self.assertFalse([g for g in blockworker._geo_graders.values() if g.store is s.plan_store])
+        self.assertTrue(s.plan_store.__dict__.get("_frame_views"), "the views on the store")
+
+        class Gone:
+            mapdata = object()
+        g = Gone()
+        blockworker.attach_main(g)
+        self.assertIs(blockworker._st().md, Gone.mapdata)
+        del g
+        gc.collect()
+        self.assertIsNone(blockworker._st(), "its server gone: none, as before attach_main")
+        self.assertIsNone(blockworker._md_versions())
+        blockworker.detach_main()
+        self.assertIsNone(blockworker._main)
+
     def test_pins_failing_grade_on_the_first_stage_not_kept(self):
         """A PROFILE_PINS that throws (any bug in it) no longer fails the block, nor an anchor's first block for
         ever: the points graded on the plans' first stage, the build faulted (not kept), logged once."""

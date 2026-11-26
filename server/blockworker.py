@@ -90,9 +90,10 @@ class _MainState:
     cache_dir = _get("cache_dir")
     plan_store = _get("plan_store")     # (the server's anchors' store, made and set up by Server.grader_for)
     del _get
-    # (the bus yards' grader _level_yards_of keeps on its holder: the server's own, not a second one)
+    # (the bus yards' grader _level_yards_of keeps on its holder: the server's own, not a second one; its lazy make
+    # is Server.ground's own, racing as there: two equal graders, the last kept)
     bus_grader = property(lambda self: getattr(self._server(), "bus_grader", None),
-                          lambda self, v: setattr(self._server(), "bus_grader", v))
+                          lambda self, v: self._server() is not None and setattr(self._server(), "bus_grader", v))
 
 
 def attach_main(server):
@@ -101,9 +102,19 @@ def attach_main(server):
     _main = _MainState(server)
 
 
+def detach_main():
+    """No server's own state any more (tests)."""
+    global _main
+    _main = None
+
+
 def _st():
-    """This process's state: a worker's (_s, init), else the server's own (_main, attach_main), else None."""
-    return _s if _s is not None else _main
+    """This process's state: a worker's (_s, init), else the server's own while it lives (_main, attach_main), else
+    None."""
+    if _s is not None:
+        return _s
+    m = _main
+    return m if m is not None and m._server() is not None else None
 
 
 _dem_t = threading.local()
@@ -1505,7 +1516,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
 def _md_versions(buildings=False):
     """The map data's versions (revisit keys); buildings: with the OSM building years' and colours' identities too (the
     tiles that draw buildings: osmyears.identity, osmcolours.identity, MapData.versions(buildings=True))."""
-    md = _st().md      # (the server's own process too: _square_disk)
+    md = getattr(_st(), "md", None)     # (the server's own process too: _square_disk)
     if md is None:
         return None
     if not buildings:
@@ -2357,20 +2368,23 @@ def _frame_grader(frame):
     whatever the frame); None without grading. In the server's own process (_profile_pins' first stage, _elev_stage1):
     a view of the server's own store, as its anchors' graders (Server.grader_for made and set it up: the same ground,
     DEM, water and plan cache as a worker's), nothing of it set again here."""
-    if _s is None and _main is not None:
-        if not _main.grading:
+    main = _st() if _s is None else None
+    if main is not None:
+        if not main.grading:
             return None
-        store = _main.plan_store
+        store = main.plan_store
         if store is None:       # (only a grader's apply asks: grader_for made the store before it)
             raise RuntimeError("the server's plan store is not made yet")
         k = (float(frame.lat0), float(frame.lon0))
         with _geo_lock:
-            got = _geo_graders.get(k)
-            if got is not None and got.store is store:
-                return got
-            got = _geo_graders[k] = gradingmod.Grader(frame, store.md, store.elev, store.widths, store=store)
-            while len(_geo_graders) > GEO_FRAMES_KEPT:
-                _geo_graders.pop(next(iter(_geo_graders)))
+            # (kept on the store itself, not in _geo_graders: the module's memo would hold the server alive through the
+            # store's elev, a bound method of it, and a later server's process would find another store's views)
+            views = store.__dict__.setdefault("_frame_views", {})
+            got = views.get(k)
+            if got is None:
+                got = views[k] = gradingmod.Grader(frame, store.md, store.elev, store.widths, store=store)
+                while len(views) > GEO_FRAMES_KEPT:
+                    views.pop(next(iter(views)))
             return got
     if not _s.grading:
         return None

@@ -152,7 +152,7 @@ PROFILE_PINS = None
 PIN_TAPER_M = 12.0          # m (T_MAX) past an approach's road edge its change fades out over (the plans' own)
 PIN_GATE_M = (1.0, 3.0)     # m: a point this far from the approach's height today keeps its change in full / none
 PIN_STATS = {"calls": 0, "pinned": 0, "pins_s": 0.0, "field_s": 0.0}      # (measurements: _pin_field's calls, seconds)
-_PIN_FAILED = set()         # (kind, message) of the PROFILE_PINS failures logged (_pin_field: once each)
+_PIN_FAILED = set()         # exception type names of the PROFILE_PINS failures logged (_pin_field: once each)
 _PIN_FAILED_LOCK = threading.Lock()
 SPREAD_CELLS = 16           # plans(): more map cells in the points' bbox: only the cells around the points
 T_MIN, T_MAX = 5.0, 12.0    # m, transition back to the natural ground (5: roads close together meet gently)
@@ -7464,17 +7464,18 @@ class _Planner:
             import revisit
             if isinstance(ex, (pools.Abandoned, revisit.StaleMiss)):    # (the build's own control flow: not a fault)
                 raise
-            # (graded on the first stage alone, never kept (a fault: built again on a later visit), logged once per
-            # kind of failure: a block whose pins threw failed whole, and an anchor's first block with it, asked again
-            # every 6 s for ever; the server's own process's missing state, a player's log 2026-11-26)
+            # (graded on the first stage alone, never kept (a fault: built again on a later visit), logged at ERROR with
+            # its traceback once per exception type (a bounded set, whatever the messages): a block whose pins threw
+            # failed whole, and an anchor's first block with it, asked again every 6 s for ever; the server's own
+            # process's missing state, a player's log 2026-11-26. Everything is caught, programming errors too: the
+            # player gets a world whichever bug it is; tests see the ERROR line (assertNoLogs))
             revisit.fault()
-            sig = (type(ex).__name__, str(ex)[:120])
+            sig = type(ex).__name__
             with _PIN_FAILED_LOCK:
                 first = sig not in _PIN_FAILED
                 _PIN_FAILED.add(sig)
             if first:
-                log.warning("road profile pins failed (%s: %s): graded without them, not kept", type(ex).__name__, ex,
-                            exc_info=True)
+                log.error("road profile pins failed (%s: %s): graded without them, not kept", sig, ex, exc_info=True)
             return None
         t1 = time.perf_counter()
         PIN_STATS["calls"] += 1
