@@ -85,6 +85,8 @@ impl Ring {
 pub struct Mix {
     pub rain: Controls,
     pub thunder: f64,
+    /// the rain from the recorded texture bank (livetex.rs) instead of the procedural engine, when the bank loaded
+    pub rain_rec: bool,
 }
 
 /// The ring's fill target: fill_target's (about one callback and a margin), more after each underrun (from GROW_AFTER_S in), at
@@ -367,6 +369,10 @@ impl Worker {
         use crate::outbus::{Limiter, Resampler, SoftClip};
         let (sr, ch) = (self.sr, self.ch as usize);
         let mut lr = LiveRain::new(self.seed);
+        // the recorded rain (texture bank next to the program; none: the procedural rain plays whatever is asked)
+        let mut tex = crate::texbuild::default_bank()
+            .and_then(|p| crate::texbuild::Bank::load(&p).ok())
+            .map(|b| crate::livetex::LiveTex::new(Arc::new(b), self.seed));
         let mut src = vec![0.0f32; 512];
         let mut blk = vec![0.0f64; 512];
         let mut lim = Limiter::new(ENGINE_FS);
@@ -404,7 +410,25 @@ impl Worker {
             }
             let m = self.mix.lock().map(|m| *m).ok();
             if let Some(m) = m {
-                lr.set(m.rain);
+                let rec = m.rain_rec && tex.is_some();
+                // the procedural rain at the files' level (live::file_match_db), silent while the recorded one plays
+                let mut c = m.rain;
+                c.volume *= crate::m::undb(crate::live::file_match_db(c.rain_mm_h));
+                c.muted |= rec;
+                lr.set(c);
+                if let Some(t) = tex.as_mut() {
+                    let r = m.rain;
+                    t.set(crate::livetex::Controls {
+                        rain_mm_h: r.rain_mm_h,
+                        // (wind and drips stay with the mod's files in both modes for now)
+                        wind_ms: 0.0,
+                        shelter: r.shelter,
+                        cabin: r.cabin,
+                        rain_volume: r.volume,
+                        wind_volume: 0.0,
+                        muted: r.muted || !rec,
+                    });
+                }
             }
             let want_thunder = m.map(|m| m.thunder as f32).unwrap_or(0.0);
             frame.clear();
@@ -423,6 +447,9 @@ impl Worker {
                             *v = 0.0;
                         }
                         lr.process(&mut src);
+                        if let Some(t) = tex.as_mut() {
+                            t.process(&mut src);
+                        }
                         // the rain under the strike ducks: the gain from the block's start to its end
                         let d1 = self.bus.duck_gain(t_out + block_s);
                         let n = src.len() as f32;

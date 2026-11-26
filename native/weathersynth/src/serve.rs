@@ -78,7 +78,7 @@ pub fn mix_for(m: Option<&Msg>, stale: bool) -> (Controls, f64) {
         rain_mm_h: m.rain_mm_h,
         shelter: m.shelter,
         cabin: if m.cabin { 1.0 } else { 0.0 },
-        volume: m.volume * m.duck,
+        volume: m.volume * m.duck * m.rain_vol,
         // (in a tunnel the rain is not heard: the mod's own goes to its muffled layer, ours stays quiet for now)
         muted: quiet || m.tunnel,
     };
@@ -186,6 +186,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             (Box::new(thunderlive::BySet { generated: Box::new(thunderlive::MethodB), recorded }), sets)
         }
     };
+    let rain_sets = if crate::texbuild::default_bank().is_some() { r#"["generated","recorded"]"# } else { r#"["generated"]"# };
     let sets_json = format!("[{}]", sets.iter().map(|v| crate::proto::quote(v)).collect::<Vec<_>>().join(","));
     let rname = renderer.name();
     let bus = Arc::new(Bus::new());
@@ -193,7 +194,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // the first open tried again after OPEN_RETRY_S (a device busy at the game's own start)
     let mut tries = 0;
     let mut out = loop {
-        match crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0 }, bus.clone(), buffer) {
+        match crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0, rain_rec: false }, bus.clone(), buffer) {
             Ok(o) => break o,
             Err(e) if tries < OPEN_RETRY_S.len() => {
                 eprintln!("live-serve: audio device: {e}; trying again in {} s", OPEN_RETRY_S[tries]);
@@ -252,7 +253,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let stale = last_at.elapsed().as_secs_f64() > HEARTBEAT_S;
         let (rain, thunder) = mix_for(last.as_ref(), stale);
         if let Ok(mut mx) = out.mix.lock() {
-            *mx = crate::audio::Mix { rain, thunder };
+            *mx = crate::audio::Mix { rain, thunder, rain_rec: last.as_ref().map(|m| m.rain_rec).unwrap_or(false) };
         }
         let x = out.xruns.load(std::sync::atomic::Ordering::Relaxed);
         for _ in xruns_seen..x {
@@ -304,7 +305,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             drop(out);
             // (a little longer after each trouble in a row: a loaded machine gets time to settle)
             std::thread::sleep(Duration::from_millis(200 * trouble_run.clamp(1, 5) as u64));
-            out = crate::audio::open(seed, crate::audio::Mix { rain, thunder }, bus.clone(), buffer)
+            out = crate::audio::open(seed, crate::audio::Mix { rain, thunder, rain_rec: last.as_ref().map(|m| m.rain_rec).unwrap_or(false) }, bus.clone(), buffer)
                 .unwrap_or_else(|e| fail(format!("audio device (reopening): {e}")));
             base_underruns = None;
         }
@@ -321,7 +322,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let (rl, rm) = bus.render_ms();
             let ready = ready_json(&bus.ready());
             let line = format!(
-                "{},\"reopens\":{reopens},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0},\"limited\":{},\"thunderSets\":{sets_json},\"readyThunders\":{ready}}}",
+                "{},\"reopens\":{reopens},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0},\"limited\":{},\"thunderSets\":{sets_json},\"rainSets\":{rain_sets},\"readyThunders\":{ready}}}",
                 &line[..line.len() - 1],
                 out.limited.load(std::sync::atomic::Ordering::Relaxed)
             );
@@ -333,7 +334,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     // fade out (LiveRain and the thunder gain follow the silent mix), then stop
     if let Ok(mut mx) = out.mix.lock() {
-        *mx = crate::audio::Mix { rain: silent, thunder: 0.0 };
+        *mx = crate::audio::Mix { rain: silent, thunder: 0.0, rain_rec: false };
     }
     std::thread::sleep(Duration::from_millis(400));
     bus.stop();
@@ -352,7 +353,7 @@ mod tests {
 
     #[test]
     fn mix_follows_the_message() {
-        let (r, t) = mix_for(Some(&m(r#"{"mode":"live","rainMmH":6,"shelter":0.8,"cabin":true,"volume":0.5,"thunderVolume":0.4,"duck":0.5}"#)), false);
+        let (r, t) = mix_for(Some(&m(r#"{"mode":"live","rainMmH":6,"shelter":0.8,"cabin":true,"volume":0.5,"thunderVolume":0.4,"duck":0.5,"rainVol":1}"#)), false);
         assert!(!r.muted && r.rain_mm_h == 6.0 && r.cabin == 1.0 && r.volume == 0.25 && r.shelter == 0.8);
         assert_eq!(t, 0.4);
         let (_, t) = mix_for(Some(&m(r#"{"mode":"live","thunderVolume":1,"shelter":0.2}"#)), false);

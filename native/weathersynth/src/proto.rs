@@ -255,7 +255,14 @@ pub struct Msg {
     pub duck: f64,
     pub t: f64,
     pub thunders: Vec<Thunder>,
+    /// the Weather page's Rain sound: 'recorded' (the texture bank, livetex.rs); else 'generated' (live.rs)
+    pub rain_rec: bool,
+    /// the mod's own rain volume for its layers (RAIN_GAIN x the rain share x its fade, 0..1), so the synth plays at the
+    /// files' level; a mod that does not send it: DEFAULT_RAIN_VOL (RAIN_GAIN at full rain)
+    pub rain_vol: f64,
 }
+
+pub const DEFAULT_RAIN_VOL: f64 = 0.5;
 
 pub const MAX_THUNDERS: usize = 32;
 
@@ -302,6 +309,8 @@ pub fn msg(line: &str) -> Result<Msg, String> {
         duck: c01("duck", 1.0),
         t: j.num("t").unwrap_or(0.0),
         thunders,
+        rain_rec: j.str("rainSet") == Some("recorded"),
+        rain_vol: j.num("rainVol").unwrap_or(DEFAULT_RAIN_VOL).clamp(0.0, 1.0),
     })
 }
 

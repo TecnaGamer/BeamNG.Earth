@@ -302,6 +302,8 @@
     "duck": {"type": "num"},
     "t": {"type": "num"},
     "thunderSet": {"type": "str", "optional": true, "doc": "the Weather page's Thunder sound: 'generated' (the game plays the method B files; the synth only ducks its rain at each strike's crack) or 'recorded' (the synth's grain-bank renderer)"},
+    "rainSet": {"type": "str", "optional": true, "doc": "the Weather page's Rain sound: 'generated' (the synth's physical rain) or 'recorded' (its texture bank of CC0 rain recordings; the physical rain when the synth has no bank)"},
+    "rainVol": {"type": "num", "optional": true, "doc": "the mod's own rain volume for its layers (RAIN_GAIN x the rain share, 0..1): the synth's rain plays at the files' level times this (absent: 0.5)"},
     "thunders": {"type": "list", "optional": true}
    }
   },
@@ -1043,6 +1045,7 @@
     "reason": {"type": "str", "optional": true},
     "latencyMs": {"type": "num", "optional": true},
     "thunderSets": {"type": "list", "optional": true, "doc": "the thunder sets the synth plays itself ('recorded': its grain bank, every thunder; 'generated': method B's strikes and closes it has ready, see readyThunders); for any other set the mod plays its own files"},
+    "rainSets": {"type": "list", "optional": true, "doc": "the rain sets the synth can play ('recorded' only when its texture bank loaded)"},
     "readyThunders": {"type": "list", "optional": true, "doc": "[[id, d m], ...]: the thunders the synth has rendered and waiting (at most 24); the mod lets the synth play a generated strike / close only when its id is listed here with d within 15 % of the strike's (else it plays its file and sends the final with play = false)"}
    }
   },

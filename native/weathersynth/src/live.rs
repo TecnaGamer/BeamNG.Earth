@@ -557,3 +557,23 @@ pub fn thunder_bench(micro_min: f64) -> String {
     }
     s
 }
+
+/// The procedural engine's level against the pre-recorded loops (2026-11-26, live-bench --wav at volume 1 vs the
+/// files' integrated loudness): it came out 13.5 dB (0.7 mm/h), 22.3 dB (5) and 24.0 dB (35) louder than the loop the
+/// mod plays at the same volume, which the bus limiter then crushed ("super loud"). This gain (dB, by log10 rate
+/// between those points, held at the ends) brings it to the files' level.
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+pub fn file_match_db(rate_mm_h: f64) -> f64 {
+    const P: [(f64, f64); 3] = [(0.7, -13.5), (5.0, -22.3), (35.0, -24.0)];
+    let x = m::log10(rate_mm_h.max(1e-3));
+    if x <= m::log10(P[0].0) {
+        return P[0].1;
+    }
+    for w in P.windows(2) {
+        let (a, b) = (m::log10(w[0].0), m::log10(w[1].0));
+        if x <= b {
+            return w[0].1 + (w[1].1 - w[0].1) * (x - a) / (b - a);
+        }
+    }
+    P[2].1
+}
