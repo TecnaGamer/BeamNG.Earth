@@ -37,7 +37,7 @@ SERVER = os.path.dirname(os.path.abspath(__file__))
 EXE = "weathersynth.exe" if os.name == "nt" else "weathersynth"
 # the fields passed on to the synth (protocol_table.json weather_audio; anything else is dropped)
 FIELDS = ("mode", "rainMmH", "windMs", "shelter", "tunnel", "cabin", "volume", "thunderVolume", "muted", "duck", "t",
-          "thunderSet", "synthRain", "rainSet", "rainVol", "thunders")
+          "thunderSet", "synthRain", "rainSet", "rainVol", "roofNear", "enclosed", "thunders")
 # (play: a final the game plays from its file, the synth only ducks; dropped here before 2026-11-26, so the synth
 # played those too, a second thunder up to LATE_MAX_S after the file's)
 THUNDER_FIELDS = ("id", "at", "d", "kind", "gain", "seed", "final", "play")

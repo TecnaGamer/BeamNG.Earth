@@ -25,7 +25,7 @@ use crate::texmix::{self, cubic};
 use std::sync::Arc;
 
 pub const FS: f64 = 44100.0;
-const XF: usize = 22050;
+const XF: usize = (texmix::PARAMS.xf_s * FS) as usize;
 pub const RAIN_CENTRES: [f64; 3] = [0.7, 5.0, 35.0];
 pub const WIND_CENTRES: [f64; 3] = [3.0, 8.0, 15.0];
 const RAIN_CABIN: f64 = 0.35;
@@ -64,6 +64,11 @@ fn fade() -> &'static [f64] {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Controls {
+    /// the roof heard from outside, near the car (0..1: the hood / bumper cameras 1, orbit by its distance)
+    pub roof_near: f64,
+    /// under an enclosed shelter (a tunnel, a closed bridge, a building: muffled A, the outdoor rain filtered) or an
+    /// open one (an open bridge, an overpass: muffled B, the under-bridge takes)
+    pub enclosed: bool,
     pub rain_mm_h: f64,
     pub wind_ms: f64,
     pub shelter: f64,
@@ -94,9 +99,12 @@ struct Stream {
 
 impl Stream {
     fn new_seg(&mut self, bank: &Bank, fade_in: bool) -> Option<Seg> {
-        let core = (self.rng.range(2.0, 5.0) * FS) as usize;
+        let core = (self.rng.range(texmix::PARAMS.core_min, texmix::PARAMS.core_max) * FS) as usize;
+        let vs = self.rng.range(1.0 - texmix::PARAMS.vs, 1.0 + texmix::PARAMS.vs);
+        // (never longer than this stream's longest block allows: a segment with no block to fit would end the stream)
+        let longest = self.blocks.iter().map(|&k| bank.blocks[k].samples.len()).max().unwrap_or(0) as f64;
+        let core = core.min(((longest - 8.0) / vs) as usize - XF.min(((longest - 8.0) / vs) as usize)).max(FS as usize);
         let len = core + XF;
-        let vs = self.rng.range(0.97, 1.03);
         let span = len as f64 * vs + 6.0;
         let fits: Vec<usize> = self.blocks.iter().cloned().filter(|&k| bank.blocks[k].samples.len() as f64 > span).collect();
         if fits.is_empty() {
@@ -187,7 +195,8 @@ impl Layer {
             }
             streams.push(st);
         }
-        // blocks sit at -30 LUFS; uncorrelated streams whose gains' powers sum to 1 keep that
+        // the live bank's blocks sit at -30 LUFS each (texbank-live); uncorrelated streams whose gains' powers sum to 1
+        // keep that
         let gain = m::undb(lufs + 30.0);
         Some(Layer { streams, sg: texmix::stream_gains(class, ns), gain, w: 0.0 })
     }
@@ -214,9 +223,13 @@ pub struct LiveTex {
     a: f64,
     muff: [Biquad; 2],
     muff_gain: f64,
+    near: f64,
+    enc: f64,
+    cabf: [Biquad; 3],
+    cab_gain: f64,
 }
 
-const LAYERS: [(&str, &str); 9] = [
+const LAYERS: [(&str, &str); 10] = [
     ("rain_light", "light"),
     ("rain_moderate", "medium"),
     ("rain_heavy", "heavy"),
@@ -226,6 +239,7 @@ const LAYERS: [(&str, &str); 9] = [
     ("wind_light", "wind_light"),
     ("wind_moderate", "wind_moderate"),
     ("wind_strong", "wind_strong"),
+    ("rain_under", "muffled_open"),
 ];
 
 fn loop_lufs(name: &str) -> f64 {
@@ -246,8 +260,44 @@ impl LiveTex {
             }
             None => 0.0,
         };
-        let c = Controls { rain_mm_h: 0.0, wind_ms: 0.0, shelter: 1.0, cabin: 0.0, rain_volume: 0.0, wind_volume: 0.0, muted: true };
-        LiveTex { bank, layers, target: c, sh: 1.0, cab: 0.0, rv: 0.0, wv: 0.0, a: 1.0 - m::exp(-1.0 / (SMOOTH_S * FS)), muff: [lp(), lp()], muff_gain }
+        // the roof inside the car: texmix's cabin filter, levelled as its loops (the same loudness as the plain roof)
+        let cab_lp = || Biquad::lowpass(FS, texmix::CABIN_LP_HZ, std::f64::consts::FRAC_1_SQRT_2);
+        let cab_pk = || Biquad::peaking(FS, texmix::CABIN_PEAK_HZ, texmix::CABIN_PEAK_Q, texmix::CABIN_PEAK_DB);
+        let cab_gain = match texmix::texture(&bank, "roof", seed, (10.0 * FS) as usize) {
+            Some((mut x, _)) => {
+                let l0 = loudness::integrated(&x, FS, true);
+                texmix::cabin_filter(&mut x);
+                m::undb(-(loudness::integrated(&x, FS, true) - l0))
+            }
+            None => 0.0,
+        };
+        let c = Controls {
+            rain_mm_h: 0.0,
+            wind_ms: 0.0,
+            shelter: 1.0,
+            cabin: 0.0,
+            roof_near: 0.0,
+            enclosed: true,
+            rain_volume: 0.0,
+            wind_volume: 0.0,
+            muted: true,
+        };
+        LiveTex {
+            bank,
+            layers,
+            target: c,
+            sh: 1.0,
+            cab: 0.0,
+            rv: 0.0,
+            wv: 0.0,
+            a: 1.0 - m::exp(-1.0 / (SMOOTH_S * FS)),
+            muff: [lp(), lp()],
+            muff_gain,
+            near: 0.0,
+            enc: 1.0,
+            cabf: [cab_lp(), cab_lp(), cab_pk()],
+            cab_gain,
+        }
     }
 
     pub fn set(&mut self, c: Controls) {
@@ -265,6 +315,8 @@ impl LiveTex {
         let (rv_t, wv_t) = if t.muted { (0.0, 0.0) } else { (if raining { t.rain_volume } else { 0.0 }, t.wind_volume * wind_on) };
         let cab_t = t.cabin.clamp(0.0, 1.0);
         let sh_t = t.shelter.clamp(0.0, 1.0);
+        let near_t = t.roof_near.clamp(0.0, 1.0);
+        let enc_t = if t.enclosed { 1.0 } else { 0.0 };
         let bank = self.bank.clone();
         let a = self.a;
         for o in out.iter_mut() {
@@ -272,6 +324,8 @@ impl LiveTex {
             self.cab += a * (cab_t - self.cab);
             self.rv += a * (rv_t - self.rv);
             self.wv += a * (wv_t - self.wv);
+            self.near += a * (near_t - self.near);
+            self.enc += a * (enc_t - self.enc);
             if rv_t == 0.0 && self.rv < 1e-6 {
                 self.rv = 0.0;
             }
@@ -281,12 +335,16 @@ impl LiveTex {
             let mut outdoor = 0.0;
             let mut roof = 0.0;
             let mut wind = 0.0;
+            let mut under = 0.0;
+            let roof_on = self.cab > 1e-4 || self.near > 1e-4;
+            let under_on = self.sh < 0.999 && self.enc < 0.999;
             for (k, l) in self.layers.iter_mut().enumerate() {
                 let Some(l) = l else { continue };
                 let (wt, vol) = match k {
                     0..=2 => (rw[k], self.rv),
-                    3..=5 => (rw[k - 3], if self.cab > 1e-4 { self.rv } else { 0.0 }),
-                    _ => (ww[k - 6], self.wv),
+                    3..=5 => (rw[k - 3], if roof_on { self.rv } else { 0.0 }),
+                    6..=8 => (ww[k - 6], self.wv),
+                    _ => (1.0, if under_on { self.rv } else { 0.0 }),
                 };
                 let tgt = if vol > 0.0 { wt } else { 0.0 };
                 l.w += a * (tgt - l.w);
@@ -298,19 +356,31 @@ impl LiveTex {
                 match k {
                     0..=2 => outdoor += y,
                     3..=5 => roof += y,
-                    _ => wind += y,
+                    6..=8 => wind += y,
+                    _ => under += y,
                 }
             }
             let mut y = 0.0;
             if self.rv > 0.0 {
                 let open = outdoor * self.sh * (1.0 - self.cab + self.cab * RAIN_CABIN);
+                // under a roof: muffled A (enclosed) and B (open) crossfaded by the shelter's kind
                 let muff = if self.sh < 0.999 {
                     let m0 = self.muff[0].tick(outdoor);
-                    self.muff[1].tick(m0) * self.muff_gain * (1.0 - self.sh) * RAIN_UNDER_ROOF
+                    let a_path = self.muff[1].tick(m0) * self.muff_gain;
+                    (a_path * self.enc + under * (1.0 - self.enc)) * (1.0 - self.sh) * RAIN_UNDER_ROOF
                 } else {
                     0.0
                 };
-                y += (open + muff + roof * self.cab * self.sh * RAIN_ROOF) * self.rv;
+                // the roof: plain near the car outside, through the cabin filter inside
+                let inside = if self.cab > 1e-4 {
+                    let c0 = self.cabf[0].tick(roof);
+                    let c1 = self.cabf[1].tick(c0);
+                    self.cabf[2].tick(c1) * self.cab_gain * self.cab
+                } else {
+                    0.0
+                };
+                let roof_mix = (roof * self.near * (1.0 - self.cab) + inside) * self.sh * RAIN_ROOF;
+                y += (open + muff + roof_mix) * self.rv;
             }
             if self.wv > 0.0 {
                 // wind: damped in the car like the outside rain, quieter under a roof
@@ -330,6 +400,8 @@ pub fn bench(bank: Arc<Bank>, block: usize) -> Vec<(String, Vec<f64>)> {
         ("heavy", 35.0, 0.0, 1.0, 0.0),
         ("roof_heavy", 35.0, 0.0, 1.0, 1.0),
         ("under_medium", 5.0, 0.0, 0.0, 0.0),
+        ("roof_near_heavy", 35.0, 0.0, 1.0, -1.0),
+        ("under_open_medium", 5.0, 0.0, 0.0, -2.0),
         ("wind_8ms", 0.0, 8.0, 1.0, 0.0),
     ];
     let mut out = Vec::new();
@@ -345,7 +417,7 @@ pub fn bench(bank: Arc<Bank>, block: usize) -> Vec<(String, Vec<f64>)> {
             let lr = |a: f64, b: f64, u: f64| m::pow(10.0, m::log10(a) + (m::log10(b) - m::log10(a)) * u.clamp(0.0, 1.0));
             let rate = if t < 6.0 { 0.7 } else if t < 12.0 { lr(0.7, 5.0, (t - 6.0) / 6.0) } else if t < 18.0 { 5.0 } else if t < 24.0 { lr(5.0, 35.0, (t - 18.0) / 6.0) } else { 35.0 };
             let (sh, cab) = if t < 36.0 { (1.0, 0.0) } else if t < 48.0 { (1.0, 1.0) } else { (0.0, 0.0) };
-            lt.set(Controls { rain_mm_h: rate, wind_ms: 0.0, shelter: sh, cabin: cab, rain_volume: 1.0, wind_volume: 0.0, muted: false });
+            lt.set(Controls { rain_mm_h: rate, wind_ms: 0.0, shelter: sh, cabin: cab, roof_near: 0.0, enclosed: true, rain_volume: 1.0, wind_volume: 0.0, muted: false });
             for v in c.chunks_mut(block) {
                 lt.process(v);
             }
@@ -354,7 +426,9 @@ pub fn bench(bank: Arc<Bank>, block: usize) -> Vec<(String, Vec<f64>)> {
     }
     for (name, r, w, sh, cab) in conds {
         let mut lt = LiveTex::new(bank.clone(), 1);
-        lt.set(Controls { rain_mm_h: r, wind_ms: w, shelter: sh, cabin: cab, rain_volume: 1.0, wind_volume: 1.0, muted: false });
+        // (cab -1: outside, the roof near; -2: under an open shelter)
+        let (near, enclosed, cab) = if cab == -1.0 { (1.0, true, 0.0) } else if cab == -2.0 { (0.0, false, 0.0) } else { (0.0, true, cab) };
+        lt.set(Controls { rain_mm_h: r, wind_ms: w, shelter: sh, cabin: cab, roof_near: near, enclosed, rain_volume: 1.0, wind_volume: 1.0, muted: false });
         let n = (23.0 * FS) as usize;
         let mut buf = vec![0.0f32; n];
         for c in buf.chunks_mut(block) {
@@ -388,7 +462,7 @@ mod tests {
     #[test]
     fn block_size_does_not_change_the_output() {
         let b = bank();
-        let c = Controls { rain_mm_h: 3.0, wind_ms: 6.0, shelter: 0.6, cabin: 0.0, rain_volume: 0.8, wind_volume: 1.0, muted: false };
+        let c = Controls { rain_mm_h: 3.0, wind_ms: 6.0, shelter: 0.6, cabin: 0.0, roof_near: 0.5, enclosed: false, rain_volume: 0.8, wind_volume: 1.0, muted: false };
         let run = |blk: usize| {
             let mut lt = LiveTex::new(b.clone(), 9);
             lt.set(c);
@@ -405,7 +479,7 @@ mod tests {
     fn silent_when_dry_and_calm() {
         let b = bank();
         let mut lt = LiveTex::new(b, 1);
-        lt.set(Controls { rain_mm_h: 0.0, wind_ms: 0.0, shelter: 1.0, cabin: 0.0, rain_volume: 1.0, wind_volume: 1.0, muted: false });
+        lt.set(Controls { rain_mm_h: 0.0, wind_ms: 0.0, shelter: 1.0, cabin: 0.0, roof_near: 0.0, enclosed: true, rain_volume: 1.0, wind_volume: 1.0, muted: false });
         let mut v = vec![0.0f32; 4096];
         lt.process(&mut v);
         assert!(v.iter().all(|x| *x == 0.0));

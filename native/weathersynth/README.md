@@ -228,6 +228,23 @@ clean stretches ("blocks"), not events.
     Vorbis decoder, as `grainbank-pack` does; `assets/tex/tex_bank.bin.sha256` is the pack made with ffmpeg n9.0.2.
   - The release's grains job packs it once for both platforms, and live-serve reads it from next to the program.
   - `livetex-bench` renders fixed conditions and a sweep, timed: about 0.65 % of one PC core.
+- **After the user's listen (2026-11-26):**
+  - **Light rain is variant B:** its crest limit is 40 dB, so the sparse takes of close drops are in.
+  - **Fewer take changes:** segments are 4-12 s with 1 s joins and ±1 % varispeed (they were 2-5 s, 0.5 s and ±3 %).
+    `--legacy` renders the old way.
+  - **One gain per recording:** a take keeps its level from block to block.
+  - **A spectral check per class:** a recording more than 7.5 dB RMS off its class's median 1/3-octave shape is left
+    out (`spec_dev.tsv`); light rain is exempt.
+  - `tex-set` prints the take changes per minute and the timbre jump across them, against the same measure inside a
+    segment.
+  - **The roof:** outside, the plain loops near the car; inside, `roof_cabin_*` (two 1.4 kHz low-passes and a 140 Hz
+    body resonance).
+  - **Muffled:** A (the outdoor rain filtered) under enclosed shelters; B (`muffled_open`, the under-bridge takes)
+    under open ones.
+  - **Drips:** `drips_1/2/3` are single drops (the bank's `drip` grains, cut from distinct-drop takes) at 0.8, 0.3 and
+    0.1 per second, all at one gain, so only the rate falls as the mod crossfades them.
+  - **Live:** livetex follows all of this through the new `roofNear` and `enclosed` fields. Its blocks are levelled at
+    -30 LUFS each, and a segment never outgrows its blocks.
 - **The procedural live rain's level:** `live::file_match_db` brings it to the files' level. Before, it was 13.5 /
   22.3 / 24.0 dB louder at 0.7 / 5 / 35 mm/h than the loop the mod plays at the same volume, and it had no `rainVol`.
   The bus limiter crushed it.

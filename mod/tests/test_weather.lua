@@ -850,10 +850,11 @@ W.onClientEndMission()
 W.onClientStartMission()
 W.setMode('real')
 W.setChangeSpeed(0)                  -- (instant: each state at once)
-local roof, amb = false, nil
+local roof, amb, walls = false, nil, false
 core_camera.getPosition = function() return vec3(0, 0, camZ) end
 castRayStatic = function(from, dir, max)
   if dir and dir.z and dir.z > 0 then return roof and 5 or (max or 60) + 1 end
+  if dir and dir.z == 0 then return walls and 4 or nil end   -- (sideways: the walls of an enclosed roof)
   return from.z - 3990
 end
 package.loaded['beamngEarth/ambience'] = { shelterAt = function() return amb end }
@@ -884,7 +885,11 @@ roof = true
 run(0.25)
 check(rain.pct > 0 and rain.pct < W.precipPct(10), 'under a roof: fading out')
 run(0.5)
-check(rain.hidden == true and W.precipState().why == 'roof', 'under a roof: gone within FADE_OUT_S')
+check(rain.hidden == true and W.precipState().why == 'roof' and W.shelterWhy == 'roof', 'under a roof: gone within FADE_OUT_S')
+walls = true
+run(0.25)
+check(W.shelterWhy == 'roof_enclosed', 'a roof with walls both sides: enclosed (the rain sound\'s muffled A)')
+walls = false
 roof = false
 run(0.5)
 check(rain.hidden == false and rain.pct < W.precipPct(10) - 0.05, 'out again: fading back in')

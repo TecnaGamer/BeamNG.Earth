@@ -149,6 +149,7 @@ M.FLAKE_WET_C, M.FLAKE_DRY_C = -1, -8
 -- SHELTER_S while anything falls: a road tile's roofed space or under-bridge box (ambience.shelterAt), or the SHELTER_RAYS
 -- straight up from the camera (and SHELTER_SIDE_M to either side of it) all hitting within SHELTER_RAY_M.
 M.SHELTER_S, M.SHELTER_RAY_M, M.SHELTER_SIDE_M = 0.25, 60, 3
+M.SHELTER_WALL_M = 10   -- a roof with walls this close to both sides of the view is enclosed
 M.SHELTER_FADE_OUT_S, M.SHELTER_FADE_IN_S = 0.5, 1.0
 M.PRECIP_S = 0.25          -- the drops' share written at 4 Hz while anything falls (the fades)
 M.TRAFFIC_S = 1.0          -- traffic's headlights looked at this often
@@ -1079,7 +1080,14 @@ local function shelterCheck()
     local d = castRayStatic(vec3(p.x + rx * s, p.y + ry * s, p.z + 0.2), up, M.SHELTER_RAY_M)
     if not (d and d < M.SHELTER_RAY_M) then return false, nil end
   end
-  return true, 'roof'
+  -- walls to both sides (a building, a closed bridge): 'roof_enclosed', else an open roof (an overpass, an awning);
+  -- the rain sound picks its muffled loop by it (ambience.openShelter)
+  local walls = 0
+  for _, sgn in ipairs({ -1, 1 }) do
+    local d = castRayStatic(vec3(p.x, p.y, p.z + 0.5), vec3(rx * sgn, ry * sgn, 0), M.SHELTER_WALL_M)
+    if d and d < M.SHELTER_WALL_M then walls = walls + 1 end
+  end
+  return true, walls == 2 and 'roof_enclosed' or 'roof'
 end
 
 -- The one owner of the rain and snow objects (every PRECIP_S while they fall or are shown, dt: the time since): what
@@ -1113,6 +1121,7 @@ local function ownPrecip(e, dt)
     S.sheltered, S.shelterWhy, S.shelter = false, nil, 1
   end
   M.shelter = S.shelter
+  M.shelterWhy = S.shelterWhy   -- (the kind: 'tunnel', 'bridge', 'arch', 'parking', 'roof', 'roof_enclosed'; ambience)
   local vis = choice.visibility
   drivePrecip(M.RAIN_NAME, rain * S.shelter, M.poolFor(M.RAIN_POOL, vis))
   drivePrecip(M.SNOW_NAME, snow * S.shelter, M.poolFor(M.SNOW_POOL, vis), c and c.flake)

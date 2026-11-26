@@ -25,36 +25,82 @@ use crate::rng::Rng;
 use crate::texbuild::{self, Bank, CLASSES};
 
 pub const SR: f64 = 44100.0;
-const XF_S: f64 = 0.5;
-const CORE_MIN_S: f64 = 2.0;
-const CORE_MAX_S: f64 = 5.0;
+/// The segments: core length U(core_min, core_max) s, crossfades xf_s, varispeed 1 +/- vs. Since the user's 2026-11-26
+/// listen ("I can tell all sounds are trying to filter out other noises"): long segments and joins (4-12 s, 1 s), so
+/// the timbre changes between takes come seldom and slowly, and +/-1 % varispeed (it was 2-5 s, 0.5 s, +/-3 %: a
+/// take change, and a small pitch step, every few seconds). `--legacy` renders the old way for comparison.
+#[derive(Clone, Copy)]
+pub struct Params {
+    pub core_min: f64,
+    pub core_max: f64,
+    pub xf_s: f64,
+    pub vs: f64,
+}
+pub const PARAMS: Params = Params { core_min: 4.0, core_max: 12.0, xf_s: 1.0, vs: 0.01 };
+pub const LEGACY: Params = Params { core_min: 2.0, core_max: 5.0, xf_s: 0.5, vs: 0.03 };
+static ACTIVE: std::sync::OnceLock<Params> = std::sync::OnceLock::new();
+fn params() -> Params {
+    *ACTIVE.get().unwrap_or(&PARAMS)
+}
 
-/// A loop: (file stem, bank class, the length s, its target LUFS, low-pass corners applied after (muffled))
+/// A loop: its file stem, bank class, length s, target LUFS, low-pass corners applied after (muffled A), the in-car
+/// filter (the roof heard inside: CABIN_LP twice and a body resonance), drops per second for an event loop (the
+/// drips: single drops from the bank's drip grains; 0 = a texture), and the loop whose gain it takes ("" = its own
+/// level: the drips' three densities share drips_1's gain, so a drop is as loud in each and only the rate falls).
 pub struct LoopSpec {
     pub name: &'static str,
     pub class: &'static str,
     pub secs: f64,
     pub lufs: f64,
     pub lowpass: &'static [f64],
+    pub cabin: bool,
+    pub events: f64,
+    pub gain_of: &'static str,
 }
 
-pub const LOOPS: [LoopSpec; 14] = [
-    LoopSpec { name: "light", class: "rain_light", secs: 30.0, lufs: -30.2, lowpass: &[] },
-    LoopSpec { name: "medium", class: "rain_moderate", secs: 30.0, lufs: -24.2, lowpass: &[] },
-    LoopSpec { name: "heavy", class: "rain_heavy", secs: 30.0, lufs: -17.2, lowpass: &[] },
-    LoopSpec { name: "roof_light", class: "roof_light", secs: 30.0, lufs: -30.0, lowpass: &[] },
-    LoopSpec { name: "roof", class: "roof", secs: 30.0, lufs: -24.1, lowpass: &[] },
-    LoopSpec { name: "roof_heavy", class: "roof_heavy", secs: 30.0, lufs: -17.2, lowpass: &[] },
-    // muffled (a): the outdoor medium rain through the mod's occlusion (two 900 Hz low-passes), as today's file
-    LoopSpec { name: "muffled", class: "rain_moderate", secs: 30.0, lufs: -25.9, lowpass: &[900.0, 900.0] },
-    // muffled (b): real takes from under a bridge / deck
-    LoopSpec { name: "muffled_under", class: "rain_under", secs: 30.0, lufs: -25.9, lowpass: &[] },
-    LoopSpec { name: "drips", class: "drips", secs: 30.0, lufs: -34.0, lowpass: &[] },
-    LoopSpec { name: "gutter", class: "gutter", secs: 30.0, lufs: -28.0, lowpass: &[] },
-    LoopSpec { name: "wind_light", class: "wind_light", secs: 60.0, lufs: -36.0, lowpass: &[] },
-    LoopSpec { name: "wind_moderate", class: "wind_moderate", secs: 60.0, lufs: -30.0, lowpass: &[] },
-    LoopSpec { name: "wind_strong", class: "wind_strong", secs: 60.0, lufs: -24.0, lowpass: &[] },
-    LoopSpec { name: "hail", class: "hail", secs: 30.0, lufs: -20.0, lowpass: &[] },
+/// The roof heard from inside the car (the user, 2026-11-26: "INSIDE the car ... a muffled version of the roof"):
+/// two low-passes at CABIN_LP_HZ and a body / headliner resonance (+CABIN_PEAK_DB at CABIN_PEAK_HZ, Q CABIN_PEAK_Q).
+pub const CABIN_LP_HZ: f64 = 1400.0;
+pub const CABIN_PEAK_HZ: f64 = 140.0;
+pub const CABIN_PEAK_Q: f64 = 1.2;
+pub const CABIN_PEAK_DB: f64 = 6.0;
+
+pub fn cabin_filter(x: &mut [f64]) {
+    Biquad::lowpass(SR, CABIN_LP_HZ, std::f64::consts::FRAC_1_SQRT_2).run_circular(x);
+    Biquad::lowpass(SR, CABIN_LP_HZ, std::f64::consts::FRAC_1_SQRT_2).run_circular(x);
+    Biquad::peaking(SR, CABIN_PEAK_HZ, CABIN_PEAK_Q, CABIN_PEAK_DB).run_circular(x);
+}
+
+const fn tex(name: &'static str, class: &'static str, secs: f64, lufs: f64) -> LoopSpec {
+    LoopSpec { name, class, secs, lufs, lowpass: &[], cabin: false, events: 0.0, gain_of: "" }
+}
+
+pub const LOOPS: [LoopSpec; 19] = [
+    tex("light", "rain_light", 30.0, -30.2),
+    tex("medium", "rain_moderate", 30.0, -24.2),
+    tex("heavy", "rain_heavy", 30.0, -17.2),
+    // the roof from outside, near the car (hood / bumper cameras, orbit close in)
+    tex("roof_light", "roof_light", 30.0, -30.0),
+    tex("roof", "roof", 30.0, -24.1),
+    tex("roof_heavy", "roof_heavy", 30.0, -17.2),
+    // the roof from inside (driver / cockpit cameras): the same takes through the cabin filter, at the same loudness
+    LoopSpec { cabin: true, ..tex("roof_cabin_light", "roof_light", 30.0, -30.0) },
+    LoopSpec { cabin: true, ..tex("roof_cabin", "roof", 30.0, -24.1) },
+    LoopSpec { cabin: true, ..tex("roof_cabin_heavy", "roof_heavy", 30.0, -17.2) },
+    // muffled A: the outdoor medium rain through the mod's occlusion (two 900 Hz low-passes): tunnels, closed bridges,
+    // buildings (the user, 2026-11-26)
+    LoopSpec { lowpass: &[900.0, 900.0], ..tex("muffled", "rain_moderate", 30.0, -25.9) },
+    // muffled B: real takes from under bridges and awnings: open bridges and overpasses
+    tex("muffled_open", "rain_under", 30.0, -25.9),
+    // drips after rain: sparse single drops, three densities the mod crossfades as the drips die away
+    LoopSpec { events: 0.8, ..tex("drips_1", "drip", 60.0, -36.0) },
+    LoopSpec { events: 0.3, gain_of: "drips_1", ..tex("drips_2", "drip", 60.0, -36.0) },
+    LoopSpec { events: 0.1, gain_of: "drips_1", ..tex("drips_3", "drip", 60.0, -36.0) },
+    tex("gutter", "gutter", 30.0, -28.0),
+    tex("wind_light", "wind_light", 60.0, -36.0),
+    tex("wind_moderate", "wind_moderate", 60.0, -30.0),
+    tex("wind_strong", "wind_strong", 60.0, -24.0),
+    tex("hail", "hail", 30.0, -20.0),
 ];
 
 /// Catmull-Rom sample of x at fractional position t (clamped ends).
@@ -114,6 +160,8 @@ pub struct Info {
     pub segments: usize,
     pub sources: Vec<u32>,
     pub streams: usize,
+    /// the joins: (the crossfade's middle, sample; whether the take changed there)
+    pub joins: Vec<(usize, bool)>,
 }
 
 /// One class's texture on a circular timeline of n samples (not levelled).
@@ -123,9 +171,12 @@ pub fn texture(bank: &Bank, class: &str, seed: u64, n: usize) -> Option<(Vec<f64
         return None;
     }
     let streams = if p.len() >= 2 { 2 } else { 1 };
-    let xf = (XF_S * SR) as usize;
+    let pr = params();
+    let (core_min, core_max) = (pr.core_min, pr.core_max);
+    let xf = (pr.xf_s * SR) as usize;
     let mut out = vec![0.0f64; n];
     let mut segs = 0;
+    let mut joins = Vec::new();
     let sg = stream_gains(class, streams);
     for s in 0..streams {
         let mut rng = Rng::new(seed, &format!("tex-{class}-{s}"));
@@ -136,15 +187,20 @@ pub fn texture(bank: &Bank, class: &str, seed: u64, n: usize) -> Option<(Vec<f64
         let end = start + n;
         let mut pos = start;
         let mut last: Option<(usize, f64)> = None;
+        let mut first = true;
         while pos < end {
             let rem = (end - pos) as f64 / SR;
-            let mut core = rng.range(CORE_MIN_S, CORE_MAX_S);
-            if rem - core < CORE_MIN_S {
-                core = if rem <= CORE_MAX_S { rem } else { rem / 2.0 };
+            let mut core = rng.range(core_min, core_max);
+            if rem - core < core_min {
+                core = if rem <= core_max { rem } else { rem / 2.0 };
             }
             let core_n = ((core * SR) as usize).min(end - pos).max(1);
+            let vs = rng.range(1.0 - pr.vs, 1.0 + pr.vs);
+            // (never longer than the stream's longest block allows; the timeline goes on with the next segment)
+            let longest = mine.iter().map(|&k| bank.blocks[k].samples.len()).max().unwrap_or(0) as f64;
+            let fit = (((longest - 8.0) / vs) as usize).saturating_sub(xf);
+            let core_n = core_n.min(fit.max(SR as usize));
             let len = core_n + xf;
-            let vs = rng.range(0.97, 1.03);
             let span = len as f64 * vs + 4.0;
             // a block long enough, weighted by its length; a new place in it
             let fits: Vec<usize> = mine.iter().cloned().filter(|&k| bank.blocks[k].samples.len() as f64 > span + 2.0).collect();
@@ -176,6 +232,11 @@ pub fn texture(bank: &Bank, class: &str, seed: u64, n: usize) -> Option<(Vec<f64
                     _ => break,
                 }
             }
+            let changed = last.map(|(lb, _)| bank.blocks[lb].src_id != bank.blocks[bk].src_id).unwrap_or(false);
+            if !first {
+                joins.push(((pos + xf / 2) % n, changed));
+            }
+            first = false;
             last = Some((bk, st));
             let g = m::undb(rng.range(-1.0, 1.0)) * norm;
             let x = &bank.blocks[bk].samples;
@@ -194,33 +255,111 @@ pub fn texture(bank: &Bank, class: &str, seed: u64, n: usize) -> Option<(Vec<f64
         }
     }
     let sources = p.iter().map(|(s, _)| *s).collect();
-    Some((out, Info { segments: segs, sources, streams }))
+    Some((out, Info { segments: segs, sources, streams, joins }))
 }
 
-/// A finished loop: texture, its low-passes and a 30 Hz high-pass (circular), levelled. (samples, LUFS, true peak)
-pub fn render_loop(bank: &Bank, spec: &LoopSpec, seed: u64) -> Option<(Vec<f64>, f64, f64, Info)> {
+/// An event loop: single drops (the class's grains) at `rate` per second, Poisson on a circular timeline of n samples,
+/// each a random grain at U(-10, 0) dB and varispeed U(0.92, 1.08) (drops differ in size and pitch).
+pub fn events(bank: &Bank, class: &str, seed: u64, n: usize, rate: f64) -> Option<(Vec<f64>, Info)> {
+    let p = pool(bank, class);
+    let all: Vec<usize> = p.iter().flat_map(|(_, v)| v.clone()).collect();
+    if all.is_empty() {
+        return None;
+    }
+    let mut rng = Rng::new(seed, &format!("tex-events-{class}-{rate}"));
+    let mut out = vec![0.0f64; n];
+    let mut t = 0.0f64;
+    let mut count = 0;
+    loop {
+        t += -m::ln(1.0 - rng.f()) / rate;
+        let at = (t * SR) as usize;
+        if at >= n {
+            break;
+        }
+        let k = all[((rng.f() * all.len() as f64) as usize).min(all.len() - 1)];
+        let g = m::undb(rng.range(-10.0, 0.0));
+        let vs = rng.range(0.92, 1.08);
+        let x = &bank.blocks[k].samples;
+        let len = ((x.len() as f64 - 3.0) / vs) as usize;
+        for i in 0..len {
+            out[(at + i) % n] += cubic(x, i as f64 * vs) * g;
+        }
+        count += 1;
+    }
+    Some((out, Info { segments: count, sources: p.iter().map(|(s, _)| *s).collect(), streams: 1, joins: vec![] }))
+}
+
+/// The timbre change across joins: the 1/3-octave shape (dB) of the second before a join's crossfade against the
+/// second after, RMS over the bands; the same at the segments' middles (no join) as the yardstick. (median, p90) for the
+/// joins that change take, and for the middles.
+pub fn join_jumps(x: &[f64], info: &Info, xf_s: f64) -> ((f64, f64), (f64, f64)) {
+    let n = x.len();
+    let w = SR as usize;
+    let half = (xf_s * SR / 2.0) as usize + w / 10;
+    let grab = |a: usize| -> Vec<f64> { (0..w).map(|i| x[(a + i) % n]).collect() };
+    let shape = |a: usize| -> Vec<f64> {
+        crate::texbuild::third_oct_shape(&grab(a)).iter().map(|v| 10.0 * m::log10(v.max(1e-20))).collect()
+    };
+    let d = |c: usize| -> f64 {
+        let a = shape((c + n - half - w) % n);
+        let b = shape((c + half) % n);
+        m::sqrt(a.iter().zip(&b).map(|(p, q)| (p - q) * (p - q)).sum::<f64>() / a.len() as f64)
+    };
+    let mut sw: Vec<f64> = info.joins.iter().filter(|j| j.1).map(|j| d(j.0)).collect();
+    // the yardstick: points midway between consecutive joins of the loop (inside a segment)
+    let mut cs: Vec<usize> = info.joins.iter().map(|j| j.0).collect();
+    cs.sort();
+    let mut mid: Vec<f64> = cs.windows(2).filter(|p| p[1] - p[0] > 3 * w).map(|p| d((p[0] + p[1]) / 2)).collect();
+    let stat = |v: &mut Vec<f64>| -> (f64, f64) {
+        if v.is_empty() {
+            return (0.0, 0.0);
+        }
+        v.sort_by(|a, b| a.total_cmp(b));
+        (v[v.len() / 2], v[((v.len() as f64 * 0.9) as usize).min(v.len() - 1)])
+    };
+    (stat(&mut sw), stat(&mut mid))
+}
+
+/// A finished loop: texture (or events), its filters and a 30 Hz high-pass (circular), levelled (or at `fixed_gain`).
+/// (samples, LUFS, true peak, info, the total gain applied)
+pub fn render_loop(bank: &Bank, spec: &LoopSpec, seed: u64, fixed_gain: Option<f64>) -> Option<(Vec<f64>, f64, f64, Info, f64)> {
     let n = (spec.secs * SR) as usize;
-    let (mut x, info) = texture(bank, spec.class, seed, n)?;
+    let (mut x, info) = if spec.events > 0.0 {
+        events(bank, spec.class, seed, n, spec.events)?
+    } else {
+        texture(bank, spec.class, seed, n)?
+    };
     for &fc in spec.lowpass {
         Biquad::lowpass(SR, fc, std::f64::consts::FRAC_1_SQRT_2).run_circular(&mut x);
+    }
+    if spec.cabin {
+        cabin_filter(&mut x);
     }
     Biquad::highpass(SR, 30.0, std::f64::consts::FRAC_1_SQRT_2).run_circular(&mut x);
     // level, then while the true peak is over CEIL_DB a circular look-ahead limiter at LIM_DB and level again
     let mut tp = 0.0;
+    let mut total = 1.0;
     for _ in 0..4 {
-        let l = loudness::integrated(&x, SR, true);
-        let g = m::undb(spec.lufs - l);
+        let g = match fixed_gain {
+            Some(fg) => fg / total,
+            None => m::undb(spec.lufs - loudness::integrated(&x, SR, true)),
+        };
         for v in x.iter_mut() {
             *v *= g;
         }
+        total *= g;
         tp = loudness::true_peak_db(&x, true);
         if tp <= CEIL_DB {
             break;
         }
         limit_loop(&mut x, LIM_DB);
+        if fixed_gain.is_some() {
+            tp = loudness::true_peak_db(&x, true);
+            break;
+        }
     }
     let li = loudness::integrated(&x, SR, true);
-    Some((x, li, tp, info))
+    Some((x, li, tp, info, total))
 }
 
 fn write_ogg(path: &str, x: &[f64], q: &str) -> Result<(), String> {
@@ -252,15 +391,21 @@ pub fn run_set(args: &[String]) -> Result<(), String> {
     let prefix = arg(args, "--prefix").unwrap_or_else(|| "bne_rec_".into());
     let only: Option<Vec<String>> = arg(args, "--only").map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
     let ogg = args.iter().any(|a| a == "--ogg");
+    if args.iter().any(|a| a == "--legacy") {
+        let _ = ACTIVE.set(LEGACY);
+    }
+    let pr = params();
     std::fs::create_dir_all(format!("{dir}/wav")).map_err(|e| e.to_string())?;
-    println!("file\tsegments\tstreams\tsources\tLUFS\ttrue peak dBTP");
+    let mut gains: std::collections::BTreeMap<&str, f64> = std::collections::BTreeMap::new();
+    println!("file\tsegments\tstreams\tsources\tLUFS\ttrue peak dBTP\ttake changes / min\ttake-change joins: timbre jump median / p90 dB (inside a segment)");
     for spec in LOOPS.iter() {
         if let Some(o) = &only {
             if !o.iter().any(|n| n == spec.name) {
                 continue;
             }
         }
-        let Some((x, li, tp, info)) = render_loop(&bank, spec, seed) else {
+        let fixed = if spec.gain_of.is_empty() { None } else { gains.get(spec.gain_of).cloned() };
+        let Some((x, li, tp, info, gain)) = render_loop(&bank, spec, seed, fixed) else {
             println!("{}{}\t(no blocks of {})", prefix, spec.name, spec.class);
             continue;
         };
@@ -277,7 +422,10 @@ pub fn run_set(args: &[String]) -> Result<(), String> {
             format!("{{\"class\": \"{}\", \"seed\": {seed}, \"lufs\": {li:.2}, \"true_peak\": {tp:.2}, \"takes\": [{}]}}\n", spec.class, takes.join(", ")),
         )
         .map_err(|e| e.to_string())?;
-        println!("{stem}\t{}\t{}\t{}\t{li:.2}\t{tp:.2}", info.segments, info.streams, src.join(","));
+        gains.insert(spec.name, gain);
+        let ((jm, jp), (mm, mp)) = join_jumps(&x, &info, pr.xf_s);
+        let per_min = info.joins.iter().filter(|j| j.1).count() as f64 * 60.0 / spec.secs;
+        println!("{stem}\t{}\t{}\t{}\t{li:.2}\t{tp:.2}\t{per_min:.1}\t{jm:.2} / {jp:.2} ({mm:.2} / {mp:.2})", info.segments, info.streams, src.join(","));
     }
     let _ = CLASSES;
     Ok(())
@@ -344,14 +492,21 @@ mod tests {
             src_id: src,
             samples: (0..(12.0 * SR) as usize).map(|_| (r.normal() * 0.05) as f32).collect(),
         };
-        Bank { blocks: vec![mk(&mut r, 1, 10), mk(&mut r, 1, 11), mk(&mut r, 1, 10)] }
+        // (blocks long enough for the 12 s segments)
+        let mk2 = |r: &mut Rng, cls: u8, src: u32| {
+            let mut b = mk(r, cls, src);
+            let more = mk(r, cls, src);
+            b.samples.extend(more.samples);
+            b
+        };
+        Bank { blocks: vec![mk2(&mut r, 1, 10), mk2(&mut r, 1, 11), mk2(&mut r, 1, 10)] }
     }
 
     #[test]
     fn deterministic_and_levelled() {
         let b = noise_bank();
-        let a = render_loop(&b, &LOOPS[1], 3).unwrap();
-        let c = render_loop(&b, &LOOPS[1], 3).unwrap();
+        let a = render_loop(&b, &LOOPS[1], 3, None).unwrap();
+        let c = render_loop(&b, &LOOPS[1], 3, None).unwrap();
         assert_eq!(a.0, c.0, "same seed, same samples");
         assert!((a.1 - LOOPS[1].lufs).abs() < 0.05, "levelled: {}", a.1);
         assert_eq!(a.3.streams, 2);
@@ -360,7 +515,7 @@ mod tests {
     #[test]
     fn the_wrap_is_a_crossfade() {
         let b = noise_bank();
-        let (x, ..) = render_loop(&b, &LOOPS[1], 5).unwrap();
+        let (x, ..) = render_loop(&b, &LOOPS[1], 5, None).unwrap();
         let s = check(&x);
         // the seam's 50 ms step is no outlier
         let p: f64 = s.split("(p").nth(1).unwrap().split(')').next().unwrap().parse().unwrap();

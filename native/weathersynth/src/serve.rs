@@ -207,7 +207,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // the first open tried again after OPEN_RETRY_S (a device busy at the game's own start)
     let mut tries = 0;
     let mut out = loop {
-        match crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0, rain_rec: false, rain_vol: None }, bus.clone(), buffer) {
+        match crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0, rain_rec: false, rain_vol: None, roof_near: 0.0, enclosed: true }, bus.clone(), buffer) {
             Ok(o) => break o,
             Err(e) if tries < OPEN_RETRY_S.len() => {
                 eprintln!("live-serve: audio device: {e}; trying again in {} s", OPEN_RETRY_S[tries]);
@@ -281,7 +281,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let stale = last_at.elapsed().as_secs_f64() > HEARTBEAT_S;
         let (rain, thunder) = mix_for(last.as_ref(), stale);
         if let Ok(mut mx) = out.mix.lock() {
-            *mx = crate::audio::Mix { rain, thunder, rain_rec: last.as_ref().map(|m| m.rain_rec).unwrap_or(false), rain_vol: last.as_ref().and_then(|m| m.rain_vol) };
+            *mx = crate::audio::Mix { rain, thunder, rain_rec: last.as_ref().map(|m| m.rain_rec).unwrap_or(false), rain_vol: last.as_ref().and_then(|m| m.rain_vol), roof_near: last.as_ref().map(|m| m.roof_near).unwrap_or(0.0), enclosed: last.as_ref().map(|m| m.enclosed).unwrap_or(true) };
         }
         let x = out.xruns.load(std::sync::atomic::Ordering::Relaxed);
         for _ in xruns_seen..x {
@@ -333,7 +333,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             drop(out);
             // (a little longer after each trouble in a row: a loaded machine gets time to settle)
             std::thread::sleep(Duration::from_millis(200 * trouble_run.clamp(1, 5) as u64));
-            out = crate::audio::open(seed, crate::audio::Mix { rain, thunder, rain_rec: last.as_ref().map(|m| m.rain_rec).unwrap_or(false), rain_vol: last.as_ref().and_then(|m| m.rain_vol) }, bus.clone(), buffer)
+            out = crate::audio::open(seed, crate::audio::Mix { rain, thunder, rain_rec: last.as_ref().map(|m| m.rain_rec).unwrap_or(false), rain_vol: last.as_ref().and_then(|m| m.rain_vol), roof_near: last.as_ref().map(|m| m.roof_near).unwrap_or(0.0), enclosed: last.as_ref().map(|m| m.enclosed).unwrap_or(true) }, bus.clone(), buffer)
                 .unwrap_or_else(|e| fail(format!("audio device (reopening): {e}")));
             base_underruns = None;
         }
@@ -369,7 +369,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     // fade out (LiveRain and the thunder gain follow the silent mix), then stop
     if let Ok(mut mx) = out.mix.lock() {
-        *mx = crate::audio::Mix { rain: silent, thunder: 0.0, rain_rec: false, rain_vol: None };
+        *mx = crate::audio::Mix { rain: silent, thunder: 0.0, rain_rec: false, rain_vol: None, roof_near: 0.0, enclosed: true };
     }
     std::thread::sleep(Duration::from_millis(400));
     bus.stop();

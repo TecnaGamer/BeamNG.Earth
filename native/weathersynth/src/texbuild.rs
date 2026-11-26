@@ -49,7 +49,7 @@ const HISS_QUIET_DBFS: f64 = -40.0;
 /// after-rain takes measure 4-12 dB: dense soft drips in a reverberant yard; a downpour measures 1-3 dB.)
 const DRIP_SPREAD_DB: f64 = 4.0;
 
-pub const CLASSES: [&str; 13] = [
+pub const CLASSES: [&str; 14] = [
     "rain_light",
     "rain_moderate",
     "rain_heavy",
@@ -63,6 +63,8 @@ pub const CLASSES: [&str; 13] = [
     "wind_moderate",
     "wind_strong",
     "hail",
+    // single drops cut from the after-rain takes (the drips loops are scheduled from these, texmix::drips)
+    "drip",
 ];
 
 /// The bank's file name; live-serve reads it from next to the program, or from the source tree's assets folder.
@@ -87,6 +89,7 @@ pub fn class_index(c: &str) -> Option<usize> {
 /// (budget s, cap per source s) of a class
 fn budget(c: &str) -> (f64, f64) {
     match c {
+        "drip" => (90.0, 45.0),
         "wind_light" | "wind_moderate" | "wind_strong" => (300.0, 120.0),
         "rain_car" => (360.0, 120.0),
         _ => (240.0, 90.0),
@@ -98,7 +101,9 @@ fn budget(c: &str) -> (f64, f64) {
 fn crest_max(c: &str) -> f64 {
     match c {
         // light rain is sparse distinct drops, close ones far above the window's level
-        "rain_light" | "roof_light" => *LIGHT_CREST.get().unwrap_or(&30.0),
+        // (the user, 2026-11-26, picked light B: the sparse close-drop takes in, crest up to 40 dB)
+        "rain_light" => *LIGHT_CREST.get().unwrap_or(&40.0),
+        "roof_light" => 30.0,
         "drips" => 34.0,
         "hail" => 30.0,
         _ => 24.0,
@@ -107,7 +112,7 @@ fn crest_max(c: &str) -> f64 {
 
 /// windows over this crest are noted in the verdicts ("transient outlier (crest N dB)"); crest_max decides
 const CREST_RECORD_DB: f64 = 24.0;
-/// --light-crest DB: the light classes' crest limit (default 30; a variant with the sparsest close-drop takes: 40)
+/// --light-crest DB: light rain's crest limit (default 40: light B, the user's pick; 30 left the sparse takes out)
 static LIGHT_CREST: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 
 fn crest_of(reason: &str) -> Option<f64> {
@@ -316,6 +321,93 @@ fn runs_of(verdicts: &[(f64, Vec<String>)], src: usize) -> Vec<Run> {
     }
     out
 }
+
+/// a recording whose 1/3-octave shape deviates more than this (dB RMS over the bands) from its class's median is left
+/// out of that class (while more than two recordings remain)
+const SPEC_DEV_MAX: f64 = 7.5;
+/// classes the spectral check leaves alone: light rain is the user's pick B, its sparse close-drop takes by design
+const SPEC_EXEMPT: [&str; 1] = ["rain_light"];
+
+/// The 1/3-octave power shape of x, 50 Hz-16 kHz, normalised to sum 1.
+pub fn third_oct_shape(x: &[f64]) -> Vec<f64> {
+    let (f, p) = gb::psd(x, 8192);
+    let mut out = Vec::new();
+    let mut fc = 50.0f64;
+    while fc <= 16000.0 {
+        let (lo, hi) = (fc / m::pow(2.0, 1.0 / 6.0), fc * m::pow(2.0, 1.0 / 6.0));
+        out.push(gb::band_power(&f, &p, lo, hi));
+        fc *= m::pow(2.0, 1.0 / 3.0);
+    }
+    let t: f64 = out.iter().sum::<f64>().max(1e-30);
+    out.iter().map(|v| v / t).collect()
+}
+
+/// Single drops in a block: 5 ms envelope peaks of the 1-8 kHz band DRIP_RISE_DB over its 1 s running median, with
+/// no other such peak from 100 ms before to 250 ms after, back within 4 dB of the bed in the grain's last 100 ms (the
+/// bed itself 18 dB or more under the drop, so the grains carry no audible rain between drops).
+/// Each grain: 5 ms before the onset to 295 ms after, faded in over 3 ms and out over the last 150 ms (cos), its sample
+/// peak set to DRIP_PEAK_DBFS. Returns (start s in the block, samples).
+pub fn drip_grains(x: &[f64]) -> Vec<(f64, Vec<f64>)> {
+    let b = gb::bandpass_fft(x, 1000.0, 8000.0);
+    let w = (0.005 * SR) as usize;
+    let env: Vec<f64> = (0..b.len() / w).map(|i| gb::db10(gb::mean_sq(&b[i * w..(i + 1) * w]))).collect();
+    let n = env.len();
+    let mut cand = Vec::new();
+    let mut floor = vec![0.0; n];
+    for j in 0..n {
+        let a = j.saturating_sub(100);
+        let c = (j + 101).min(n);
+        floor[j] = crate::npx::median(&env[a..c]);
+    }
+    for j in 6..n.saturating_sub(6) {
+        let md = floor[j];
+        let local_max = (j.saturating_sub(6)..=(j + 6).min(n - 1)).all(|k| env[k] <= env[j]);
+        if local_max && env[j] - md > DRIP_RISE_DB {
+            cand.push(j);
+        }
+    }
+    let mut out = Vec::new();
+    for (ci, &j) in cand.iter().enumerate() {
+        let near = cand.iter().enumerate().any(|(k, &o)| k != ci && (o + 20 > j && o < j + 50));
+        if near {
+            continue;
+        }
+        let mut on = j;
+        while on > 0 && j - on < 4 && env[on - 1] > env[j] - 20.0 {
+            on -= 1;
+        }
+        let s0 = (on * w).saturating_sub((0.005 * SR) as usize);
+        let len = (0.3 * SR) as usize;
+        if s0 + len > x.len() {
+            continue;
+        }
+        let tail = &env[(s0 + len) / w - 20..(s0 + len) / w];
+        // (decayed into the bed by the grain's end: no ringing cut off)
+        if tail.iter().cloned().fold(f64::NEG_INFINITY, f64::max) > floor[j] + 4.0 {
+            continue;
+        }
+        let mut g: Vec<f64> = x[s0..s0 + len].to_vec();
+        let fi = (0.003 * SR) as usize;
+        let fo = (0.15 * SR) as usize;
+        for (i, v) in g.iter_mut().enumerate() {
+            if i < fi {
+                *v *= m::sin(0.5 * m::PI * i as f64 / fi as f64);
+            }
+            if i >= len - fo {
+                *v *= m::cos(0.5 * m::PI * (i - (len - fo)) as f64 / fo as f64);
+            }
+        }
+        let pk = g.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+        let k = m::undb(DRIP_PEAK_DBFS) / pk.max(1e-9);
+        for v in g.iter_mut() {
+            *v *= k;
+        }
+        out.push((s0 as f64 / SR, g));
+    }
+    out
+}
+const DRIP_RISE_DB: f64 = 18.0;
+const DRIP_PEAK_DBFS: f64 = -6.0;
 
 /// Envelope statistics of a block: (kurtosis of the 2.5-6 kHz 5 ms envelope, onsets per s >= 6 dB over the 1 s
 /// running median of that envelope, spectral centroid Hz 40 Hz-16 kHz).
@@ -557,7 +649,32 @@ pub fn run(args: &[String]) -> Result<(), String> {
         fit_log.push_str(&format!("{}\t{c}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.0}\t{}\n", srcs[b.src].id, b.t0, b.t1, b.kurt, b.onsets, b.centroid, fits_class(c, b.kurt)));
     }
     std::fs::write(out.join("blocks_fit.tsv"), fit_log).map_err(|e| e.to_string())?;
-    let mut blocks_all: Vec<Block> = blocks_all.into_iter().filter(|b| fits_class(&srcs[b.src].cls, b.kurt)).collect();
+    let blocks_all: Vec<Block> = blocks_all.into_iter().filter(|b| fits_class(&srcs[b.src].cls, b.kurt)).collect();
+    // one gain per recording (the median of its blocks' own): a take keeps its level from block to block, so a stream
+    // that moves within it has no level steps; a block whose peak would then pass 0.95 is left out
+    let mut by_src_g: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
+    for b in &blocks_all {
+        by_src_g.entry(b.src).or_default().push(b.gain_db);
+    }
+    let src_gain: BTreeMap<usize, f64> = by_src_g.iter().map(|(s, v)| (*s, crate::npx::median(v))).collect();
+    let mut gain_log = String::new();
+    let mut blocks_all: Vec<Block> = blocks_all
+        .into_iter()
+        .filter_map(|mut b| {
+            let g = src_gain[&b.src];
+            let k = m::undb(g - b.gain_db);
+            let pk = b.samples.iter().fold(0.0f64, |a, v| a.max(v.abs())) * k;
+            if pk > 0.95 {
+                gain_log.push_str(&format!("{}\t{:.2}\t{:.2}\tpeak {:.2} at the recording's gain: left out\n", srcs[b.src].id, b.t0, b.t1, pk));
+                return None;
+            }
+            for v in b.samples.iter_mut() {
+                *v *= k;
+            }
+            b.gain_db = g;
+            Some(b)
+        })
+        .collect();
     // the car takes split by kurtosis (terciles over the seconds)
     let car: Vec<usize> = (0..blocks_all.len()).filter(|&k| srcs[blocks_all[k].src].cls == "rain_car").collect();
     if !car.is_empty() {
@@ -573,6 +690,71 @@ pub fn run(args: &[String]) -> Result<(), String> {
             blocks_all[k].cls = class_index(c).unwrap();
         }
     }
+    // spectral consistency per class: a recording whose mean 1/3-octave shape is far from the class's median shape (an
+    // odd microphone or surface, a one-off) makes the mix's timbre jump when the streams switch to it; the worst such
+    // recordings go while more than two remain (BANKDIR/spec_dev.tsv lists every deviation)
+    let spec_max: f64 = arg(args, "--spec-dev").and_then(|v| v.parse().ok()).unwrap_or(SPEC_DEV_MAX);
+    let mut spec_log = String::from("class\tsource\tdeviation_db\tkept\n");
+    let mut drop_pair: Vec<(usize, usize)> = Vec::new();
+    for ci in 0..CLASSES.len() {
+        let mut by: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
+        let mut cnt: BTreeMap<usize, f64> = BTreeMap::new();
+        for b in blocks_all.iter().filter(|b| b.cls == ci) {
+            let sp = third_oct_shape(&b.samples);
+            let e = by.entry(b.src).or_insert_with(|| vec![0.0; sp.len()]);
+            for (a, v) in e.iter_mut().zip(&sp) {
+                *a += v;
+            }
+            *cnt.entry(b.src).or_insert(0.0) += 1.0;
+        }
+        if by.len() < 3 || SPEC_EXEMPT.contains(&CLASSES[ci]) {
+            continue;
+        }
+        let shapes: BTreeMap<usize, Vec<f64>> = by
+            .iter()
+            .map(|(s, v)| (*s, v.iter().map(|p| 10.0 * m::log10((p / cnt[s]).max(1e-20))).collect()))
+            .collect();
+        let nb = shapes.values().next().unwrap().len();
+        let mut alive: Vec<usize> = shapes.keys().cloned().collect();
+        loop {
+            let med: Vec<f64> = (0..nb).map(|k| crate::npx::median(&alive.iter().map(|s| shapes[s][k]).collect::<Vec<_>>())).collect();
+            let dev = |s: usize| m::sqrt(shapes[&s].iter().zip(&med).map(|(a, b)| (a - b) * (a - b)).sum::<f64>() / nb as f64);
+            let worst = *alive.iter().max_by(|a, b| dev(**a).total_cmp(&dev(**b))).unwrap();
+            if alive.len() <= 2 || dev(worst) <= spec_max {
+                for s in &alive {
+                    spec_log.push_str(&format!("{}\t{}\t{:.2}\ttrue\n", CLASSES[ci], srcs[*s].id, dev(*s)));
+                }
+                break;
+            }
+            spec_log.push_str(&format!("{}\t{}\t{:.2}\tfalse\n", CLASSES[ci], srcs[worst].id, dev(worst)));
+            drop_pair.push((ci, worst));
+            alive.retain(|s| *s != worst);
+        }
+    }
+    std::fs::write(out.join("spec_dev.tsv"), spec_log).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("gain_log.tsv"), gain_log).map_err(|e| e.to_string())?;
+    blocks_all.retain(|b| !drop_pair.contains(&(b.cls, b.src)));
+    // single drops from the after-rain takes
+    let drip_ci = class_index("drip").unwrap();
+    let mut grains: Vec<Block> = Vec::new();
+    // (the after-rain takes, and the light-rain and gutter takes with distinct drops: the drops are the same water on
+    // leaves, ground and eaves)
+    for b in blocks_all.iter().filter(|b| matches!(srcs[b.src].cls.as_str(), "drips" | "rain_light" | "gutter")) {
+        for (t, g) in drip_grains(&b.samples) {
+            grains.push(Block {
+                cls: drip_ci,
+                src: b.src,
+                t0: b.t0 + t,
+                t1: b.t0 + t + g.len() as f64 / SR,
+                gain_db: b.gain_db,
+                kurt: 0.0,
+                onsets: 0.0,
+                centroid: 0.0,
+                samples: g,
+            });
+        }
+    }
+    blocks_all.extend(grains);
     // selection: per class, round-robin over sources (their longest runs first), within budget and caps
     let mut chosen: Vec<Block> = Vec::new();
     let mut summary = String::new();
@@ -734,8 +916,9 @@ pub fn run_live(args: &[String]) -> Result<(), String> {
     let dir = PathBuf::from(arg(args, "--out-dir").ok_or("--out-dir DIR")?);
     let full = arg(args, "--manifest").ok_or("--manifest FULL/manifest.json (the sources' titles and pages)")?;
     let meta = source_meta(Path::new(&full))?;
-    let per: f64 = arg(args, "--per-class").and_then(|v| v.parse().ok()).unwrap_or(36.0);
-    let maxb: f64 = arg(args, "--max-block").and_then(|v| v.parse().ok()).unwrap_or(12.0);
+    // (blocks long enough for texmix::PARAMS's longest segment and its crossfade: 12 + 1 s at 1 % varispeed)
+    let per: f64 = arg(args, "--per-class").and_then(|v| v.parse().ok()).unwrap_or(45.0);
+    let maxb: f64 = arg(args, "--max-block").and_then(|v| v.parse().ok()).unwrap_or(15.0);
     let live = [
         "rain_light",
         "rain_moderate",
@@ -746,6 +929,7 @@ pub fn run_live(args: &[String]) -> Result<(), String> {
         "wind_light",
         "wind_moderate",
         "wind_strong",
+        "rain_under",
     ];
     let mut keep: Vec<TexBlock> = Vec::new();
     let mut report = String::new();
@@ -771,12 +955,24 @@ pub fn run_live(args: &[String]) -> Result<(), String> {
                 any = true;
                 let s = &bank.blocks[k].samples;
                 let want = ((maxb.min(per - total)) * SR) as usize;
-                if want < (6.0 * SR) as usize {
+                if want < (14.0 * SR) as usize {
                     break 'outer;
                 }
                 let len = want.min(s.len());
                 let a = (s.len() - len) / 2;
-                keep.push(TexBlock { cls: ci, src_id: bank.blocks[k].src_id, samples: s[a..a + len].to_vec() });
+                // (each live block at BLOCK_LUFS on its own: the live layers' gains assume it; a 15 s piece of a take
+                // may sit a few dB off its recording's median, and the live mix has no loop to level as a whole)
+                let mut piece: Vec<f32> = s[a..a + len].to_vec();
+                let x64: Vec<f64> = piece.iter().map(|v| *v as f64).collect();
+                let mut g = m::undb(BLOCK_LUFS - loudness::integrated(&x64, SR, false));
+                let pk = piece.iter().fold(0.0f32, |p, v| p.max(v.abs())) as f64;
+                if pk * g > 0.99 {
+                    g = 0.99 / pk;
+                }
+                for v in piece.iter_mut() {
+                    *v = (*v as f64 * g) as f32;
+                }
+                keep.push(TexBlock { cls: ci, src_id: bank.blocks[k].src_id, samples: piece });
                 total += len as f64 / SR;
                 n += 1;
             }

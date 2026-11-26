@@ -289,7 +289,7 @@ fn run() -> Result<(), String> {
                 (r.parse().unwrap_or(5.0), f("--shelter", 1.0), f("--cabin", 0.0))
             });
             let c0 = live::Controls { rain_mm_h: 0.0, shelter: 1.0, cabin: 0.0, volume: 0.5, muted: false };
-            let out = audio::open(1, audio::Mix { rain: c0, thunder: 0.0, rain_rec: false, rain_vol: None }, std::sync::Arc::new(thunderlive::Bus::new()), 0)?;
+            let out = audio::open(1, audio::Mix { rain: c0, thunder: 0.0, rain_rec: false, rain_vol: None, roof_near: 0.0, enclosed: true }, std::sync::Arc::new(thunderlive::Bus::new()), 0)?;
             println!("device={} rate={} channels={}", out.device_name, out.sample_rate, out.channels);
             let t0 = std::time::Instant::now();
             let mut last = -1i64;

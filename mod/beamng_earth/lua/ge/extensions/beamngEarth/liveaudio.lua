@@ -74,14 +74,16 @@ function M.fields(ctx)
     -- the rain share), so the synth plays at the files' level
     rainSet = (ctx.rainSet == 'recorded') and 'recorded' or 'generated',
     rainVol = c01(ctx.rainVol, 0.5),
+    -- the roof outside near the car (0..1) and whether a shelter is enclosed (muffled A) or open (B)
+    roofNear = c01(ctx.roofNear, 0), enclosed = ctx.enclosed ~= false,
   }
 end
 
 -- Pure: what decides a resend (rounded, so jitter does not send every frame).
 function M.signature(m, f)
-  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s|%s|%s|%.2f', m, f.rainMmH, f.windMs, f.shelter,
-    tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet),
-    tostring(M.synthRain()), tostring(f.rainSet), f.rainVol)
+  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s|%s|%s|%.2f|%.1f|%s', m, f.rainMmH, f.windMs,
+    f.shelter, tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck,
+    tostring(f.thunderSet), tostring(M.synthRain()), tostring(f.rainSet), f.rainVol, f.roofNear, tostring(f.enclosed))
 end
 
 -- Pure: the id of strike s ({ t, seed }): its hint and its final one share it.
@@ -324,7 +326,7 @@ function M.tick(now, ctx)
     return send({ type = 'weather_audio', mode = mode, rainMmH = f.rainMmH, windMs = f.windMs,
       shelter = f.shelter, tunnel = f.tunnel, cabin = f.cabin, volume = f.volume, thunderVolume = f.thunderVolume,
       muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, synthRain = M.synthRain(),
-      rainSet = f.rainSet, rainVol = f.rainVol,
+      rainSet = f.rainSet, rainVol = f.rainVol, roofNear = f.roofNear, enclosed = f.enclosed,
       thunders = th })
   end)
   if ok and sent then

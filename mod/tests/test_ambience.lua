@@ -198,12 +198,26 @@ T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_UNDER_ROOF) < 1e
 mx = amb.rainMix(0.5, 5, 1, true, false)
 T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_IN_TUNNEL) < 1e-9, 'in a tunnel: muffled, quieter')
 mx = amb.rainMix(0.5, 5, 1, false, true)
-T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roof_medium - 0.5 * amb.RAIN_ROOF) < 1e-9
-  and mx.roof_light == 0 and mx.roof_heavy == 0, 'in the car: on the roof')
+T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roofcab_medium - 0.5 * amb.RAIN_ROOF) < 1e-9
+  and mx.roofcab_light == 0 and mx.roofcab_heavy == 0 and mx.roof_medium == 0, 'in the car: the roof through the cabin')
 mx = amb.rainMix(0.5, 13, 1, false, true)
-T.check(mx.roof_medium > 0 and mx.roof_heavy > 0
-  and math.abs(math.sqrt(mx.roof_medium ^ 2 + mx.roof_heavy ^ 2) - 0.5 * amb.RAIN_ROOF) < 1e-9,
+T.check(mx.roofcab_medium > 0 and mx.roofcab_heavy > 0
+  and math.abs(math.sqrt(mx.roofcab_medium ^ 2 + mx.roofcab_heavy ^ 2) - 0.5 * amb.RAIN_ROOF) < 1e-9,
   'heavier rain on the roof: the medium and heavy roof loops crossfaded')
+-- outside: the plain roof by the camera (hood / bumper full, orbit lightly by distance), none far off
+mx = amb.rainMix(0.5, 5, 1, false, false, 1)
+T.check(math.abs(mx.roof_medium - 0.5 * amb.RAIN_ROOF) < 1e-9 and mx.roofcab_medium == 0 and math.abs(mx.medium - 0.5) < 1e-9,
+  'hood camera: the plain roof, the rain unmuffled')
+T.check(amb.roofNearFor('onboard', 30) == 1 and amb.roofNearFor('driver', 1) == 0, 'roofNear: hood 1, inside 0')
+T.check(math.abs(amb.roofNearFor('orbit', amb.ROOF_NEAR_M) - amb.ROOF_ORBIT) < 1e-12 and amb.roofNearFor('orbit', amb.ROOF_FAR_M) == 0
+  and amb.roofNearFor('orbit', 8) > 0 and amb.roofNearFor('orbit', 8) < amb.ROOF_ORBIT, 'roofNear: orbit by distance')
+-- under an open shelter (a bridge, an overpass): muffled B; enclosed or a tunnel: muffled A
+mx = amb.rainMix(0.5, 5, 0, false, false, 0, true)
+T.check(mx.muffled == 0 and math.abs(mx.muffled_open - 0.5 * amb.RAIN_UNDER_ROOF) < 1e-9, 'under an open bridge: muffled B')
+mx = amb.rainMix(0.5, 5, 1, true, false, 0, true)
+T.check(mx.muffled_open == 0 and mx.muffled > 0, 'a tunnel: muffled A even when the last shelter was open')
+T.check(amb.openShelter('bridge') and amb.openShelter('roof') and not amb.openShelter('roof_enclosed')
+  and not amb.openShelter('tunnel') and not amb.openShelter('parking'), 'shelter kinds: open and enclosed')
 
 local rainParticles = S.newObject('Precipitation')
 rainParticles:registerObject('bngEarthRain')
@@ -229,11 +243,18 @@ beamngEarth_weather.rainNow = 0
 for i = 1, 12 do clock = 386 + i * 0.5; amb.update(3, seaV) end
 T.check(layer('bne_rain_muffled.ogg') == nil and layer('bne_rain_medium.ogg') == nil, 'the rain stopped: the layers gone')
 -- ... and the drips after it, fading out over DRIPS_S
-local dr = layer('bne_drips.ogg')
-T.check(dr and dr.vol > 0 and dr.fieldsAtRegister.description == 'AudioEnvironment', 'after the rain: the drips')
+local dr = layer('bne_drips_1.ogg')
+T.check(dr and dr.vol > 0 and dr.fieldsAtRegister.description == 'AudioEnvironment' and layer('bne_drips_3.ogg') == nil,
+  'after the rain: the drips, the densest loop first')
+local d1 = amb.dripsLevel(1, amb.DRIPS_S * 0.7)
+T.check(math.abs(d1[1] - 1) < 1e-12 and math.abs(d1[2] - 0.7) < 1e-12, 'drips at 70 %: full level, the sparsest layer')
+local em3 = amb.extraMix(0, d1, 0, 1, false, false)
+T.check(em3.drips_3 > 0 and em3.drips_1 == 0, 'drips at 70 %: drips_3')
+T.check(amb.dripsLevel(1, amb.DRIPS_S * 0.9)[1] < 1 and amb.dripsLevel(1, amb.DRIPS_S)[1] == 0, 'the drips fade out at the end')
 clock = 386 + 6 + amb.DRIPS_S + 1; amb.update(3, seaV)
 for i = 1, 8 do clock = clock + 0.5; amb.update(3, seaV) end
-T.check(layer('bne_drips.ogg') == nil, 'the drips stop after DRIPS_S')
+T.check(layer('bne_drips_1.ogg') == nil and layer('bne_drips_2.ogg') == nil and layer('bne_drips_3.ogg') == nil,
+  'the drips stop after DRIPS_S')
 -- wind by strength: none when calm, the layer of the speed when windy, gone when calm again
 beamngEarth_weather = { rainNow = 0, rainMmHNow = 0, shelter = 1, windMsNow = 0.5 }
 clock = clock + 0.5; amb.update(3, seaV)
@@ -258,7 +279,7 @@ T.check(math.abs(math.sqrt(em.wind_light ^ 2 + em.wind_moderate ^ 2) - amb.WIND_
 T.check(amb.extraMix(8, 0, 0, 1, true, false).wind_moderate == 0, 'in a tunnel: no wind')
 T.check(math.abs(amb.extraMix(8, 0, 0, 1, false, true).wind_moderate - amb.WIND_GAIN * amb.RAIN_CABIN) < 1e-9, 'in the car: damped')
 T.check(amb.extraMix(0.5, 0, 0, 1, false, false).wind_light == 0, 'under WIND_FROM_MS: silent')
-T.check(math.abs(amb.dripsLevel(0.8, amb.DRIPS_S / 2) - 0.4) < 1e-12 and amb.dripsLevel(1, amb.DRIPS_S + 1) == 0, 'drips fade')
+T.check(math.abs(amb.dripsLevel(0.8, amb.DRIPS_S / 2)[1] - 0.8) < 1e-12 and amb.dripsLevel(1, amb.DRIPS_S + 1)[1] == 0, 'drips fade')
 -- the Rain sound: recorded swaps the layers' files (the same names, bne_rain_rec_*)
 amb.setRainSet('recorded')
 beamngEarth_weather = { rainNow = 1, rainMmHNow = 5, shelter = 1 }

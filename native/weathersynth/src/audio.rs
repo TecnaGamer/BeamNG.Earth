@@ -89,6 +89,9 @@ pub struct Mix {
     pub rain_rec: bool,
     /// the mod's rain volume for its layers (proto rainVol; None: RAIN_BED_GAIN x the share)
     pub rain_vol: Option<f64>,
+    /// the recorded rain's roof outside near the car, and the shelter's kind (proto roofNear, enclosed)
+    pub roof_near: f64,
+    pub enclosed: bool,
 }
 
 /// The ring's fill target: fill_target's (about one callback and a margin), more after each underrun (from GROW_AFTER_S in), at
@@ -449,6 +452,8 @@ impl Worker {
                         wind_ms: 0.0,
                         shelter: r.shelter,
                         cabin: r.cabin,
+                        roof_near: m.roof_near,
+                        enclosed: m.enclosed,
                         // the loops' loudness x the mod's rain volume (as the game plays its files)
                         rain_volume: r.volume
                             * m.rain_vol.unwrap_or_else(|| crate::live::RAIN_BED_GAIN * crate::live::rain_share(r.rain_mm_h)),

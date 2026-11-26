@@ -263,6 +263,10 @@ pub struct Msg {
     /// the mod's own rain volume for its layers (RAIN_GAIN x the rain share, 0..1): the recorded rain (livetex.rs) plays
     /// its loops' loudness x this, as the game plays its files; None (an older mod): live::RAIN_BED_GAIN x the share
     pub rain_vol: Option<f64>,
+    /// the roof heard from outside near the car (0..1: hood / bumper cameras 1, orbit by distance; absent 0)
+    pub roof_near: f64,
+    /// under an enclosed shelter (tunnel, closed bridge, building; absent: true) or an open one (bridge, overpass)
+    pub enclosed: bool,
 }
 
 pub const MAX_THUNDERS: usize = 32;
@@ -313,6 +317,8 @@ pub fn msg(line: &str) -> Result<Msg, String> {
         thunders,
         rain_rec: j.str("rainSet") == Some("recorded"),
         rain_vol: j.num("rainVol").map(|v| v.clamp(0.0, 1.0)),
+        roof_near: c01("roofNear", 0.0),
+        enclosed: j.bool("enclosed").unwrap_or(true),
     })
 }
 
