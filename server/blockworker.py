@@ -3014,7 +3014,9 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
                                   clip_poly=quad, puddles=True) if any(c.get("puddle") for c in chunks) else None
         if pmesh is not None:
             roadmeshmod.write(os.path.join(out_dir, names["puddle"]), pmesh)
-            data["puddle"] = {"shape": f"{vfs_dir}/{names['puddle']}", "pos": list(origin)}
+            # (with the spots the mod's aquaplaning looks the tyres up in: roadwear.puddle_spots)
+            data["puddle"] = {"shape": f"{vfs_dir}/{names['puddle']}", "pos": list(origin),
+                              "spots": roadwear.puddle_spots(chunks, pmesh, origin)}
         mark("puddles")
     elif chunks:                    # (no mesh: the mod's DecalRoads, as an anchor tile's)
         data["chunks"] = [dict(c, n=np.asarray(c["n"]).tolist()) if c.get("n") is not None else c
