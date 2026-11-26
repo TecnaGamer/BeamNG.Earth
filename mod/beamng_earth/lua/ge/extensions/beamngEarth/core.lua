@@ -3094,9 +3094,6 @@ local function onUpdate(dtReal, dtSim)
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat, st.koppen)
   if terrain.wetDirty then pcall(M._rewetBlock) end        -- (the wet streets' step: a flag test otherwise)
-  require('beamngEarth/seasondate').sync(net)     -- (the photo's season date to the server: settings seasonDate)
-  groundcover.setLatitude(st.anchor and st.anchor.lat, st.anchor and st.anchor.lon)   -- (the grass's season: its
-  -- hemisphere; its place: the Atlantic's Csb)
   t = mark('ui', t)
   local frameMs = frameMs0
   statusbar.frame(frameMs0)
@@ -3354,6 +3351,7 @@ local function onUpdate(dtReal, dtSim)
   if not M._mpMarked then M._mpMarked = true; pcall(mpsession.setMark, mark, hitchClock) end
   updateBeamMP(dtReal)
   t = mark('beammp', t)
+  require('beamngEarth/seasondate').frame(net, st.anchor)   -- (the season date to the server, the grass's place)
   -- Lua garbage collection pacing (gcpace.lua): the engine's full collections kept out of play, after the frame's own
   -- work; hidden frames (the loading cover, paused, the 3D map) may take the unavoidable one
   if st.inOurLevel and not M._gcBroken then

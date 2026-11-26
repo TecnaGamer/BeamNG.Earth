@@ -263,7 +263,8 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'weatherStormLight',
   'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherSoundSource', 'weatherThunderSound', 'realClouds',
-  'realFog', 'realWind', 'realPrecip', 'fogLimit', 'seasonDate', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
+  'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
+  'seasonDate',     -- (this branch's: on its own line, out of dev's busy lines above)
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',

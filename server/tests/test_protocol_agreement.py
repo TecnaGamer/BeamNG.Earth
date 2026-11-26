@@ -230,7 +230,8 @@ def mod_sends():
     terrainpatch.lua and spaceclouds.lua (core hands them net.send)."""
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
-                              "addons.lua", "api.lua", "terrainfiles.lua", "seasondate.lua", "winterlook.lua"), r"net(?:'\))?\.send\(\{"),
+                              "addons.lua", "api.lua", "terrainfiles.lua", "winterlook.lua"), r"net(?:'\))?\.send\(\{"),
+                           (("seasondate.lua",), r"\bnet\.send\(\{"),     # (this branch's: an entry of its own)
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua", "liveaudio.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):

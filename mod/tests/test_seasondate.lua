@@ -33,6 +33,20 @@ T.check(S.sync(net) and sent[2].doy == nil, 'back to the clock: sent once (no da
 T.check(not S.sync(net), 'not again')
 S.resetSent()
 T.check(S.sync(net), 'after a hello: sent again')
+-- frame: the sending and the grass's place in one call (core's one line)
+do
+  local got
+  local was = package.loaded['beamngEarth/groundcover']
+  package.loaded['beamngEarth/groundcover'] = { setLatitude = function(la, lo) got = { la, lo } end }
+  S.resetSent()
+  S.frame(net, { lat = 41.16, lon = -8.11 })
+  T.check(got and got[1] == 41.16 and got[2] == -8.11, 'frame: the anchor place to the grass')
+  T.check(sent[#sent].type == 'season_date', 'frame: the date sent after a hello')
+  got = nil
+  S.frame(net, nil)
+  T.check(got and got[1] == nil and got[2] == nil, 'frame: no anchor, no place')
+  package.loaded['beamngEarth/groundcover'] = was
+end
 core_environment = saved
 S.setSource('clock')
 

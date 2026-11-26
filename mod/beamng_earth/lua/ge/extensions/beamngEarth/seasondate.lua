@@ -67,4 +67,12 @@ function M.sync(net, force)
 end
 function M.resetSent() sent = false end
 
+-- The frame's call from core (one line there, out of its busy season lines): the server's day sent when it changed
+-- (sync), and the anchor's place to the grass (groundcover.setLatitude: the season's hemisphere, the Atlantic's Csb).
+function M.frame(net, anchor)
+  M.sync(net)
+  local ok, gc = pcall(require, 'beamngEarth/groundcover')
+  if ok and type(gc) == 'table' and gc.setLatitude then gc.setLatitude(anchor and anchor.lat, anchor and anchor.lon) end
+end
+
 return M
