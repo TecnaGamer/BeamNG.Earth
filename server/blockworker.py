@@ -1117,6 +1117,19 @@ def _roads_cell(key):
     return _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
 
 
+def _pins_legacy(planner):
+    """(636, T1, BNE_ROADSYS_TUNNELS) roadsys.pins_near's legacy(feature, lat, lon): round a tunnel the record does not
+    build (under water: T3) the squares' targets as without the record; the planner's own tunnel networks say which, as
+    its tunnel sections do (TunnelProfiles.feature_drowned). None without the record."""
+    import roadsys
+    if not roadsys.TUNNELS or not hasattr(planner, "_tunnel_chains"):
+        return None
+
+    def legacy(feat, la, lo):
+        return planner._tunnel_chains().store_at(la, lo).feature_drowned(feat, la, lo)
+    return legacy
+
+
 def _profile_pins(planner, la0, lo0, la1, lo1, pad):
     """grading.PROFILE_PINS (BNE_ROADSHAPE=profile, P3b; BNE_ROADSYS=heights, M2): the approach pins of the bridge
     chains whose parts come within pad + roadshape.PIN_REACH_M of the box (heights: roadsys.pins_near), each chain solved (or taken) in this process's bridge
@@ -1128,7 +1141,7 @@ def _profile_pins(planner, la0, lo0, la1, lo1, pad):
     if roadsys.HEIGHTS and not roadshape.PROFILE_BUILT:
         # (BNE_ROADSYS=heights: the profile squares' terrain targets, by square: no chain is asked)
         try:
-            return roadsys.pins_near(la0, lo0, la1, lo1, pad, _roads_cell, _elev_stage1)
+            return roadsys.pins_near(la0, lo0, la1, lo1, pad, _roads_cell, _elev_stage1, legacy=_pins_legacy(planner))
         except (netfetch.FetchError, demmod.DemUnavailable):     # (short, not kept)
             import revisit
             revisit.fault()

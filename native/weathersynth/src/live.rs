@@ -124,7 +124,144 @@ fn derive(r: f64) -> Derived {
     }
 }
 
+// ------------------------------------------------------------------ the level cap (2026-11-26)
+//
+// The user, 2026-11-26: "the rain drops with Live sounds sound terrible and are super lound". The drops play at
+// absolute levels (gain 1 / distance), which in a downpour came out far above the game's own rain. The open-air mix is
+// now never louder than the pre-recorded loops play in the game at the same rate: the loops' loudness (SOURCES.md:
+// light -30.2 @ 0.7 mm/h, medium -24.2 @ 5, heavy -17.2 @ 35 LUFS integrated) crossfaded in log rate as ambience.lua
+// rainWeights does, x the volume the game plays them at (ambience.lua RAIN_GAIN x weather.lua's rain share
+// RAIN_CURVE). A loudness meter (K-weighted, CAP_WINDOW_S) on the uncapped mix sets one gain, falling in CAP_DOWN_S,
+// rising in CAP_UP_S; never above 1 (quieter rain stays as it is). server/tests/test_liveaudio.py checks these
+// numbers against the Lua.
+
+/// ambience.lua RAIN_GAIN (the rainGain of its M.MIX option: change both together; test_liveaudio.py checks)
+pub const RAIN_BED_GAIN: f64 = 0.35; // = ambience.lua MIX rainlow (the user, 2026-11-26)
+/// the loops: (ambience.lua RAIN_LAYERS rate mm/h, SOURCES.md integrated loudness LUFS)
+pub const RAIN_LOOPS: [(f64, f64); 3] = [(0.7, -30.2), (5.0, -24.2), (35.0, -17.2)];
+/// weather.lua RAIN_CURVE (rate mm/h, the rain's share), PRECIP_OFF
+pub const RAIN_SHARE: [(f64, f64); 5] = [(0.05, 0.15), (0.1, 0.25), (1.0, 0.45), (4.0, 0.75), (10.0, 1.0)];
+pub const PRECIP_OFF: f64 = 0.02;
+/// (the drops run 20-30 dB over the loops uncapped, the recorded-mix agent's sweep 2026-11-26: so the meter is short,
+/// momentary loudness, the gain falls fast, starts at 0 and rises only on a signal the meter has seen)
+pub const CAP_WINDOW_S: f64 = 0.4;
+pub const CAP_DOWN_S: f64 = 0.03;
+pub const CAP_UP_S: f64 = 2.0;
+/// below this the meter has nothing to go by: the gain is held
+pub const CAP_FLOOR_LUFS: f64 = -70.0;
+const CAP_BLOCK: usize = 4410; // 100 ms at FS
+const CAP_BLOCKS: usize = (CAP_WINDOW_S * 10.0 + 0.5) as usize; // CAP_WINDOW_S of 100 ms blocks
+
+/// Pure: weather.lua precipPct (the rain's share 0..1 for a rate).
+pub fn rain_share(r: f64) -> f64 {
+    if r <= PRECIP_OFF {
+        return 0.0;
+    }
+    let c = RAIN_SHARE;
+    if r <= c[0].0 {
+        return c[0].1;
+    }
+    for w in c.windows(2) {
+        if r <= w[1].0 {
+            return w[0].1 + (w[1].1 - w[0].1) * m::ln(r / w[0].0) / m::ln(w[1].0 / w[0].0);
+        }
+    }
+    c[c.len() - 1].1
+}
+
+/// Pure: the loudness (LUFS) the game's rain plays at for a rate: the loops crossfaded (ambience.lua rainWeights:
+/// triangles in log10 rate between the loops' rates, the ends held; summed in power) x RAIN_BED_GAIN x the share.
+/// -100 when it does not rain.
+pub fn rain_target_lufs(r: f64) -> f64 {
+    let share = rain_share(r);
+    if share <= 0.0 {
+        return -100.0;
+    }
+    let l = RAIN_LOOPS;
+    let x = m::log10(r.max(1e-3));
+    let mut w = [0.0f64; 3];
+    if x <= m::log10(l[0].0) {
+        w[0] = 1.0;
+    } else if x >= m::log10(l[2].0) {
+        w[2] = 1.0;
+    } else {
+        for i in 0..2 {
+            let (a, b) = (m::log10(l[i].0), m::log10(l[i + 1].0));
+            if x <= b {
+                let t = (x - a) / (b - a);
+                w[i] = 1.0 - t;
+                w[i + 1] = t;
+                break;
+            }
+        }
+    }
+    let p: f64 = (0..3).map(|i| (w[i] * m::undb(l[i].1)).powi(2)).sum();
+    10.0 * m::log10(p.max(1e-30)) + 20.0 * m::log10(RAIN_BED_GAIN * share)
+}
+
+/// The open-air mix's level cap: a K-weighted meter on the uncapped signal, one smoothed gain (no allocation per block).
+pub struct RainCap {
+    k1: Biquad,
+    k2: Biquad,
+    acc: f64,
+    n: usize,
+    blocks: [f64; CAP_BLOCKS],
+    filled: usize,
+    at: usize,
+    pub gain: f64,
+    pub on: bool,
+}
+
+impl RainCap {
+    pub fn new() -> RainCap {
+        let (k1, k2) = crate::loudness::kweight_filters(FS);
+        RainCap { k1, k2, acc: 0.0, n: 0, blocks: [0.0; CAP_BLOCKS], filled: 0, at: 0, gain: 0.0, on: true }
+    }
+
+    /// The meter's loudness now (LUFS over the last CAP_WINDOW_S, or what it has), None before 0.3 s.
+    pub fn measured(&self) -> Option<f64> {
+        if self.filled < 3 {
+            return None;
+        }
+        let s: f64 = self.blocks[..self.filled].iter().sum();
+        Some(crate::loudness::lufs_of(s / self.filled as f64))
+    }
+
+    /// Meter x (the uncapped open-air mix of one block, rate r mm/h), then scale it in place by the cap (ramped over
+    /// the block from the last gain).
+    pub fn process(&mut self, x: &mut [f32], r: f64) {
+        for &v in x.iter() {
+            let k = self.k2.tick(self.k1.tick(v as f64));
+            self.acc += k * k;
+            self.n += 1;
+            if self.n == CAP_BLOCK {
+                self.blocks[self.at] = self.acc / CAP_BLOCK as f64;
+                self.at = (self.at + 1) % CAP_BLOCKS;
+                self.filled = (self.filled + 1).min(CAP_BLOCKS);
+                self.acc = 0.0;
+                self.n = 0;
+            }
+        }
+        let want = match (self.on, self.measured()) {
+            (false, _) => 1.0,
+            (true, Some(l)) if l > CAP_FLOOR_LUFS => m::undb(rain_target_lufs(r) - l).min(1.0),
+            // (silence, or not measured yet: held; a fresh cap starts at 0, so the first drops never burst out)
+            (true, _) => self.gain,
+        };
+        let dt = x.len() as f64 / FS;
+        let tau = if want < self.gain { CAP_DOWN_S } else { CAP_UP_S };
+        let g0 = self.gain;
+        let g1 = g0 + (want - g0) * (1.0 - m::exp(-dt / tau));
+        let n = x.len().max(1) as f64;
+        for (i, v) in x.iter_mut().enumerate() {
+            *v *= (g0 + (g1 - g0) * (i as f64 / n)) as f32;
+        }
+        self.gain = g1;
+    }
+}
+
 pub struct LiveRain {
+    pub cap: RainCap,
     grains: Vec<Grain>,
     bubbles: Vec<Grain>,
     voices: Vec<Voice>,
@@ -199,6 +336,7 @@ impl LiveRain {
         }
         let c = Controls { rain_mm_h: 0.0, shelter: 1.0, cabin: 0.0, volume: 1.0, muted: false };
         LiveRain {
+            cap: RainCap::new(),
             grains,
             bubbles,
             voices: vec![Voice::default(); VOICES],
@@ -407,6 +545,8 @@ impl LiveRain {
             let w = self.wash_lp.tick(self.wash_bp.tick(self.wash_hp.tick(w)));
             *o += w as f32;
         }
+        // the open air never louder than the game's own rain loops at this rate (RainCap)
+        self.cap.process(&mut self.out_open, self.cur.rain_mm_h);
         // mix: open air, under shelter (muffled), in the cabin (roof + outside through the body)
         let sh = self.cur.shelter;
         let cab = self.cur.cabin;
@@ -556,4 +696,77 @@ pub fn thunder_bench(micro_min: f64) -> String {
         ));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_target_is_the_games_rain() {
+        // at the heavy loop's rate (share 1 from 10 mm/h): the loop x RAIN_BED_GAIN
+        assert!((rain_target_lufs(35.0) - (-17.2 + 20.0 * RAIN_BED_GAIN.log10())).abs() < 0.01);
+        // 5 mm/h: the medium loop alone, its share 0.75 + 0.25 ln(5 / 4) / ln(10 / 4)
+        let share = 0.75 + 0.25 * (1.25f64).ln() / (2.5f64).ln();
+        assert!((rain_target_lufs(5.0) - (-24.2 + 20.0 * (RAIN_BED_GAIN * share).log10())).abs() < 0.01);
+        assert!(rain_target_lufs(0.0) <= -100.0 && rain_share(0.01) == 0.0);
+        assert!(rain_target_lufs(15.0) > rain_target_lufs(5.0) && rain_target_lufs(5.0) > rain_target_lufs(0.7));
+    }
+
+    /// The live rain's loudness (integrated over the last half of `secs`) at a fixed rate, the cap on or off.
+    fn loudness_at(rate: f64, cap: bool, secs: f64) -> f64 {
+        let mut lr = LiveRain::new(7);
+        lr.cap.on = cap;
+        lr.set(Controls { rain_mm_h: rate, shelter: 1.0, cabin: 0.0, volume: 1.0, muted: false });
+        let mut out = Vec::new();
+        let mut buf = vec![0.0f32; 512];
+        while (out.len() as f64) < secs * FS {
+            buf.iter_mut().for_each(|v| *v = 0.0);
+            lr.process(&mut buf);
+            out.extend(buf.iter().map(|&v| v as f64));
+        }
+        let half = out.len() / 2;
+        crate::loudness::integrated(&out[half..], FS, false)
+    }
+
+    #[test]
+    fn the_live_rain_is_never_louder_than_the_loops() {
+        for rate in [0.7, 5.0, 15.0, 35.0] {
+            let (raw, capped, target) = (loudness_at(rate, false, 10.0), loudness_at(rate, true, 10.0), rain_target_lufs(rate));
+            eprintln!("live rain {rate} mm/h: uncapped {raw:.1} LUFS, capped {capped:.1}, the game's loops {target:.1}");
+            assert!(capped <= target + 1.0, "{rate} mm/h: {capped:.1} LUFS over the loops' {target:.1}");
+            assert!(capped <= raw + 0.1, "the cap never makes it louder");
+        }
+    }
+
+    #[test]
+    fn no_burst_at_the_start_or_a_downpour_arriving() {
+        // the start at 35 mm/h, then dry, then a jump from drizzle to a downpour: the loudest 400 ms anywhere stays
+        // within a few dB of the loops' level for the rate it reaches
+        let mut lr = LiveRain::new(3);
+        let mut out = Vec::new();
+        let mut buf = vec![0.0f32; 512];
+        let plan = [(35.0, 3.0), (0.0, 3.0), (0.7, 4.0), (35.0, 4.0)];
+        for (rate, secs) in plan {
+            lr.set(Controls { rain_mm_h: rate, shelter: 1.0, cabin: 0.0, volume: 1.0, muted: false });
+            let end = out.len() + (secs * FS) as usize;
+            while out.len() < end {
+                buf.iter_mut().for_each(|v| *v = 0.0);
+                lr.process(&mut buf);
+                out.extend(buf.iter().map(|&v| v as f64));
+            }
+        }
+        let kw = crate::loudness::kweight(&out, FS);
+        let win = (0.4 * FS) as usize;
+        let mut worst = -100.0f64;
+        let mut i = 0;
+        while i + win <= kw.len() {
+            let ms = kw[i..i + win].iter().map(|v| v * v).sum::<f64>() / win as f64;
+            worst = worst.max(crate::loudness::lufs_of(ms));
+            i += win / 4;
+        }
+        let target = rain_target_lufs(35.0);
+        eprintln!("the loudest 400 ms: {worst:.1} LUFS (the loops at 35 mm/h {target:.1})");
+        assert!(worst <= target + 4.0, "{worst:.1} LUFS");
+    }
 }
