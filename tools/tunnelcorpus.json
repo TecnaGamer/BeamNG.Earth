@@ -450,6 +450,15 @@
   "note": "B31 Schuetzenallee west entrance, Tachy's Street View photos 2026-11-22: a town ramp's side walls start where it leaves the level road (no earth banks in town; the ramp itself at 47.98843, 7.86448, 510 m west of the given point, hence r 600); no daylight at a tube's unbuilt end"
  },
  {
+  "name": "freiburg_schuetzenallee_exit_ground",
+  "lat": 47.98645,
+  "lon": 7.87061,
+  "r": 200.0,
+  "issue": null,
+  "kind": "tunnel",
+  "note": "B31 Schuetzenallee, the road just past a tube's exit, Tachy's in-game report 2026-11-26 (dev 76935292, BNE_ROADSYS_TUNNELS=on): terrain stands on the carriageway after the mouth (ground across the open road, not the tube)"
+ },
+ {
   "name": "freiburg_kappler_east",
   "lat": 47.97952,
   "lon": 7.90755,
