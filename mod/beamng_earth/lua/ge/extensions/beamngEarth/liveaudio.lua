@@ -77,7 +77,10 @@ function M.setThunderSet(v)
 end
 function M.thunderSet() return thunderSet end
 -- Whether the synth plays the thunder now (Live, and the set's LIVE_THUNDER).
-function M.liveThunder() return M.LIVE_THUNDER[thunderSet] == true end
+-- (and only when the synth says it plays that set: a synth without its grain bank leaves the thunder to the files)
+function M.liveThunder()
+  return M.LIVE_THUNDER[thunderSet] == true and type(state.sets) == 'table' and state.sets[thunderSet] == true
+end
 
 -- Pure: send now? (a changed signature or a waiting thunder at once; while live also every SEND_S, the heartbeat the
 -- server's synth and state ride on)
@@ -148,7 +151,12 @@ end
 -- core.lua: the server's 'audio_state' { state = 'live' | 'off' | 'failed', reason?, latencyMs? }
 function M.onAudioState(msg)
   if type(msg) ~= 'table' then return end
-  state = { state = tostring(msg.state or 'off'), reason = msg.reason, latencyMs = tonumber(msg.latencyMs), t = clockhp() }
+  local sets = {}
+  if type(msg.thunderSets) == 'table' then
+    for _, v in ipairs(msg.thunderSets) do sets[tostring(v)] = true end
+  end
+  state = { state = tostring(msg.state or 'off'), reason = msg.reason, latencyMs = tonumber(msg.latencyMs), t = clockhp(),
+    sets = sets }
 end
 
 -- A new connection, its end or a level change: the server's word is gone, the pre-recorded sounds come back, and the

@@ -1041,7 +1041,8 @@
    "fields": {
     "state": {"type": "str"},
     "reason": {"type": "str", "optional": true},
-    "latencyMs": {"type": "num", "optional": true}
+    "latencyMs": {"type": "num", "optional": true},
+    "thunderSets": {"type": "list", "optional": true, "doc": "the thunder sets the synth plays itself ('recorded': its grain bank); for any other set the mod plays its own files"}
    }
   },
   "snowstate": {

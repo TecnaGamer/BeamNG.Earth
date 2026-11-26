@@ -36,7 +36,7 @@ EXE = "weathersynth.exe" if os.name == "nt" else "weathersynth"
 FIELDS = ("mode", "rainMmH", "windMs", "shelter", "tunnel", "cabin", "volume", "thunderVolume", "muted", "duck", "t",
           "thunderSet", "thunders")
 THUNDER_FIELDS = ("id", "at", "d", "kind", "gain", "seed", "final")
-STATE_FIELDS = ("state", "reason", "latencyMs")
+STATE_FIELDS = ("state", "reason", "latencyMs", "thunderSets")
 MAX_THUNDERS = 32            # per message (a hint burst is a few)
 QUEUE_MAX = 8                # lines waiting for the child (2 s of heartbeats)
 RETRY_S = (5.0, 30.0)        # the waits before the retries after a failed start
@@ -116,6 +116,8 @@ def state_message(line):
         out["reason"] = d["reason"][:200]
     if isinstance(d.get("latencyMs"), (int, float)) and not isinstance(d.get("latencyMs"), bool):
         out["latencyMs"] = float(d["latencyMs"])
+    if isinstance(d.get("thunderSets"), list):
+        out["thunderSets"] = [v for v in d["thunderSets"][:4] if v in ("generated", "recorded")]
     return out
 
 
