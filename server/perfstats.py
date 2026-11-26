@@ -150,6 +150,21 @@ def _pss_mb(pid):
         return None
 
 
+def _pss_parts(pid):
+    """(Pss, SwapPss) of a Linux process in MB (memwatch: the swapped share counted at the RAM it holds), or None."""
+    try:
+        pss = swp = 0
+        with open(f"/proc/{pid}/smaps_rollup") as f:
+            for line in f:
+                if line.startswith("Pss:"):
+                    pss = int(line.split()[1])
+                elif line.startswith("SwapPss:"):
+                    swp = int(line.split()[1])
+        return pss / 1024.0, swp / 1024.0
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def _win_proc(pid):
     """(CPU seconds, private MB) of a Windows process, or None."""
     import ctypes

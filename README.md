@@ -177,7 +177,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   traffic turns its headlights on and slows down in rain, snow and fog.
 - **Storms**: lightning flashes and bolts with thunder delayed by the distance (the same strikes for everyone with the
   same weather in multiplayer), darker light under storm clouds, optional lit rain streaks around you, a wet look on streets,
-  sidewalks, markings, bridges and buildings, and rain sounds that follow the rain's strength and go muffled under cover.
+  sidewalks, markings, bridges and buildings, puddles that fill in the low spots, along kerbs and in worn wheel ruts and
+  dry up after the rain, and rain sounds that follow the rain's strength and go muffled under cover.
   An experimental "Weather sounds: Live" setting has the app make the thunder live (the rain stays the pre-recorded
   loops for now), through your default audio device at the game's volume, with the pre-recorded sounds as the fallback.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
@@ -428,7 +429,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   when the real weather brings snow, slush, frost or ice, from an hourly snow model of the last 10 days' weather; main
   roads are cleared and salted first and bridges freeze first; the road's condition shows in the status bar; broadleaf
   trees go bare tree by tree in their winter, near and far, a few oaks and young beeches keeping their dead leaves; snow
-  lies on the ground near and far. `BNE_WINTER=light` or `ice` forces a fixed light-snow or ice-storm state); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too). A switch set by hand in the
+  lies on the ground near and far; snowy streets look the part by road class: main roads plowed and salted to wet
+  black lanes with slush at their edges, side streets packed white with grey wheel tracks, markings fading under the
+  snow, snowbanks along plowed roads (never across junctions, crossings or bridges), sidewalks shovelled, trampled or
+  left covered, white bridge decks. `BNE_WINTER=light`, `heavy` or `ice` forces a fixed light-snow, snowstorm or
+  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too). A switch set by hand in the
   server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's

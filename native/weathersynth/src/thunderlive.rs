@@ -325,6 +325,25 @@ struct State {
     render_ms_last: f64,
     late: u64,
     dropped: u64,
+    /// costly renders not made (another one waiting, or the machine busy): the game plays the file
+    skipped: u64,
+}
+
+/// A render that costs seconds of a core (method B's strikes and closes, the generated set: 5.7-18.9 s each on the
+/// Deck, 2026-11-26 broker test); the grain bank's (recorded) take tens of ms.
+pub fn costly(spec: &Spec) -> bool {
+    !spec.rec && matches!(spec.kind, Kind::Strike | Kind::Close)
+}
+
+/// At most this many costly renders waiting or running at once: a hint for another one is not rendered (the mod sees
+/// it is not ready and plays the file). With the render thread at low priority this keeps one core's worth of method B
+/// off a loaded Deck at most.
+pub const MAX_COSTLY_PENDING: usize = 1;
+/// The machine is busy (the 1-minute load per cpu above this, Linux): a costly render is not started (the file plays).
+pub const BUSY_RENDER_LOAD: f64 = 1.0;
+
+fn costly_pending(st: &State) -> usize {
+    st.entries.values().filter(|e| costly(&e.spec) && e.samples.is_none() && !e.started).count()
 }
 
 /// The schedule between the stdin thread (offer), the render thread (next_job / done) and the synth worker (start_due /
@@ -363,6 +382,10 @@ impl Bus {
             self.cv.notify_all();
             return;
         }
+        let st_costly_others = {
+            let s: &State = &st;
+            s.entries.iter().filter(|(k, e)| *k != &th.id && costly(&e.spec) && e.samples.is_none() && !e.started).count()
+        };
         match st.entries.get_mut(&th.id) {
             Some(e) => {
                 if th.fin {
@@ -376,8 +399,13 @@ impl Bus {
                 } else if !e.fin && !e.started {
                     // a hint again (the listener moved): a new kind or a distance moved past the margin renders again
                     if e.spec.kind != th.kind || d_moved(e.spec.d, th.d) {
-                        e.samples = None;
-                        e.spec = spec;
+                        // (a costly one again only when no other is waiting: else its old render stays, and the mod,
+                        // finding it rendered for another distance, plays the file)
+                        let others = st_costly_others;
+                        if !(costly(&spec) && others >= MAX_COSTLY_PENDING) {
+                            e.samples = None;
+                            e.spec = spec;
+                        }
                     }
                     e.at = th.at;
                     e.gain = th.gain;
@@ -385,6 +413,10 @@ impl Bus {
             }
             None => {
                 if st.entries.len() >= MAX_ENTRIES {
+                    return;
+                }
+                if !th.fin && costly(&spec) && costly_pending(&st) >= MAX_COSTLY_PENDING {
+                    st.skipped += 1;
                     return;
                 }
                 st.entries.insert(
@@ -399,10 +431,17 @@ impl Bus {
 
     /// (render thread) the next thunder to render: the earliest without a render. Waits up to wait_s for one; None
     /// when there is none by then, or after stop.
+    #[cfg(test)]
     pub fn next_job(&self, now: impl Fn() -> f64, wait_s: f64) -> Option<(String, Spec)> {
+        self.next_job_unless_busy(now, wait_s, || false)
+    }
+
+    /// next_job, but a costly render picked while busy() is dropped instead (its strike plays from the file).
+    pub fn next_job_unless_busy(&self, now: impl Fn() -> f64, wait_s: f64, busy: impl Fn() -> bool) -> Option<(String, Spec)> {
         let mut st = self.st.lock().unwrap();
-        for attempt in 0..2 {
-            if st.stop {
+        let mut attempt = 0;
+        loop {
+            if st.stop || attempt >= 2 {
                 return None;
             }
             let t = now();
@@ -413,14 +452,24 @@ impl Bus {
                 .min_by(|a, b| a.1.at.partial_cmp(&b.1.at).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(k, e)| (k.clone(), e.spec));
             if let Some((id, spec)) = pick {
+                if costly(&spec) && busy() {
+                    st.entries.remove(&id);
+                    st.skipped += 1;
+                    continue;
+                }
                 st.entries.get_mut(&id).unwrap().rendering = true;
                 return Some((id, spec));
             }
             if attempt == 0 && wait_s > 0.0 {
                 st = self.cv.wait_timeout(st, std::time::Duration::from_secs_f64(wait_s)).unwrap().0;
             }
+            attempt += 1;
         }
-        None
+    }
+
+    /// costly renders not made (MAX_COSTLY_PENDING, busy)
+    pub fn skipped(&self) -> u64 {
+        self.st.lock().unwrap().skipped
     }
 
     pub fn stopped(&self) -> bool {
@@ -547,10 +596,16 @@ impl Bus {
     }
 }
 
-/// The render thread: renders the bus's jobs until stop.
-pub fn render_loop(bus: Arc<Bus>, mut r: Box<dyn ThunderRenderer>, now: fn() -> f64) {
+/// The render thread: renders the bus's jobs until stop, at LOW priority (prio.rs lower: offline-style work never
+/// competes with the game; only the mixer and the device callback are raised), skipping costly renders while busy().
+pub fn render_loop(bus: Arc<Bus>, mut r: Box<dyn ThunderRenderer>, now: fn() -> f64, busy: fn() -> bool) {
+    let low = crate::prio::lower_current_thread();
+    eprintln!(
+        "live-serve: the thunder render thread: {}",
+        if low == crate::prio::NOT_RAISED { "not lowered".to_string() } else { crate::prio::describe(low) }
+    );
     while !bus.stopped() {
-        if let Some((id, spec)) = bus.next_job(now, 0.25) {
+        if let Some((id, spec)) = bus.next_job_unless_busy(now, 0.25, busy) {
             let t0 = std::time::Instant::now();
             let (s, crack_s) = r.render_timed(&spec);
             bus.done_timed(&id, spec, cap_peak(s), t0.elapsed().as_secs_f64() * 1000.0, crack_s);
@@ -660,6 +715,39 @@ mod tests {
             bus.offer(&th(&format!("x{i}"), 60.0, Kind::Far, false));
         }
         assert!(bus.st.lock().unwrap().entries.len() <= MAX_ENTRIES);
+    }
+
+    #[test]
+    fn one_costly_render_at_a_time_and_none_while_busy() {
+        // (the Deck's broker run: method B strikes / closes took 5.7-18.9 s each, the render thread always busy)
+        let bus = Bus::new();
+        let mut r = files();
+        bus.offer(&th("a", 50.0, Kind::Close, false));
+        bus.offer(&th("b", 51.0, Kind::Strike, false));
+        assert_eq!(bus.skipped(), 1, "a second costly hint while one waits: not rendered (the file plays)");
+        let mut rec = th("r", 52.0, Kind::Close, false);
+        rec.rec = true;
+        bus.offer(&rec);
+        let mut far = th("f", 53.0, Kind::Far, false);
+        far.rec = true;
+        bus.offer(&far);
+        assert_eq!(bus.skipped(), 1, "the grain bank's renders (tens of ms) are not capped");
+        let (id, spec) = bus.next_job(|| 20.0, 0.0).unwrap();
+        assert_eq!(id, "a");
+        // while it renders, another costly hint is still turned away
+        bus.offer(&th("c", 54.0, Kind::Close, false));
+        assert_eq!(bus.skipped(), 2);
+        bus.done(&id, spec, r.render(&spec));
+        bus.offer(&th("c", 54.0, Kind::Close, false));
+        assert_eq!(bus.skipped(), 2, "the first one done: the next is taken");
+        // busy: the costly job is dropped at pick time (its strike plays from the file), the cheap ones still render
+        let picked: Vec<String> =
+            std::iter::from_fn(|| bus.next_job_unless_busy(|| 20.0, 0.0, || true).map(|(id, _)| id)).collect();
+        assert_eq!(picked, vec!["r".to_string(), "f".to_string()], "busy: only the grain bank's");
+        assert_eq!(bus.skipped(), 3, "c dropped while busy");
+        assert!(!bus.ready().iter().any(|(id, _)| id == "c"));
+        assert!(costly(&Spec { seed: 1, d: 1.0, kind: Kind::Strike, rec: false })
+            && !costly(&Spec { seed: 1, d: 1.0, kind: Kind::Mid, rec: false }));
     }
 
     #[test]

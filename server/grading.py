@@ -6819,36 +6819,26 @@ class _Planner:
         got, res = self._memo_get("_landings_in_memo", mkey)
         if got:
             return res
-        ends = []                       # (end, direction into the deck, class, the cell whose copy it is)
+        # (landings.rs landing_ends: both ends of every deck line of the cells, in their order, the joint test and each
+        # end once at its 0.1 m key. BNE_ROADSYS=surface (roads.MAPPED_RANGES): the end at its key and its direction
+        # to 1e-4, the same whichever copy: every map cell has its own copy of a deck, ~1e-5 m from the others', and
+        # the least of those read was taken, so two neighbouring cells' plans, each reading round its own points, took
+        # other copies of one end and met apart at their seam, M5 round 7. Reading the end's own cell for its copy cost
+        # 4x the CPU at Express, every cell past a place's edge read for its ends)
+        lines, cls = [], []
         for k in cells:
-            for b, cls, link in self._raw_lines(k)["bridges"]:
-                for at0 in (True, False):
-                    e = b[0] if at0 else b[-1]
-                    ends.append((np.asarray(e, np.float64), roadsmod._dir_at(b, True) if at0
-                                 else -roadsmod._dir_at(b, False), None if link else cls, str(k)))
-        snap = roadsmod.MAPPED_RANGES()
-        best = {}                       # (end rounded to 0.1 m -> its copy: the least by its values, whoever asks)
-        for e, d, c, _ck in ends:
-            if c not in FAST_GAP_CLASSES:
-                continue
-            # (a joint: another deck's end here, that deck going on the way this one comes from)
-            if any(float(dnp.hypot(*(e2 - e))) <= FAST_GAP_JOIN_M and float(dnp.dot(d2, d)) < -0.5
-                   for e2, d2, _c2, _k2 in ends):
-                continue
-            key = (round(float(e[0]), 1), round(float(e[1]), 1))
-            if snap:
-                # (BNE_ROADSYS=surface: the end at its key and its direction to 1e-4, the same whichever copy: every
-                # map cell has its own copy of a deck, ~1e-5 m from the others', and the least of those read was taken,
-                # so two neighbouring cells' plans, each reading round its own points, took other copies of one end
-                # and met apart at their seam, M5 round 7. Reading the end's own cell for its copy cost 4x the CPU at
-                # Express, every cell past a place's edge read for its ends)
-                row = (key[0], key[1], round(-float(d[0]), 4), round(-float(d[1]), 4), str(c))
-            else:
-                row = (float(e[0]), float(e[1]), -float(d[0]), -float(d[1]), str(c))
-            if key not in best or row < best[key]:
-                best[key] = row
+            for b, c, link in self._raw_lines(k)["bridges"]:
+                lines.append(np.asarray(b, np.float64)[:, :2])
+                cls.append(None if link else c)
+        rows = []
+        if lines:
+            import fast
+            fast.require(638, "landing_ends")
+            rows = fast._ef.landing_ends(np.concatenate(lines), [0] + np.cumsum([len(x) for x in lines]).tolist(),
+                                         cls, list(FAST_GAP_CLASSES), FAST_GAP_JOIN_M, roadsmod.TURN_LOOK_M,
+                                         bool(roadsmod.MAPPED_RANGES()))
         out = []
-        for _k, r in sorted(best.items()):
+        for r in rows:
             got = self._landing_chain(r[0], r[1], r[2], r[3], r[4])
             if got is not None:
                 out.append((got[0], r[4], got[1], got[2], got[3], np.array([r[2], r[3]], np.float64)))
@@ -6867,60 +6857,26 @@ class _Planner:
         got, res = self._memo_get("_landing_memo", key)
         if got:
             return res
-        end, v = np.array([ex, ey], np.float64), np.array([vx, vy], np.float64)
         la, lo, _ = self.frame.enu_to_geodetic(np.array([ex]), np.array([ey]), 0.0)
-        cand, rest, seen = [], [], set()
+        lines, cand, fids = [], [], []
         for k in self._gap_cells(la, lo, FAST_GAP_CHAIN_M + 20.0):
             for g, gc, lk, built, gfid in self._raw_lines(k)["ground"]:
-                g = np.asarray(g, np.float64)[:, :2]
-                kk = (round(float(g[0, 0]), 2), round(float(g[0, 1]), 2), round(float(g[-1, 0]), 2),
-                      round(float(g[-1, 1]), 2), len(g))
-                if len(g) < 2 or kk in seen:
-                    continue
-                seen.add(kk)
-                (cand if gc == cls and not lk and built else rest).append((kk, g, gfid))
-        cand.sort(key=lambda r: r[0])
-        rest.sort(key=lambda r: r[0])
-        pts, used, at, u, total, first = [end[None]], [], end, v, 0.0, True
-        while total < FAST_GAP_CHAIN_M:
-            best = None
-            for kk, g, gfid in cand:
-                if any(kk == q for q, _g, _f in used):
-                    continue
-                for rev in (False, True):
-                    q = g[::-1] if rev else g
-                    d0 = float(dnp.hypot(*(q[0] - at)))
-                    if d0 > (FAST_GAP_START_M if first else FAST_GAP_LINK_M):
-                        continue
-                    w = roadsmod._dir_at(q, True)
-                    cs = float(dnp.dot(w, u))
-                    if first and d0 > CHAIN_JOIN_M:
-                        gap = (q[0] - at) / d0
-                        cs = min(cs, float(dnp.dot(gap, u)))
-                    if cs < FAST_GAP_COS:
-                        continue
-                    # (a part joined at the node before one that starts beside it: a lane section's offset joint)
-                    rank = (d0 > CHAIN_JOIN_M, -cs, kk, rev)
-                    if best is None or rank < best[0]:
-                        best = (rank, kk, q, g, gfid)
-            if best is None:
-                break
-            _r, kk, q, g, gfid = best
-            used.append((kk, g, gfid))
-            pts.append(q)
-            total += float(dnp.hypot(*np.diff(q, axis=0).T).sum())
-            at, u, first = q[-1], roadsmod._dir_at(q, False), False
+                lines.append(np.asarray(g, np.float64)[:, :2])
+                cand.append(bool(gc == cls and not lk and built))
+                fids.append(gfid)
         res = None
-        if used:
-            ap = np.vstack(pts)
-            ap = ap[np.r_[True, dnp.hypot(*np.diff(ap, axis=0).T) > 1e-6]]
-            if len(ap) >= 2:
-                own_keys = {q for q, _g, _f in used}
-                near = _along(ap, np.arange(0.0, FAST_GAP_FAR_M + 1e-6, PROFILE_STEP))
-                lo_, hi_ = near.min(0) - FAST_GAP_ID_M - 1.0, near.max(0) + FAST_GAP_ID_M + 1.0
-                other = [g for kk, g, _f in cand + rest if kk not in own_keys
-                         and not ((g.max(0) < lo_).any() or (g.min(0) > hi_).any())]
-                res = (ap, [g for _q, g, _f in used], other, frozenset(f for _q, _g, f in used))
+        if lines:
+            # (landings.rs landing_chain: the lines each once, the chain walked, the approach and the roads round it)
+            import fast
+            fast.require(638, "landing_chain")
+            got = fast._ef.landing_chain(
+                (ex, ey), (vx, vy), np.concatenate(lines), [0] + np.cumsum([len(x) for x in lines]).tolist(), cand,
+                np.arange(0.0, FAST_GAP_FAR_M + 1e-6, PROFILE_STEP),
+                (FAST_GAP_START_M, FAST_GAP_LINK_M, CHAIN_JOIN_M, FAST_GAP_COS, FAST_GAP_CHAIN_M, FAST_GAP_ID_M,
+                 roadsmod.TURN_LOOK_M))
+            if got is not None:
+                ap, used, other = got
+                res = (ap, [lines[i] for i in used], [lines[i] for i in other], frozenset(fids[i] for i in used))
         return self._memo_put("_landing_memo", key, res)
 
     def _end_never_raised(self, xy):
@@ -7695,7 +7651,7 @@ class _Planner:
             # before: Codex review of 05a15e20, the same query unsmoothed on a cold planner and smoothed on a warm one)
             graded = bool(plans) or (RACEWAY_SMOOTH_ON and bool(self._raceway_lines(lat.ravel(), lon.ravel())))
         else:
-            graded = bool(plans) or (RACEWAY_SMOOTH_ON and self._has_keeps())
+            graded = bool(plans) or (RACEWAY_SMOOTH_ON and self._has_keeps(keys))
         e = n = None
         if graded:
             e, n, _ = self.frame.geodetic_to_enu(lat.ravel(), lon.ravel(), 0.0)
@@ -7717,12 +7673,12 @@ class _Planner:
                 race[band[0]] = True
                 out[band[0]] = band[1]
         else:
-            race = self._on_kept(e, n)
+            race = self._on_kept(e, n, keys)     # (the points' cells' roads alone: _zones_of)
             if race is not None:            # (the terrain is a racetrack's surface: GitHub #143, smoothed: #833)
-                out[race] = self._raceway_ground(e[race], n[race], base.ravel()[race])
+                out[race] = self._raceway_ground(e[race], n[race], base.ravel()[race], keys=keys)
         # (roads_only: the roads' grading alone, the same whichever cells' tunnels are planned already: a tunnel's
         # portal was at the graded road or at the bare ground by whether its own cover was known yet)
-        keep = None if roads_only else self._over_tunnels(e, n)
+        keep = None if roads_only else self._over_tunnels(e, n, keys)
         if keep is not None:
             # (a small change stays: a road over the tunnel lies on its own graded profile, the ground over the tunnel
             # left ungraded under it stood a few cm over the E6's lanes as patches of bare ground, GitHub #2)
@@ -7778,15 +7734,20 @@ class _Planner:
     def open_tunnels(self, lat, lon):
         """[(lat (k,), lon (k,), Spec)] of the tunnels' open sections planned near the points: roads on the ground
         that the map calls tunnels (surface.paint_roads paints them: grass grew over the open road of Central Park's
-        79th Street Transverse, 2026-10-17)."""
+        79th Street Transverse, 2026-10-17). The points' own cells' sections, in their keys' order: one section is in
+        every cell its tunnel part reaches, each with its own copy's Spec (a road's tunnel spec is its cell's copy's:
+        roads.tunnel_specs, 10 m in one cell and 8.6 m in the next at CA-1's Malibu tunnel), and the first of them was
+        taken in the order the cells happened to be planned, with whatever cells other threads had planned: two
+        builds of one place painted the mouth's asphalt and dirt 1.4 m apart (the tunnel corpus's Malibu S, 2026-11-26)."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
         if lat.size == 0:
             return []
-        for key in mapcells.cells_for_points(lat, lon):
+        keys = sorted(set(mapcells.cells_for_points(lat, lon)))
+        for key in keys:
             self._cell_plans(key)
         with self.lock:
-            secs = [o for v in self.opens.values() for o in v]
+            secs = [o for key in keys for o in self.opens.get(key, ())]
         out, seen = [], set()
         for xy, spec in secs:
             k = (round(float(xy[0, 0]), 2), round(float(xy[0, 1]), 2), len(xy))
@@ -7801,9 +7762,20 @@ class _Planner:
             out.append((la, lo, spec))
         return out
 
-    def _has_keeps(self):
+    def _zones_of(self, memo, keys):
+        """With self.lock held: the zones of memo (self.covers / self.keeps: cell key -> [zone]) of the cells keys, in
+        their order (keys None: of every cell planned so far). A query's own cells (apply's keys, planned by it): each
+        cell holds a tunnel part / an UNGRADED road with its own copy's width (roads.tunnel_specs is its cell's copy's:
+        10 m in one cell and 8.6 m in the next at CA-1's Malibu tunnel, b29a785a1), so a wider copy from a cell some
+        other thread happened to plan widened the mask, by the order the cells were planned in."""
+        if keys is None:
+            return [z for v in memo.values() for z in v]
+        return [z for k in keys for z in memo.get(k, ())]
+
+    def _has_keeps(self, keys=None):
+        """Any UNGRADED road kept by the cells keys (None: by any cell planned so far)?"""
         with self.lock:
-            return any(self.keeps.values())
+            return bool(_Planner._zones_of(self, self.keeps, keys))
 
     def _raceway_cell(self, key):
         """[(xy (k, 2), band half width)]: the UNGRADED roads of map cell key as _plan_cell keeps them (placed as the
@@ -7892,17 +7864,17 @@ class _Planner:
             add(cells(np.asarray(la), np.asarray(lo), RACEWAY_NODE_REACH_M))
         return sorted(found.items())
 
-    def _raceway_zones(self, lat=None, lon=None):
+    def _raceway_zones(self, lat=None, lon=None, keys=None):
         """(zones, kept): the raceways' smoothed surfaces (raceway_surface), each line once, and per zone its (key,
-        line, band half width): of the UNGRADED roads kept by the planned cells, or (lat, lon given: BNE_RACEWAY_DIG)
-        those that can shape the points' ground (_raceway_lines)."""
+        line, band half width): of the UNGRADED roads kept by the cells keys (None: by the planned cells; _zones_of),
+        or (lat, lon given: BNE_RACEWAY_DIG) those that can shape the points' ground (_raceway_lines)."""
         if lat is not None:
             lines = self._raceway_lines(lat, lon)
         else:
             with self.lock:
                 lines = sorted({(round(float(xy[0, 0]), 2), round(float(xy[0, 1]), 2), round(float(xy[-1, 0]), 2),
                                  round(float(xy[-1, 1]), 2), len(xy), round(float(hw), 3)): (xy, hw)
-                                for v in self.keeps.values() for xy, hw in v}.items())
+                                for xy, hw in _Planner._zones_of(self, self.keeps, keys)}.items())
         memo = self.__dict__.setdefault("_raceway_memo", OrderedDict())
         zones, kept = [], []
         for key, (xy, hw) in lines:
@@ -7948,14 +7920,14 @@ class _Planner:
                     dmemo.popitem(last=False)
         return got
 
-    def _raceway_ground(self, e, n, base, layered=False):
+    def _raceway_ground(self, e, n, base, layered=False, keys=None):
         """base at the points on a raceway (_on_kept) smoothed along it (raceway_ground; RACEWAY_SMOOTH_ON).
         layered (BNE_RACEWAY_DIG): the raceways that can shape the points (_raceway_lines) laid by their joins
         (raceway_dominance, racedig.JOIN_BLEND_M): (surface, covered) then."""
         if not RACEWAY_SMOOTH_ON or self.elev is None:
             return (base, np.ones(len(base), bool)) if layered else base
         if not layered:
-            zones, kept = self._raceway_zones()
+            zones, kept = self._raceway_zones(keys=keys)
             return raceway_ground(e, n, base, zones)
         la, lo, _ = self.frame.enu_to_geodetic(np.asarray(e, np.float64), np.asarray(n, np.float64), 0.0)
         zones, kept = self._raceway_zones(np.asarray(la), np.asarray(lo))
@@ -7989,10 +7961,11 @@ class _Planner:
                                   joins=self._raceway_joins(kept), blend=racedig.JOIN_BLEND_M)
         return idx[cov], got[cov]
 
-    def _on_kept(self, e, n):
-        """Which points lie on an UNGRADED road's carriageway (+ UNGRADED_MARGIN_M), or None."""
+    def _on_kept(self, e, n, keys=None):
+        """Which points lie on an UNGRADED road's carriageway (+ UNGRADED_MARGIN_M), or None: the roads kept by the
+        cells keys (None: by every cell planned so far; _zones_of)."""
         with self.lock:
-            zones = [z for v in self.keeps.values() for z in v]
+            zones = _Planner._zones_of(self, self.keeps, keys)
         if not zones or not len(e):
             return None
         import fast
@@ -8003,10 +7976,11 @@ class _Planner:
             fast._ef.over_tunnel(mask, ee, nn, np.ascontiguousarray(xy[:, :2], np.float64), float(hw), 0.0)
         return mask if mask.any() else None
 
-    def _over_tunnels(self, e, n):
-        """Which points lie over a covered tunnel (its half width + TUNNEL_KEEP_M), or None."""
+    def _over_tunnels(self, e, n, keys=None):
+        """Which points lie over a covered tunnel (its half width + TUNNEL_KEEP_M), or None: the tunnels of the cells
+        keys (None: of every cell planned so far; _zones_of)."""
         with self.lock:
-            zones = [z for v in self.covers.values() for z in v]
+            zones = _Planner._zones_of(self, self.covers, keys)
         if not zones or not len(e):
             return None
         import fast

@@ -291,6 +291,7 @@ local function precip(name)
   return o
 end
 local rain, snow = precip(W.RAIN_NAME), precip(W.SNOW_NAME)
+rain:setField('doCollision', 0, '1')      -- (an old level file: the owner turns the drops' collision off)
 local sun = S.newObject('ScatterSky'); sun:registerObject('sunsky')
 sun:setField('brightness', 0, '1.2')
 function sun:postApply() self.applied = (self.applied or 0) + 1 end
@@ -375,6 +376,8 @@ check(rain.hidden == false and rain.fields.numDrops == tostring(W.poolFor(W.RAIN
 check(scenetree.findObject(W.NEAR_SHADER) ~= nil and scenetree.findObject(W.NEAR_SHADER).DXVertexShaderFile == 'shaders/beamngEarth/precipNearV.hlsl',
   'the near-fade drop shader made at the first drops')
 check(rain.pct > 0.9 * W.precipPct(8), 'rain fraction approached its share: ' .. tostring(rain.pct))
+check(rain.fields.doCollision == '0', 'the drops do not collide (made again with the pool: still one postApply)')
+check(snow.fields.doCollision == nil, 'snow not shown: not touched')
 check(snow.hidden == true, 'no snow')
 -- the camera above the cloud base: no rain
 camZ = 5000

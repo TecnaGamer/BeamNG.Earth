@@ -98,7 +98,14 @@ Output latency (src/audio.rs, serve.rs):
 - **The callback allocates nothing** (`audio::tests::the_callback_path_never_allocates`, a counting allocator).
 - **Trouble:** a stream error (ALSA POLLERR after an unrecovered xrun, a device lost), or 3 xruns within 60 s, reopens
   the default device with twice the buffer, up to 2048 frames. After 5 quiet minutes the buffer halves again, never
-  below the first size. Only failures at 2048 frames count toward `failed` (3 a minute).
+  below the first size, except on a machine with 8 hardware threads or fewer (the Deck), which keeps it: each reopen is
+  a glitch (the Deck flipped 512 / 1024 six times in the 2026-11-26 broker run). Only failures at 2048 frames count
+  toward `failed` (3 a minute).
+- **Thunder renders** (thunderlive.rs): the render thread runs at LOW priority (nice 10, Windows below normal) so method
+  B (seconds per strike) never competes with the game. At most one costly render (a generated strike or close) waits
+  or runs at a time; another hint meanwhile, or any costly render while the machine is busy (the 1-minute load above
+  1.0 per cpu), is not rendered and its strike plays from the file (`skipped` in the state line). The grain bank's
+  renders (tens of ms) are not limited.
 
 Ten-minute soaks (2026-11-25; silent, volumes 0; rain at 4 Hz, a hinted thunder every 30 s):
 

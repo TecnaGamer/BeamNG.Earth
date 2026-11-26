@@ -46,6 +46,7 @@ MAX_THUNDERS = 32            # per message (a hint burst is a few)
 QUEUE_MAX = 8                # lines waiting for the child (2 s of heartbeats)
 RETRY_S = (5.0, 30.0)        # the waits before the retries after a failed start
 LIVE_RESET_S = 60.0          # a child live this long before it stopped: its failure gets the retries again
+STDERR_JOIN_S = 2.0          # after the child exits, the stderr reader gets this long to deliver its last lines
 STOP_WAIT_S = 2.0            # a stopped child that has not exited by then is killed
 LOG_LINES_PER_MIN = 20       # the child's stderr in the server log, at most this many lines a minute
 
@@ -271,10 +272,12 @@ class LiveAudio:
         self.proc, self.queue, self.owner = proc, q, conn
         call = self.call or conn.loop.call_soon_threadsafe
         stderr_tail = []
-        for target, args, name in ((self._stderr, (proc, stderr_tail), "weathersynth-err"),
-                                   (self._stdout, (proc, conn, stderr_tail, call), "weathersynth-out"),
-                                   (self._writer, (proc, q), "weathersynth-in")):
-            threading.Thread(target=target, args=args, daemon=True, name=name).start()
+        err = threading.Thread(target=self._stderr, args=(proc, stderr_tail), daemon=True, name="weathersynth-err")
+        for t in (err,
+                  threading.Thread(target=self._stdout, args=(proc, conn, stderr_tail, call, err), daemon=True,
+                                   name="weathersynth-out"),
+                  threading.Thread(target=self._writer, args=(proc, q), daemon=True, name="weathersynth-in")):
+            t.start()
         log.info("weathersynth live-serve started (%s)", exe)
         return True
 
@@ -317,7 +320,7 @@ class LiveAudio:
                 tail[:] = [line]
         proc.stderr.close()
 
-    def _stdout(self, proc, conn, tail, call):
+    def _stdout(self, proc, conn, tail, call, err=None):
         for raw in iter(proc.stdout.readline, b""):
             m = state_message(raw.decode("utf-8", "replace"))
             if m is not None:
@@ -327,6 +330,8 @@ class LiveAudio:
         if rc == 0 and not getattr(proc, "stopping", False):
             call(self._ended, proc)             # (its own end: no Live line for LINGER_S; a new Live starts another)
         elif not getattr(proc, "stopping", False):
+            if err is not None:
+                err.join(STDERR_JOIN_S)         # (its last stderr line may still be in the pipe: the reason must not race it)
             reason = tail[0] if tail else f"weathersynth exited ({rc})"
             call(self._died, proc, conn, reason)
 

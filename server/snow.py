@@ -8,7 +8,7 @@ Two parts, two switches (the user, 2026-11-24: wet roads all year, snow and ice 
                      ASPHALT_WET collision type for tyre spray and sound); the window is the past 24 h and the next 6 h
   BNE_WINTER=on      everything: the wet roads and the snow and ice (roads by plow class, decks, the ground's pack, lake
                      ice, W2's band table); the window is the past 10 days (the pack's memory) and the next 6 h
-  BNE_WINTER=light / ice: a preset (a fixed synthetic forcing, snow.rs preset), the same for everyone, no network
+  BNE_WINTER=light / heavy / ice: a preset (a fixed synthetic forcing, snow.rs preset), the same for everyone, no network
 One hourly Open-Meteo request per 0.1-degree cell and UTC hour serves both (the weather's API, caps and credit).
 Neither set: no service, no tracker work, no message (the server's output is the same as without this module).
 
@@ -28,7 +28,7 @@ import weather
 
 log = logging.getLogger("earthd.snow")
 
-PRESETS = ("light", "ice")
+PRESETS = ("light", "heavy", "ice")
 _YES = ("on", "1", "true", "real", "yes")
 _RAW = os.environ.get("BNE_WINTER", "").strip().lower()
 WET_ROADS = os.environ.get("BNE_WET_ROADS", "").strip().lower() in _YES
@@ -114,11 +114,12 @@ def _mm(v01):
 
 
 def message(recs, upto, t, lat, lon, z_site, z_cell, regime, prev_bin=-1, src="real", built=0, raw=None,
-            winter=True):
+            winter=True, prev_banks=None):
     """The 'snowstate' message for a site (pure but for the kernel): recs [n, NF] int32, the current row `upto`, its
     UTC hour t, the site's elevation (m) and the forcing's (m), the regime, the previous depth bin (hysteresis).
-    raw: a dict that gets the kernel's own band rows and road condition codes (the W2 table: w2_table). winter False:
-    the wet-road part only (conditions dry / damp / wet: snow.rs wet_only; no ground snow, bands or lake ice)."""
+    raw: a dict that gets the kernel's own band rows and road condition codes (the W2 table: w2_table) and W3's road
+    look (snowroad.rs look: zone shares, paint, decks, sidewalks, bank bins from prev_banks, dirt). winter False: the
+    wet-road part only (conditions dry / damp / wet: snow.rs wet_only; no ground snow, bands or lake ice)."""
     fast.require(NATIVE, "snow state")
     names = fast._ef.snow_conditions()
     lat_e2 = int(round(lat * 100))
@@ -129,8 +130,16 @@ def message(recs, upto, t, lat, lon, z_site, z_cell, regime, prev_bin=-1, src="r
                  for r in roads]
         g = [0] * 10 + list(g[10:])
         bands, lake = [], []
+    look = None
+    if winter:
+        import snowroad
+        if snowroad.ON:
+            look = dict(fast._ef.snowroad_look([[int(v) for v in r] for r in roads], int(g[0]), int(g[9]), int(g[5]),
+                                               bool(g[6]), int(g[10]), int(regime),
+                                               list(prev_banks) if prev_banks is not None else [-1] * 5))
     if raw is not None:
         raw["bands"], raw["conds"], raw["ground"], raw["lake"] = bands, [int(r[0]) for r in roads[:5]], g, lake
+        raw["look"] = look
 
     def row(r):
         return [names[r[0]], _mm(r[1]), round(r[2] / 100.0, 2), names[r[3]], _mm(r[4]), int(r[5]),
@@ -151,15 +160,23 @@ def message(recs, upto, t, lat, lon, z_site, z_cell, regime, prev_bin=-1, src="r
             # lake ice at the site (plan 2.9; the 10-day window's memory only): freezing degree-days (degC day), ice
             # mm (2.7 sqrt(FDD) cm), whole days below 0 degC in a row
             "lake": [round(lake[0] / 100.0, 2), int(lake[1]), int(lake[2])] if lake else [],
-            "credit": weather.CREDIT if src == "real" else ""}
+            "credit": weather.CREDIT if src == "real" else "",
+            # W3's road look (winterroad.lua): per plow class P0..P4 the paint shown and a deck's snow (0..1), the
+            # bank bin 0..4 and its dirt 0..2; the sidewalks' [state, cover 0..8] by slot (main streets, residential
+            # cleared, residential left, unmaintained; states covered / trampled / shovelled / clear / icy)
+            **({"look": {"marking": [round(v / 1000.0, 3) for v in look["marking"]],
+                         "deck": [round(v / 1000.0, 3) for v in look["deck_cover"]],
+                         "banks": list(look["bank_bin"]), "dirt": list(look["dirt"]),
+                         "walks": [list(w) for w in look["walks"]]}} if look else {})}
 
 
-def preset_message(name, lat, lon, prev_bin=-1, raw=None):
+def preset_message(name, lat, lon, prev_bin=-1, raw=None, prev_banks=None):
     """A preset's snowstate (the same for every player: its own synthetic window, regime and site)."""
     fast.require(NATIVE, "snow preset")
     recs, regime, z, lat_e2 = fast._ef.snow_preset(name)
     n = recs.shape[0]
-    msg = message(recs, n - 1, 0, lat_e2 / 100.0, lon, z, z, regime, prev_bin, src=name, raw=raw)
+    msg = message(recs, n - 1, 0, lat_e2 / 100.0, lon, z, z, regime, prev_bin, src=name, raw=raw,
+                  prev_banks=prev_banks)
     msg["lat"], msg["lon"] = float(lat), float(lon)
     return msg
 
@@ -170,6 +187,9 @@ def w2_table(raw, prev_bins):
     ground's cover a P0..P4 road keeps (by its condition)."""
     rows, road = fast._ef.snow_band_table([list(b) for b in raw["bands"]], list(prev_bins), raw["conds"])
     rows = tuple(tuple(int(v) for v in r) for r in rows)
+    look = raw.get("look")
+    if look:        # (W3: the lanes', wheel tracks' and edges' shares per class)
+        road = tuple(int(look["shares"][c][z]) for z in range(3) for c in range(5))
     return rows, tuple(int(v) for v in road), [r[2] for r in rows]
 
 
@@ -204,6 +224,8 @@ class Service:
         self.table = None           # (rows, road) of W2's Table, the provider's
         self.view = None            # {mode, cover, depth}: winterlook.lua's ('snow' message)
         self.bins = [-1] * 8
+        self.bank_bins = [-1] * 5    # W3's bank bins (hysteresis)
+        self.road_snow = None        # W3: the road skins' winter part (snowroad.wear_snow; Server.wear_arg)
         self.ice = -1
         self.table_changes = 0
         self.cover = (cover if cover is not None else _snowcover()) if self.winter else None
@@ -224,6 +246,8 @@ class Service:
     def commit(self, conn, raw):
         """(event loop) The W2 table of a new state: when it differs from the last, the provider's Field changes, the
         server re-renders what is shown (Server.snow_changed) and every connection gets {"type": "snow"}."""
+        if raw is not None and raw.get("look") is not None:
+            Service._commit_roads(self, conn, raw["look"])
         if self.cover is None or raw is None or not raw.get("bands"):
             return False
         with self.lock:
@@ -242,6 +266,20 @@ class Service:
                 s.snow_changed()
             for c in list(getattr(s, "connections", ()) or ()):
                 c.send({"type": "snow", "snow": dict(view)})
+        return changed
+
+    def _commit_roads(self, conn, look):
+        """(event loop) W3's look of a new state: the bank bins kept for the hysteresis; when the road skins' winter
+        part changes (snowroad.wear_snow: a first snowy state, a bank bin moving) the server sends the road tiles
+        again (Server.snow_roads_changed)."""
+        import snowroad
+        with self.lock:
+            self.bank_bins = [int(b) for b in look["bank_bin"]]
+            part = snowroad.wear_snow(look)
+            changed = part != self.road_snow
+            self.road_snow = part
+        if changed and hasattr(conn.s, "snow_roads_changed"):
+            conn.s.snow_roads_changed()
         return changed
 
     def key(self, lat, lon, now):
@@ -282,12 +320,12 @@ class Service:
     def get(self, lat, lon, z_site, prev_bin=-1, raw=None):
         """The snowstate message at (lat, lon) with the ground z_site m above sea level (raw: see message)."""
         if self.mode in PRESETS:
-            return preset_message(self.mode, lat, lon, prev_bin, raw=raw)
+            return preset_message(self.mode, lat, lon, prev_bin, raw=raw, prev_banks=self.bank_bins)
         recs, times, z_cell, clat, clon = self.forcing(lat, lon)
         now = self.clock()
         i = hour_index(times, now)
         return message(recs, i, times[i], clat, clon, z_site, z_cell, regime_at(lat, lon), prev_bin, raw=raw,
-                       winter=self.winter)
+                       winter=self.winter, prev_banks=self.bank_bins)
 
 
 class Tracker:
