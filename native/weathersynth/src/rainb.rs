@@ -148,15 +148,15 @@ impl Tune {
             car_db: -4.0,
             iso: 0.25,
             cap: 3000.0,
-            glass_db: -12.0,
+            glass_db: -17.0,
             body_db: -6.0,
-            liner_hz: 1400.0,
+            liner_hz: 1000.0,
             drip_db: 0.0,
             drip_frac: 0.25,
             fast_near: 0.35,
             fast_far: 0.15,
             cabin_lf_db: 3.0,
-            roofhf_db: -16.0,
+            roofhf_db: -22.0,
             fast_cabin: 0.2,
         };
         if let Ok(s) = std::env::var("WEATHERSYNTH_RB") {

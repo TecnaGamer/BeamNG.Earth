@@ -68,7 +68,7 @@ const N_SURF: usize = 7;
 /// rate, for the open air, the cabin path and the shelter (shelter weight 1); and the cabin parts' gains.
 const LEVEL_RATES: [f64; 11] = [0.05, 0.1, 0.3, 0.7, 1.0, 2.0, 5.0, 10.0, 20.0, 35.0, 60.0];
 const LEVEL_OPEN: [f64; 11] = [-37.50, -34.45, -26.34, -23.24, -18.20, -13.50, -5.78, 1.48, 6.80, 10.48, 14.21];
-const LEVEL_CABIN: [f64; 11] = [-37.00, -31.00, -24.94, -20.87, -17.36, -12.66, -7.13, -3.11, 1.82, 4.60, 9.72];
+const LEVEL_CABIN: [f64; 11] = [-37.92, -31.78, -26.04, -22.01, -18.63, -13.87, -8.39, -4.28, 0.77, 3.59, 8.74];
 const LEVEL_SHELTER: [f64; 11] = [-40.23, -38.35, -30.54, -22.56, -22.55, -16.78, -8.40, -1.60, 5.65, 9.32, 11.08];
 const GLASS_G: f64 = 1.027607e0;
 const BODY_G: f64 = 2.486389e1;
@@ -170,7 +170,7 @@ impl CabinFx {
             thump: ModeBank::new(&[mk(85.0, 5.0, 1.0), mk(132.0, 6.0, 0.8), mk(205.0, 6.0, 0.6), mk(320.0, 7.0, 0.35)]),
             pk1: peaking(110.0, 2.0, env_f("pk1_db", 2.0)),
             pk2: peaking(190.0, 2.5, env_f("pk2_db", 2.0)),
-            glass_hp: Biquad::bandpass(FS, env_f("glass_hz", 3500.0), 0.7),
+            glass_hp: Biquad::bandpass(FS, env_f("glass_hz", 2800.0), 0.7),
             env: 0.0,
             slow: 0.0,
             att: dsp::onepole_coef(FS, 1.0 / (m::TAU * 0.001)),
@@ -186,9 +186,9 @@ impl CabinFx {
             floor_g: m::undb(env_f("floor_db", 10.0)),
             thump_g: m::undb(env_f("thump_db", 0.0)),
             thump_d: env_f("thump_d", 2.2),
-            glass_g: m::undb(env_f("glass_db", 3.0)),
+            glass_g: m::undb(env_f("glass_db", -2.0)),
             hf_bp: Biquad::highpass(FS, env_f("hf_hz", 2500.0), 0.7071),
-            hf_g: m::undb(env_f("hf_db", 0.0)),
+            hf_g: m::undb(env_f("hf_db", -6.0)),
             tick_pre: env_f("tick_pre", 0.0),
         }
     }
