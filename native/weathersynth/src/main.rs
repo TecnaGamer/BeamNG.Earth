@@ -25,6 +25,8 @@ mod live;
 mod loudness;
 mod m;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
+mod outbus;
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod proto;
 mod rain;
 mod rng;

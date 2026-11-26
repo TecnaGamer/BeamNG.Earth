@@ -22,6 +22,99 @@ pub struct Spec {
     pub seed: u32,
     pub d: f64,
     pub kind: Kind,
+    /// the recorded set (the grain bank); else the generated one
+    pub rec: bool,
+}
+
+/// Live thunder is never louder than this (dBFS sample peak): it sums with the game in the system mixer.
+pub const LIVE_PEAK_DB: f64 = -3.0;
+
+/// No thunder (the generated set while Live: the game plays the method B files; the synth only ducks its rain).
+pub struct NoThunder;
+
+impl ThunderRenderer for NoThunder {
+    fn name(&self) -> String {
+        "none".into()
+    }
+    fn render(&mut self, _spec: &Spec) -> Vec<f32> {
+        Vec::new()
+    }
+}
+
+/// One renderer per thunder set (the Weather page's Thunder sound).
+pub struct BySet {
+    pub generated: Box<dyn ThunderRenderer>,
+    pub recorded: Box<dyn ThunderRenderer>,
+}
+
+impl ThunderRenderer for BySet {
+    fn name(&self) -> String {
+        format!("generated={} recorded={}", self.generated.name(), self.recorded.name())
+    }
+    fn render(&mut self, spec: &Spec) -> Vec<f32> {
+        if spec.rec {
+            self.recorded.render(spec)
+        } else {
+            self.generated.render(spec)
+        }
+    }
+}
+
+/// Scaled down so its sample peak is at most LIVE_PEAK_DB (never up).
+pub fn cap_peak(mut x: Vec<f32>) -> Vec<f32> {
+    let peak = x.iter().fold(0.0f32, |a, v| a.max(v.abs())) as f64;
+    let cap = crate::m::undb(LIVE_PEAK_DB);
+    if peak > cap {
+        let g = (cap / peak) as f32;
+        for v in x.iter_mut() {
+            *v *= g;
+        }
+    }
+    x
+}
+
+/// The scheduled rain duck under a strike (the same rule as the mod's ambience.lua, CLOSE_STRIKE_AND_LOUDNESS.md):
+/// a pre-dip from when the strike is known, a 15 ms ramp ending at its crack, -10 dB at 60 m to -5 dB at 280 m, held,
+/// released (linear in dB).
+pub const DUCK_RAMP_S: f64 = 0.015;
+pub const DUCK_HOLD_S: f64 = 0.45;
+pub const DUCK_RELEASE_S: f64 = 2.0;
+pub const PREDIP_DB: f64 = -2.5;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Duck {
+    pub from: f64,
+    pub t0: f64,
+    pub depth_db: f64,
+}
+
+pub fn duck_depth_db(d: f64) -> f64 {
+    -10.0 + 5.0 * ((d - 60.0) / 220.0).clamp(0.0, 1.0)
+}
+
+/// Pure: the envelope 0..1 of a duck at time t, and whether it is over.
+pub fn duck_envelope(k: &Duck, t: f64) -> (f64, bool) {
+    let pre = PREDIP_DB.min(0.0) / k.depth_db;
+    let r0 = k.t0 - DUCK_RAMP_S;
+    if t < k.from {
+        return (0.0, false);
+    }
+    if t < r0 {
+        return (pre, false);
+    }
+    if t < k.t0 {
+        return (pre + (1.0 - pre) * (t - r0) / DUCK_RAMP_S, false);
+    }
+    let h = k.t0 + DUCK_HOLD_S;
+    if t < h {
+        return (1.0, false);
+    }
+    let e = 1.0 - (t - h) / DUCK_RELEASE_S;
+    if e <= 0.0 {
+        (0.0, true)
+    } else {
+        (e, false)
+    }
 }
 
 /// A thunder renderer: mono f32 at 44.1 kHz, the sound's start at index 0 (the distance delay is the bus's job),
@@ -119,6 +212,9 @@ pub fn renderer(choice: &str) -> Result<Box<dyn ThunderRenderer>, String> {
         let bank = crate::grainbank::Bank::load(&path)?;
         return Ok(Box::new(crate::grainbank::Grains { bank: Arc::new(bank) }));
     }
+    if choice == "none" {
+        return Ok(Box::new(NoThunder));
+    }
     if choice == "procedural" {
         let micro_min = std::env::var("WEATHERSYNTH_MICRO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.06);
         return Ok(Box::new(Procedural { micro_min, length_s: 14.0 }));
@@ -158,6 +254,7 @@ struct Voice {
 
 #[derive(Default)]
 struct State {
+    ducks: Vec<Duck>,
     entries: HashMap<String, Entry>,
     voices: Vec<Voice>,
     stop: bool,
@@ -183,8 +280,19 @@ impl Bus {
 
     /// A thunder from a message (a hint or a final). A final whose kind changed since the hint is rendered again.
     pub fn offer(&self, th: &Thunder) {
+        self.offer_at(th, utc_now())
+    }
+
+    /// (offer with the time it is known: the duck's pre-dip starts then)
+    pub fn offer_at(&self, th: &Thunder, now: f64) {
         let mut st = self.st.lock().unwrap();
-        let spec = Spec { seed: th.seed, d: th.d, kind: th.kind };
+        let spec = Spec { seed: th.seed, d: th.d, kind: th.kind, rec: th.rec };
+        // a strike's final: its rain duck, whoever plays the thunder (once per strike)
+        if th.fin && th.kind == Kind::Strike && !st.entries.get(&th.id).map(|e| e.fin).unwrap_or(false) {
+            if st.ducks.len() < 16 {
+                st.ducks.push(Duck { from: now.min(th.at), t0: th.at, depth_db: duck_depth_db(th.d) });
+            }
+        }
         match st.entries.get_mut(&th.id) {
             Some(e) => {
                 if th.fin {
@@ -316,6 +424,23 @@ impl Bus {
         (st.render_ms_last, st.render_ms_max)
     }
 
+    /// (synth worker) the rain's gain at time t under the ducks (1: none); the ducks that are over dropped.
+    pub fn duck_gain(&self, t: f64) -> f64 {
+        let mut st = self.st.lock().unwrap();
+        if st.ducks.is_empty() {
+            return 1.0;
+        }
+        let mut g = 1.0f64;
+        st.ducks.retain(|k| {
+            let (e, over) = duck_envelope(k, t);
+            if e > 0.0 {
+                g = g.min(crate::m::undb(k.depth_db * e));
+            }
+            !over
+        });
+        g
+    }
+
     pub fn stop(&self) {
         self.st.lock().unwrap().stop = true;
         self.cv.notify_all();
@@ -333,7 +458,7 @@ pub fn render_loop(bus: Arc<Bus>, mut r: Box<dyn ThunderRenderer>, now: fn() -> 
     while !bus.stopped() {
         if let Some((id, spec)) = bus.next_job(now, 0.25) {
             let t0 = std::time::Instant::now();
-            let s = r.render(&spec);
+            let s = cap_peak(r.render(&spec));
             bus.done_timed(&id, spec, s, t0.elapsed().as_secs_f64() * 1000.0);
         }
     }
@@ -349,7 +474,7 @@ mod tests {
     use super::*;
 
     fn th(id: &str, at: f64, kind: Kind, fin: bool) -> Thunder {
-        Thunder { id: id.into(), at, d: 1000.0, kind, gain: 0.5, seed: 3, fin }
+        Thunder { id: id.into(), at, d: 1000.0, kind, gain: 0.5, seed: 3, fin, rec: false }
     }
 
     fn files() -> Files {
@@ -410,6 +535,24 @@ mod tests {
         assert_eq!(bus.counts().2, 1, "the late final dropped");
         bus.stop();
         assert!(bus.stopped() && bus.next_job(|| 0.0, 1.0).is_none(), "stop ends the render thread");
+    }
+
+    #[test]
+    fn strike_duck_and_peak_cap() {
+        let bus = Bus::new();
+        let mut t = th("s", 100.5, Kind::Strike, true);
+        t.d = 60.0;
+        bus.offer_at(&t, 100.0);
+        bus.offer_at(&t, 100.0); // (the same strike again: one duck)
+        assert!((bus.duck_gain(100.2) - crate::m::undb(PREDIP_DB)).abs() < 1e-9, "the pre-dip");
+        assert!((bus.duck_gain(100.6) - crate::m::undb(-10.0)).abs() < 1e-9, "-10 dB at 60 m");
+        assert_eq!(bus.duck_gain(100.5 + DUCK_HOLD_S + DUCK_RELEASE_S + 0.1), 1.0, "over");
+        assert!(bus.st.lock().unwrap().ducks.is_empty(), "dropped");
+        bus.offer_at(&th("c", 10.0, Kind::Close, true), 9.0);
+        assert_eq!(bus.duck_gain(10.1), 1.0, "only strikes duck");
+        let y = cap_peak(vec![0.0, 0.9, -0.2]);
+        assert!((y[1] as f64 - crate::m::undb(LIVE_PEAK_DB)).abs() < 1e-6);
+        assert_eq!(cap_peak(vec![0.1, -0.2]), vec![0.1, -0.2], "never up");
     }
 
     #[test]

@@ -122,7 +122,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     use std::time::{Duration, Instant};
 
     let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
-    let choice = get("--thunder").unwrap_or_else(|| "grains".into());
+    // the thunder: by the message's set (generated: none here, the game plays the method B files; recorded: the grain
+    // bank), or one renderer for both with --thunder (tests)
+    let choice = get("--thunder");
     let seed: u64 = get("--seed").and_then(|s| s.parse().ok()).unwrap_or(1);
     // the server's lines are read from the start, before the device opens (a slow open never fills the pipe: the
     // server's writer would wait on it)
@@ -159,14 +161,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
         std::process::exit(2);
     };
     // (the grain bank by default; without its file the physical model, said on stderr: thunder still plays)
-    let renderer = match thunderlive::renderer(&choice) {
-        Ok(r) => r,
-        Err(e) if choice == "grains" => {
-            eprintln!("live-serve: {e}; the procedural thunder instead");
-            thunderlive::renderer("procedural").unwrap_or_else(|e| fail(e))
+    let (renderer, sets): (Box<dyn thunderlive::ThunderRenderer>, Vec<&str>) = match &choice {
+        Some(c) => (thunderlive::renderer(c).unwrap_or_else(|e| fail(e)), vec!["generated", "recorded"]),
+        None => {
+            let (recorded, mut sets): (Box<dyn thunderlive::ThunderRenderer>, Vec<&str>) =
+                match thunderlive::renderer("grains") {
+                    Ok(r) => (r, vec!["recorded"]),
+                    Err(e) => {
+                        // (no bank file: the recorded set is not offered; the mod then plays its rec files)
+                        eprintln!("live-serve: {e}; the recorded thunder stays with the game's files");
+                        (Box::new(thunderlive::NoThunder), vec![])
+                    }
+                };
+            sets.sort();
+            (Box::new(thunderlive::BySet { generated: Box::new(thunderlive::NoThunder), recorded }), sets)
         }
-        Err(e) => fail(e),
     };
+    let sets_json = format!("[{}]", sets.iter().map(|v| crate::proto::quote(v)).collect::<Vec<_>>().join(","));
     let rname = renderer.name();
     let bus = Arc::new(Bus::new());
     let (silent, _) = mix_for(None, true);
@@ -300,8 +311,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let line = state_line(out.latency_ms(), underruns_before + u - base_underruns.unwrap_or(u), &rname, bus.counts(), buf);
             let (rl, rm) = bus.render_ms();
             let line = format!(
-                "{},\"reopens\":{reopens},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0}}}",
-                &line[..line.len() - 1]
+                "{},\"reopens\":{reopens},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0},\"limited\":{},\"thunderSets\":{sets_json}}}",
+                &line[..line.len() - 1],
+                out.limited.load(std::sync::atomic::Ordering::Relaxed)
             );
             let mut lock = stdout.lock();
             if writeln!(lock, "{line}").and_then(|_| lock.flush()).is_err() {

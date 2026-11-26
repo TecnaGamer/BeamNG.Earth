@@ -233,6 +233,8 @@ pub struct Thunder {
     pub seed: u32,
     /// false: a look-ahead hint (render it early); true: it struck (play it)
     pub fin: bool,
+    /// the message's thunderSet is 'recorded' (the grain bank); else 'generated'
+    pub rec: bool,
 }
 
 /// A 'weather_audio' line, made safe (clamped; unknown fields ignored; a bad thunder skipped).
@@ -260,6 +262,7 @@ pub fn msg(line: &str) -> Result<Msg, String> {
         return Err("not an object".into());
     }
     let c01 = |k: &str, d: f64| j.num(k).unwrap_or(d).clamp(0.0, 1.0);
+    let rec = j.str("thunderSet") == Some("recorded");
     let mut thunders = Vec::new();
     if let Some(Json::Arr(a)) = j.get("thunders") {
         for t in a.iter().take(MAX_THUNDERS) {
@@ -278,6 +281,7 @@ pub fn msg(line: &str) -> Result<Msg, String> {
                 gain: t.num("gain").unwrap_or(1.0).clamp(0.0, 1.0),
                 seed: t.num("seed").unwrap_or(0.0).clamp(0.0, u32::MAX as f64) as u32,
                 fin: t.bool("final").unwrap_or(false),
+                rec,
             });
         }
     }
@@ -328,7 +332,8 @@ mod tests {
         assert_eq!((m.rain_mm_h, m.shelter, m.volume, m.thunder_volume, m.duck), (4.5, 0.25, 0.6, 1.0, 0.35));
         assert_eq!(m.t, 1764000000.25);
         assert_eq!(m.thunders.len(), 2, "the bad kind skipped");
-        assert_eq!(m.thunders[0], Thunder { id: "7@1.000".into(), at: 6.5, d: 1715.0, kind: Kind::Close, gain: 0.6, seed: 7, fin: true });
+        assert_eq!(m.thunders[0], Thunder { id: "7@1.000".into(), at: 6.5, d: 1715.0, kind: Kind::Close, gain: 0.6, seed: 7, fin: true, rec: false });
+        assert!(msg(r#"{"mode":"live","thunderSet":"recorded","thunders":[{"id":"a","at":1,"kind":"far"}]}"#).unwrap().thunders[0].rec);
         assert!(!m.thunders[1].fin && m.thunders[1].kind == Kind::Far && m.thunders[1].gain == 1.0);
     }
 

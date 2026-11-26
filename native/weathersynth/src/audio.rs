@@ -115,6 +115,8 @@ pub struct Output {
     pub callback_frames: Arc<AtomicU32>,
     /// the worker's fill target now (frames)
     pub target_frames: Arc<AtomicU32>,
+    /// times the output bus's limiter engaged
+    pub limited: Arc<AtomicU64>,
     /// set by the stream's error callback for anything but an xrun (POLLERR, a device lost): the caller reopens
     pub error: Arc<AtomicBool>,
     /// the device's own xruns (cpal BufferUnderrun: recovered by cpal, an audible gap)
@@ -269,6 +271,7 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
     let mix = Arc::new(Mutex::new(initial));
     let first_target = fill_target(fixed, 0, (sample_rate as f64 * MAX_QUEUE_S) as u32);
     let target = Arc::new(AtomicU32::new(first_target));
+    let limited = Arc::new(AtomicU64::new(0));
     let w = Worker {
         seed,
         ring: ring.clone(),
@@ -281,6 +284,7 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
         sr: sample_rate,
         ch: channels,
         guess_frames: fixed,
+        limited: limited.clone(),
     };
     let worker = std::thread::Builder::new().name("weather-synth".into()).spawn(move || w.run()).map_err(|e| e.to_string())?;
     // the ring filled to its first target before the device starts pulling, at most 0.5 s
@@ -309,6 +313,7 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
         device_latency_us: cb.lat,
         callback_frames: cb.frames,
         target_frames: target,
+        limited,
         error: cb.error,
         xruns: cb.xruns,
     })
@@ -350,25 +355,30 @@ struct Worker {
     sr: u32,
     ch: u16,
     guess_frames: u32,
+    limited: Arc<AtomicU64>,
 }
 
 impl Worker {
-    /// Renders 512-sample blocks at the engine rate (the rain, then the thunders due by the time the block will be
-    /// heard), resamples linearly to the device rate, duplicates to every channel, and keeps the ring at its target in
-    /// callback-sized pieces, sleeping about half a callback between checks.
+    /// Renders 512-sample blocks at the engine rate: the rain (under the bus's scheduled strike ducks), then the thunders
+    /// due by the time the block will be heard, then the output bus (outbus.rs: the 2 ms look-ahead limiter at
+    /// -1.5 dBTP, the ADAA soft clip, the clamp), then the windowed-sinc resampler to the device rate; duplicates to
+    /// every channel and keeps the ring at its target in callback-sized pieces, sleeping about half a callback between.
     fn run(self) {
+        use crate::outbus::{Limiter, Resampler, SoftClip};
         let (sr, ch) = (self.sr, self.ch as usize);
         let mut lr = LiveRain::new(self.seed);
-        let step = ENGINE_FS / sr as f64; // engine samples per device sample
         let mut src = vec![0.0f32; 512];
-        let mut src_pos = 0.0f64;
-        let mut prev = 0.0f32;
-        let mut have = false;
+        let mut blk = vec![0.0f64; 512];
+        let mut lim = Limiter::new(ENGINE_FS);
+        let mut clip = SoftClip::new();
+        let mut rs = Resampler::new(ENGINE_FS, sr as f64);
         let mut frame: Vec<f32> = Vec::with_capacity(8192);
         let mut thunder_gain = 0.0f32;
+        let mut duck_prev = 1.0f64;
         let started = std::time::Instant::now();
         let mut base_underruns: Option<u64> = None;
         let max_frames = (sr as f64 * MAX_QUEUE_S) as u32;
+        let block_s = src.len() as f64 / ENGINE_FS;
         while !self.stop.load(Ordering::Relaxed) {
             let cbf = match self.cb_frames.load(Ordering::Relaxed) {
                 0 => self.guess_frames,
@@ -399,33 +409,41 @@ impl Worker {
             let want_thunder = m.map(|m| m.thunder as f32).unwrap_or(0.0);
             frame.clear();
             let frames = (target as usize - filled_frames).min(cbf as usize).max(32);
-            for _ in 0..frames {
-                if !have || src_pos >= src.len() as f64 {
-                    if have {
-                        prev = src[src.len() - 1];
-                        src_pos -= src.len() as f64;
+            while frame.len() < frames * ch {
+                let v = match rs.pull() {
+                    Some(v) => v as f32,
+                    None => {
+                        // one engine block: the UTC time it will be heard (now + what is queued ahead of it, the
+                        // resampler's and the limiter's delay, the device's latency)
+                        let queued = (self.ring.filled() + frame.len()) as f64 / (sr as f64 * ch as f64)
+                            + rs.pending() / ENGINE_FS
+                            + crate::outbus::LIM_LOOK_S;
+                        let t_out = utc_now() + queued + self.dev_lat.load(Ordering::Relaxed) as f64 * 1e-6;
+                        for v in src.iter_mut() {
+                            *v = 0.0;
+                        }
+                        lr.process(&mut src);
+                        // the rain under the strike ducks: the gain from the block's start to its end
+                        let d1 = self.bus.duck_gain(t_out + block_s);
+                        let n = src.len() as f32;
+                        for (k, v) in src.iter_mut().enumerate() {
+                            *v *= (duck_prev + (d1 - duck_prev) * (k as f64 / n as f64)) as f32;
+                        }
+                        duck_prev = d1;
+                        self.bus.start_due(t_out);
+                        thunder_gain += (want_thunder - thunder_gain) * 0.2;
+                        self.bus.mix(&mut src, thunder_gain);
+                        for (b, v) in blk.iter_mut().zip(&src) {
+                            *b = clip.tick(lim.tick(*v as f64));
+                        }
+                        self.limited.store(lim.engaged, Ordering::Relaxed);
+                        rs.push(&blk);
+                        continue;
                     }
-                    for v in src.iter_mut() {
-                        *v = 0.0;
-                    }
-                    lr.process(&mut src);
-                    // the UTC time this block will be heard: now + what is queued ahead of it + the device's latency
-                    let queued = (self.ring.filled() + frame.len()) as f64 / (sr as f64 * ch as f64);
-                    let t_out = utc_now() + queued + self.dev_lat.load(Ordering::Relaxed) as f64 * 1e-6;
-                    self.bus.start_due(t_out);
-                    thunder_gain += (want_thunder - thunder_gain) * 0.2;
-                    self.bus.mix(&mut src, thunder_gain);
-                    have = true;
-                }
-                let i = src_pos.floor() as usize;
-                let fr = (src_pos - i as f64) as f32;
-                let a = if i == 0 { prev } else { src[i - 1] };
-                let b = src[i];
-                let v = a + (b - a) * fr;
+                };
                 for _ in 0..ch {
                     frame.push(v);
                 }
-                src_pos += step;
             }
             let mut off = 0;
             while off < frame.len() && !self.stop.load(Ordering::Relaxed) {
