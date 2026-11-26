@@ -1049,8 +1049,8 @@ def chain_heights(store, comp, parts, ground_ll=None):
 def _regions_of(la, lo):
     """Each point's region frame id (FRAME_Z Web-Mercator tile: mapcells.cells_of's exact edge rules)."""
     import mapcells
-    ks = mapcells.cells_of(np.asarray(la, np.float64), np.asarray(lo, np.float64), FRAME_Z)
-    return np.array([(FRAME_Z << 48) | (k.x << 24) | k.y for k in ks], np.int64)
+    xs, ys = mapcells.cells_xy(np.asarray(la, np.float64), np.asarray(lo, np.float64), FRAME_Z)
+    return (np.int64(FRAME_Z) << 48) | (xs << 24) | ys
 
 
 def _square_pins(fid, frame, sq, cell_fn, ground_ll):
@@ -1750,14 +1750,14 @@ def ground_cut(frame, cell_fn, la, lo, z, box=None):
     e = np.ascontiguousarray(np.asarray(e, np.float64).ravel())
     n = np.ascontiguousarray(np.asarray(n, np.float64).ravel())
     ok = np.isfinite(la) & np.isfinite(lo)
-    keys = mapcells.cells_of(np.where(ok, la, 0.0), np.where(ok, lo, 0.0))
+    xs, ys = mapcells.cells_xy(np.where(ok, la, 0.0), np.where(ok, lo, 0.0))
+    code = (xs << 32) | ys
     groups = {}
-    for i, k in enumerate(keys):
-        if ok[i]:
-            groups.setdefault(k, []).append(i)
+    for c in np.unique(code[ok]).tolist():      # (each cell's points in their order, the cells as str() sorts them)
+        groups[mapcells.CellKey(mapcells.ZOOM, c >> 32, c & 0xFFFFFFFF)] = np.flatnonzero(ok & (code == c))
     cut = 0
     for k in sorted(groups, key=str):
-        idx = np.asarray(groups[k], np.int64)
+        idx = groups[k]
         if box is None:
             c = ceil_of_cell(frame, cell_fn, k, _snap_box(e[idx], n[idx]))
         else:
