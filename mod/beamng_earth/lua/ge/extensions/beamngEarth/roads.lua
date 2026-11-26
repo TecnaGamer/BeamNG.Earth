@@ -542,6 +542,7 @@ local function dropTile(key)
   if t.props then require('beamngEarth/trees').dropKey((key:gsub(':', ':p', 1))) end
   if t.guardrails then require('beamngEarth/trees').dropKey((key:gsub(':', ':g', 1))) end
   if t.props then require('beamngEarth/nightlights').dropKey(key) end
+  if t.displayCars then require('beamngEarth/trees').dropKey((key:gsub(':', ':cars', 1))) end
   if t.talus then require('beamngEarth/trees').dropKey((key:gsub(':', ':t', 1))) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
   if t.speedTraps then speedtraps.dropKey(key) end
@@ -1017,7 +1018,14 @@ local function geoRows(key, t, data, replacing)
     t.guardrailRows = #data.guardrails.items
   end
   if type(data.park) == 'table' and data.park[1] then
-    require('beamngEarth/parking').onRows(t.anchor, key, M.mapRows(pl, data.park, 1, 4))
+    local density = require('beamngEarth/parkingdensity')
+    local spots, display = density.split(data.park)
+    if display and #display > 0 and not replacing then
+      require('beamngEarth/trees').onGeoRows('cars' .. t.gkey, t.gkey, display, density.groups, 9,
+        t.frame, t.rowPivot or 0, t.anchorObj)
+      t.displayCars = true
+    end
+    require('beamngEarth/parking').onRows(t.anchor, key, M.mapRows(pl, spots, 1, 4))
     t.park = true
   end
   if type(data.speedTraps) == 'table' and data.speedTraps[1] then
@@ -1705,7 +1713,13 @@ function M.onTile(msg, currentAnchor, a)
     tiles[key].guardrailRows = #data.guardrails.items
   end
   if type(data.park) == 'table' and data.park[1] then      -- curbside parking spots (parking.lua)
-    require('beamngEarth/parking').onRows(msg.anchorId, key, data.park)
+    local density = require('beamngEarth/parkingdensity')
+    local spots, display = density.split(data.park)
+    if display and #display > 0 then
+      require('beamngEarth/trees').onRows(msg.anchorId, 'cars' .. tostring(msg.key), display, density.groups, 9)
+      tiles[key].displayCars = true
+    end
+    require('beamngEarth/parking').onRows(msg.anchorId, key, spots)
     tiles[key].park = true
   end
   if type(data.fuel) == 'table' and data.fuel[1] then      -- gas stations: pumps, refuel areas (gasstations.lua)

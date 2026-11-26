@@ -3489,6 +3489,8 @@ class Server:
             if park is not None:
                 import busstationpark
                 park = park + busstationpark.rows(anchor.frame, self.mapdata, box, elev)
+            import parkingdisplay
+            park = parkingdisplay.apply(anchor.frame, tx, ty, self.mapdata, park, items, drives)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
         chunks += parkingmod.finish_markings(anchor.frame, tx, ty, self.mapdata, elev, items, marks,
                                              separate_bays=bool(frontage_country))
@@ -10631,7 +10633,32 @@ class Connection:
         return fast._ef.follow_pose(self, aid, FRAME_S, FAST_BASE_V, PREFETCH_CHAIN,
                                     (ROUTE_NEAR_M, ROUTE_ALIGN, ROUTE_STEP_M, ROUTE_AHEAD_S, ROUTE_AHEAD_MAX_M))
 
+    def _refresh_storefront_pack(self):
+        if os.environ.get("BNE_STOREFRONTS") != "1":
+            return
+        now = time.monotonic()
+        if now < getattr(self, "_pack_poll_after", 0) or getattr(self, "_pack_checking", False):
+            return
+        self._pack_poll_after = now + 1
+        self._pack_checking = True
+
+        async def check():
+            from storefrontpack import snapshot
+            try:
+                pack = await asyncio.to_thread(snapshot, self.s.root)
+                digest = pack.digest if pack else None
+                if getattr(self, "_pack_digest", None) != digest:
+                    self._pack_digest = digest
+                    self.roads.close()
+                    self.roads = road_tracker(self)
+                    log.info("Storefront pack changed. Refreshing visible road tiles.")
+            finally:
+                self._pack_checking = False
+
+        self.spawn(check())
+
     def _pose_refresh(self, aid, tree):
+        self._refresh_storefront_pack()
         self.maybe_prefetch()
         self.send_ready_set()
         if aid == self.active and self.following:

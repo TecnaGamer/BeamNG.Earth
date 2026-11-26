@@ -478,6 +478,12 @@ M.CATALOG.kantstolpe = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_kant
 M.GROUP_MAX_M.kantstolpe = 800
 M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_giveway_b1', 2.30 } }   -- (Sweden's yellow give-way)
 M.GROUP_MAX_M.giveway_b1 = 300
+-- Static lot inventory uses shared visual meshes at their authored dimensions.
+for name, h in pairs({sedan=1.45, hatchback=1.48, suv=1.74, pickup=1.79}) do
+  local g = 'lot_' .. name
+  M.CATALOG[g] = {{'/art/shapes/beamngearth/dealer/' .. name, h}}
+  M.NO_COLLIDE[g], M.ONE_SPELLING[g], M.GROUP_MAX_M[g] = true, true, 420
+end
 -- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
 local SE_SIGNS = { se_f17 = 2.70, se_f17_400 = 2.78, se_f17_300 = 2.78, se_f17_200 = 2.78, se_f18_11 = 2.70, se_f18_12 = 2.70,
   se_f18_21 = 2.70, se_f2 = 3.50, se_c1 = 2.10, se_b3 = 2.60, se_e1 = 2.70, se_e2 = 2.70,
@@ -1285,6 +1291,7 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
     M.placeGeo(t)
   end
   t.id = key
+  if tostring(tileKey):match('^cars') then t.parkingCheck = 0 end
   t.furn = tostring(tileKey):match('^[pg]g%d') ~= nil or tostring(tileKey):match('^p') ~= nil  -- (street furniture, rails)
   setTile(key, t)
   dirty = true
@@ -1894,6 +1901,7 @@ function M.update(anchorId, player, view, frameMs, fill)
     lhx, lhy = (player.vx or 0) / psp, (player.vy or 0) / psp
   end
   local nOrder = 0
+  local parkingCamera, parkingNow
   for li = 1, #tileList do
     local key = tileList[li]
     local t = tiles[key]
@@ -1902,6 +1910,16 @@ function M.update(anchorId, player, view, frameMs, fill)
       local dCar = boxDist(player, t)
       local dist = view and math.min(boxDist(view, t), dCar) or dCar
       local want = tileThreshold(dist, t)
+      if t.parkingCheck and dist <= 420 then
+        parkingNow = parkingNow or os.clock()
+        if parkingNow >= t.parkingCheck then
+          if parkingCamera == nil then parkingCamera = require('beamngEarth/parking').cameraView() or false end
+          if require('beamngEarth/parkingdensity').refresh(t, parkingCamera, player, geotile) then
+            t.pending, t.scan = true, nil
+          end
+          t.parkingCheck = parkingNow + 4
+        end
+      end
       local capD = dist
       if leadM > 0 and t.furn and (t.cx - player.x) * lhx + (t.cy - player.y) * lhy > -(t.half or 128) then
         capD = math.max(0, dist - leadM)
@@ -2034,6 +2052,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         local b = (i - 1) * s
         local r = f[b + F_RANK]
         local g = names[f[b + F_GROUP] + 1]
+        if t.parkingCheck and not (t.occupied and t.occupied[i]) then r = 2 end
         local cap = g and (M.GROUP_MAX_M[g] or ((clifftalus.enabled and clifftalus.isGroup(g)) and clifftalus.MAX_DISTANCE_M))
         local isGuardrail = M.isBarrier(g)
         if isGuardrail then
@@ -2234,6 +2253,7 @@ function M.keepupMissing(px, py, r)
         if (x - lx) * (x - lx) + (y - ly) * (y - ly) <= r2 and not t.made[i] then
           local g = names[f[b + F_GROUP] + 1]
           local rk = f[b + F_RANK]
+          if t.parkingCheck and not (t.occupied and t.occupied[i]) then rk = 2 end
           local cap = g and (M.GROUP_MAX_M[g] or ((clifftalus.enabled and clifftalus.isGroup(g)) and clifftalus.MAX_DISTANCE_M))
           if M.isBarrier(g) then
             local rowCap

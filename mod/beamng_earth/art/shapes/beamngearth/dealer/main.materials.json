@@ -1,0 +1,155 @@
+{
+  "bne_inventory_silver": {
+    "name": "bne_inventory_silver",
+    "mapTo": "bne_inventory_silver",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.58,
+          0.6,
+          1
+        ],
+        "roughnessFactor": 0.54
+      }
+    ]
+  },
+  "bne_inventory_red": {
+    "name": "bne_inventory_red",
+    "mapTo": "bne_inventory_red",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.48,
+          0.055,
+          0.04,
+          1
+        ],
+        "roughnessFactor": 0.54
+      }
+    ]
+  },
+  "bne_inventory_blue": {
+    "name": "bne_inventory_blue",
+    "mapTo": "bne_inventory_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.065,
+          0.18,
+          0.27,
+          1
+        ],
+        "roughnessFactor": 0.54
+      }
+    ]
+  },
+  "bne_inventory_white": {
+    "name": "bne_inventory_white",
+    "mapTo": "bne_inventory_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.81,
+          0.8,
+          0.76,
+          1
+        ],
+        "roughnessFactor": 0.54
+      }
+    ]
+  },
+  "bne_inventory_glass": {
+    "name": "bne_inventory_glass",
+    "mapTo": "bne_inventory_glass",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.085,
+          0.15,
+          0.19,
+          1
+        ],
+        "roughnessFactor": 0.32
+      }
+    ]
+  },
+  "bne_inventory_rubber": {
+    "name": "bne_inventory_rubber",
+    "mapTo": "bne_inventory_rubber",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.035,
+          0.036,
+          0.039,
+          1
+        ],
+        "roughnessFactor": 0.54
+      }
+    ]
+  },
+  "bne_inventory_rim": {
+    "name": "bne_inventory_rim",
+    "mapTo": "bne_inventory_rim",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.52,
+          0.54,
+          0.55,
+          1
+        ],
+        "roughnessFactor": 0.54
+      }
+    ]
+  },
+  "bne_inventory_tail": {
+    "name": "bne_inventory_tail",
+    "mapTo": "bne_inventory_tail",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.68,
+          0.055,
+          0.032,
+          1
+        ],
+        "roughnessFactor": 0.54
+      }
+    ]
+  },
+  "bne_inventory_lamp": {
+    "name": "bne_inventory_lamp",
+    "mapTo": "bne_inventory_lamp",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.84,
+          0.87,
+          0.82,
+          1
+        ],
+        "roughnessFactor": 0.54
+      }
+    ]
+  }
+}

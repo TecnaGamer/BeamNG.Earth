@@ -124,6 +124,8 @@ export const settingsSchema = [
     name: "Experimental",
     intro: "Features still being tested, all off by default. Each takes effect when the world server restarts (the Restart world server button at the top of the page; the game stays open). With any of them on, BeamNG.Earth builds every place itself (the prebuilt shared world data is made for the default settings) and builds places you visited again, so first visits load more slowly.",
     items: [
+      { id: "expStorefronts", type: "bool", default: false, name: "Storefronts and business signs", desc: "Show fictional storefronts and category signs at mapped businesses, malls and shopping centers. The first visit to a shopping area can take longer.",
+        note: RESTART_NOTE },
       { id: "roadSigns", type: "bool", default: false, name: "Road signs", desc: "Experimental. Ordinary signs where the road data implies them: no entry, dead end, crossings, bends, roundabouts, give way and stop, tunnels, bus stops, in Ukraine, Czechia, Poland and Germany. Needs Roads. Turning it off applies at once.",
         note: RESTART_NOTE },
       { id: "expNlRoadSigns", type: "bool", default: false, name: "Dutch road signs", desc: "Experimental. A first set of the Netherlands' own road signs, drawn by the Road signs above. Needs Road signs.",

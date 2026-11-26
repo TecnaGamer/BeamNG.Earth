@@ -168,6 +168,7 @@ M.SCHEMA = {
   -- environment variables"): each the server's BNE_* build switches (server/experimental.py FEATURES), all off by
   -- default; the app's launcher (start.py for a source install) reads them from this file and starts the server with
   -- them, so a change holds from the next start of BeamNG.Earth. Nothing here applies them in the game itself
+  expStorefronts = { kind = 'bool', default = false, label = 'Storefronts and business signs' },
   expNlRoadSigns = { kind = 'bool', default = false, label = 'Dutch road signs' },
   expEuScenery = { kind = 'bool', default = false, label = 'French and European road scenery' },
   expDropRails = { kind = 'bool', default = false, label = 'Guard rails at drops' },
@@ -268,7 +269,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'creditsCorner', 'creditsSize', 'mainMenuTile', 'cacheCapGb', 'routeDownload', 'routeAvoidHighways', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
-  'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
+  'expStorefronts', 'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
   'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expRoadFollow', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads' }

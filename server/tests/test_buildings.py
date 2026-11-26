@@ -1372,6 +1372,19 @@ class CustomModelSuppressionTest(unittest.TestCase):
         out = bld._suppress_under_models(items, [], 0.0, 0.0)
         self.assertEqual(out, items)
 
+    def test_storefront_overlay_keeps_host_and_is_visual_only(self):
+        model = {"id": "local_sign", "xy": (10., 10.), "local": {"storefront_overlay": True}}
+        shape = {"shape": "sign.cdae", "texture": None, "material": "sign",
+                 "has_alpha": False, "alpha_cutoff": None}
+        with mock.patch("threedmr.load_local_model", return_value=self._gltf_mesh((8., 1.))), \
+             mock.patch("threedmr.write_model", return_value=shape), \
+             mock.patch("threedmr.update_materials"):
+            entries, radii, _ = bld._custom_tile_entries(
+                self.f, [model], lambda la, lo: np.zeros(np.shape(la)), "/tmp/s1", "/temp/beamngEarth/s1")
+        self.assertEqual(len(entries), 1)
+        self.assertIs(entries[0]["col"], False)
+        self.assertEqual(radii, [])
+
     def test_suppress_radius_clamped(self):
         custom = [{"id": 41, "xy": (10.0, 10.0)}, {"id": 3, "xy": (20.0, 20.0)}]
 
@@ -1910,6 +1923,23 @@ class TollBoothTest(unittest.TestCase):
 
 
 class RoadLinesTest(unittest.TestCase):
+    def test_directed_service_lanes_require_consistent_one_way_coverage(self):
+        from test_roads import FRAME, features, rules
+        for spans, expected in (
+            ([(0, 1., 0., .3)], 0),
+            ([(0, 1., 0., .5), (0, -1., .5, 1.)], 0),
+            ([(0, 1., 0., .3), (0, 1., .5, 1.)], 0),
+            ([(0, -1., .4, 1.), (0, -1., 0., .4)], -1),
+            ([(0, 1., 0., 1.)], 1),
+        ):
+            with self.subTest(spans=spans):
+                f = features([[(10, 20), (80, 20)]], ["service"])
+                f.rules["oneway"] = rules(spans, "float")
+                lines = bld.road_lines(FRAME, [f], 0., 0., classes={"service"}, directed=True)
+                self.assertEqual(len(lines), int(bool(expected)))
+                if expected:
+                    self.assertEqual(np.sign(lines[0][-1,0]-lines[0][0,0]), expected)
+
     def test_a_road_with_a_bridge_in_it_keeps_its_ground_pieces(self):
         """A motorway segment with a short overpass in it (the A7, GitHub #239): its pieces on the ground are public
         road lines (they were left out whole, and lorries machine-learned as buildings stood on its lanes)."""

@@ -21,7 +21,7 @@ MODULES = (
     "test_revisit", "test_revisit_side", "test_revisitpack", "test_plancache", "test_bake_formats", "test_chunkcache", "test_pools",
     "test_plan_neutral", "test_seamprobe", "test_ground_rules",
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
-    "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
+    "test_sketchfab_assets", "test_storefrontpack", "test_streamedstores", "test_parkingdisplay", "test_subsea_tunnels", "test_tunnels",
     "test_host_package", "test_carriageway_solver",
     "test_portugal_imagery",
     "test_rail_crossing_assets",

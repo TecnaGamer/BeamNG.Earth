@@ -23,6 +23,7 @@ SETTINGS_FILE = ("settings", "beamngEarth.json")    # (cpupin.MOD_SETTINGS; the 
 
 # (setting id, {variable: value when on}, the setting it needs on as well or None). The order is the page's.
 FEATURES = (
+    ("expStorefronts", {"BNE_STOREFRONTS": "1", "BNE_LOCAL_BUSINESS_SIGNS": "1"}, None),
     ("roadSigns", {"BNE_ROADSIGNS": "on"}, None),                         # roadsigns.ON
     ("expNlRoadSigns", {"BNE_NL_ROADSIGNS": "on"}, "roadSigns"),           # roadsigns.NL_ON (only with ON)
     # The road revamp's switches as one (the user, 2026-11-17: "if revamped roads arent enabled by default in the dev
