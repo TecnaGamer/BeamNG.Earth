@@ -876,9 +876,13 @@ class SlotPool:
         self.lane = sched.lane(lane or name, self.workers, adaptive, False) if sched is not None else None
         self._queue = (collections.deque(), collections.deque())       # (normal, low)
         self._queue_cv = threading.Condition()
+        self._closing = False       # (shutdown: no new jobs; the loops end once the queue is empty)
+        self._loops = []
         if sched is None:
             for i in range(self.workers):
-                threading.Thread(target=self._local_loop, daemon=True, name=f"{name}-slot{i}").start()
+                t = threading.Thread(target=self._local_loop, daemon=True, name=f"{name}-slot{i}")
+                t.start()
+                self._loops.append(t)
         self._free = collections.deque(range(self.workers))
         self._free_cv = threading.Condition()
         self._count_lock = threading.Lock()
@@ -910,10 +914,13 @@ class SlotPool:
             fut = concurrent.futures.Future()
             where = []
             self._where[fut] = where
-            with self._count_lock:
-                self.inflight += 1
-            fut.add_done_callback(self._done)
             with self._queue_cv:
+                if self._closing:           # (as an executor after its shutdown; before the count and the future's use)
+                    self._where.pop(fut, None)
+                    raise RuntimeError("cannot schedule new futures after shutdown")
+                with self._count_lock:
+                    self.inflight += 1
+                fut.add_done_callback(self._done)
                 self._queue[1 if low else 0].append((fut, fn, args, kwargs, make_args, where))
                 self._queue_cv.notify()
             return fut
@@ -938,6 +945,8 @@ class SlotPool:
         while True:
             with self._queue_cv:
                 while not (self._queue[0] or self._queue[1]):
+                    if self._closing:       # (shut down and nothing left: the slots are shut after every loop ends)
+                        return
                     self._queue_cv.wait()
                 fut, fn, args, kwargs, make_args, where = (self._queue[0] or self._queue[1]).popleft()
             if not fut.set_running_or_notify_cancel():
@@ -1027,13 +1036,32 @@ class SlotPool:
         return [pid for p in self.slots for pid in p._pids()]
 
     def shutdown(self, wait=True, *, cancel_futures=False):
-        if cancel_futures:
-            with self._queue_cv:
+        """As an executor's: no new jobs; the queued ones run (cancel_futures: cancelled), then the slots' processes are
+        shut. sched None: the loops stop taking jobs once the queue is empty and the slots are shut only after every
+        loop has ended (a job a loop had just taken was handed to a closed slot: RuntimeError, Gemini on 01df0d0f);
+        wait False returns at once, the rest done by a thread of its own."""
+        if self.sched is not None:
+            for p in self.slots:
+                p.shutdown(wait=wait, cancel_futures=cancel_futures)
+            return
+        with self._queue_cv:
+            self._closing = True
+            if cancel_futures:
                 for q in self._queue:
                     while q:
                         q.popleft()[0].cancel()
-        for p in self.slots:
-            p.shutdown(wait=wait, cancel_futures=cancel_futures)
+            self._queue_cv.notify_all()
+
+        def finish():
+            for t in self._loops:
+                if t is not threading.current_thread():
+                    t.join()
+            for p in self.slots:
+                p.shutdown(wait=True)
+        if wait:
+            finish()
+        else:
+            threading.Thread(target=finish, daemon=True, name=f"{self.name}-shutdown").start()
 
 
 def members(pool):

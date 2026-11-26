@@ -87,7 +87,7 @@ def process_mb(pid):
     got = perfstats._pss_parts(pid)
     if got is None:
         return None
-    return float(fast._ef.ram_counted_mb(got[0], got[1], budget.swap_weight()))
+    return budget.counted_mb(got[0], got[1])
 
 
 def measure():
@@ -140,7 +140,6 @@ def _avail_mb():
 
 def start(limit_mb=None):
     """The watchdog's thread (the server's main process, after its pools exist). False when off or without a limit."""
-    fast.require(MEMWATCH_KERNEL, "the memory watchdog (ram_counted_mb, ram_burst_room_mb)")
     global _thread
     limit_mb = budget.LIMIT_MB if limit_mb is None else limit_mb
     with _lock:
@@ -149,6 +148,7 @@ def start(limit_mb=None):
         _state["tier"] = budget.TIER
     if not ON or not limit_mb or _thread is not None:
         return False
+    fast.require(MEMWATCH_KERNEL, "the memory watchdog (ram_counted_mb, ram_burst_room_mb)")
     _thread = threading.Thread(target=_loop, daemon=True, name="memwatch")
     _thread.start()
     log.info("memory: the server's limit %.1f GB (%s; settings page: Max RAM for BeamNG.Earth), tier %s",

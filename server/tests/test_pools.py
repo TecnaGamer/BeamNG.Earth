@@ -401,6 +401,41 @@ class LocalSlotsTest(unittest.TestCase):
             p.shutdown()
 
 
+class LocalSlotsShutdownTest(unittest.TestCase):
+    """SlotPool (sched None) shutdown as an executor's: the queued jobs run to the end (or are cancelled with
+    cancel_futures), the slots shut only after the loops end, so no job taken just before is handed to a closed slot
+    (Gemini on 01df0d0f); a submit after it raises RuntimeError."""
+
+    def test_queued_jobs_finish_then_the_slots_close(self):
+        import time
+        p = pools.SlotPool(None, "test", 2, mp_context=SPAWN)
+        p.submit(abs, -1).result(timeout=60)            # (both processes started)
+        futs = [p.submit(time.sleep, 0.05) for _ in range(12)] + [p.submit(abs, -3)]
+        p.shutdown(wait=True)
+        self.assertTrue(all(f.done() and f.exception() is None for f in futs), "every queued job ran")
+        self.assertEqual(futs[-1].result(), 3)
+        with self.assertRaises(RuntimeError):
+            p.submit(abs, -1)
+        self.assertFalse(any(t.is_alive() for t in p._loops))
+        self.assertEqual(p.inflight, 0)
+
+    def test_cancel_futures_and_no_wait(self):
+        import time
+        p = pools.SlotPool(None, "test", 1, mp_context=SPAWN)
+        p.submit(abs, -1).result(timeout=60)
+        running = p.submit(time.sleep, 0.8)
+        time.sleep(0.3)
+        queued = [p.submit(abs, -i) for i in range(5)]
+        p.shutdown(wait=False, cancel_futures=True)
+        self.assertTrue(all(f.cancelled() for f in queued), "the queued jobs cancelled")
+        self.assertIsNone(running.result(timeout=60), "the running one finished in its open slot")
+        deadline = time.monotonic() + 30
+        while any(t.is_alive() for t in p._loops) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(any(t.is_alive() for t in p._loops))
+        self.assertEqual(p.inflight, 0)
+
+
 class TasksPerChildTest(unittest.TestCase):
     """The lean memory tiers' road process replaced after so many jobs (pools.tasks_per_child_kw): every job still
     answered, by fresh processes, the queue kept. The pool's own queue on every Python, never the executor's

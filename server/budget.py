@@ -544,6 +544,17 @@ def swap_weight():
     return w
 
 
+def counted_mb(resident_mb, swapped_mb):
+    """MB of a process's memory as the ceilings count it: resident, and swapped at swap_weight (native ram_counted_mb).
+    A module older than earthfast 637 (no ram_counted_mb: the server refuses to start below fast.MIN_VERSION, but a
+    tool or a test may load one): swapped whole, as before."""
+    try:
+        import fast
+        return float(fast._ef.ram_counted_mb(resident_mb, swapped_mb, swap_weight()))
+    except AttributeError:
+        return resident_mb + swapped_mb
+
+
 def memory_mb(private=False):
     """This process's memory in MB (Linux /proc: resident, and swapped at the RAM it holds, swap_weight; Windows:
     private bytes), or None. private: its own resident pages only (Linux RssAnon: not the shared libraries' pages
@@ -557,8 +568,7 @@ def memory_mb(private=False):
                     rss = int(line.split()[1])
                 elif line.startswith("VmSwap:"):
                     swap = int(line.split()[1])
-        import fast
-        return float(fast._ef.ram_counted_mb(rss / 1024.0, swap / 1024.0, swap_weight()))
+        return counted_mb(rss / 1024.0, swap / 1024.0)
     except (OSError, ValueError):
         pass
     win = _win_memory()

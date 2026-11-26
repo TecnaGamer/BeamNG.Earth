@@ -251,3 +251,23 @@ class WatchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OlderModuleTest(unittest.TestCase):
+    """(Gemini on 01df0d0f) a module older than earthfast 637 loaded by a tool or test: the ceilings count swap whole,
+    and an off watchdog asks nothing of the module."""
+
+    def test_counted_whole_without_the_kernel(self):
+        import fast
+        with mock.patch.object(fast, "_ef", object()):
+            self.assertEqual(budget.counted_mb(1000.0, 500.0), 1500.0)
+            mb = budget.memory_mb()
+            if sys.platform.startswith("linux"):
+                self.assertGreater(mb, 1.0)
+
+    def test_off_watchdog_never_requires_the_kernel(self):
+        import fast
+        with mock.patch.object(memwatch, "ON", False), \
+                mock.patch.object(fast, "require", side_effect=AssertionError("required")):
+            self.assertFalse(memwatch.start(4096.0))
+            self.assertFalse(memwatch.start(0.0))
