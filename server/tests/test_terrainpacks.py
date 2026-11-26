@@ -79,6 +79,42 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(set(self.led.entries()), {KEY_A, KEY_D})
         self.assertEqual(tp.cap(self.led, self.pdir, max_bytes=250), (0, 0), "under the cap: nothing")
 
+    def test_existing_ledger_reads_back(self):
+        """A ledger the Python module wrote (Linux "\\n", Windows "\\r\\n") reads back; a rewrite keeps its format."""
+        os.makedirs(self.cache)
+        with open(self.led.path, "wb") as f:
+            f.write(f"{KEY_A} 20261124-120000-bbbb 1764000000\r\n{KEY_B} s2 1764000001\n{KEY_C} s3 0042\r".encode())
+        self.assertEqual(self.led.entries(), {KEY_A: ("20261124-120000-bbbb", 1764000000), KEY_B: ("s2", 1764000001),
+                                              KEY_C: ("s3", 42)})
+        self.assertEqual(self.led.keys_of("s2"), [KEY_B])
+        self.assertEqual(tp.prune(self.led, self.pdir, {"s2", "20261124-120000-bbbb"}), (0, 0))
+        self.assertEqual(self.led.entries(), {KEY_A: ("20261124-120000-bbbb", 1764000000), KEY_B: ("s2", 1764000001)})
+        with open(self.led.path, "rb") as f:
+            self.assertEqual(f.read(), f"{KEY_A} 20261124-120000-bbbb 1764000000{os.linesep}{KEY_B} s2 1764000001"
+                             f"{os.linesep}".encode(), "the lines dropped (s3 gone), oldest first, the platform's ends")
+
+    @unittest.skipIf(os.name == "nt", "symbolic links need rights on Windows")
+    def test_links_never_followed(self):
+        """Guard: a link at a recorded pack's name is never measured or deleted, nor what it points at."""
+        outside = write(os.path.join(self.tmp.name, "elsewhere", "precious.dds"), b"p" * 1000)
+        os.makedirs(self.pdir)
+        os.symlink(outside, os.path.join(self.pdir, KEY_A + ".dds"))
+        self.led.record(KEY_A, "gone", now=1)
+        self.assertEqual(tp.prune(self.led, self.pdir, set()), (0, 0))
+        self.led.record(KEY_A, "s", now=2)
+        self.assertEqual(tp.cap(self.led, self.pdir, max_bytes=0), (0, 0))
+        self.assertTrue(os.path.islink(os.path.join(self.pdir, KEY_A + ".dds")) and os.path.exists(outside))
+
+    def test_no_python_fallback(self):
+        """The work is the native module's: an older one is refused, nothing done in Python."""
+        ef = fast._ef
+        self.addCleanup(setattr, fast, "_ef", ef)
+        fast._ef = type("Old", (), {"VERSION": tp.NATIVE - 1})()
+        with self.assertRaises(fast.NativeMissing):
+            tp.prune(self.led, self.pdir, set())
+        with self.assertRaises(fast.NativeMissing):
+            tp.is_ours(os.path.join(self.pdir, KEY_A + ".dds"))
+
 
 class OursTest(unittest.TestCase):
     def setUp(self):
@@ -109,6 +145,20 @@ class OursTest(unittest.TestCase):
         self.assertFalse(tp.is_ours(write(os.path.join(self.pdir, "1" * 16 + ".dds"), pack_bytes()[:-16])))
         self.assertFalse(tp.is_ours(write(os.path.join(self.pdir, "2" * 16 + ".dds"), pack_bytes(px=1024))))
         self.assertFalse(tp.is_ours(write(os.path.join(self.tmp.name, "notakey.dds"), pack_bytes())))
+
+    @unittest.skipIf(os.name == "nt", "symbolic links need rights on Windows")
+    def test_links_are_not_ours(self):
+        """Guard: a link to one of our packs is no pack (not read through), and makes the folder unfamiliar (no wipe)."""
+        real = write(os.path.join(self.tmp.name, "elsewhere", KEY_A + ".dds"), pack_bytes())
+        write(os.path.join(self.pdir, KEY_B + ".dds"), b"x")
+        link = os.path.join(self.pdir, KEY_A + ".dds")
+        os.symlink(real, link)
+        self.assertTrue(tp.is_ours(real))
+        self.assertFalse(tp.is_ours(link))
+        self.assertFalse(tp.familiar(self.pdir))
+        mark = os.path.join(self.tmp.name, "cache", tp.WIPE_MARK)
+        self.assertIsNone(tp.wipe_v2(self.pdir, set(), mark))
+        self.assertTrue(os.path.exists(real) and os.path.islink(link) and not os.path.exists(mark))
 
     def test_familiar(self):
         write(os.path.join(self.pdir, KEY_A + ".dds"), b"x")
@@ -218,6 +268,17 @@ class ServerPacksTest(unittest.TestCase):
         self.server(game=True)
         self.assertTrue(os.path.exists(mine), "a session a game may still show keeps its packs")
         self.assertFalse(os.path.exists(os.path.join(self.cache, tp.WIPE_MARK)), "no wipe with a game running")
+
+    def test_game_running_prunes_and_caps_nothing(self):
+        """Guard: with a game running even a gone session's recorded pack and a leaked one stay (the game may show
+        them), whatever the cap."""
+        led = tp.Ledger(self.cache)
+        gone = write(os.path.join(self.pdir, KEY_A + ".dds"), pack_bytes())
+        led.record(KEY_A, "20261101-000000-aaaa", now=1)
+        leaked = write(os.path.join(self.pdir, KEY_B + ".dds"), pack_bytes(seed=6))
+        self.server(game=True)
+        self.assertTrue(os.path.exists(gone) and os.path.exists(leaked))
+        self.assertEqual(set(tp.Ledger(self.cache).entries()), {KEY_A})
 
     def test_release_takes_the_recorded_packs_first(self):
         sid = "20261124-120000-cccc"
