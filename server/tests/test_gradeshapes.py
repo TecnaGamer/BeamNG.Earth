@@ -842,7 +842,7 @@ def test_a_growth_lays_the_same_ramps_with_and_without_its_memo():
 
 
 def _indexed(members, reach=False):
-    """find_interchanges of the members with the process's pair index (a growth's round, as owner.grow makes it): (net,
+    """find_interchanges of the members on the process's line network (a growth's round, as owner.grow makes it): (net,
     found, the round's scan)."""
     scan = ix.Scan()
     net, found = ix.find_interchanges(members, lambda n_: (lambda xy: np.zeros(len(xy)), lambda i, s: _fixed(n_, lambda xy: np.zeros(len(xy)), i, s)),
@@ -850,27 +850,27 @@ def _indexed(members, reach=False):
     return net, found, scan
 
 
-def _seeds_relations(net, scan):
-    """{seed's key: (the index's relations, a full scan's)}."""
-    out = {}
+def _assert_network_exact(net):
+    """Every member's relations from the line network against the Python made with no index (every other member of two
+    points or more through _pair_relations)."""
     for i in range(len(net.m)):
-        if ix._is_seed(net, i):
-            out[net.m[i].key] = (scan.relations(net, i), ix._relations(net, i))
-    return out
+        if len(net.lines[i]) < 2:
+            continue
+        whole = [(j,) + r_ for j in range(len(net.m)) if j != i and len(net.lines[j]) >= 2
+                 for r_ in ix._pair_relations(net, i, j)]
+        got = ix._relations(net, i)
+        assert len(got) == len(whole), net.m[i].key
+        for a, b in zip(got, whole):
+            assert a[:4] == b[:4] and np.asarray(a[4]).tobytes() == np.asarray(b[4]).tobytes(), (net.m[i].key, a, b)
 
 
-def _assert_index_exact(net, scan):
-    for key, (got, whole) in _seeds_relations(net, scan).items():
-        assert got == whole, key
-
-
-def test_the_pair_index_gives_each_growth_the_relations_of_a_full_scan():
-    """The process's pair index across growths (PAIRS): a seed's entry names every member near it in the net, whichever
-    growth indexed each, so relations() is a full scan's. A seed the index has not seen is scanned along its line; one
-    it has is asked for the members near its box that its entry lacks: this net's new members (a road joining the deck's
-    end), a member indexed by another growth and met here for the first time, and the same part cut differently and kept
-    in this net in place of the copy the last net kept (one_part: a seed's neighbours are not the same from net to net).
-    A member that is no seed is never asked and has no entry: no relations of its own, and every seed near it is."""
+def test_the_line_network_gives_each_growth_the_relations_of_a_full_scan():
+    """The process's line network across growths: a line is added once, by the first net that has it, and every net after
+    reads its pairs there, whatever else that net holds: a road joining the deck's end that the last net lacked, a member
+    another growth added, and the same part cut differently kept in this net in place of the copy the last net kept
+    (one_part: a member's neighbours are not the same from net to net); a line of the network that this net lacks is
+    nobody's relation here."""
+    import linenet
     d1 = Member("d1", _line(0, -30, 0, 30, 13), "deck", "secondary", 60, 1, 5.0, None)
     mid = Member("mid", _line(0, 30, 0, 90, 16), "ground", "secondary", 60, 0, 5.0, None)
     d2 = Member("d2", _line(0, 90, 0, 150, 13), "deck", "secondary", 60, 1, 5.0, None)
@@ -878,57 +878,48 @@ def test_the_pair_index_gives_each_growth_the_relations_of_a_full_scan():
     s = Member("s", _line(0, -600, 0, -30, 100), "ground", "secondary", 60, 0, 5.0, None)
     n = Member("n", _line(0, 151, 0, 400, 50), "deck", "secondary", 60, 1, 5.0, None)
     n2 = Member("n", _line(0, 151.5, 0, 400, 50), "deck", "secondary", 60, 1, 5.0, None)     # (the same part, cut otherwise)
-    # (a growth over n alone first)
-    _0, _f, scan0 = _indexed([n])
-    assert scan0.scanned[-1] == 1 and len(ix.PAIRS.pairs) == 1, "the seed alone is in the index"
-    # (a growth over the decks' district: its two seeds scanned; mid and w, no seeds, never asked)
-    net1, _f, scan1 = _indexed([d1, mid, d2, w])
-    assert scan1.scanned[-1] == 2 and scan1.fresh == 2 and len(ix.PAIRS.pairs) == 3
-    _assert_index_exact(net1, scan1)
-    # (a growth with s added and n met for the first time: d1 and d2, had already, asked for what they lack: s and n)
-    net2, _f, scan2 = _indexed([d1, mid, d2, w, s, n])
-    assert scan2.scanned[-1] == 2 and scan2.fresh == 0, "d1 (lacks s) and d2 (lacks n) are asked, both ways: n lacks nothing then"
-    _assert_index_exact(net2, scan2)
-    rel = _seeds_relations(net2, scan2)
-    keys = lambda got: {net2.m[r[0]].key for r in got}
-    assert "n" in keys(rel["d2"][0]) and "d2" in keys(rel["n"][0]), "the strangers are paired"
-    # (the same part cut otherwise takes n's place, as one_part keeps another copy from one net to the next)
-    net3, _f, scan3 = _indexed([d1, mid, d2, w, s, n2])
-    assert scan3.scanned[-1] == 1 and scan3.fresh == 1, "n2 scanned (new; its scan gives d2 its side): nobody else"
-    _assert_index_exact(net3, scan3)
-    stale = ix._line_id(net2, _key_index(net2, "n"))
-    assert stale not in {ix._line_id(net3, r[0]) for r in scan3.relations(net3, _key_index(net3, "d2"))},         "n's stale entry names a member this net has not"
-    # (nothing new, nothing lacked: nobody asked)
-    net4, _f, scan4 = _indexed([d1, mid, d2, w, s, n2])
-    assert scan4.scanned[-1] == 0 and scan4.fresh == 0
-    _assert_index_exact(net4, scan4)
+    net0, _f, _s = _indexed([n])
+    nw = net0.network
+    assert len(nw.ln) == 1
+    net1, _f, _s = _indexed([d1, mid, d2, w])
+    assert net1.network is nw and len(nw.ln) == 5
+    _assert_network_exact(net1)
+    net2, _f, _s = _indexed([d1, mid, d2, w, s, n])
+    assert len(nw.ln) == 6, "s added; n there already"
+    _assert_network_exact(net2)
+    keys = lambda i: {net2.m[r[0]].key for r in ix._relations(net2, i)}
+    assert "n" in keys(_key_index(net2, "d2")) and "d2" in keys(_key_index(net2, "n")), "the strangers are paired"
+    net3, _f, _s = _indexed([d1, mid, d2, w, s, n2])
+    assert len(nw.ln) == 7
+    _assert_network_exact(net3)
+    assert {net3.m[r[0]].key for r in ix._relations(net3, _key_index(net3, "d2"))} >= {"n"}
+    assert all(net3.m[r[0]] is not n for r in ix._relations(net3, _key_index(net3, "d2"))), "n's old copy is not here"
+    net4, _f, _s = _indexed([d1, mid, d2, w, s, n2])
+    assert len(nw.ln) == 7, "nothing new"
+    _assert_network_exact(net4)
+    assert linenet.current() is nw
 
 
-def test_the_pair_index_at_its_caps_holds_the_nets_seeds_and_scans_the_rest_again():
-    """At its caps the index keeps the net's own seeds (a growth's rounds go on reading one another) and nothing of the
-    other growths: met again, they are scanned as new. A growth reading the old index goes on with it."""
+def test_a_full_line_network_gives_way_to_a_new_one_and_its_nets_keep_theirs():
+    """At its cap the process starts a new network; a net bound to the old one (a growth's rounds: Scan.network) goes on
+    with it."""
+    import linenet
     d1 = Member("d1", _line(0, -30, 0, 30, 13), "deck", "secondary", 60, 1, 5.0, None)
     mid = Member("mid", _line(0, 30, 0, 90, 16), "ground", "secondary", 60, 0, 5.0, None)
     d3 = Member("d3", _line(-50, 60, 50, 60, 11), "deck", "secondary", 60, 1, 5.0, None)
-    far = Member("far", _line(-3000, 0, -3000, 500, 100), "deck", "secondary", 60, 1, 5.0, None)
-    _0, _f, scan1 = _indexed([d1, mid])
-    assert scan1.scanned[-1] == 1 and len(ix.PAIRS.pairs) == 1
-    was = ix.PAIRS
-    ix.PAIRS_MAX_SEEDS, ix.PAIRS_MAX_PAIRS = 2, 2
+    net1, _f, scan1 = _indexed([d1, mid])
+    was = net1.network
+    real = linenet.MAX_POINTS
+    linenet.MAX_POINTS = was.ln.points
     try:
-        _1, _f, scan2 = _indexed([d1, mid, d3])          # (not full yet: d3 new)
-        assert ix.PAIRS is was and scan2.scanned[-1] == 1 and scan2.fresh == 1 and len(ix.PAIRS.pairs) == 2
-        _assert_index_exact(_1, scan2)
-        _2, _f, scan3 = _indexed([d1, mid, far])         # (full: d1, this net's seed, kept; d3 out of it, dropped; far new)
-        assert ix.PAIRS is not was and len(was.pairs) == 2, "the old index is the old growth's still"
-        assert set(ix.PAIRS.pairs) == {ix._line_id(_2, _key_index(_2, "d1")), ix._line_id(_2, _key_index(_2, "far"))}
-        assert scan3.scanned[-1] == 1 and scan3.fresh == 1
-        _assert_index_exact(_2, scan3)
-        _3, _f, scan4 = _indexed([d1, mid, far, d3])     # (d3 met again: new)
-        assert scan4.scanned[-1] == 1 and scan4.fresh == 1
-        _assert_index_exact(_3, scan4)
+        net2, _f, scan2 = _indexed([d1, mid, d3])
+        assert net2.network is not was and len(net2.network.ln) == 3, "a new network, the net's lines in it"
+        _assert_network_exact(net2)
+        old = ix.find_interchanges([d1, mid, d3], scan=scan1)[0]
+        assert old.network is was and len(was.ln) == 3, "the old growth's rounds go on with theirs"
+        _assert_network_exact(old)
     finally:
-        ix.PAIRS_MAX_SEEDS, ix.PAIRS_MAX_PAIRS = 100000, 200000
+        linenet.MAX_POINTS = real
 
 
 def test_the_find_asks_the_step_limit_in_its_dips_and_reaches_not_only_between_its_seeds_relations():

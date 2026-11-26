@@ -161,8 +161,10 @@ interchange already solved (`owner.skipper`: the index names its key and the sol
 The ramps' reaches (`gradeshapes._ramp_reaches`) are computed only inside that one growth and stored with the extent
 (`owner.extent_add`: the box and the member keys of the interchange's seeds, which are one interchange): a region's find
 (`find_interchanges(reach=False)`) finds the systems alone, and a solver that did not grow starts from the stored extent, in
-one round, with the stored reaches. A growth's rounds scan only the members they add (`gradeshapes.Scan`: each against its
-neighbours through the net's grid; the relations of the members of earlier rounds are kept).
+one round, with the stored reaches. Every net's members are in the process's line network (`linenet`,
+`earthfast.LineNet`: every road, deck, tunnel and track in one segment grid, the lines near each other paired once, when
+the later is added), so a growth's rounds add only the lines they bring and the relations of the earlier rounds' are
+read there (`gradeshapes._relations`).
 
 An interchange ends where its roads come back to the ground, which is the end of a ramp, not the end of a structure. A
 road leaving a deck belongs to the interchange as far as the deck's ramp reaches (`gradeshapes._ramp_reaches`, from the
