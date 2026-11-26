@@ -72,6 +72,8 @@ What changed in each release of BeamNG.Earth, newest first.
 - Reduced the chance of trees losing their leaves as you get closer (with Winter on): far trees showed summer green
   while the near ones had turned or gone bare.
 - Reduced the chance of streets staying dry in a rain preset with Winter on where the real weather is dry.
+- Reduced the chance of the world stopping loading with Revamped roads (Experimental) on: after driving a while, the
+  ground ahead could fail to build again and again.
 
 ## 1.10.1 beta (2026-11-15)
 
