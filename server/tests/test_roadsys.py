@@ -782,7 +782,7 @@ class CeilTest(unittest.TestCase):
             with mock.patch.dict(os.environ, {"BNE_ROADSYS": "surface"}):
                 importlib.reload(roadsys)
                 self.assertTrue(roadsys.CEIL)
-                with mock.patch.object(roadsys, "ceil_of_cell", lambda f, cf, k: c):
+                with mock.patch.object(roadsys, "ceil_of_cell", lambda f, cf, k, box=None: c):
                     la = np.array([0.0, 0.0, 4e-4])
                     lo = np.array([3e-4, -3e-5, 3e-4])
                     z = np.full(3, 10.0)
@@ -823,8 +823,78 @@ class CeilTest(unittest.TestCase):
             self.assertEqual(len(calls), 2, "read again once its time is up")
         roadsys._ceil_memo.clear()
 
+    def test_a_ceiling_reads_the_decks_near_the_points_asked(self):
+        """(M5 r5) ground_cut asks each cell's ceiling for its points' box snapped out to CEIL_SNAP_M; the decks are
+        read within the cell + 60 m and that box + ceil_reach (their chains alone solved: the whole cell's made the
+        corpus' first visits x5-20 CPU), one ceiling per cell and box."""
+        import mapcells
+        import roadsys
+        e, _c = self.ceil([self.low()])
+        regs = []
+
+        def inputs(frame, cell_fn, keys, reg, view):
+            regs.append(reg)
+            return [], []
+
+        class F:
+            lat0 = lon0 = 0.0
+
+            def geodetic_to_enu(self, la, lo, h):
+                return np.asarray(lo, np.float64) * 1e5, np.asarray(la, np.float64) * 1e5, np.zeros(np.shape(la))
+        key = mapcells.CellKey(mapcells.ZOOM, 1 << (mapcells.ZOOM - 1), (1 << (mapcells.ZOOM - 1)) - 1)
+        la0, lo0, la1, lo1 = roadsys._cell_bounds(key)
+        roadsys._ceil_memo.clear()
+        try:
+            with mock.patch.dict(os.environ, {"BNE_ROADSYS": "surface"}):
+                importlib.reload(roadsys)
+                roadsys._ceil_memo.clear()
+                with mock.patch.object(roadsys, "ends_of_cell", lambda f, cf, k: e), \
+                        mock.patch.object(roadsys, "_decks_view", lambda f: object()), \
+                        mock.patch.object(roadsys, "ceil_reach", lambda cf, keys: 50.0), \
+                        mock.patch.object(roadsys, "_ceil_inputs", inputs):
+                    la = np.array([(la0 + la1) / 2, (la0 + la1) / 2 + 1e-5])
+                    lo = np.array([lo0 + 2e-5, lo0 + 3e-5])
+                    for _ in range(2):
+                        roadsys.ground_cut(F(), None, la, lo, np.full(2, 5.0))
+                    self.assertEqual(len(regs), 1, "one ceiling per cell and box")
+                    x, y = lo * 1e5, la * 1e5
+                    box = roadsys._snap_box(x, y)
+                    self.assertTrue(box[0] <= x.min() and box[2] >= x.max() and box[1] <= y.min() and box[3] >= y.max())
+                    self.assertEqual([v % roadsys.CEIL_SNAP_M for v in box], [0.0] * 4)
+                    reg = regs[0]
+                    self.assertEqual(reg[0], max(lo0 * 1e5 - 60.0, box[0] - 50.0))     # (the cell's own edge + 60 m)
+                    self.assertEqual(reg[2], box[2] + 50.0)
+                    self.assertEqual(reg[1], max(la0 * 1e5 - 60.0, box[1] - 50.0))
+                    self.assertEqual(reg[3], min(la1 * 1e5 + 60.0, box[3] + 50.0))
+                    roadsys.ceil_of_cell(F(), None, key)                # (no box: the whole cell, as before)
+                    self.assertEqual(regs[-1], (lo0 * 1e5 - 60.0, la0 * 1e5 - 60.0, lo1 * 1e5 + 60.0, la1 * 1e5 + 60.0))
+        finally:
+            importlib.reload(roadsys)
+            roadsys._ceil_memo.clear()
+
+    def test_a_ceilings_reach_is_the_widest_structure_rounds(self):
+        """ceil_reach: CEIL_EASE_M + 3.74 x the widest bridge's half width round the cell + CEIL_XY_TOL_M, less the
+        parts' NEAR_M (their boxes come that near the asked box)."""
+        import roads
+        import roadsys
+
+        class Sp:
+            def __init__(self, w):
+                self.width = w
+
+        class Fe(list):
+            ids = ["w1", "w2"]
+        specs = {"a": [None, Sp(12.0)], "b": [Sp(18.0), None], "c": [None, None]}
+        cells = {k: Fe([1, 2]) for k in specs}
+        for k, f in cells.items():
+            f.k = k
+        with mock.patch.object(roadsys, "XSEC", False), \
+                mock.patch.object(roads, "bridge_specs", lambda f: specs[f.k]):
+            got = roadsys.ceil_reach(lambda k: cells[k], ["a", "b", "c"])
+        self.assertAlmostEqual(got, roadsys.CEIL_EASE_M + 3.74 * 9.0 + roadsys.CEIL_XY_TOL_M - roads.NEAR_M)
+
     def test_keyed_and_wired(self):
-        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 6)
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 7)
         self.assertGreaterEqual(fast.MIN_VERSION, 630)
         bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
         self.assertIn("_roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1)", bw)

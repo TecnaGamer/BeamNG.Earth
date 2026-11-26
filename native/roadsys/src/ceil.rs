@@ -28,6 +28,11 @@ pub const KEEP_PAST_M: f64 = 1.0;    // m past a ground road's surface (half wid
                                      // the terrain's interpolation) ...
 pub const SIDE_RAMP: f64 = 0.5;      // ... then cut at most this per m farther (a 1:2 slope down under the deck)
 pub const CELL_M: f64 = 8.0;         // the segments' index square
+pub const ALLOW_CAP_M: f64 = 8.3;    // (M5 r5) a ground road or railway limits a deck's cut only within the deck's own
+                                     // need (its depth + CLEAR_UNDER_M, at most this: the deepest structure's, 8 m +
+                                     // 0.3) of its keep (its distance past it * SIDE_RAMP), the reach the cell's deepest
+                                     // deck's need gave before: so a node's value is its own decks' whatever other decks
+                                     // a caller read
 
 /// One deck part: its line in the frame, its top's height per vertex (the frame's own heights as the evaluators'
 /// ground has them), its half width and its structure's drawn depth.
@@ -106,7 +111,6 @@ impl Ceil {
             end_of: [None, None], skip: BTreeSet::new(),
         }).collect();
         // (an end on another deck's band goes on onto it: not free)
-        let need_max = out.iter().map(|d| d.depth + CLEAR_UNDER_M).fold(0.0, f64::max);
         for i in 0..out.len() {
             for side in 0..2 {
                 let p = if side == 0 { out[i].line.p[0] } else { *out[i].line.p.last().unwrap() };
@@ -144,7 +148,9 @@ impl Ceil {
         rl.dedup_by(|a, b| a.iter().map(|&q| mm2(q)).eq(b.iter().map(|&q| mm2(q))));
         let mut gnd_grid: BTreeMap<(i64, i64), Vec<(u32, u32, u8)>> = BTreeMap::new();
         let near = |bb: &[f64; 4]| bb[2] >= all[0] && bb[0] <= all[2] && bb[3] >= all[1] && bb[1] <= all[3];
-        let reach = KEEP_PAST_M + ends.s + need_max / SIDE_RAMP + 0.01;
+        // (M5 r5: a fixed reach, not the read's deepest deck's: every ground part allow() may count at a node lies in
+        // the node's index square whichever decks were read; allow() cuts them off at the deck's own need exactly)
+        let reach = KEEP_PAST_M + ends.s + ALLOW_CAP_M / SIDE_RAMP + 0.01;
         for (gi, g) in ends.grounds.iter().enumerate() {
             for s in 0..g.pts.len().saturating_sub(1) {
                 let bb = seg_box(g.pts[s], g.pts[s + 1], g.hw + CLEAR_M + reach);
@@ -164,10 +170,11 @@ impl Ceil {
 
     /// m deck `di`'s ceiling may cut the ground at q by beside the ground roads (other than its approaches) and the
     /// railways round it: none within their surface (half width + CLEAR_M, a railway's bed RAIL_HW_M) + KEEP_PAST_M +
-    /// one lattice square, then SIDE_RAMP per m (f64::INFINITY: none near).
+    /// one lattice square, then SIDE_RAMP per m up to the deck's own need (f64::INFINITY: none nearer; M5 r5).
     fn allow(&self, di: usize, q: P2) -> f64 {
         let Some(v) = self.gnd_grid.get(&(cell_of(q[0]), cell_of(q[1]))) else { return f64::INFINITY };
         let keep = KEEP_PAST_M + self.ends.s;
+        let cap = (self.decks[di].depth + CLEAR_UNDER_M).min(ALLOW_CAP_M);
         let mut best = f64::INFINITY;
         for &(pi, s, kind) in v {
             let (pi, s) = (pi as usize, s as usize);
@@ -180,6 +187,7 @@ impl Ceil {
                 seg_near(q, r[s], r[s + 1]).0 - (RAIL_HW_M + keep)
             };
             let a = if past > 0.0 { past * SIDE_RAMP } else { 0.0 };
+            if a > cap { continue; }
             if a < best { best = a; }
         }
         best
@@ -425,6 +433,30 @@ mod tests {
         let c = Ceil::new(ends, &[d(0.0, 60.0), d(60.0, 120.0)], &[]);
         assert!((c.ground(59.0, 0.0, 10.0) - 8.5).abs() < 1e-12);
         assert!((c.ground(61.0, 0.0, 10.0) - 8.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_nodes_value_is_its_own_decks_whatever_other_decks_were_read() {
+        // (M5 r5: a caller reads the decks near its own box; a deep deck far off changes no node of the first, even
+        // where a ground road beside it limits a deep cut: the ground far over the deck)
+        let br = vec![Part { pts: straight(0.0, 60.0, 0.0), hw: 5.0 }];
+        let gr = vec![Part { pts: straight(-50.0, 0.0, 0.0), hw: 5.0 }, Part { pts: vec![[30.0, 9.0], [30.0, 60.0]], hw: 3.0 }];
+        let a = Deck { pts: straight(0.0, 60.0, 0.0), h: vec![10.0; 3], hw: 5.0, depth: 0.6 };
+        let far = Deck { pts: straight(500.0, 560.0, 0.0), h: vec![10.0; 3], hw: 5.0, depth: 8.0 };
+        let c1 = Ceil::new(Ends::new(&br, gr.clone(), &[], 1.0), &[a.clone()], &[vec![[45.0, 8.0], [45.0, 80.0]]]);
+        let c2 = Ceil::new(Ends::new(&br, gr.clone(), &[], 1.0), &[a, far], &[vec![[45.0, 8.0], [45.0, 80.0]]]);
+        let mut cut = 0;
+        for i in -20..140 {
+            for j in -20..20 {
+                let (x, y) = (i as f64 * 0.5, j as f64 * 0.5);
+                for z in [10.0, 30.0] {
+                    let g = c1.ground(x, y, z);
+                    assert_eq!(g.to_bits(), c2.ground(x, y, z).to_bits(), "{x} {y} {z}");
+                    if g < z { cut += 1; }
+                }
+            }
+        }
+        assert!(cut > 0);
     }
 
     #[test]

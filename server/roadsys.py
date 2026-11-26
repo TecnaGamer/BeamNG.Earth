@@ -63,6 +63,10 @@ product declares and hands them over.
       each deck's top heights less its structure's drawn depth), eased in from a free end past the hand-over's metres
       at 1:2, a ground road's or railway's surface and the lattice square round it kept, eased off them at 1:2; the
       hand-over's lattice takes a node so lowered as the deck's (ground_lowering).
+      Round 5 (surface 7): each ceiling reads the decks near the points asked (the caller's box, snapped out, + 120 m),
+      so only their chains are solved (the whole cell's chains, their approaches' cells planned, cost the corpus' first
+      visits x5-20 CPU at four places); ceil.rs counts the ground roads beside a deck within its own need, so a node's
+      value is the same whichever box asked.
 
   BNE_ROADSYS_AREAS (osmareas.py; with shadow or surface): audit: the products read OSM's mapped road areas
       (area:highway=*) of their read's cells and report how their faces meet them (the shadow record's "areas": edge
@@ -1453,7 +1457,20 @@ def handover_drop(frame, cell_fn, la, lo):
 
 # ------------------------------------------------------------------------- M5: the ground under the decks
 
-CEIL_CELLS_KEPT = 64            # RoadsysCeil kept per process (per frame and centre cell)
+CEIL_CELLS_KEPT = 256           # RoadsysCeil kept per process (per frame, centre cell and box)
+# (M5 r5) a ceiling reads the decks near the points asked, not the whole cell's: the chains of every deck within a cell
+# (+ 60 m) were solved for it, most of them far from any point a caller built (their approaches' cells planned: the
+# corpus' first visits x5-20 CPU at four places, RU20). The points' box is snapped out to CEIL_SNAP_M (one ceiling for a
+# block's calls) and grown by ceil_reach: a node's value takes the decks over it (within their half width hw) and whether
+# their ends within the eased metres (handover.rs FULL_M + (ceil.rs ALLOW_CAP_M - DROP_M) / RAMP = 21 m; a skewed end's
+# line (skew.rs: at most 60 degrees, tan 1.73) moves that up to 1.73 hw) go on onto another deck (its half width + 0.5):
+# every deck that counts comes within CEIL_EASE_M + 3.73 hw + CEIL_XY_TOL_M of the box, hw the widest structure round the
+# cell (its hand-over rows), less ChainView's NEAR_M (its parts' boxes come that near). ceil.rs counts the ground roads
+# within each deck's own need (allow), so the value is the same whichever box asked (test_roadsys, ceil.rs
+# a_nodes_value_is_its_own_decks_whatever_other_decks_were_read).
+CEIL_SNAP_M = 64.0
+CEIL_EASE_M = 21.5          # handover.rs FULL_M + (8.3 - DROP_M) / RAMP, + COVER_M
+CEIL_XY_TOL_M = 10.0        # m a part's solved line may lie off its mapped ring (the deck builder's own ends)
 CEIL_SHORT_TTL_S = SHORT_TTL_S  # s a ceiling made from a short read answers again (each use faulted: never kept) before
                                 # it is read again (rebuilt on every query, the corpus' first visits took 18 s -> 35 min)
 _ceil_memo = {}
@@ -1514,21 +1531,63 @@ def _ceil_inputs(frame, cell_fn, keys, reg, view):
     for feats in cells:
         if feats is None or not len(feats):
             continue
-        for _fid, ll, _clear in _rails(feats):
-            e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-            xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
-            if len(xy) >= 2 and not (xy[:, 0].max() < reg[0] - 10 or xy[:, 0].min() > reg[2] + 10
-                                     or xy[:, 1].max() < reg[1] - 10 or xy[:, 1].min() > reg[3] + 10):
+        for xy in _rails_in(feats, frame):
+            if not (xy[:, 0].max() < reg[0] - 10 or xy[:, 0].min() > reg[2] + 10
+                    or xy[:, 1].max() < reg[1] - 10 or xy[:, 1].min() > reg[3] + 10):
                 rails.append(xy)
     return decks, rails
 
 
-def ceil_of_cell(frame, cell_fn, key):
-    """earthfast.RoadsysCeil of map cell key (in frame): its hand-over's ends (ends_of_cell) with the decks that may
-    lie over it, read from the 3 x 3 cells round it as the ends are (a deck over a point reaches it from those cells:
-    a point's ceiling is the same whichever caller asks), each deck's heights its chain's published solve. None when a
-    cell cannot be read; the ends alone (their drop) when no bridge chains are at hand (DECKS_FN unset) or their read
-    failed. Kept for good only when every read was complete; one made from a short read (a short chain's stand-in
+def _rails_in(feats, frame):
+    """[(n, 2)] a cell's railways at ground level (_rails) in frame, memoised on the cell's features per frame (each
+    ceiling's box reads its 3 x 3 cells again)."""
+    memo = feats.__dict__.setdefault("_roadsys_rails_xy", {})
+    fk = _frame_key(frame)
+    got = memo.get(fk)
+    if got is None:
+        got = []
+        for _fid, ll, _clear in _rails(feats):
+            e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+            xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
+            if len(xy) >= 2:
+                got.append(xy)
+        if len(memo) > 8:
+            memo.clear()
+        memo[fk] = got
+    return got
+
+
+def ceil_reach(cell_fn, keys):
+    """m round a ceiling's box its decks are read (CEIL_EASE_M + 3.74 x the widest bridge's half width in cells keys
+    as _ceil_inputs takes it: its spec's or its cross-section's; + CEIL_XY_TOL_M, less roads.NEAR_M), a function of the
+    map round the cell alone."""
+    import roads
+    hw = 0.0
+    for k in keys:
+        feats = cell_fn(k)
+        if feats is None or not len(feats):
+            continue
+        xs = _xsec_extents(cell_fn, k) if XSEC else {}
+        for i, sp in enumerate(roads.bridge_specs(feats)):
+            if sp is not None:
+                hw = max(hw, float(sp.width) / 2, float(xs.get(feature(str(feats.ids[i])), 0.0)))
+    return max(0.0, CEIL_EASE_M + 3.74 * hw + CEIL_XY_TOL_M - float(roads.NEAR_M))
+
+
+def _snap_box(e, n):
+    """The box (x0, y0, x1, y1) of the points (e, n) snapped out to CEIL_SNAP_M (ceil_of_cell's box)."""
+    s = CEIL_SNAP_M
+    return (float(np.floor(np.min(e) / s) * s), float(np.floor(np.min(n) / s) * s),
+            float((np.floor(np.max(e) / s) + 1.0) * s), float((np.floor(np.max(n) / s) + 1.0) * s))
+
+
+def ceil_of_cell(frame, cell_fn, key, box=None):
+    """earthfast.RoadsysCeil of map cell key (in frame) for its points in box (x0, y0, x1, y1; None: the whole cell):
+    its hand-over's ends (ends_of_cell) with the decks that may lie over them, read from the 3 x 3 cells round it as the
+    ends are (a deck over a point reaches it from those cells), within the cell + 60 m and box + CEIL_NEAR_M (a point's
+    ceiling is the same whichever caller asks, whatever its box), each deck's heights its chain's published solve. None
+    when a cell cannot be read; the ends alone (their drop) when no bridge chains are at hand (DECKS_FN unset) or their
+    read failed. Kept for good only when every read was complete; one made from a short read (a short chain's stand-in
     heights) answers for CEIL_SHORT_TTL_S, each use faulted (not kept), then is read again."""
     import heightmap
     import mapcells
@@ -1536,7 +1595,8 @@ def ceil_of_cell(frame, cell_fn, key):
     ends = ends_of_cell(frame, cell_fn, key)
     if ends is None:
         return None
-    mk = (_frame_key(frame), str(key), float(heightmap.SQUARE))
+    box = None if box is None else tuple(float(v) for v in box)
+    mk = (_frame_key(frame), str(key), float(heightmap.SQUARE), box)
     with _ends_lock:
         got = _ceil_memo.get(mk)
         if got is not None and (got[1] or time.monotonic() - got[2] < CEIL_SHORT_TTL_S):
@@ -1557,7 +1617,13 @@ def ceil_of_cell(frame, cell_fn, key):
     reg = (float(np.min(bx)) - 60.0, float(np.min(by)) - 60.0, float(np.max(bx)) + 60.0, float(np.max(by)) + 60.0)
     with revisit.scope() as read:
         try:
-            got = _ceil_inputs(frame, cell_fn, keys, reg, view)
+            if box is not None:         # (the decks near the points asked: their chains alone solved)
+                r = ceil_reach(cell_fn, keys)
+                reg = (max(reg[0], box[0] - r), max(reg[1], box[1] - r), min(reg[2], box[2] + r), min(reg[3], box[3] + r))
+            if reg[0] > reg[2] or reg[1] > reg[3]:
+                got = ([], [])
+            else:
+                got = _ceil_inputs(frame, cell_fn, keys, reg, view)
         except Exception as ex:             # (no ceiling rather than no ground: not kept)
             (log.debug if isinstance(ex, OSError) else log.warning)("roadsys ceiling: %s: %s", type(ex).__name__, ex)
             revisit.fault()
@@ -1570,7 +1636,8 @@ def ceil_of_cell(frame, cell_fn, key):
         return c
     c = ends.ceil(*got)
     if CEIL_DUMP and c.count():
-        with open(os.path.join(CEIL_DUMP, f"ceil_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}_{key.z}_{key.x}_{key.y}.rsce"),
+        with open(os.path.join(CEIL_DUMP, f"ceil_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}_{key.z}_{key.x}_{key.y}"
+                           + ("" if box is None else "_%d_%d" % (int(box[0]), int(box[1]))) + ".rsce"),
                   "wb") as f:
             f.write(c.input())
     with _ends_lock:
@@ -1610,10 +1677,10 @@ def ground_cut(frame, cell_fn, la, lo, z):
             groups.setdefault(k, []).append(i)
     cut = 0
     for k in sorted(groups, key=str):
-        c = ceil_of_cell(frame, cell_fn, k)
+        idx = np.asarray(groups[k], np.int64)
+        c = ceil_of_cell(frame, cell_fn, k, _snap_box(e[idx], n[idx]))
         if c is None:
             continue
-        idx = np.asarray(groups[k], np.int64)
         before = zf[idx]
         after = c.ground(np.ascontiguousarray(e[idx]), np.ascontiguousarray(n[idx]), np.ascontiguousarray(before))
         zf[idx] = after
