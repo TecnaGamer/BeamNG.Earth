@@ -909,8 +909,8 @@ const SAG_LOW_M: f64 = 12.0;        // a sag is the lowest sample this far eithe
 const SAG_RISE_M: f64 = 30.0;       // ... and the road rises at least SAG_MIN_M within this far on both sides
 const SAG_MIN_M: f64 = 0.04;
 const SAG_MIN_MOTORWAY_M: f64 = 0.08;   // (a motorway's drainage: only marked sags)
-const GUTTER_EVERY: (f64, f64) = (14.0, 40.0);
-const RUT_EVERY: (f64, f64) = (22.0, 70.0);
+const GUTTER_EVERY: (f64, f64) = (8.0, 22.0);
+const RUT_EVERY: (f64, f64) = (12.0, 40.0);
 const WHEEL_M: f64 = 0.85;          // m from a lane's centre to a wheel path
 
 /// Puddles of the road's sags: (distance along, depth m) of every low point of the centre line's profile within the
@@ -986,10 +986,10 @@ fn road_puddles(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], gutter
             let mut s = rng.range(0.0, GUTTER_EVERY.1);
             while s < len {
                 let cond = condition(base, mapped, seed, s);
-                let along = rng.range(1.4, 3.6);
-                let across = rng.range(0.45, 0.95).min(0.5 * hw);
+                let along = rng.range(2.0, 5.0);
+                let across = rng.range(0.6, 1.2).min(0.5 * hw);
                 let (turn, cell, keep) = (rng.range(-0.08, 0.08), rng.pick(4) as i64, rng.f());
-                if keep < (0.45 * (1.25 - cond)).clamp(0.15, 0.6) && overlaps(&win, s - along, s + along) {
+                if keep < (0.6 * (1.3 - cond)).clamp(0.3, 0.75) && overlaps(&win, s - along, s + along) {
                     quad(out, s, side * (hw - across / 2.0 - 0.05), along, across, turn, K_PUDDLE_GUTTER, 4 + cell);
                 }
                 s += rng.range(GUTTER_EVERY.0, GUTTER_EVERY.1);
@@ -1005,11 +1005,11 @@ fn road_puddles(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], gutter
                 let mut s = rng.range(0.0, RUT_EVERY.1);
                 while s < len {
                     let cond = condition(base, mapped, seed, s);
-                    let along = rng.range(1.8, 5.5);
-                    let across = rng.range(0.28, 0.5);
+                    let along = rng.range(2.5, 7.0);
+                    let across = rng.range(0.35, 0.6);
                     let (turn, cell, keep) = (rng.range(-0.04, 0.04), rng.pick(4) as i64, rng.f());
                     let row = if cond < 0.5 { 8 } else { 12 };
-                    if keep < (0.15 + 0.5 * (1.0 - cond)) && overlaps(&win, s - along, s + along) {
+                    if keep < (0.25 + 0.55 * (1.0 - cond)) && overlaps(&win, s - along, s + along) {
                         quad(out, s, c + w, along, across, turn, K_PUDDLE_RUT, row + cell);
                     }
                     s += rng.range(RUT_EVERY.0, RUT_EVERY.1) / (1.3 - cond).max(0.5);
@@ -1117,9 +1117,9 @@ pub fn puddle_atlas(size: usize) -> Vec<u8> {
                     let n = 0.55 * noise(seed, uu, vv, 3.0) + 0.3 * noise(seed ^ 1, uu, vv, 7.0)
                         + 0.15 * noise(seed ^ 2, uu, vv, 17.0);
                     // the rim pushed in and out by the noise; the depth falls from the middle to it
-                    let rim = 0.72 + 0.5 * (n - 0.5);
+                    let rim = (0.86 + 0.45 * (n - 0.5)).min(0.97);       // (never past the cell: its neighbours in the mips)
                     let d = (1.0 - r / rim.max(0.2)).max(0.0);
-                    let depth = (d.min(0.6) / 0.6 * PEAK[row]).clamp(0.0, 1.0);
+                    let depth = (d.min(0.5) / 0.5 * PEAK[row]).clamp(0.0, 1.0);
                     let (x, y) = (col * cs + px, row * cs + py_);
                     out[y * size + x] = (depth * 255.0).round() as u8;
                 }
@@ -1259,7 +1259,7 @@ mod tests {
         assert!(no_kerb.attrs.iter().all(|q| q[0] as i64 != K_PUDDLE_GUTTER));
         let kerb = puddles(&ln, &a, bx, true);
         let g = kerb.attrs.iter().filter(|q| q[0] as i64 == K_PUDDLE_GUTTER).count();
-        assert!(g > 15 && g < 80, "gutter puddles a km on both sides: {g}");
+        assert!(g > 30 && g < 220, "gutter puddles a km on both sides: {g}");
         let ruts = kerb.attrs.iter().filter(|q| q[0] as i64 == K_PUDDLE_RUT).count();
         assert!(ruts > 20, "a worn street's ruts: {ruts}");
         // a new surface: fewer ruts
