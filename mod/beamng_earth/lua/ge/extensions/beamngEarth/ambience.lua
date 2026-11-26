@@ -477,7 +477,7 @@ M.MIX_OPTIONS = {
   rainlow = { rainGain = 0.35, closeDuck = false },
   both = { rainGain = 0.4, closeDuck = true },
 }
-M.MIX = 'current'
+M.MIX = 'rainlow'      -- (the user, 2026-11-26: "Let's just lower the rain sound")
 M.CLOSE_DUCK_DB = { -6, -3 }   -- (dB at storm.STRIKE_M, at storm.CLOSE_M; linear in distance between)
 M.RAIN_GAIN = M.MIX_OPTIONS[M.MIX].rainGain   -- the loop's volume at full rain ...
 M.CLOSE_DUCK = M.MIX_OPTIONS[M.MIX].closeDuck

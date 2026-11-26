@@ -136,7 +136,7 @@ fn derive(r: f64) -> Derived {
 // numbers against the Lua.
 
 /// ambience.lua RAIN_GAIN (the rainGain of its M.MIX option: change both together; test_liveaudio.py checks)
-pub const RAIN_BED_GAIN: f64 = 0.5;
+pub const RAIN_BED_GAIN: f64 = 0.35; // = ambience.lua MIX rainlow (the user, 2026-11-26)
 /// the loops: (ambience.lua RAIN_LAYERS rate mm/h, SOURCES.md integrated loudness LUFS)
 pub const RAIN_LOOPS: [(f64, f64); 3] = [(0.7, -30.2), (5.0, -24.2), (35.0, -17.2)];
 /// weather.lua RAIN_CURVE (rate mm/h, the rain's share), PRECIP_OFF
@@ -704,11 +704,11 @@ mod tests {
 
     #[test]
     fn the_target_is_the_games_rain() {
-        // at the heavy loop's rate (share 1 from 10 mm/h): the loop x RAIN_BED_GAIN (-6.02 dB)
-        assert!((rain_target_lufs(35.0) - (-17.2 - 6.0206)).abs() < 0.01);
+        // at the heavy loop's rate (share 1 from 10 mm/h): the loop x RAIN_BED_GAIN
+        assert!((rain_target_lufs(35.0) - (-17.2 + 20.0 * RAIN_BED_GAIN.log10())).abs() < 0.01);
         // 5 mm/h: the medium loop alone, its share 0.75 + 0.25 ln(5 / 4) / ln(10 / 4)
         let share = 0.75 + 0.25 * (1.25f64).ln() / (2.5f64).ln();
-        assert!((rain_target_lufs(5.0) - (-24.2 + 20.0 * (0.5 * share).log10())).abs() < 0.01);
+        assert!((rain_target_lufs(5.0) - (-24.2 + 20.0 * (RAIN_BED_GAIN * share).log10())).abs() < 0.01);
         assert!(rain_target_lufs(0.0) <= -100.0 && rain_share(0.01) == 0.0);
         assert!(rain_target_lufs(15.0) > rain_target_lufs(5.0) && rain_target_lufs(5.0) > rain_target_lufs(0.7));
     }
