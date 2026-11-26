@@ -152,7 +152,7 @@ M.URGENT_EVERY_FRAMES = 3
 --  * URGENT_SURFACES: the drawn road and sidewalks of the tile the car is in, and of those it reaches within
 --    URGENT_SURFACE_S (URGENT_SURFACE_MIN_M at least), are made at once like an urgent deck (urgentWalk).
 M.KIND_SPLIT = true
-M.WALK_KIND = { road = 'roadSurf', walk = 'roadSurf', walkcol = 'roadCol', bldcol = 'roadCol', railcol = 'roadCol',
+M.WALK_KIND = { road = 'roadSurf', walk = 'roadSurf', bank = 'roadSurf', walkcol = 'roadCol', bldcol = 'roadCol', railcol = 'roadCol',
   railcol2 = 'roadCol', railcol3 = 'roadCol', buscol = 'roadCol', barrier = 'roadCol', deck = 'roadDrive',
   tunnel = 'roadDrive' }
 M.DUE = true
@@ -866,7 +866,7 @@ local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
 M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
-M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
+M.SKIN_WHATS = { 'road', 'walk', 'walkcol', 'bank' }   -- (bank: winter W3's snowbanks, render only; with winter on)
 
 local swapState = nil        -- a generation swap being staged: { gen, parts, tiles } (M.swapBegin)
 local swapBack = nil         -- a rollback's collision still to come: { reloaded, frames } (M.swapUndo)
@@ -1237,7 +1237,7 @@ function M.onSkin(msg, currentAnchor)
       if sl then w = { shape = sl.path, pos = w.pos }; t.slots[what] = sl end
       t.skin[what] = { shape = w.shape, pos = w.pos }
       local q = { key = geoKey(msg.key), walk = w, what = what, tile = t, skin = true,
-        renderOnly = (M._cliffsOn and M.isCliffStrip(what)) or what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
+        renderOnly = (M._cliffsOn and M.isCliffStrip(what)) or what == 'road' or what == 'bank' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
       if not q.renderOnly then t.colWant[what] = true end
       t.skin.pending = t.skin.pending + 1
       if stage then swapState.expect = swapState.expect + 1 end

@@ -113,6 +113,7 @@ mod fartex;
 mod photojpeg;
 mod leafon;
 mod snowlook;
+mod snowroad; // winter W3 (BNE_WINTER): snowy roads by plow class, sidewalks, snowbanks (server/snowroad.py)
 mod photomesh;
 mod deshadow;
 mod colormatch;
@@ -7806,10 +7807,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
     // W2 snow on the ground photos, server/snowcover.py)
     snow::py::register(m)?;
+    // 634: snowroad_classes / snowroad_zones / snowroad_class_at / snowroad_banks / snowroad_look (snowroad.rs: the
+    // winter W3 lane sheet, server/snowroad.py); SnowLook's road mask by (class, zone): 15 slots (snowlook.rs)
+    snowroad::py::register(m)?;
     // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
     // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
     // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
-    m.add("VERSION", 631)?;
+    m.add("VERSION", 634)?;
     Ok(())
 }

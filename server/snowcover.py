@@ -9,8 +9,8 @@ already-white texels left alone, permanent snow above the climatic snowline in p
 
 The snow state: a FIELD of band tables per forcing cell (the interface with W1's kernel and W5's pack). A Table is up to
 8 rows (band elevation m, cover 0..8, depth bin 0..6, age 0..3), lowest first, linear in elevation between rows and
-held past the ends, and the road shares P0..P4 (eighths of the ground's cover a road of that plow class keeps: W3's
-hook; the photos get no road mask yet, so the roads take the ground's cover). A Field is a resolution (deg) and the
+held past the ends, and the road shares (eighths of the ground's cover a road keeps) per plow class P0..P4 and zone
+(W3, snowroad.py: lanes, wheel tracks, edge; five values: the lanes' share for every zone). A Field is a resolution (deg) and the
 tables by cell (ci, cj) = (floor((lon + 180) / res), floor((90 - lat) / res)), or one table everywhere. Where it comes
 from (BNE_SNOW):
   none                  nothing (the keys are today's exactly);
@@ -33,15 +33,18 @@ import numpy as np
 
 import fast
 
-ON = os.environ.get("BNE_WINTER", "off").strip().lower() in ("on", "1", "yes", "true")
+# (W1's presets too: BNE_WINTER=light / heavy / ice is the whole winter at that fixed state, its photos from the
+# preset's own band table through W1's provider)
+ON = os.environ.get("BNE_WINTER", "off").strip().lower() in ("on", "1", "yes", "true", "light", "heavy", "ice")
 MODE = (os.environ.get("BNE_SNOW", "") or ("real" if ON else "none")).strip().lower()
 # The look's own version: in every spec's key part (bump it with any change of PARAMS, the kernel's snow term or how a
 # spec is cut from a field)
-LOOK_VERSION = 1
+LOOK_VERSION = 2          # (2: W3's road zones)
 GEO_N = 9               # nodes a side of the geodetic grid over a texture (lat, lon, curvature drop, snowline)
 FIELD_PAD_CELLS = 1     # cells past the square a spec holds (the texels near its edge blend with them)
 
-# rows: ((z m, cover 0..8, depth 0..6, age 0..3), ...); road: 5 x 0..8; ice: 0..8, the share of still water (lakes,
+# rows: ((z m, cover 0..8, depth 0..6, age 0..3), ...); road: 15 x 0..8 (lanes P0..P4, tracks P0..P4, edges P0..P4;
+# or 5: the lanes', every zone alike); ice: 0..8, the share of still water (lakes,
 # ponds, reservoirs) frozen and snow-covered (W1: from freezing degree-days; W6 makes it drivable). Moving water (rivers,
 # canals) and the sea stay open whatever it says.
 Table = namedtuple("Table", "rows road ice", defaults=(0,))
@@ -51,9 +54,10 @@ NO_ROAD = (8, 8, 8, 8, 8)
 # of a storm in most snowy places (Minneapolis in January, Mapillary 2026-01-21: bare wet streets, white yards).
 PHOTO_ROAD_CLASS = 3            # 1..5 = P0..P4
 ROAD_MASK_ON = 128              # of road_mask's 0..255 coverage
-# preset road shares (eighths of the ground's cover, P0..P4): plowed main roads, packed side streets
-PLOWED = (1, 1, 2, 3, 6)
-BARE_ROADS = (0, 0, 0, 1, 3)    # a dusting does not lie on pavement
+# preset road shares (eighths of the ground's cover; lanes, wheel tracks, edges, each P0..P4): plowed main roads with
+# slush at their edges, packed side streets with grey tracks
+PLOWED = (1, 1, 2, 5, 6) + (0, 0, 0, 2, 3) + (5, 5, 6, 8, 8)
+BARE_ROADS = (0, 0, 0, 1, 3) + (0, 0, 0, 0, 1) + (1, 1, 2, 3, 5)    # a dusting does not lie on pavement
 
 # Debug presets (the plan's 2.11: "a preset is a fixed synthetic forcing record"; here the band table it leads to)
 PRESETS = {
@@ -243,7 +247,7 @@ def credit_ids(spec):
 
 
 def _window(f, south, west, north, east):
-    """(res, ci0, cj0, idx, tables (n, 8, 4) int32, counts (n, 7) int32: rows, road shares, ice) of the field's cells
+    """(res, ci0, cj0, idx, tables (n, 8, 4) int32, counts (n, 17) int32: rows, road shares (15), ice) of the field's cells
     round the box, or None
     when none of them has any cover."""
     if f is None:
@@ -275,7 +279,7 @@ def _window(f, south, west, north, east):
         if not tabs:
             return None
     tables = np.zeros((len(tabs), 8, 4), np.int32)
-    counts = np.zeros((len(tabs), 7), np.int32)
+    counts = np.zeros((len(tabs), 17), np.int32)
     for n, t in enumerate(tabs):
         rows = sorted((int(z), int(c), int(d), int(a)) for z, c, d, a in t.rows)[:8]
         if not rows:
@@ -285,9 +289,19 @@ def _window(f, south, west, north, east):
                 raise ValueError(f"snow table row out of range: {row}")
             tables[n, r] = row
         counts[n, 0] = len(rows)
-        counts[n, 1:6] = [min(max(int(v), 0), 8) for v in tuple(t.road)[:5]]
-        counts[n, 6] = min(max(int(t.ice), 0), 8)
+        counts[n, 1:16] = road_slots(t.road)
+        counts[n, 16] = min(max(int(t.ice), 0), 8)
     return (res, ci0, cj0, idx, tables, counts)
+
+
+def road_slots(road):
+    """A table's road shares as the 15 (zone, class) slots: 15 values as given, 5 (the lanes') for every zone."""
+    r = [min(max(int(v), 0), 8) for v in tuple(road)]
+    if len(r) == 5:
+        r = r * 3
+    if len(r) != 15:
+        raise ValueError(f"snow table road shares: 5 or 15, got {len(r)}")
+    return r
 
 
 def deep_possible():
@@ -356,7 +370,7 @@ def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
     U = np.ascontiguousarray(np.asarray(U, np.float64))
     if U.ndim != 2 or min(U.shape) < 2:
         return None
-    fast.require(625, "SnowLook")
+    fast.require(634, "SnowLook")      # (634: the road mask by (class, zone): 15 slots)
     t = np.linspace(0.0, 1.0, GEO_N)
     e, n = np.meshgrid(x0 + t * size, y0 + size - t * size)       # row 0 north
     lat, lon, h = frame.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)
@@ -499,11 +513,15 @@ def masks(frame, x0, y0, size, px, surface=None, widths=None, md=None):
 
 
 def road_classes(frame, x0, y0, size, px, surface, widths=None):
-    """The plow class per texel (px x px uint8: 0 none, PHOTO_ROAD_CLASS on paved ground) of a photo over
-    [x0, x0 + size]^2 (surface.road_mask's carriageways, lots and pads, without the curb corners), or None (no surface,
+    """The road slot per texel (px x px uint8: 0 none, 1 + zone * 5 + class) of a photo over [x0, x0 + size]^2: with
+    W3 (snowroad.ON) the carriageways by plow class and zone (snowroad.photo_mask), else PHOTO_ROAD_CLASS's lanes on
+    all paved ground (surface.road_mask's carriageways, lots and pads, without the curb corners); None (no surface,
     texels coarser than surface.ROAD_MASK_MAX_TEXEL, no roads)."""
     if surface is None:
         return None
+    import snowroad
+    if snowroad.ON:
+        return snowroad.photo_mask(frame, x0, y0, size, px, surface, widths)
     import surface as surfacemod
     m = surfacemod.road_mask(frame, x0, y0, size, px, surface, widths, corners=False)
     if m is None:

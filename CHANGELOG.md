@@ -12,6 +12,11 @@ What changed in each release of BeamNG.Earth, newest first.
   or off, and a limit on how thick fog can get.
 - **Traffic in bad weather**: AI traffic turns its headlights on in rain, snow and fog and drives a little slower
   (slow enough to stop within the visible distance in thick fog); street lamps come on earlier under a dark stormy sky.
+- **Winter (Experimental): snowy streets.** With Winter on, streets look like their real winter state by road class:
+  main roads plowed and salted to wet black lanes with slush along their edges, side streets packed white with grey
+  wheel tracks, road markings fading under the snow, snowbanks along plowed roads that grow with each storm and go
+  grey with dirt over the days after (never across junctions, crossings or bridges), sidewalks shovelled on main
+  streets and some residential frontages and trampled or covered elsewhere, and white bridge decks.
 - **Winter (Experimental): bare trees.** With Winter on, oaks, beeches, birches, aspens and poplars lose their leaves
   tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
   young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green.
