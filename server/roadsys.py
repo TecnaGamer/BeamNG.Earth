@@ -57,6 +57,16 @@ product declares and hands them over.
       country, other public roads, service roads and tracks, foot and cycle ways; net.rs clearance_of) + the
       structure's own depth (structure_depth: its design and span), the road under cut up to 5 m where that is gentler
       than lifting (one solve); twin decks one height; surface decks drawn their whole depth until the girder kits.
+      Round 4 (surface, earthfast 630): the ground under a deck at most at its soffit less 0.3 m (DESIGN.md G5; native/
+      roadsys ceil.rs): every evaluator of the physics ground (ground_cut, through roads.block_arch_raise) caps it by
+      the decks the bridge chains publish round its map cell (ceil_of_cell: the 3 x 3 cells, as the hand-over's ends;
+      each deck's top heights less its structure's drawn depth), eased in from a free end past the hand-over's metres
+      at 1:2, a ground road's or railway's surface and the lattice square round it kept, eased off them at 1:2; the
+      hand-over's lattice takes a node so lowered as the deck's (ground_lowering).
+      Round 5 (surface 7): each ceiling reads the decks near the points asked (the caller's box, snapped out, + 120 m),
+      so only their chains are solved (the whole cell's chains, their approaches' cells planned, cost the corpus' first
+      visits x5-20 CPU at four places); ceil.rs counts the ground roads beside a deck within its own need, so a node's
+      value is the same whichever box asked.
 
   BNE_ROADSYS_AREAS (osmareas.py; with shadow or surface): audit: the products read OSM's mapped road areas
       (area:highway=*) of their read's cells and report how their faces meet them (the shadow record's "areas": edge
@@ -106,6 +116,12 @@ SURFACE_KERNEL = 626        # earthfast.roadsys_decks
 # bridge inventory's skew first) says so: the hand-over's ends (RoadsysEnds' crossed / nbi) and the deck faces' end rows
 SKEW = SURFACE
 SKEW_KERNEL = 627
+# (630, M5 round 4; 632, round 5: a ground road counted within each deck's own need) BNE_ROADSYS=surface: the ground
+# under a deck at most at its soffit less 0.3 m (bridgerewrite/DESIGN.md G5; native/roadsys ceil.rs), every evaluator of
+# the physics ground (ground_cut through roads.block_arch_raise)
+CEIL = SURFACE
+CEIL_KERNEL = 632
+DECKS_FN = None             # (frame) -> the road bridges' ChainView in frame (blockworker: its bridge chain store), or None
 WATER_FN = None             # water_fn(cell key) -> the water Features (set_water_fn: mapdata.MapData), None: none read
 
 
@@ -117,7 +133,7 @@ def set_water_fn(fn):
 # server/tunnelrec.py): the profile squares make it with their profiles; roads.TunnelProfiles hands it on to every
 # consumer (floors, sections, portals, holes), its own solve left to the networks under water (T3)
 TUNNELS = SURFACE and os.environ.get("BNE_ROADSYS_TUNNELS", "off").strip().lower() == "on"
-TUNNELS_KERNEL = 629
+TUNNELS_KERNEL = 636
 XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
 XSEC_KERNEL = 617           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs (617: with areas=, fit= in one binary; trunk 616 has no xsec)
 
@@ -150,6 +166,7 @@ class _Cells:
         self._fn = cell_fn
         self.memo = {}
         self.rows = {}
+        self.xext = {}          # (_xsec_extents per cell: a pure function of its table, by the table's stamp)
         self.lock = threading.Lock()
 
     def cell_fn(self, key):
@@ -647,15 +664,46 @@ _STYLE = ("white", "", 0.12, 0.15, 0.15, 0.2, (3.0, 9.0), (3.0, 9.0), (3.0, 9.0)
 SQUARE_M = 2000.0           # native/roadsys square.rs SQUARE_M
 FIELD_REACH_M = 300.0       # m round a shadow tile its knots take the squares' heights (product.rs FIELD_REACH_M)
 CLIP_PAD_M = 5.0            # m past a query's reach its targets' lines are kept (pins_near)
+LEGACY_REACH_M = 250.0      # (636, T1) m along its stroke a line's nearest tunnel decides its legacy weights (pins_near:
+                            # past HAND_MAX_M and TUNNEL_FADE_M, the reach of a mouth's dig and of the old fade)
+
+
+def clear_memory():
+    """This process's road system memos let go (budget.register_shed): the cells' tables, the ceilings, the deck ends,
+    the profile squares (read again from DISK) and their pins. None was dropped by a shed before: a Baltimore road
+    process held ~230 MB of them after 80 geotiles (the ceilings 146 MB, the tables 47, the ends 25; 2026-11-26)."""
+    with _memo_lock:
+        _cells_of.clear()
+        _squares.clear()
+        _short_sq.clear()
+        _pins.clear()
+    with _ends_lock:
+        _ceil_memo.clear()
+        _ends_memo.clear()
+
+
+def _reads_of(cell_fn):
+    """(key, what it holds) of what cell_fn reads: the same lambda made again (each road tile, block and skin makes its
+    own `lambda key: md.cell(...)`) is the same code over the same globals and closed-over values, so it reads the same
+    store and shares its tables: before, each tile's new lambda had a _Cells of its own and converted every map cell
+    of its reads again (roadsys._table: 27 cells a road geotile, 2.7 s of its ~6 s under BNE_ROADSYS=surface,
+    Baltimore 2026-11-26). The values it closes over are held with the key (no id taken again by another object)."""
+    code = getattr(cell_fn, "__code__", None)
+    if code is None:
+        return ("id", id(cell_fn)), (cell_fn,)
+    held = tuple(c.cell_contents for c in (cell_fn.__closure__ or ()))
+    return ("fn", code, id(cell_fn.__globals__), tuple(id(v) for v in held),
+            id(cell_fn.__defaults__) if cell_fn.__defaults__ else None), (cell_fn.__globals__, cell_fn.__defaults__) + held
 
 
 def _cells_for(cell_fn):
     if isinstance(cell_fn, _Cells):         # (the shadow thread's own tables)
         return cell_fn
+    key, held = _reads_of(cell_fn)
     with _memo_lock:
-        got = _cells_of.get(id(cell_fn))
-        if got is None or got[0] is not cell_fn:
-            got = _cells_of[id(cell_fn)] = (cell_fn, _Cells(cell_fn=cell_fn))
+        got = _cells_of.get(key)
+        if got is None:
+            got = _cells_of[key] = (held, _Cells(cell_fn=cell_fn))
             while len(_cells_of) > 8:
                 _cells_of.pop(next(iter(_cells_of)))
         return got[1]
@@ -1015,8 +1063,8 @@ def chain_heights(store, comp, parts, ground_ll=None):
 def _regions_of(la, lo):
     """Each point's region frame id (FRAME_Z Web-Mercator tile: mapcells.cells_of's exact edge rules)."""
     import mapcells
-    ks = mapcells.cells_of(np.asarray(la, np.float64), np.asarray(lo, np.float64), FRAME_Z)
-    return np.array([(FRAME_Z << 48) | (k.x << 24) | k.y for k in ks], np.int64)
+    xs, ys = mapcells.cells_xy(np.asarray(la, np.float64), np.asarray(lo, np.float64), FRAME_Z)
+    return (np.int64(FRAME_Z) << 48) | (xs << 24) | ys
 
 
 def _square_pins(fid, frame, sq, cell_fn, ground_ll):
@@ -1048,7 +1096,9 @@ def _square_pins_in(fid, frame, sq, cell_fn, ground_ll):
         return None, None
     out = []
     cache = {tuple(sq): me}
-    for feat, pts, tans, w, share, half, hand, low in me.pins():
+    # (636, T1) each line as a tunnel left off the record has it (pins_near's legacy), only with the record
+    legacy = me.tunnel_pins() if TUNNELS else None
+    for li, (feat, pts, tans, w, share, half, hand, low) in enumerate(me.pins()):
         box = [float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())]
         nb = []
         for q in fast._ef.roadsys_squares_of_box(box):
@@ -1065,12 +1115,20 @@ def _square_pins_in(fid, frame, sq, cell_fn, ground_ll):
         idx = np.flatnonzero(ok)
         if len(idx) < 2:
             continue
+        extra = ()
+        if legacy is not None:
+            w_leg, low_leg, tfeat, tdist, tp = legacy[li]
+            if tfeat and np.isfinite(tdist):
+                tla, tlo, _ = frame.enu_to_geodetic(np.array([tp[0]]), np.array([tp[1]]), 0.0)
+                extra = (np.round(np.asarray(w_leg, np.float64), 4), np.round(np.asarray(low_leg, np.float64), 4), tfeat,
+                         round(float(tdist), 2), round(float(np.asarray(tla)[0]), 9), round(float(np.asarray(tlo)[0]), 9))
         for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
             if len(run) >= 2:
                 out.append((np.ascontiguousarray(pts[run]), np.round(la[run], 9), np.round(lo[run], 9),
                             np.asarray(z[run], np.float64), round(float(half), 3),
                             np.round(np.asarray(w, np.float64)[run], 4), np.round(np.asarray(share, np.float64)[run], 4),
-                            np.round(np.asarray(hand, np.float64)[run], 4), np.round(np.asarray(low, np.float64)[run], 4)))
+                            np.round(np.asarray(hand, np.float64)[run], 4), np.round(np.asarray(low, np.float64)[run], 4))
+                           + ((extra[0][run], extra[1][run]) + extra[2:] if extra else ()))
     entry = (tuple(sorted((q, v.info()[1]) for q, v in cache.items())), out)
     with _memo_lock:
         STATS["pins_squares"] += 1
@@ -1081,12 +1139,15 @@ def _square_pins_in(fid, frame, sq, cell_fn, ground_ll):
     return out, entry
 
 
-def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None):
+def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None, legacy=None):
     """grading.PROFILE_PINS under BNE_ROADSYS=heights: the terrain targets of the profile squares within pad_m of the box
     (degrees), as roadshape._built's pins [(lat, lon, dz against today_ll, height today, half width, fade, share)]:
     each line cut to the box grown by pad_m + CLIP_PAD_M (one point past each cut: every segment within pad_m of a
     point in the box is whole, so a point's change is the same whichever query asks), each point's from its own
-    region's squares, sorted by content (roadshape.pins_near). today_ll is read only at those points."""
+    region's squares, sorted by content (roadshape.pins_near). today_ll is read only at those points.
+    legacy(feature, lat, lon) -> bool (636, T1, BNE_ROADSYS_TUNNELS): a line whose nearest tunnel (within LEGACY_REACH_M
+    along its stroke) is one the record does not build (under water: TunnelProfiles.feature_drowned) takes the weights and
+    lows it had without the record (the tunnel fade, no digs at the record's mouths): its floor is the old solve's."""
     import math
     import dmath
     import revisit
@@ -1113,7 +1174,9 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None):
                 if got is None:
                     revisit.fault(here=True)
                     continue
-                for xy, pla, plo, z, half, w, share, hand, low in got:
+                for xy, pla, plo, z, half, w, share, hand, low, *extra in got:
+                    if extra and legacy is not None and extra[3] <= LEGACY_REACH_M and legacy(extra[2], extra[4], extra[5]):
+                        w, low = extra[0], extra[1]     # (a tunnel the record does not build: as without the record)
                     inn = (pla >= g0) & (pla <= g1) & (plo >= h0) & (plo <= h1)
                     if not inn.any():
                         continue
@@ -1222,6 +1285,25 @@ def _frame_key(frame):
     return (type(frame).__name__, float(frame.lat0), float(frame.lon0))
 
 
+def _to_frame_many(frame, lls):
+    """[(n, 2) x / y in frame] of lon / lat polylines lls: one projection for all of them (the kernel works point by
+    point, so the numbers are each line's own projection's; one call a line was 280,000 calls and ~9 s of a Baltimore
+    drive's hand-over reads, 2026-11-26)."""
+    if not lls:
+        return []
+    arr = [np.asarray(ll, np.float64)[:, :2] for ll in lls]
+    allll = np.concatenate(arr) if len(arr) > 1 else arr[0]
+    e, nn, _u = frame.geodetic_to_enu(np.ascontiguousarray(allll[:, 1]), np.ascontiguousarray(allll[:, 0]),
+                                      np.zeros(len(allll)))
+    e, nn = np.asarray(e, np.float64), np.asarray(nn, np.float64)
+    out, a = [], 0
+    for ll in arr:
+        b = a + len(ll)
+        out.append(np.ascontiguousarray(np.column_stack((e[a:b], nn[a:b])), np.float64))
+        a = b
+    return out
+
+
 def _ends_from(frame, cell_fn, keys, reg):
     """earthfast.RoadsysEnds of the road parts of map cells keys (in frame) coming within the frame box reg; None when
     a cell cannot be read."""
@@ -1259,19 +1341,14 @@ def _ends_from(frame, cell_fn, keys, reg):
                 revisit.fault()
                 return None
             for kind, lines in ((1, [r[1] for r in rails]), (3, waters)):
-                for ll in lines:
-                    e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-                    xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
+                for xy in _to_frame_many(frame, [ll for ll in lines if len(ll)]):
                     if len(xy) >= 2 and not (xy[:, 0].max() < reg[0] or xy[:, 0].min() > reg[2] or xy[:, 1].max() < reg[1]
                                              or xy[:, 1].min() > reg[3]):
                         crossed.append((kind, xy))
         crossed.sort(key=lambda c: (c[0], c[1].tobytes()))       # (one order whatever the cells' order)
-    for (kind, fid, j) in sorted(rows):
-        ll, hw = rows[(kind, fid, j)]
-        if len(ll) < 2:
-            continue
-        e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-        xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))), np.float64)
+    order = [k for k in sorted(rows) if len(rows[k][0]) >= 2]
+    for (kind, fid, j), xy in zip(order, _to_frame_many(frame, [rows[k][0] for k in order])):
+        hw = rows[(kind, fid, j)][1]
         if xy[:, 0].max() < reg[0] or xy[:, 0].min() > reg[2] or xy[:, 1].max() < reg[1] or xy[:, 1].min() > reg[3]:
             continue
         if kind == "b":
@@ -1343,10 +1420,16 @@ def _xsec_extents(cell_fn, key):
     whose cross-section shapes them (earthfast.roadsys_xsec_half_extent: the deck faces' own width), the widest copy."""
     import fast
     fast.require(XSEC_KERNEL, "roadsys_xsec_half_extent")
-    tab = _cells_for(cell_fn).table(key)
-    out = {}
+    cc = _cells_for(cell_fn)
+    tab = cc.table(key)
     if tab is None:
-        return out
+        return {}
+    stamp = cc.rows.get(str(key), (None,))[0]
+    with cc.lock:
+        got = cc.xext.get(str(key))
+    if got is not None and got[0] == stamp and got[1] is tab:
+        return dict(got[2])
+    out = {}
     for k, texts, nums, ints, x in zip(tab["ids"], tab["texts"], tab["nums"], tab["ints"], tab["xsec"]):
         if not x:
             continue
@@ -1354,6 +1437,10 @@ def _xsec_extents(cell_fn, key):
         if e is not None:
             f = feature(k.split("|", 1)[0])
             out[f] = max(out.get(f, 0.0), float(e))
+    with cc.lock:
+        cc.xext[str(key)] = (stamp, tab, dict(out))
+        while len(cc.xext) > 512:
+            cc.xext.pop(next(iter(cc.xext)))
     return out
 
 
@@ -1438,6 +1525,277 @@ def handover_drop(frame, cell_fn, la, lo):
     HANDOVER_STATS["points"] += int(la.size)
     HANDOVER_STATS["dropped"] += int((out > 0).sum())
     return out.reshape(shape)
+
+
+# ------------------------------------------------------------------------- M5: the ground under the decks
+
+CEIL_CELLS_KEPT = 256           # RoadsysCeil kept per process (per frame, centre cell and box)
+# (M5 r5) a ceiling reads the decks near the points asked, not the whole cell's: the chains of every deck within a cell
+# (+ 60 m) were solved for it, most of them far from any point a caller built (their approaches' cells planned: the
+# corpus' first visits x5-20 CPU at four places, RU20). The points' box is snapped out to CEIL_SNAP_M (one ceiling for a
+# block's calls) and grown by ceil_reach: a node's value takes the decks over it (within their half width hw) and whether
+# their ends within the eased metres (handover.rs FULL_M + (ceil.rs ALLOW_CAP_M - DROP_M) / RAMP = 21 m; a skewed end's
+# line (skew.rs: at most 60 degrees, tan 1.73) moves that up to 1.73 hw) go on onto another deck (its half width + 0.5):
+# every deck that counts comes within CEIL_EASE_M + 3.73 hw + CEIL_XY_TOL_M of the box, hw the widest structure round the
+# cell (its hand-over rows), less ChainView's NEAR_M (its parts' boxes come that near). ceil.rs counts the ground roads
+# within each deck's own need (allow), so the value is the same whichever box asked (test_roadsys, ceil.rs
+# a_nodes_value_is_its_own_decks_whatever_other_decks_were_read).
+CEIL_SNAP_M = 64.0
+CEIL_EASE_M = 21.5          # handover.rs FULL_M + (8.3 - DROP_M) / RAMP, + COVER_M
+CEIL_XY_TOL_M = 10.0        # m a part's solved line may lie off its mapped ring (the deck builder's own ends)
+CEIL_SHORT_TTL_S = SHORT_TTL_S  # s a ceiling made from a short read answers again (each use faulted: never kept) before
+                                # it is read again (rebuilt on every query, the corpus' first visits took 18 s -> 35 min)
+_ceil_memo = {}
+_views = {}
+CEIL_STATS = {"built": 0, "hits": 0, "decks": 0, "short": 0, "cut": 0}
+CEIL_DUMP = os.environ.get("ROADSYS_CEIL_DUMP") or None     # (tools only: each ceiling's whole input, `roadsys ceil`)
+
+
+def _decks_view(frame):
+    """The road bridges' ChainView in frame (DECKS_FN's, one per frame), or None."""
+    if DECKS_FN is None:
+        return None
+    fk = _frame_key(frame)
+    with _ends_lock:
+        v = _views.get(fk)
+    if v is None:
+        v = DECKS_FN(frame)
+        if v is None:
+            return None
+        with _ends_lock:
+            _views[fk] = v
+            while len(_views) > 16:
+                _views.pop(next(iter(_views)))
+    return v
+
+
+def _ceil_inputs(frame, cell_fn, keys, reg, view):
+    """(decks [(x, y, top height (n, 3), half width, depth)], rails [(n, 2)]) round the frame box reg from map cells
+    keys: every road deck part the bridge chains publish there (each solved with its chain: the heights the deck faces
+    are drawn at, as geodetic heights, the evaluators' own), its half width the deck builder's (or its cross-section's)
+    and its structure's drawn depth; the railways at ground level there. None when a cell cannot be read."""
+    import roads
+    cells = []
+    for k in keys:
+        try:
+            cells.append(cell_fn(k))
+        except Exception as ex:             # (no ceiling rather than no ground: nothing built with it kept)
+            log.debug("roadsys ceiling: cell %s: %s: %s", k, type(ex).__name__, ex)
+            import revisit
+            revisit.fault()
+            return None
+    xs = {}
+    if XSEC:
+        for k in keys:
+            for f, e in _xsec_extents(cell_fn, k).items():
+                xs[f] = max(xs.get(f, 0.0), e)
+    decks = []
+    for key, spec, xy, z, _lon in view.parts_published(cells, reg):
+        xy, z = np.asarray(xy, np.float64), np.asarray(z, np.float64)
+        if len(xy) < 2 or len(z) != len(xy) or not np.isfinite(z).all() or spec is None:
+            continue
+        _la, _lo, h = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], z)
+        hw = max(float(spec.width) / 2, xs.get(feature(key[0]), 0.0))
+        depth = view.depth_of_part(key)
+        decks.append((np.ascontiguousarray(np.c_[xy[:, :2], np.asarray(h, np.float64)], np.float64), hw,
+                      float(roads.DECK_FULL_DEPTH if depth is None else depth)))
+    rails = []
+    for feats in cells:
+        if feats is None or not len(feats):
+            continue
+        for xy in _rails_in(feats, frame):
+            if not (xy[:, 0].max() < reg[0] - 10 or xy[:, 0].min() > reg[2] + 10
+                    or xy[:, 1].max() < reg[1] - 10 or xy[:, 1].min() > reg[3] + 10):
+                rails.append(xy)
+    return decks, rails
+
+
+def _ceil_rails(feats):
+    """[lon / lat (n, 2)] the railways whose ground a ceiling keeps: the floors' (_rails) and every railway the rail
+    tiles draw on the ground (railways.drawn's lines, their "ground" pieces: a short tunnel mapped under a road
+    bridge too, which railways draws on the ground with its collider while tag_level_ranges calls it a tunnel: the
+    ceiling cut the ground under 0bff's rail colliders, 19 lips up to 14 cm; M5 r5)."""
+    import railways
+    import roads
+    out = [ll for _fid, ll, _clear in _rails(feats)]
+    for i in range(len(feats)):
+        if not roads._rail_drawn(feats, i):
+            continue
+        for kind, rings in railways._pieces(feats, i):
+            if kind == "ground":
+                out += [np.asarray(r, np.float64)[:, :2] for r in rings if len(r) >= 2]
+    return out
+
+
+def _rails_in(feats, frame):
+    """[(n, 2)] a cell's railways at ground level (_ceil_rails) in frame, memoised on the cell's features per frame
+    (each ceiling's box reads its 3 x 3 cells again)."""
+    memo = feats.__dict__.setdefault("_roadsys_rails_xy", {})
+    fk = _frame_key(frame)
+    got = memo.get(fk)
+    if got is None:
+        got = []
+        for ll in _ceil_rails(feats):
+            e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+            xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
+            if len(xy) >= 2:
+                got.append(xy)
+        if len(memo) > 8:
+            memo.clear()
+        memo[fk] = got
+    return got
+
+
+def ceil_reach(cell_fn, keys):
+    """m round a ceiling's box its decks are read (CEIL_EASE_M + 3.74 x the widest bridge's half width in cells keys
+    as _ceil_inputs takes it: its spec's or its cross-section's; + CEIL_XY_TOL_M, less roads.NEAR_M), a function of the
+    map round the cell alone."""
+    import roads
+    hw = 0.0
+    for k in keys:
+        feats = cell_fn(k)
+        if feats is None or not len(feats):
+            continue
+        xs = _xsec_extents(cell_fn, k) if XSEC else {}
+        for i, sp in enumerate(roads.bridge_specs(feats)):
+            if sp is not None:
+                hw = max(hw, float(sp.width) / 2, float(xs.get(feature(str(feats.ids[i])), 0.0)))
+    return max(0.0, CEIL_EASE_M + 3.74 * hw + CEIL_XY_TOL_M - float(roads.NEAR_M))
+
+
+def _snap_box(e, n):
+    """The box (x0, y0, x1, y1) of the points (e, n) snapped out to CEIL_SNAP_M (ceil_of_cell's box)."""
+    s = CEIL_SNAP_M
+    return (float(np.floor(np.min(e) / s) * s), float(np.floor(np.min(n) / s) * s),
+            float((np.floor(np.max(e) / s) + 1.0) * s), float((np.floor(np.max(n) / s) + 1.0) * s))
+
+
+def ceil_of_cell(frame, cell_fn, key, box=None):
+    """earthfast.RoadsysCeil of map cell key (in frame) for its points in box (x0, y0, x1, y1; None: the whole cell):
+    its hand-over's ends (ends_of_cell) with the decks that may lie over them, read from the 3 x 3 cells round it as the
+    ends are (a deck over a point reaches it from those cells), within the cell + 60 m and box + CEIL_NEAR_M (a point's
+    ceiling is the same whichever caller asks, whatever its box), each deck's heights its chain's published solve. None
+    when a cell cannot be read; the ends alone (their drop) when no bridge chains are at hand (DECKS_FN unset) or their
+    read failed. Kept for good only when every read was complete; one made from a short read (a short chain's stand-in
+    heights) answers for CEIL_SHORT_TTL_S, each use faulted (not kept), then is read again."""
+    import heightmap
+    import mapcells
+    import revisit
+    ends = ends_of_cell(frame, cell_fn, key)
+    if ends is None:
+        return None
+    box = None if box is None else tuple(float(v) for v in box)
+    mk = (_frame_key(frame), str(key), float(heightmap.SQUARE), box)
+    with _ends_lock:
+        got = _ceil_memo.get(mk)
+        if got is not None and (got[1] or time.monotonic() - got[2] < CEIL_SHORT_TTL_S):
+            CEIL_STATS["hits"] += 1
+            if not got[1]:
+                revisit.fault()             # (made from a short read: whoever builds on it is short too)
+            return got[0]
+    view = _decks_view(frame)
+    if view is None:
+        return ends.ceil([], [])
+    import fast
+    fast.require(CEIL_KERNEL, "the ground under the decks")
+    n = 1 << key.z
+    keys = [mapcells.CellKey(key.z, (key.x + dx) % n, key.y + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+            if 0 <= key.y + dy < n]
+    la0, lo0, la1, lo1 = _cell_bounds(key)
+    bx, by, _ = frame.geodetic_to_enu(np.array([la0, la0, la1, la1]), np.array([lo0, lo1, lo0, lo1]), np.zeros(4))
+    reg = (float(np.min(bx)) - 60.0, float(np.min(by)) - 60.0, float(np.max(bx)) + 60.0, float(np.max(by)) + 60.0)
+    with revisit.scope() as read:
+        try:
+            if box is not None:         # (the decks near the points asked: their chains alone solved)
+                r = ceil_reach(cell_fn, keys)
+                reg = (max(reg[0], box[0] - r), max(reg[1], box[1] - r), min(reg[2], box[2] + r), min(reg[3], box[3] + r))
+            if reg[0] > reg[2] or reg[1] > reg[3]:
+                got = ([], [])
+            else:
+                got = _ceil_inputs(frame, cell_fn, keys, reg, view)
+        except Exception as ex:             # (no ceiling rather than no ground: not kept)
+            (log.debug if isinstance(ex, OSError) else log.warning)("roadsys ceiling: %s: %s", type(ex).__name__, ex)
+            revisit.fault()
+            got = None
+    if got is None:             # (the drop alone, as structures has it: not kept)
+        c = ends.ceil([], [])
+        with _ends_lock:
+            CEIL_STATS["short"] += 1
+            _ceil_memo[mk] = (c, False, time.monotonic())
+        return c
+    c = ends.ceil(*got)
+    if CEIL_DUMP and c.count():
+        with open(os.path.join(CEIL_DUMP, f"ceil_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}_{key.z}_{key.x}_{key.y}"
+                           + ("" if box is None else "_%d_%d" % (int(box[0]), int(box[1]))) + ".rsce"),
+                  "wb") as f:
+            f.write(c.input())
+    with _ends_lock:
+        CEIL_STATS["built"] += 1
+        CEIL_STATS["decks"] += int(c.count())
+        if not read.complete:
+            CEIL_STATS["short"] += 1
+        _ceil_memo.pop(mk, None)
+        _ceil_memo[mk] = (c, bool(read.complete), time.monotonic())
+        while len(_ceil_memo) > CEIL_CELLS_KEPT:
+            _ceil_memo.pop(next(iter(_ceil_memo)))
+    return c
+
+
+def ground_cut(frame, cell_fn, la, lo, z, box=None):
+    """The physics ground at the points (la, lo) from its ground z there (geodetic m), in frame: lowered under the first
+    metres of the decks' ground ends (BNE_ROADSYS=structures: handover_drop) and, under surface, nowhere over a deck's
+    soffit less 0.3 m (ceil_of_cell); z itself in any other mode. Each point by its own map cell's neighbourhood.
+    box (frame x0, y0, x1, y1): the extent every query of the caller's job lies in (a block's, a road tile's), the
+    ceilings' read box with the points': one ceiling per cell for the whole job instead of one per query's points
+    (a road geotile's ~25 ground queries built ~7 ceilings, each its own read of the bridge chains: 0.5 s apiece,
+    Baltimore 2026-11-26). A ceiling's value at a point is the same whichever box read it (ceil_of_cell), so the
+    ground is too (shown byte for byte with whole-cell boxes, wg1126)."""
+    z = np.asarray(z, np.float64)
+    if not STRUCTURES or not z.size:
+        return z
+    if not CEIL:
+        return z - handover_drop(frame, cell_fn, la, lo)
+    import mapcells
+    shape = z.shape
+    la = np.asarray(la, np.float64).ravel()
+    lo = np.asarray(lo, np.float64).ravel()
+    zf = z.ravel().copy()
+    e, n, _u = frame.geodetic_to_enu(la, lo, 0.0)
+    e = np.ascontiguousarray(np.asarray(e, np.float64).ravel())
+    n = np.ascontiguousarray(np.asarray(n, np.float64).ravel())
+    ok = np.isfinite(la) & np.isfinite(lo)
+    xs, ys = mapcells.cells_xy(np.where(ok, la, 0.0), np.where(ok, lo, 0.0))
+    code = (xs << 32) | ys
+    groups = {}
+    for c in np.unique(code[ok]).tolist():      # (each cell's points in their order, the cells as str() sorts them)
+        groups[mapcells.CellKey(mapcells.ZOOM, c >> 32, c & 0xFFFFFFFF)] = np.flatnonzero(ok & (code == c))
+    cut = 0
+    for k in sorted(groups, key=str):
+        idx = groups[k]
+        if box is None:
+            c = ceil_of_cell(frame, cell_fn, k, _snap_box(e[idx], n[idx]))
+        else:
+            c = ceil_of_cell(frame, cell_fn, k, _snap_box(
+                np.array([float(np.min(e[idx])), float(np.max(e[idx])), float(box[0]), float(box[2])]),
+                np.array([float(np.min(n[idx])), float(np.max(n[idx])), float(box[1]), float(box[3])])))
+        if c is None:
+            continue
+        before = zf[idx]
+        after = c.ground(np.ascontiguousarray(e[idx]), np.ascontiguousarray(n[idx]), np.ascontiguousarray(before))
+        zf[idx] = after
+        cut += int((after < before).sum())
+    HANDOVER_STATS["points"] += int(la.size)
+    CEIL_STATS["cut"] += cut
+    return zf.reshape(shape)
+
+
+def ground_lowering(frame, cell_fn, la, lo, z, box=None):
+    """m ground_cut lowers the ground z at the points (la, lo) by (the hand-over's lattice: a node lowered by the drop
+    or the ceiling is the deck's there, roadsys handover.rs zone). box: ground_cut's."""
+    z = np.asarray(z, np.float64)
+    if not CEIL:
+        return handover_drop(frame, cell_fn, la, lo).reshape(z.shape) if z.size else z * 0.0
+    return z - ground_cut(frame, cell_fn, la, lo, z, box)
 
 
 # ------------------------------------------------------------------------- M4 surface: decks from the road faces

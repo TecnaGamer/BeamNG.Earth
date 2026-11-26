@@ -1699,6 +1699,9 @@ fn crossings(net: &mut Net) {
                 // the mesher draws, + its roof and soil (TUNNEL_ROOF_M); the tunnel's knots, smoothness only, take it)
                 if lo_sup.kind == SUP_TUNNEL && !net.opts.tunnels { unbridged += 1; continue; }
                 let up_sup = if up == sa { ua } else { ub };
+                // (631: only a road on the ground holds it: a deck over a tagged tunnel is a covered roadway (section
+                // type 2, T4), today's as before; its floor moved Seal Beach's connector decks onto each other)
+                if lo_sup.kind == SUP_TUNNEL && up_sup.kind == SUP_STRUCT { unbridged += 1; continue; }
                 let floor = if lo_sup.kind == SUP_TUNNEL {
                     if net.opts.tunnels { (clear + TUNNEL_LIGHTS_M).max(TUNNEL_LID_MIN_M) + TUNNEL_ROOF_M } else { 8.0 }
                 } else { clear + deck_under(up_sup) };

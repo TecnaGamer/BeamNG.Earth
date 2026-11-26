@@ -128,6 +128,14 @@ class _State:
         budget.register_shed(self._clear_chunks)
         import rangeread            # (the remote files' block LRU, up to rangeread.MEM_BYTES: kept by a shed before)
         budget.register_shed(rangeread.clear_memory)
+        # (the memos that hold map features or native objects past the map data's own drop: a shed left a Baltimore
+        # road process's floor rising 0.8 -> 1.8 GB over 110 jobs, the playtest's 1.6 -> 3.7 GB in 25 minutes,
+        # 2026-11-26: the placements, the road system's tables / ceilings / ends / squares, the rail nodes)
+        budget.register_shed(_roads.clear_placements)
+        import roadsys
+        budget.register_shed(roadsys.clear_memory)
+        import railprofile
+        budget.register_shed(railprofile.clear_memory)
 
     def _clear_chunks(self):
         with self.lock:
@@ -1124,6 +1132,19 @@ def _roads_cell(key):
     return _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
 
 
+def _pins_legacy(planner):
+    """(636, T1, BNE_ROADSYS_TUNNELS) roadsys.pins_near's legacy(feature, lat, lon): round a tunnel the record does not
+    build (under water: T3) the squares' targets as without the record; the planner's own tunnel networks say which, as
+    its tunnel sections do (TunnelProfiles.feature_drowned). None without the record."""
+    import roadsys
+    if not roadsys.TUNNELS or not hasattr(planner, "_tunnel_chains"):
+        return None
+
+    def legacy(feat, la, lo):
+        return planner._tunnel_chains().store_at(la, lo).feature_drowned(feat, la, lo)
+    return legacy
+
+
 def _profile_pins(planner, la0, lo0, la1, lo1, pad):
     """grading.PROFILE_PINS (BNE_ROADSHAPE=profile, P3b; BNE_ROADSYS=heights, M2): the approach pins of the bridge
     chains whose parts come within pad + roadshape.PIN_REACH_M of the box (heights: roadsys.pins_near), each chain solved (or taken) in this process's bridge
@@ -1135,7 +1156,7 @@ def _profile_pins(planner, la0, lo0, la1, lo1, pad):
     if roadsys.HEIGHTS and not roadshape.PROFILE_BUILT:
         # (BNE_ROADSYS=heights: the profile squares' terrain targets, by square: no chain is asked)
         try:
-            return roadsys.pins_near(la0, lo0, la1, lo1, pad, _roads_cell, _elev_stage1)
+            return roadsys.pins_near(la0, lo0, la1, lo1, pad, _roads_cell, _elev_stage1, legacy=_pins_legacy(planner))
         except (netfetch.FetchError, demmod.DemUnavailable):     # (short, not kept)
             import revisit
             revisit.fault()
@@ -1341,7 +1362,7 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
         sv = src.version()
     except Exception:
         sv = None
-    k = revisit.key("signs", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(left_hand), bool(mph),
+    k = revisit.key("signs", *revisit.frame_parts(lat, lon), zoom, tx, ty, bool(left_hand), bool(mph),
                     country, bool(dirs), bool(rsigns), bool(dej), bool(towns_on), _md_versions(), repr(sv),
                     ("rules", _ground_rules()), *_radar_key(), *de)
     return _revisit_tile("signs", k, aid, tx, ty, out_dir, vfs_dir, f"signs_{aid}_{tx}_{ty}.json",
@@ -1407,7 +1428,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
     if de_junctions:
         import designs
         de = designs.cache_parts(True, geodesy.EnuFrame(lat, lon), designs.tile_reach(roadsmod_tile_bbox(tx, ty)))
-    k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
+    k = revisit.key("roads", *revisit.frame_parts(lat, lon), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _md_versions(bool(buildings)), float(buried), lamp_region, country, *cliff_settings.cache_parts,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
@@ -2574,7 +2595,7 @@ def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q):
     """The revisit key of an anchor's skin of the geotile whose content has key ckey (_geo_skin)."""
     import revisit
     import heightmap as heightmapmod
-    return revisit.key("rskin", ckey, round(float(lat), 7), round(float(lon), 7), int(zoom), bool(sidewalks),
+    return revisit.key("rskin", ckey, *revisit.frame_parts(lat, lon), int(zoom), bool(sidewalks),
                        float(lift), None if q is None else float(q), ("rules", _ground_rules()),
                        float(heightmapmod.SQUARE))
 
@@ -3093,7 +3114,10 @@ def _anchor_drawn(aid, lat, lon, zoom, box):
 
     def drawn(la, lo):
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo), box)
-    return frame, drawn, cell_fn
+
+    def pre(la, lo):            # (drawn before the road system's cut: the hand-over's lowering is pre - drawn)
+        return roadsmod._block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo), box)
+    return frame, drawn, cell_fn, pre
 
 
 HANDOVER_GRID_MAX = 400_000     # lattice nodes one deck's hand-over may read (beyond: the sheared deck as it was)
@@ -3142,7 +3166,7 @@ def _deck_handover(blob, pos, tile, frame, piv, aid, lat, lon, zoom, q):
     W = dnp.matmul(P + np.asarray(pos, np.float64), rot.T) + off
     x0, y0 = float(W[:, 0].min()), float(W[:, 1].min())
     x1, y1 = float(W[:, 0].max()), float(W[:, 1].max())
-    fr, drawn, cell_fn = _anchor_drawn(aid, lat, lon, zoom, (x0 - 60.0, y0 - 60.0, x1 + 60.0, y1 + 60.0))
+    fr, drawn, cell_fn, pre = _anchor_drawn(aid, lat, lon, zoom, (x0 - 60.0, y0 - 60.0, x1 + 60.0, y1 + 60.0))
     ends = roadsys.ends_for_box(fr, cell_fn, (x0, y0, x1, y1))
     if ends is None or not ends.count():
         return None
@@ -3170,7 +3194,12 @@ def _deck_handover(blob, pos, tile, frame, piv, aid, lat, lon, zoom, q):
         ys = heightmap.lattice_coords(j0 + b0, b1 - b0 + 1)
         _el, u = heightmap.surface(fr, drawn, xs, ys, keep)
         zq = np.rint(np.asarray(u, np.float64) * (1.0 / q)) * q
-        dr = roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])
+        if roadsys.CEIL:        # (M5: a node the ceiling lowers is the deck's as a dropped one is)
+            dr = roadsys.ground_lowering(fr, cell_fn, keep["lat"], keep["lon"],
+                                         pre(np.asarray(keep["lat"], np.float64), np.asarray(keep["lon"], np.float64)),
+                                         (gx0, gy0, gx1, gy1))
+        else:
+            dr = roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])
         zg[b0:b1 + 1, a0:a1 + 1] = zq
         dg[b0:b1 + 1, a0:a1 + 1] = np.asarray(dr, np.float64).reshape(zq.shape)
     top = names.index(roadmeshmod.DECK_TOP)
@@ -3712,7 +3741,7 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
-    k = revisit.key("bldfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
+    k = revisit.key("bldfar", *revisit.frame_parts(lat, lon), zoom, tx, ty,
                     _md_versions(True), lamp_region, bool(left_hand), _nyc_key(frame, roadsmod_tile_bbox(tx, ty)))
     return _revisit_tile("bldfar", k, aid, tx, ty, out_dir, vfs_dir, f"bldfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_tile(frame, tx, ty, _s.md,
@@ -3730,7 +3759,7 @@ def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
-    k = revisit.key("bldsky", round(float(lat), 7), round(float(lon), 7), zoom, ux, uy,
+    k = revisit.key("bldsky", *revisit.frame_parts(lat, lon), zoom, ux, uy,
                     _md_versions(True), lamp_region)
     u = buildingsmod.SKY_UNIT
     sx0, sy0, _, _ = roadsmod_tile_bbox(ux * u, uy * u)
@@ -3762,7 +3791,7 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
         _chain_store(f"far_bridges_{zoom}", roadsmod.BridgeProfiles,
                      lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, zoom)), far_setup), frame,
         prefer=_chain_store("bridges", roadsmod.BridgeProfiles, None, _bridge_setup))
-    k = revisit.key("brfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
+    k = revisit.key("brfar", *revisit.frame_parts(lat, lon), zoom, tx, ty,
                     _s.md.versions() if _s.md is not None else None)
     return _revisit_tile("brfar", k, aid, tx, ty, out_dir, vfs_dir, f"brfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_bridge_tile(frame, tx, ty, _s.md, bridges, out_dir, vfs_dir, aid),
@@ -4091,8 +4120,9 @@ def _far_global_key(z, x, y, zoom, ref_zoom, layout):
 
 
 def _far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
-    """What a far tile's geometry is built from (the revisit cache's key)."""
-    return (round(float(lat), 7), round(float(lon), 7), (tile.level, tile.i, tile.j), zoom,
+    """What a far tile's geometry is built from (the revisit cache's key): the frame exactly (revisit.frame_parts)."""
+    import revisit
+    return (*revisit.frame_parts(lat, lon), (tile.level, tile.i, tile.j), zoom,
             None if q is None else float(q), ref_zoom, bool(with_sink), repr(layout),
             _s.md.versions() if _s.md is not None else None, _s.sea is not None, _s.airports is not None)
 
@@ -4707,4 +4737,8 @@ def _square_disk():
 if _roadsys.HEIGHTS:
     _roadsys.GROUND = plan_elev
     _roadsys.DISK_FN = _square_disk
+if _roadsys.CEIL:
+    # (M5: the ground under the decks from the road tiles' own bridge chains: the store every anchor shares, on the
+    # plans' first stage as _bridges makes it under the road system, so the ceiling is the drawn decks' whoever asks)
+    _roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1) if getattr(_s, "md", None) is not None else None
 _roadsys.AREAS_MD_FN = lambda: getattr(_s, "md", None)     # (BNE_ROADSYS_AREAS: the decks' mapped road areas)

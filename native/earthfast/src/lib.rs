@@ -6,6 +6,7 @@
 // reason; `cargo clippy` fails on a new one.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 mod cliffcuts;
+mod mapcells;
 mod cliffsurface;
 mod cliffappearance;
 mod cliffphoto;
@@ -78,6 +79,7 @@ mod power;
 mod underpass;
 mod coarseease;
 mod junctionsnap;
+mod landings;
 mod tunnelcover;
 mod tunnelchain;
 mod tunnelrec;
@@ -147,6 +149,7 @@ mod underdeck;
 mod deckground;
 mod railseam;
 mod stageshare;
+mod terrainpacks;
 mod classgrid;
 mod frontage;
 mod furnstations;
@@ -7164,6 +7167,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(membudget::ram_desktop_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_effective_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_watch, m)?)?;
+    // 637: the swapped pages at the RAM they hold (zram), a far burst's room by the system's memory under Auto
+    m.add_function(wrap_pyfunction!(membudget::ram_swap_weight, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_counted_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_burst_room_mb, m)?)?;
+    // 637: the map cells of arrays of points (mapcells.cells_of / cell_of)
+    m.add_function(wrap_pyfunction!(mapcells::mapcells_xy, m)?)?;
+    m.add_function(wrap_pyfunction!(mapcells::mapcells_cell, m)?)?;
         // 259: tunnel entrances (portal: portal_mesh, tunnel_cover_mesh, portal_style)
     m.add_function(wrap_pyfunction!(portal::portal_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(portal::tunnel_cover_mesh, m)?)?;
@@ -7843,6 +7853,25 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // flat strip is fill_flat (the lattice's teeth reach) behind the core
     // 630: upstream dev (629) merged with the fork's grading kernels (581-583 above: gradebins fill / cutting walls, rail_crossing_roads' grade callback),
     // both sets of changes in this build, the version past both
-    m.add("VERSION", 630)?;
+    // 629: the tunnel plan T1 (roadsys tunnel.rs, tunaudit.rs, tunnelrec.rs; BNE_ROADSYS_TUNNELS)
+    // 630 (628 kept for another branch): RoadsysEnds.ceil / RoadsysCeil (roadsys ceil.rs: the ground under a deck at
+    // most at its soffit less 0.3 m, BNE_ROADSYS=surface; every evaluator of the physics ground,
+    // roads.block_arch_raise), handover.rs End.junction
+    // 631: the tunnel plan T1 round 2 (tunnel records' portals and floors)
+    // 632: RoadsysCeil counts a ground road beside a deck within the deck's own need (ceil.rs allow), whatever other
+    // decks were read (roadsys.ceil_of_cell's box)
+    // 635 (633 and 634 kept for the tunnel and winter W3 branches): tpacks_* (terrainpacks.rs: the ledger, prune, cap
+    // and one-time wipe of our photo packs in the game's terrain texture cache, server/terrainpacks.py)
+    terrainpacks::register(m)?;
+    // 636 (the tunnel branch's 633 renumbered over dev's 635): tunnel plan T1 round 3, the tunnel record's lids under
+    // a road crossing over the tube kept (tunnel.rs StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as
+    // without the record: roadsys.pins_near legacy)
+    // 638: landing_ends / landing_chain (landings.rs: FAST_GAP's deck-end landings and their approaches, ported from
+    // grading._Planner._landings_in / _landing_chain)
+    m.add_function(wrap_pyfunction!(landings::landing_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(landings::landing_chain, m)?)?;
+    // 639: upstream dev (638) merged with the fork's grading kernels (581-583, 630 above: gradebins fill / cutting walls,
+    // rail_crossing_roads' grade callback), both sets of changes in this build, the version past both
+    m.add("VERSION", 639)?;
     Ok(())
 }
