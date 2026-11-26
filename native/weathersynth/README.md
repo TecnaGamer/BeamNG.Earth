@@ -209,8 +209,12 @@ clean stretches ("blocks"), not events.
   - Every layer plays at its loop's loudness times the mod's `rainVol`, so Live matches Pre-recorded.
   - A silent layer costs nothing.
   - The output does not depend on the block size (test).
-  - `texbank-live` cuts the small live bank (`tex_bank.bin`, about 33 MB: 42 s per class, round-robin over the
-    recordings); live-serve reads it from next to the program.
+  - `texbank-live` cuts the live pieces from the full bank: 42 s per class, round-robin over the recordings.
+    They are committed like the thunder grains, in `assets/tex/` (`manifest.json`, `blocks/*.ogg` at Vorbis q6,
+    4.6 MB, and `CREDITS.md`).
+  - `texbank-pack` decodes them into `assets/tex_bank.bin` (about 33 MB of i16, gitignored). It uses ffmpeg's own
+    Vorbis decoder, as `grainbank-pack` does; `assets/tex/tex_bank.bin.sha256` is the pack made with ffmpeg n9.0.2.
+  - The release's grains job packs it once for both platforms, and live-serve reads it from next to the program.
   - `livetex-bench` renders fixed conditions and a sweep, timed: about 0.65 % of one PC core.
 - **The procedural live rain's level:** `live::file_match_db` brings it to the files' level. Before, it was 13.5 /
   22.3 / 24.0 dB louder at 0.7 / 5 / 35 mm/h than the loop the mod plays at the same volume, and it had no `rainVol`.

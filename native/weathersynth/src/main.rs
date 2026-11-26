@@ -18,7 +18,8 @@
 //!   weathersynth grainbank-build plan|cut --gb DIR [--plan F] [--out BANKDIR] [--threads N]   the bank v3 builder
 //!   weathersynth grainbank-compare --ref MANIFEST --new MANIFEST   a re-cut bank against a reference (SPEC 9)
 //!   weathersynth texbank-build --gb DIR --sources S.json --out BANKDIR [--threads N]   recorded rain / wind blocks
-//!   weathersynth texbank-live --bank BIN --out tex_bank.bin [--per-class S] [--max-block S]   the live subset
+//!   weathersynth texbank-live --bank BIN --manifest M --out-dir assets/tex [--per-class S] [--max-block S]   live pieces
+//!   weathersynth texbank-pack [--manifest assets/tex/manifest.json] [--out assets/tex_bank.bin]   the live bank
 //!   weathersynth tex-set --bank BIN --out DIR [--seed N] [--ogg] [--prefix P] [--only a,b]   the recorded loops
 //!   weathersynth livetex-bench --bank BIN --out DIR [--block N]   live recorded rain / wind, offline, timed
 //!   weathersynth tex-check FILE.wav ...              loudness, true peak, loop seam and texture statistics
@@ -509,6 +510,7 @@ fn run() -> Result<(), String> {
         }
         "texbank-build" => texbuild::run(&args)?,
         "texbank-live" => texbuild::run_live(&args)?,
+        "texbank-pack" => texbuild::run_pack(&args)?,
         "tex-set" => texmix::run_set(&args)?,
         "tex-check" => texmix::run_check(&args)?,
         "livetex-bench" => {

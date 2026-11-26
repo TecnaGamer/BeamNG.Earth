@@ -723,13 +723,17 @@ pub fn bank_bytes(blocks: &[TexBlock]) -> Vec<u8> {
     o
 }
 
-/// The live bank (`texbank-live --bank BIN --out tex_bank.bin [--per-class S] [--max-block S]`): the classes the
-/// live engine plays (outdoor rain, the roof, wind), each at most S seconds, taken round-robin over its recordings
-/// (each block's middle, at most max-block seconds), so a small file still holds every take. The offline bank keeps
+/// The live bank's pieces (`texbank-live --bank BIN --manifest FULL/manifest.json --out-dir DIR [--per-class S]
+/// [--max-block S]`): the classes the live engine plays (outdoor rain, the roof, wind), each at most S seconds, taken
+/// round-robin over its recordings (each block's middle, at most max-block seconds). Written as the committed asset
+/// folder, like assets/grains: DIR/manifest.json, DIR/blocks/<id>.ogg (Vorbis q6, bit-exact container) and
+/// DIR/CREDITS.md; `texbank-pack` makes tex_bank.bin from it (the release's grains job). The offline bank keeps
 /// everything for the loops.
 pub fn run_live(args: &[String]) -> Result<(), String> {
     let bank = Bank::load(&arg(args, "--bank").ok_or("--bank BIN")?)?;
-    let out = arg(args, "--out").ok_or("--out BIN")?;
+    let dir = PathBuf::from(arg(args, "--out-dir").ok_or("--out-dir DIR")?);
+    let full = arg(args, "--manifest").ok_or("--manifest FULL/manifest.json (the sources' titles and pages)")?;
+    let meta = source_meta(Path::new(&full))?;
     let per: f64 = arg(args, "--per-class").and_then(|v| v.parse().ok()).unwrap_or(36.0);
     let maxb: f64 = arg(args, "--max-block").and_then(|v| v.parse().ok()).unwrap_or(12.0);
     let live = [
@@ -783,8 +787,129 @@ pub fn run_live(args: &[String]) -> Result<(), String> {
         }
         report.push_str(&format!("{c}: {n} blocks {total:.0} s\n"));
     }
-    let bytes = bank_bytes(&keep);
-    std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
-    print!("{report}{} bytes\n", bytes.len());
+    std::fs::create_dir_all(dir.join("blocks")).map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    let mut per_src: BTreeMap<u32, (usize, f64, Vec<&str>)> = BTreeMap::new();
+    for (k, b) in keep.iter().enumerate() {
+        let c = CLASSES[b.cls as usize];
+        let id = format!("{c}_{k:03}_{}", b.src_id);
+        let file = format!("blocks/{id}.ogg");
+        let x: Vec<f64> = b.samples.iter().map(|v| *v as f64).collect();
+        write_ogg_q(&dir.join(&file), &x, "6")?;
+        let m = meta.get(&b.src_id).cloned().unwrap_or_default();
+        let e = per_src.entry(b.src_id).or_insert((0, 0.0, Vec::new()));
+        e.0 += 1;
+        e.1 += b.samples.len() as f64 / SR;
+        if !e.2.contains(&c) {
+            e.2.push(c);
+        }
+        entries.push(Out::Obj(vec![
+            ("id".into(), Out::S(id)),
+            ("class".into(), Out::S(c.into())),
+            ("source_id".into(), Out::I(b.src_id as i64)),
+            ("file".into(), Out::S(file)),
+            ("seconds".into(), Out::F(m::round(b.samples.len() as f64 / SR * 1000.0) / 1000.0)),
+            ("title".into(), Out::S(m.0)),
+            ("author".into(), Out::S(m.1)),
+            ("page".into(), Out::S(m.2)),
+            ("license".into(), Out::S(m.3)),
+            ("checked".into(), Out::S(m.4)),
+        ]));
+    }
+    gb::write_json(&dir.join("manifest.json"), &Out::Obj(vec![("blocks".into(), Out::Arr(entries))]))?;
+    let mut cr = String::from(
+        "# Credits: the live recorded rain and wind (weathersynth's texture bank)\n\nEvery block comes from a field \
+recording released under Creative Commons Zero (CC0 1.0) on Freesound. CC0 needs no attribution; we credit the \
+recordists anyway, with thanks. Each recording was screened, its clean stretches cut, high-passed and levelled; \
+weathersynth crossfades them live. Licences were checked on each sound page on the date shown.\n\n| Freesound sound | \
+title | recordist | licence | checked | blocks |\n|---|---|---|---|---|---|\n",
+    );
+    for (sid, (n, d, cl)) in &per_src {
+        let m = meta.get(sid).cloned().unwrap_or_default();
+        cr.push_str(&format!(
+            "| [{sid}]({}) | {} | {} | CC0 1.0 | {} | {n} ({d:.0} s: {}) |\n",
+            m.2,
+            m.0.replace('|', "/"),
+            m.1,
+            m.4,
+            cl.join(", ")
+        ));
+    }
+    std::fs::write(dir.join("CREDITS.md"), cr).map_err(|e| e.to_string())?;
+    print!("{report}{} blocks from {} recordings -> {}\n", keep.len(), per_src.len(), dir.display());
+    Ok(())
+}
+
+/// (title, author, page, licence, checked) per source id, from a texbank-build manifest.
+fn source_meta(p: &Path) -> Result<BTreeMap<u32, (String, String, String, String, String)>, String> {
+    let t = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let j = proto::parse_limit(&t, 1 << 26)?;
+    let Some(Json::Arr(list)) = j.get("blocks") else { return Err("manifest: no blocks".into()) };
+    let mut out = BTreeMap::new();
+    for b in list {
+        let s = |k: &str| b.str(k).unwrap_or("").to_string();
+        if let Ok(id) = s("source_id").parse::<u32>() {
+            out.insert(id, (s("title"), s("author"), s("page"), s("license"), s("checked")));
+        }
+    }
+    Ok(out)
+}
+
+/// Vorbis at quality q through ffmpeg's libvorbis (bit-exact container: no encoder tag, no metadata).
+fn write_ogg_q(path: &Path, x: &[f64], q: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let raw: Vec<u8> = x.iter().flat_map(|v| (*v as f32).to_le_bytes()).collect();
+    let mut ch = Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-y", "-f", "f32le", "-ar", "44100", "-ac", "1", "-i", "-"])
+        .args(["-c:a", "libvorbis", "-q:a", q, "-map_metadata", "-1", "-fflags", "+bitexact"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("ffmpeg: {e}"))?;
+    ch.stdin.take().ok_or("ffmpeg stdin")?.write_all(&raw).map_err(|e| format!("ffmpeg: {e}"))?;
+    if !ch.wait().map_err(|e| format!("ffmpeg: {e}"))?.success() {
+        return Err(format!("ffmpeg could not write {}", path.display()));
+    }
+    Ok(())
+}
+
+/// `texbank-pack [--manifest assets/tex/manifest.json] [--out assets/tex_bank.bin]`: the committed Ogg blocks into the
+/// live bank, decoded as grainbank-pack decodes the thunder grains (ffmpeg's own Vorbis decoder, -c:a vorbis, its float
+/// output; the i16 rounding is ours), so the decoder build is the only moving part (the release checks the sha256).
+pub fn run_pack(args: &[String]) -> Result<(), String> {
+    let manifest = arg(args, "--manifest").unwrap_or_else(|| "assets/tex/manifest.json".into());
+    let out = arg(args, "--out").unwrap_or_else(|| format!("assets/{BANK_FILE}"));
+    let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{manifest}: {e}"))?;
+    let doc = proto::parse_limit(&text, 1 << 24)?;
+    let base = Path::new(&manifest).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let Some(Json::Arr(list)) = doc.get("blocks") else { return Err("manifest: no blocks".into()) };
+    let mut blocks = Vec::new();
+    for b in list {
+        let id = b.str("id").ok_or("block without id")?;
+        let cls = b.str("class").and_then(class_index).ok_or_else(|| format!("{id}: unknown class"))? as u8;
+        let file = b.str("file").ok_or_else(|| format!("{id}: no file"))?;
+        if file.contains("..") || file.starts_with('/') {
+            return Err(format!("{id}: file outside the folder"));
+        }
+        let o = std::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-v", "error", "-c:a", "vorbis", "-i"])
+            .arg(base.join(file))
+            .args(["-ac", "1", "-ar", "44100", "-f", "f32le", "-"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("ffmpeg: {e}"))?;
+        if !o.status.success() || o.stdout.len() < 4 {
+            return Err(format!("ffmpeg could not decode {file}"));
+        }
+        let samples: Vec<f32> = o.stdout.chunks_exact(4).map(|p| f32::from_le_bytes([p[0], p[1], p[2], p[3]])).collect();
+        blocks.push(TexBlock { cls, src_id: b.num("source_id").unwrap_or(0.0) as u32, samples });
+    }
+    let bytes = bank_bytes(&blocks);
+    let tmp = format!("{out}.new");
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("{tmp}: {e}"))?;
+    std::fs::rename(&tmp, &out).map_err(|e| format!("{out}: {e}"))?;
+    let secs: f64 = blocks.iter().map(|b| b.samples.len() as f64 / SR).sum();
+    println!("{} blocks, {secs:.0} s, {:.1} MB -> {out}", blocks.len(), bytes.len() as f64 / 1e6);
     Ok(())
 }
