@@ -610,6 +610,20 @@ def key(kind, *parts):
     return k
 
 
+def frame_parts(lat, lon):
+    """The anchor frame's part of an item's key: its origin as it is, (float(lat), float(lon)), the way blockcache
+    keys the blocks (repr of the frame's lat0 / lon0). Every item built in an anchor's frame (its far tiles and their
+    textures, road, sign and building tiles, the block's base photo) is keyed by it.
+
+    It was each origin rounded to 7 decimals until 2026-11-26: two frames under 5e-8 degrees (~5 mm) apart shared one
+    key, so an item built in the one was served to the other. A far tile at the exact level is the block's own lattice
+    rounded to its height quantum; built in a frame a millimetre off it was one quantum (1/64 m) off the block at
+    0.1-1 % of its vertices, at random spots (MeshDrive64Test l2_bad, the gates' shared test cache: the drive's
+    rebase anchor is the car's spot, a few 1e-7 degrees apart from run to run with the load). The mod's anchors are
+    on its grid (geodesy.snapAnchor: 6 decimals), where round(x, 7) is x: their keys are the same as before."""
+    return float(lat), float(lon)
+
+
 # Items kept across code changes (the user, 2026-11-02: road plans and cell facts survive updates): keyed by their
 # output's format number instead of the code (plancache.PLANS_FORMAT, roads.FACTS_FORMAT: bumped whenever a change
 # makes other output; tests/test_bake_formats.py fails on its fixture until they are), with the build switches still.
