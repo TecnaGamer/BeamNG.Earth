@@ -67,7 +67,7 @@ jobs:
           echo "publish=$pub" >> "$GITHUB_OUTPUT"
           echo "VERSION $v, release exists: $exists, publish: $pub"
 
-  # The thunder grain bank (native/weathersynth/assets/grains -> thunder_grains.bin, 17 MB of raw i16): packed ONCE
+  # The thunder grain bank (native/weathersynth/assets/grains -> thunder_grains.bin, bank v3: 15.3 MB of raw i16): packed ONCE
   # here and handed to both platform jobs, so the AppImage and the .exe bundle byte-identical files. The pack decodes
   # the committed Ogg grains with ffmpeg's own Vorbis decoder (-c:a vorbis, float output; the i16 rounding is
   # weathersynth's); the decoder is Ubuntu 22.04's ffmpeg package, its version logged, and a sha256 other than the
