@@ -1425,6 +1425,21 @@ function M.setPuddles(on)
   return n
 end
 
+-- (probes) tiles whose skin has a puddle part, those made, and the made ones shown; one made object's id and shape
+function M.puddleStats()
+  local parts, made, shown, any = 0, 0, 0, nil
+  for _, t in pairs(tiles) do
+    if t.skin and t.skin.puddle then parts = parts + 1 end
+    local o = t.puddle and scenetree.findObjectById(t.puddle)
+    if o then
+      made = made + 1
+      if not o:isHidden() then shown = shown + 1 end
+      any = any or { id = t.puddle, shape = o:getField('shapeName', 0) }
+    end
+  end
+  return { parts = parts, made = made, shown = shown, any = any }
+end
+
 -- Is the collision of the last rollback (swapUndo) in effect: its rebuild ran, and a frame has passed? True when no
 -- rollback is waiting.
 function M.swapRolledBack()

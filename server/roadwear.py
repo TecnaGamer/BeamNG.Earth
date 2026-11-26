@@ -331,7 +331,7 @@ def puddle_chunks(roads, seen, box, has_sidewalks, exclude=None, skip=()):
         pts.append(p[:, :3])
         off.append(off[-1] + len(p))
         hw = float(spec.width) / 2
-        paved = spec.kind == "paved" and fid not in skip and len(p) >= 2
+        paved = spec.kind in roadsmod.BUILT and fid not in skip and len(p) >= 2     # (asphalt and setts: Fells Point's brick streets)
         drive, lanes, doff = 2 * hw, 1, 0.0
         if paved:
             drive, lanes = roadsmod.lane_layout(spec)
