@@ -267,6 +267,14 @@ clean stretches ("blocks"), not events.
     - The hail loop schedules them as sparse hard hits (7 per second, about a third bouncing) over a little rain,
       14 dB under the hits.
     - `hail_texture` is the old wash, kept for comparison.
+- **The third listen (2026-11-26):**
+  - **Hail:** single ice hits cut as recorded (no subtraction), only those clean in the recording, with a gentle fade.
+  - **Recorded wind:** each window is also screened for birds and insects (tonal tracks 2-8 kHz), hum and engines,
+    and voices. A take with more than a tenth of its windows flagged is left out whole.
+  - **Generated wind:** `windsynth.rs` builds gusting wind from rumble, whoosh, moving resonances, aeolian whistles
+    and tree roar.
+  - **The Weather page:** "Wind sound: Generated / Recorded" plays `bne_wind_gen_*` or `bne_wind_*`.
+  - `wind-noise FILE...` runs the wind screen's measures on a rendered loop.
 - **The procedural live rain's level:** `live::file_match_db` brings it to the files' level. Before, it was 13.5 /
   22.3 / 24.0 dB louder at 0.7 / 5 / 35 mm/h than the loop the mod plays at the same volume, and it had no `rainVol`.
   The bus limiter crushed it.

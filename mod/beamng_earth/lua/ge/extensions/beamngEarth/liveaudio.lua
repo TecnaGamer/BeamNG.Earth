@@ -27,6 +27,9 @@ M.LIVE_KINDS = { strike = true, close = true }
 -- the synth lists the set in rainSets (the recorded rain needs its texture bank: without it the game plays the
 -- recorded FILES, not the synth's procedural rain). The synth keeps the thunder and its ducks either way.
 M.LIVE_RAIN = { generated = false, recorded = true }
+-- The same for the wind, per Wind sound: the synth plays no wind yet, so the game's wind files play in both modes (the
+-- hook: a set turned true here, and listed by the synth, would hand that set to it as LIVE_RAIN does)
+M.LIVE_WIND = { generated = false, recorded = false }
 -- a ready render serves a final whose distance is within this much of the one it was rendered for (the synth's
 -- READY_REL_D: a hint moved further renders again)
 M.READY_REL_D = 0.15

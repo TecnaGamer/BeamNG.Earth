@@ -125,6 +125,9 @@ M.SCHEMA = {
   -- the rain: generated (the physical model's loops) or recorded (CC0 field recordings mixed by weathersynth's texture
   -- renderer; the user, 2026-11-26: "use a similar method ... for the other weather sound effects"), files and live
   weatherRainSound = { kind = 'enum', default = 'generated', values = { 'generated', 'recorded' }, label = 'Rain sound' },
+  -- the wind: generated (windsynth.rs) or recorded (CC0 field recordings; the user, 2026-11-26: "Let people switch
+  -- between recorded and generated"), thunder's default
+  weatherWindSound = { kind = 'enum', default = 'generated', values = { 'generated', 'recorded' }, label = 'Wind sound' },
   realClouds = { kind = 'bool', default = true, label = 'Real clouds' },
   realFog = { kind = 'bool', default = true, label = 'Real fog' },
   realWind = { kind = 'bool', default = true, label = 'Real wind' },
@@ -263,7 +266,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'weatherStormLight',
-  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'realClouds',
+  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'weatherWindSound', 'realClouds',
   'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
@@ -672,6 +675,10 @@ M.APPLY = {
     require('beamngEarth/liveaudio').setThunderSet(v)
     local ok, storm = pcall(require, 'beamngEarth/storm')
     if ok and storm and storm.setThunderSet then storm.setThunderSet(v) end
+  end,
+  weatherWindSound = function(v)
+    local ok, amb = pcall(require, 'beamngEarth/ambience')
+    if ok and amb and amb.setWindSet then amb.setWindSet(v) end
   end,
   weatherRainSound = function(v)
     local ok, amb = pcall(require, 'beamngEarth/ambience')

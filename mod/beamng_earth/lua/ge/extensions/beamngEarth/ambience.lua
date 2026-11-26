@@ -500,6 +500,16 @@ M.rainLayers = layerVol
 -- loudness per file; credits in CREDITS.md "Weather sounds"). A set whose files are missing falls back to generated.
 M.RAIN_SET = 'generated'
 M.REC_PREFIX = 'bne_rain_rec_'
+-- The Weather page's sound sets, one row per family (the hook for more: a family's set picks its files here, and
+-- liveaudio.LIVE_RAIN / LIVE_WIND say whether the live synth plays that set itself; the settings page's entry and
+-- settings.lua's apply function call the setter). Both sets of a family play at the same loudness.
+--   rain: 'generated' bne_rain_*.ogg (weathersynth's physical model; its live engine is liveaudio.LIVE_RAIN.generated,
+--         off until it is fixed) / 'recorded' bne_rain_rec_*.ogg (CC0 recordings mixed by texmix.rs)
+--   wind: 'generated' bne_wind_gen_*.ogg (windsynth.rs) / 'recorded' bne_wind_*.ogg (CC0 recordings); files in both
+--         weather sound modes (the live synth plays no wind: liveaudio.LIVE_WIND)
+-- The default of each is thunder's (settings.lua weatherThunderSound): 'generated'.
+M.WIND_SET = 'generated'
+M.WIND_GEN_PREFIX = 'bne_wind_gen_'
 local recOk = nil                     -- the recorded files are there (checked once)
 function M.setRainSet(v)
   local s = (v == 'recorded') and 'recorded' or 'generated'
@@ -509,6 +519,19 @@ function M.setRainSet(v)
   -- the playing layers go; the next frame makes them again from the other files, at the volume they had
   for name, e in pairs(layerEm) do if simObjectExists(e) then e:delete() end; layerEm[name] = nil end
 end
+function M.setWindSet(v)
+  local s = (v == 'recorded') and 'recorded' or 'generated'
+  if s == M.WIND_SET then return end
+  M.WIND_SET = s
+  -- the wind layers playing go; the next frame makes them again from the other files, at the volume they had
+  for name, e in pairs(layerEm) do
+    if name:match('^wind_') then
+      if simObjectExists(e) then e:delete() end
+      layerEm[name] = nil
+    end
+  end
+end
+
 local function recorded()
   if M.RAIN_SET ~= 'recorded' then return false end
   if recOk == nil then recOk = FS and FS.fileExists and FS:fileExists(M.RAIN_DIR .. M.REC_PREFIX .. 'medium.ogg') or false end
@@ -599,6 +622,8 @@ M.OPEN_SHELTERS = { bridge = true, roof = true }
 function M.openShelter(kind) return M.OPEN_SHELTERS[kind] == true end
 
 local function layerFile(name)
+  local strength = name:match('^wind_(%a+)$')
+  if strength and M.WIND_SET == 'generated' then return M.WIND_GEN_PREFIX .. strength .. '.ogg' end
   if M.EXTRA_FILES[name] then return M.EXTRA_FILES[name] end
   local rec = recorded()
   if name == 'muffled' then return rec and (M.REC_PREFIX .. 'muffled.ogg') or M.RAIN_MUFFLED end

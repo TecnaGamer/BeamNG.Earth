@@ -258,14 +258,14 @@ T.check(layer('bne_drips_1.ogg') == nil and layer('bne_drips_2.ogg') == nil and 
 -- wind by strength: none when calm, the layer of the speed when windy, gone when calm again
 beamngEarth_weather = { rainNow = 0, rainMmHNow = 0, shelter = 1, windMsNow = 0.5 }
 clock = clock + 0.5; amb.update(3, seaV)
-T.check(layer('bne_wind_light.ogg') == nil and next(amb.extraLayers) == nil, 'calm: no wind layer')
+T.check(layer('bne_wind_gen_light.ogg') == nil and next(amb.extraLayers) == nil, 'calm: no wind layer')
 beamngEarth_weather.windMsNow = 8
 for i = 1, 8 do clock = clock + 0.5; amb.update(3, seaV) end
-local wm = layer('bne_wind_moderate.ogg')
-T.check(wm and math.abs(wm.vol - amb.WIND_GAIN) < 1e-9 and layer('bne_wind_strong.ogg') == nil, '8 m/s: the moderate wind')
+local wm = layer('bne_wind_gen_moderate.ogg')
+T.check(wm and math.abs(wm.vol - amb.WIND_GAIN) < 1e-9 and layer('bne_wind_gen_strong.ogg') == nil, '8 m/s: the moderate wind (generated, the default)')
 beamngEarth_weather.windMsNow = 0
 for i = 1, 12 do clock = clock + 0.5; amb.update(3, seaV) end
-T.check(layer('bne_wind_moderate.ogg') == nil and next(amb.extraLayers) == nil, 'calm again: the wind layer gone')
+T.check(layer('bne_wind_gen_moderate.ogg') == nil and next(amb.extraLayers) == nil, 'calm again: the wind layer gone')
 -- hail
 beamngEarth_weather.hailNow = 1
 for i = 1, 8 do clock = clock + 0.5; amb.update(3, seaV) end
@@ -280,6 +280,17 @@ T.check(amb.extraMix(8, 0, 0, 1, true, false).wind_moderate == 0, 'in a tunnel: 
 T.check(math.abs(amb.extraMix(8, 0, 0, 1, false, true).wind_moderate - amb.WIND_GAIN * amb.RAIN_CABIN) < 1e-9, 'in the car: damped')
 T.check(amb.extraMix(0.5, 0, 0, 1, false, false).wind_light == 0, 'under WIND_FROM_MS: silent')
 T.check(math.abs(amb.dripsLevel(0.8, amb.DRIPS_S / 2)[1] - 0.8) < 1e-12 and amb.dripsLevel(1, amb.DRIPS_S + 1)[1] == 0, 'drips fade')
+-- the Wind sound: generated plays bne_wind_gen_*, recorded bne_wind_*; a change swaps the playing layer
+amb.setWindSet('generated')
+beamngEarth_weather = { rainNow = 0, rainMmHNow = 0, shelter = 1, windMsNow = 8 }
+for i = 1, 8 do clock = clock + 0.5; amb.update(3, seaV) end
+T.check(layer('bne_wind_gen_moderate.ogg') ~= nil and layer('bne_wind_moderate.ogg') == nil, 'Wind sound generated: bne_wind_gen_moderate')
+amb.setWindSet('recorded')
+clock = clock + 0.5; amb.update(3, seaV)
+T.check(layer('bne_wind_moderate.ogg') ~= nil and layer('bne_wind_gen_moderate.ogg') == nil, 'Wind sound recorded: bne_wind_moderate')
+beamngEarth_weather.windMsNow = 0
+for i = 1, 12 do clock = clock + 0.5; amb.update(3, seaV) end
+amb.setWindSet('generated')
 -- the Rain sound: recorded swaps the layers' files (the same names, bne_rain_rec_*)
 amb.setRainSet('recorded')
 beamngEarth_weather = { rainNow = 1, rainMmHNow = 5, shelter = 1 }
