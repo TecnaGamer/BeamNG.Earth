@@ -194,6 +194,91 @@ weathersynth grainbank-compare --ref REF/manifest.json --new BANKDIR/manifest.js
     an encoder tag.
   - The run takes 22 s (plan) and 8 s (cut) with 4 threads, on the PC.
 
+## Recorded rain, wind, drips and hail (src/texbuild.rs, texmix.rs, livetex.rs)
+
+The Recorded rain set and the wind, drip and hail loops use the same idea as the Recorded thunder: clean pieces of
+CC0 Freesound field recordings, mixed with controlled variation. Rain and wind are textures, so the pieces are long
+clean stretches ("blocks"), not events.
+
+- **The bank:** built from the originals with `texbank-build`. The 5 s windows are screened with the thunder
+  builder's rules plus the rain-only ones (traffic swell, unsteady, <120 Hz rumble, knocks). Extra checks:
+  - thunder blanked;
+  - microphone buffeting (wind);
+  - still raining (drips);
+  - one hit far above its window's level (crest).
+  - Clean runs of 10 s or more become blocks.
+  - A density check keeps light rain sparse (2.5-6 kHz envelope kurtosis >= 8) and heavy rain dense (<= 40).
+  - Each block is high-passed and levelled to -30 LUFS, then the blocks are selected round-robin over the recordings
+    within a budget and a cap per recording.
+  - Car takes keep the intensity their title states, or are split into light / medium / heavy by kurtosis.
+  - Output: `tex_bank.bin` ("WSTEX1", i16), `manifest.json`, `screening.tsv`, `blocks_fit.tsv` and `CREDITS.md`.
+  - The screening is cached per original's sha256 (`--cache`).
+- **The loops:** `tex-set` renders them. Each is two streams of U(2, 5) s segments from random places, with varispeed
+  U(0.97, 1.03), +/-1 dB of gain and 0.5 s equal-power joins.
+  - The streams are laid on a circular timeline, so the wrap is a crossfade like any other join.
+  - Sparse classes keep the second stream 6 dB down.
+  - Each loop is levelled to its class (the current loops' loudness: rain -30.2 / -24.2 / -17.2, roof -30.0 / -24.1 /
+    -17.2, muffled -25.9; wind -36 / -30 / -24, drips -34, hail -20 LUFS).
+  - A circular 5 ms look-ahead limiter runs only when a hit passes -1 dBTP.
+  - `tex-check` measures each loop's loudness, its true peak and its seam (the 50 ms step and the spectral flux
+    across the wrap, ranked among the same windows inside the loop).
+- **Live:** livetex.rs plays the same blocks continuously when the mod sends `rainSet: "recorded"`.
+  - The layers are outdoor light / medium / heavy and the roof's three, with equal-power weights in log rate. The
+    muffled path is two 900 Hz low-passes, levelled as the muffled loop.
+  - Every layer plays at its loop's loudness times the mod's `rainVol`, so Live matches Pre-recorded.
+  - A silent layer costs nothing.
+  - The output does not depend on the block size (test).
+  - `texbank-live` cuts the live pieces from the full bank: 42 s per class, round-robin over the recordings.
+    They are committed like the thunder grains, in `assets/tex/` (`manifest.json`, `blocks/*.ogg` at Vorbis q6,
+    4.6 MB, and `CREDITS.md`).
+  - `texbank-pack` decodes them into `assets/tex_bank.bin` (about 33 MB of i16, gitignored). It uses ffmpeg's own
+    Vorbis decoder, as `grainbank-pack` does; `assets/tex/tex_bank.bin.sha256` is the pack made with ffmpeg n9.0.2.
+  - The release's grains job packs it once for both platforms, and live-serve reads it from next to the program.
+  - `livetex-bench` renders fixed conditions and a sweep, timed: about 0.65 % of one PC core.
+- **After the user's listen (2026-11-26):**
+  - **Light rain is variant B:** its crest limit is 40 dB, so the sparse takes of close drops are in.
+  - **Fewer take changes:** segments are 4-12 s with 1 s joins and ±1 % varispeed (they were 2-5 s, 0.5 s and ±3 %).
+    `--legacy` renders the old way.
+  - **One gain per recording:** a take keeps its level from block to block.
+  - **A spectral check per class:** a recording more than 7.5 dB RMS off its class's median 1/3-octave shape is left
+    out (`spec_dev.tsv`); light rain is exempt.
+  - `tex-set` prints the take changes per minute and the timbre jump across them, against the same measure inside a
+    segment.
+  - **The roof:** outside, the plain loops near the car; inside, `roof_cabin_*` (two 1.4 kHz low-passes and a 140 Hz
+    body resonance).
+  - **Muffled:** A (the outdoor rain filtered) under enclosed shelters; B (`muffled_open`, the under-bridge takes)
+    under open ones.
+  - **Drips:** `drips_1/2/3` are single drops (the bank's `drip` grains, cut from distinct-drop takes) at 0.8, 0.3 and
+    0.1 per second, all at one gain, so only the rate falls as the mod crossfades them.
+  - **Live:** livetex follows all of this through the new `roofNear` and `enclosed` fields. Its blocks are levelled at
+    -30 LUFS each, and a segment never outgrows its blocks.
+- **After the second listen (2026-11-26):**
+  - **Drips:** the recorded drops carried their take's noise in and out.
+    - `drips_1/2/3` are now synthetic: rain.rs's drop model, with big slow drops onto a puddle (with a Minnaert
+      bubble), the road or leaves. There is exact silence between drops.
+    - `drips_rec_1/2/3` keep the recorded drops for an A/B, cleaned by `impact_grains`. The take's noise is measured
+      in the gap just before each hit and subtracted, then the grain is gated to exact zeros 40 dB under its peak.
+  - **Wind:** it sounded like rain.
+    - `patter.tsv` measures every window's 2-8 kHz share. Rain, leaf patter and hiss measure about -9 to -3 dB; wind
+      measures -14 to -30 dB.
+    - Wind windows above -12 dB are rejected.
+  - **Hail:** it sounded like rain.
+    - `hail_hit` grains are bright, isolated hits cut from the hail takes and cleaned.
+    - The hail loop schedules them as sparse hard hits (7 per second, about a third bouncing) over a little rain,
+      14 dB under the hits.
+    - `hail_texture` is the old wash, kept for comparison.
+- **The third listen (2026-11-26):**
+  - **Hail:** single ice hits cut as recorded (no subtraction), only those clean in the recording, with a gentle fade.
+  - **Recorded wind:** each window is also screened for birds and insects (tonal tracks 2-8 kHz), hum and engines,
+    and voices. A take with more than a tenth of its windows flagged is left out whole.
+  - **Generated wind:** `windsynth.rs` builds gusting wind from rumble, whoosh, moving resonances, aeolian whistles
+    and tree roar.
+  - **The Weather page:** "Wind sound: Generated / Recorded" plays `bne_wind_gen_*` or `bne_wind_*`.
+  - `wind-noise FILE...` runs the wind screen's measures on a rendered loop.
+- **The procedural live rain's level:** `live::file_match_db` brings it to the files' level. Before, it was 13.5 /
+  22.3 / 24.0 dB louder at 0.7 / 5 / 35 mm/h than the loop the mod plays at the same volume, and it had no `rainVol`.
+  The bus limiter crushed it.
+
 ## Audio rules (src/audio.rs)
 
 - **Output streams only.** On WASAPI, an input stream opened on an output device is loopback capture of the system's

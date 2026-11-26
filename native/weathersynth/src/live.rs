@@ -170,7 +170,7 @@ pub fn rain_share(r: f64) -> f64 {
 }
 
 /// Pure: the loudness (LUFS) the game's rain plays at for a rate: the loops crossfaded (ambience.lua rainWeights:
-/// triangles in log10 rate between the loops' rates, the ends held; summed in power) x RAIN_BED_GAIN x the share.
+/// triangles in log10 rate between the loops' rates, the ends held, as equal-power gains; summed in power) x RAIN_BED_GAIN x the share.
 /// -100 when it does not rain.
 pub fn rain_target_lufs(r: f64) -> f64 {
     let share = rain_share(r);
@@ -195,7 +195,8 @@ pub fn rain_target_lufs(r: f64) -> f64 {
             }
         }
     }
-    let p: f64 = (0..3).map(|i| (w[i] * m::undb(l[i].1)).powi(2)).sum();
+    // (ambience.lua rainWeights are equal power since 2026-11-26: each loop's amplitude sqrt(w), so its power w)
+    let p: f64 = (0..3).map(|i| w[i] * m::undb(l[i].1).powi(2)).sum();
     10.0 * m::log10(p.max(1e-30)) + 20.0 * m::log10(RAIN_BED_GAIN * share)
 }
 

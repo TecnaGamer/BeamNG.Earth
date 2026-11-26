@@ -37,11 +37,11 @@ SERVER = os.path.dirname(os.path.abspath(__file__))
 EXE = "weathersynth.exe" if os.name == "nt" else "weathersynth"
 # the fields passed on to the synth (protocol_table.json weather_audio; anything else is dropped)
 FIELDS = ("mode", "rainMmH", "windMs", "shelter", "tunnel", "cabin", "volume", "thunderVolume", "muted", "duck", "t",
-          "thunderSet", "synthRain", "thunders")
+          "thunderSet", "synthRain", "rainSet", "rainVol", "roofNear", "enclosed", "thunders")
 # (play: a final the game plays from its file, the synth only ducks; dropped here before 2026-11-26, so the synth
 # played those too, a second thunder up to LATE_MAX_S after the file's)
 THUNDER_FIELDS = ("id", "at", "d", "kind", "gain", "seed", "final", "play")
-STATE_FIELDS = ("state", "reason", "latencyMs", "thunderSets", "readyThunders")
+STATE_FIELDS = ("state", "reason", "latencyMs", "thunderSets", "rainSets", "readyThunders")
 MAX_THUNDERS = 32            # per message (a hint burst is a few)
 QUEUE_MAX = 8                # lines waiting for the child (2 s of heartbeats)
 RETRY_S = (5.0, 30.0)        # the waits before the retries after a failed start
@@ -124,6 +124,8 @@ def state_message(line):
         out["latencyMs"] = float(d["latencyMs"])
     if isinstance(d.get("thunderSets"), list):
         out["thunderSets"] = [v for v in d["thunderSets"][:4] if v in ("generated", "recorded")]
+    if isinstance(d.get("rainSets"), list):
+        out["rainSets"] = [v for v in d["rainSets"][:4] if v in ("generated", "recorded")]
     if isinstance(d.get("readyThunders"), list):
         out["readyThunders"] = [[v[0][:64], float(v[1])] for v in d["readyThunders"][:24]
                                 if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)

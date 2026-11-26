@@ -1,4 +1,4 @@
-# Weather sounds (thunder and rain)
+# Weather sounds (thunder, rain, wind, drips and hail)
 
 Two thunder sets, picked with the Weather page's Thunder sound (storm.lua `THUNDER_SET`), and the rain:
 
@@ -114,6 +114,38 @@ weathersynth set --out OUT --set 1 --only rain --ogg
 | bne_rain_muffled.ogg | set 1, muffled | 101 | the medium loop through two 900 Hz low-passes, +4 dB (heard from under a roof) | -25.9 LUFS | -4.33 dBTP | 89,416 B |
 
 The rain loops' statistics (band shares, transients, decay) are in `_work/analysis.tsv`.
+
+### Recorded rain, wind, drips and hail (the recorded mix, 2026-11-26)
+
+Rendered by `weathersynth tex-set --bank tex_bank.bin --seed 1 --ogg` (texmix.rs) from the texture bank
+(`texbank-build`, texbuild.rs) cut from the CC0 originals listed in CREDITS.md; Vorbis q4. 30 s loops (wind and drips
+60 s), seamless (the wrap is a crossfade like every other join), each at its class's loudness (the rain at the
+generated loops' levels, so the Rain sound switch changes nothing in loudness). The Generated wind and the drips need
+no recordings.
+
+| File | What | Loudness | True peak (Ogg) | Size |
+|---|---|---|---|---|
+| bne_rain_rec_light.ogg | light rain (sparse close drops: the user's light B) | -30.4 LUFS | -1.6 dBTP | 310,563 B |
+| bne_rain_rec_medium.ogg | medium rain | -24.4 LUFS | -3.5 dBTP | 284,641 B |
+| bne_rain_rec_heavy.ogg | heavy rain | -17.4 LUFS | -1.5 dBTP | 286,244 B |
+| bne_rain_rec_roof_light.ogg | the car roof from outside near the car, light | -30.2 LUFS | -7.1 dBTP | 285,808 B |
+| bne_rain_rec_roof.ogg | the roof from outside, medium | -24.3 LUFS | -4.5 dBTP | 288,924 B |
+| bne_rain_rec_roof_heavy.ogg | the roof from outside, heavy | -17.4 LUFS | -1.2 dBTP | 284,087 B |
+| bne_rain_rec_roof_cabin_light.ogg | the roof inside the car (cabin filter), light | -30.1 LUFS | -6.6 dBTP | 148,443 B |
+| bne_rain_rec_roof_cabin.ogg | the roof inside, medium | -24.2 LUFS | -6.7 dBTP | 148,910 B |
+| bne_rain_rec_roof_cabin_heavy.ogg | the roof inside, heavy | -17.3 LUFS | -1.0 dBTP | 150,353 B |
+| bne_rain_rec_muffled.ogg | muffled A: tunnels, closed bridges, buildings (the medium rain through two 900 Hz low-passes) | -26.0 LUFS | -9.3 dBTP | 144,049 B |
+| bne_rain_rec_muffled_open.ogg | muffled B: open bridges and overpasses (under-bridge recordings) | -26.1 LUFS | -5.7 dBTP | 288,288 B |
+| bne_wind_light.ogg | recorded wind, light (~3 m/s) | -36.1 LUFS | -17.9 dBTP | 523,311 B |
+| bne_wind_moderate.ogg | recorded wind, moderate (~8 m/s) | -30.2 LUFS | -9.7 dBTP | 533,764 B |
+| bne_wind_strong.ogg | recorded wind, strong (~15 m/s) | -24.1 LUFS | -3.4 dBTP | 510,743 B |
+| bne_hail.ogg | hail: ice hits (7 / s, a third bouncing) over a little rain, levelled by its peak | -26.4 LUFS | -3.7 dBTP | 305,368 B |
+| bne_wind_gen_light.ogg | generated wind, light | -36.2 LUFS | -15.3 dBTP | 311,761 B |
+| bne_wind_gen_moderate.ogg | generated wind, moderate | -30.2 LUFS | -10.1 dBTP | 335,961 B |
+| bne_wind_gen_strong.ogg | generated wind, strong | -24.2 LUFS | -4.3 dBTP | 349,180 B |
+| bne_drips_1.ogg | drips after rain, 0.8 drops / s (generated) | -36.2 LUFS | -2.7 dBTP | 35,051 B |
+| bne_drips_2.ogg | drips, 0.3 / s | -37.3 LUFS | -1.7 dBTP | 18,197 B |
+| bne_drips_3.ogg | drips, 0.1 / s | -37.8 LUFS | -4.5 dBTP | 13,288 B |
 
 - **Thunder:** the loudness is that of the loudest 3 s (EBU R128 short-term). Each file starts where the sound
   becomes audible; the game delays it by the strike's distance after the flash.
