@@ -56,6 +56,13 @@ pub struct LoopSpec {
     pub cabin: bool,
     pub events: f64,
     pub gain_of: &'static str,
+    /// an event loop of synthetic drops (synth_drops) instead of the bank's grains
+    pub synth: bool,
+    /// an event loop's bounces: the share of hits followed by a smaller one 40-150 ms later (hail)
+    pub bounce: f64,
+    /// a texture under an event loop (its bank class) and how far under the events (dB)
+    pub bed: &'static str,
+    pub bed_db: f64,
 }
 
 /// The roof heard from inside the car (the user, 2026-11-26: "INSIDE the car ... a muffled version of the roof"):
@@ -72,10 +79,10 @@ pub fn cabin_filter(x: &mut [f64]) {
 }
 
 const fn tex(name: &'static str, class: &'static str, secs: f64, lufs: f64) -> LoopSpec {
-    LoopSpec { name, class, secs, lufs, lowpass: &[], cabin: false, events: 0.0, gain_of: "" }
+    LoopSpec { name, class, secs, lufs, lowpass: &[], cabin: false, events: 0.0, gain_of: "", synth: false, bounce: 0.0, bed: "", bed_db: 0.0 }
 }
 
-pub const LOOPS: [LoopSpec; 19] = [
+pub const LOOPS: [LoopSpec; 23] = [
     tex("light", "rain_light", 30.0, -30.2),
     tex("medium", "rain_moderate", 30.0, -24.2),
     tex("heavy", "rain_heavy", 30.0, -17.2),
@@ -92,15 +99,24 @@ pub const LOOPS: [LoopSpec; 19] = [
     LoopSpec { lowpass: &[900.0, 900.0], ..tex("muffled", "rain_moderate", 30.0, -25.9) },
     // muffled B: real takes from under bridges and awnings: open bridges and overpasses
     tex("muffled_open", "rain_under", 30.0, -25.9),
-    // drips after rain: sparse single drops, three densities the mod crossfades as the drips die away
-    LoopSpec { events: 0.8, ..tex("drips_1", "drip", 60.0, -36.0) },
-    LoopSpec { events: 0.3, gain_of: "drips_1", ..tex("drips_2", "drip", 60.0, -36.0) },
-    LoopSpec { events: 0.1, gain_of: "drips_1", ..tex("drips_3", "drip", 60.0, -36.0) },
+    // drips after rain: sparse single drops, three densities the mod crossfades as the drips die away. Synthetic (the
+    // user, 2026-11-26, of the recorded ones: "every time a drip sound is played I can hear its background noise"):
+    // rain.rs's drop model, nothing between the drops
+    LoopSpec { events: 0.8, synth: true, ..tex("drips_1", "drip", 60.0, -36.0) },
+    LoopSpec { events: 0.3, synth: true, gain_of: "drips_1", ..tex("drips_2", "drip", 60.0, -36.0) },
+    LoopSpec { events: 0.1, synth: true, gain_of: "drips_1", ..tex("drips_3", "drip", 60.0, -36.0) },
+    // the A/B: recorded drops, each cleaned to true silence (texbuild::impact_grains)
+    LoopSpec { events: 0.8, ..tex("drips_rec_1", "drip", 60.0, -36.0) },
+    LoopSpec { events: 0.3, gain_of: "drips_rec_1", ..tex("drips_rec_2", "drip", 60.0, -36.0) },
+    LoopSpec { events: 0.1, gain_of: "drips_rec_1", ..tex("drips_rec_3", "drip", 60.0, -36.0) },
     tex("gutter", "gutter", 30.0, -28.0),
     tex("wind_light", "wind_light", 60.0, -36.0),
     tex("wind_moderate", "wind_moderate", 60.0, -30.0),
     tex("wind_strong", "wind_strong", 60.0, -24.0),
-    tex("hail", "hail", 30.0, -20.0),
+    // hail (the user, 2026-11-26: "sounds similar to rain"): hard ice hits with gaps, some bouncing, over a little rain
+    LoopSpec { events: 7.0, bounce: 0.35, bed: "rain_moderate", bed_db: 14.0, ..tex("hail", "hail_hit", 30.0, -20.0) },
+    // (the round-4 hail, a texture of the hail takes, for comparison)
+    tex("hail_texture", "hail", 30.0, -20.0),
 ];
 
 /// Catmull-Rom sample of x at fractional position t (clamped ends).
@@ -258,9 +274,39 @@ pub fn texture(bank: &Bank, class: &str, seed: u64, n: usize) -> Option<(Vec<f64
     Some((out, Info { segments: segs, sources, streams, joins }))
 }
 
-/// An event loop: single drops (the class's grains) at `rate` per second, Poisson on a circular timeline of n samples,
-/// each a random grain at U(-10, 0) dB and varispeed U(0.92, 1.08) (drops differ in size and pitch).
-pub fn events(bank: &Bank, class: &str, seed: u64, n: usize, rate: f64) -> Option<(Vec<f64>, Info)> {
+/// Synthetic drops at `rate` per second, Poisson on a circular timeline of n samples: drips from trees and eaves, big
+/// slow drops (3.5-5.5 mm at 4-8 m/s) onto a puddle (a splash and a Minnaert bubble whose pitch rises), the wet road
+/// or leaves (rain.rs drop_event_pitched, pitched down 0.6-0.85: bigger drops ring lower), each U(-12, 0) dB. Silence
+/// between the drops.
+pub fn synth_drops(seed: u64, n: usize, rate: f64) -> (Vec<f64>, Info) {
+    use crate::rain::{drop_event_pitched, Surf};
+    let mut rng = Rng::new(seed, &format!("synth-drops-{rate}"));
+    let mut out = vec![0.0f64; n];
+    let mut t = 0.0f64;
+    let mut count = 0;
+    loop {
+        t += -m::ln(1.0 - rng.f()) / rate;
+        let at = (t * SR) as usize;
+        if at >= n {
+            break;
+        }
+        let u = rng.f();
+        let surf = if u < 0.5 { Surf::Puddle } else if u < 0.75 { Surf::Road } else { Surf::Leaves };
+        let (dmm, vel, pitch) = (rng.range(3.5, 5.5), rng.range(4.0, 8.0), rng.range(0.6, 0.85));
+        let ev = drop_event_pitched(&mut rng, surf, dmm, vel, 1.0, pitch);
+        let g = m::undb(rng.range(-12.0, 0.0));
+        for (i, v) in ev.iter().enumerate() {
+            out[(at + i) % n] += v * g;
+        }
+        count += 1;
+    }
+    (out, Info { segments: count, sources: vec![], streams: 1, joins: vec![] })
+}
+
+/// An event loop: single hits (the class's grains) at `rate` per second, Poisson on a circular timeline of n samples,
+/// each a random grain at U(-10, 0) dB and varispeed U(0.92, 1.08) (drops and hailstones differ in size and pitch);
+/// a `bounce` share followed by a smaller hit of the same grain 40-150 ms later (a hailstone bouncing).
+pub fn events(bank: &Bank, class: &str, seed: u64, n: usize, rate: f64, bounce: f64) -> Option<(Vec<f64>, Info)> {
     let p = pool(bank, class);
     let all: Vec<usize> = p.iter().flat_map(|(_, v)| v.clone()).collect();
     if all.is_empty() {
@@ -283,6 +329,15 @@ pub fn events(bank: &Bank, class: &str, seed: u64, n: usize, rate: f64) -> Optio
         let len = ((x.len() as f64 - 3.0) / vs) as usize;
         for i in 0..len {
             out[(at + i) % n] += cubic(x, i as f64 * vs) * g;
+        }
+        if bounce > 0.0 && rng.chance(bounce) {
+            let at2 = at + (rng.range(0.04, 0.15) * SR) as usize;
+            let g2 = g * m::undb(rng.range(-14.0, -6.0));
+            let vs2 = vs * rng.range(1.02, 1.12);
+            let len2 = ((x.len() as f64 - 3.0) / vs2) as usize;
+            for i in 0..len2 {
+                out[(at2 + i) % n] += cubic(x, i as f64 * vs2) * g2;
+            }
         }
         count += 1;
     }
@@ -324,11 +379,23 @@ pub fn join_jumps(x: &[f64], info: &Info, xf_s: f64) -> ((f64, f64), (f64, f64))
 /// (samples, LUFS, true peak, info, the total gain applied)
 pub fn render_loop(bank: &Bank, spec: &LoopSpec, seed: u64, fixed_gain: Option<f64>) -> Option<(Vec<f64>, f64, f64, Info, f64)> {
     let n = (spec.secs * SR) as usize;
-    let (mut x, info) = if spec.events > 0.0 {
-        events(bank, spec.class, seed, n, spec.events)?
+    let (mut x, info) = if spec.synth {
+        synth_drops(seed, n, spec.events)
+    } else if spec.events > 0.0 {
+        events(bank, spec.class, seed, n, spec.events, spec.bounce)?
     } else {
         texture(bank, spec.class, seed, n)?
     };
+    if !spec.bed.is_empty() {
+        // the bed bed_db under the events (both measured over the loop)
+        if let Some((mut b, _)) = texture(bank, spec.bed, seed ^ 0xbed, n) {
+            let (le, lb) = (loudness::integrated(&x, SR, true), loudness::integrated(&b, SR, true));
+            let g = m::undb(le - spec.bed_db - lb);
+            for (v, w) in x.iter_mut().zip(b.iter_mut()) {
+                *v += *w * g;
+            }
+        }
+    }
     for &fc in spec.lowpass {
         Biquad::lowpass(SR, fc, std::f64::consts::FRAC_1_SQRT_2).run_circular(&mut x);
     }

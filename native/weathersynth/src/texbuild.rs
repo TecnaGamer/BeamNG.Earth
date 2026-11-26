@@ -49,7 +49,7 @@ const HISS_QUIET_DBFS: f64 = -40.0;
 /// after-rain takes measure 4-12 dB: dense soft drips in a reverberant yard; a downpour measures 1-3 dB.)
 const DRIP_SPREAD_DB: f64 = 4.0;
 
-pub const CLASSES: [&str; 14] = [
+pub const CLASSES: [&str; 15] = [
     "rain_light",
     "rain_moderate",
     "rain_heavy",
@@ -65,6 +65,8 @@ pub const CLASSES: [&str; 14] = [
     "hail",
     // single drops cut from the after-rain takes (the drips loops are scheduled from these, texmix::drips)
     "drip",
+    // single hail hits cut from the hail takes, cleaned (the hail loop's impact layer)
+    "hail_hit",
 ];
 
 /// The bank's file name; live-serve reads it from next to the program, or from the source tree's assets folder.
@@ -90,6 +92,7 @@ pub fn class_index(c: &str) -> Option<usize> {
 fn budget(c: &str) -> (f64, f64) {
     match c {
         "drip" => (90.0, 45.0),
+        "hail_hit" => (60.0, 20.0),
         "wind_light" | "wind_moderate" | "wind_strong" => (300.0, 120.0),
         "rain_car" => (360.0, 120.0),
         _ => (240.0, 90.0),
@@ -322,6 +325,31 @@ fn runs_of(verdicts: &[(f64, Vec<String>)], src: usize) -> Vec<Run> {
     out
 }
 
+/// The wind patter measures of a window: (onsets per second: rising edges of the 2-8 kHz 5 ms envelope 6 dB over its
+/// 1 s running median; the 2-8 kHz share of the 50 Hz-16 kHz power, dB).
+pub fn patter(x: &[f64]) -> (f64, f64) {
+    let b = gb::bandpass_fft(x, 2000.0, 8000.0);
+    let w = (0.005 * SR) as usize;
+    let e: Vec<f64> = (0..b.len() / w).map(|i| gb::db10(gb::mean_sq(&b[i * w..(i + 1) * w]))).collect();
+    let mut on = 0usize;
+    let mut up = false;
+    for j in 0..e.len() {
+        let a = j.saturating_sub(100);
+        let c = (j + 101).min(e.len());
+        let hi = e[j] - crate::npx::median(&e[a..c]) > 6.0;
+        if hi && !up {
+            on += 1;
+        }
+        up = hi;
+    }
+    let (f, p) = gb::psd(x, 4096);
+    let hf = gb::db10(gb::band_power(&f, &p, 2000.0, 8000.0) / gb::band_power(&f, &p, 50.0, 16000.0).max(1e-30));
+    (on as f64 / (x.len() as f64 / SR), hf)
+}
+/// wind windows over these are patter or hiss, not wind (set from patter.tsv: see the README)
+const WIND_ONSETS_MAX: f64 = 3.0;
+const WIND_HF_MAX_DB: f64 = -12.0;
+
 /// a recording whose 1/3-octave shape deviates more than this (dB RMS over the bands) from its class's median is left
 /// out of that class (while more than two recordings remain)
 const SPEC_DEV_MAX: f64 = 7.5;
@@ -347,66 +375,100 @@ pub fn third_oct_shape(x: &[f64]) -> Vec<f64> {
 /// bed itself 18 dB or more under the drop, so the grains carry no audible rain between drops).
 /// Each grain: 5 ms before the onset to 295 ms after, faded in over 3 ms and out over the last 150 ms (cos), its sample
 /// peak set to DRIP_PEAK_DBFS. Returns (start s in the block, samples).
-pub fn drip_grains(x: &[f64]) -> Vec<(f64, Vec<f64>)> {
-    let b = gb::bandpass_fft(x, 1000.0, 8000.0);
+/// What an impact grain is (drips, hail hits): the band its onsets are found in, how far its 5 ms envelope must rise
+/// over the 1 s running median, the quiet asked before and after it (ms), and its length (s).
+#[derive(Clone, Copy)]
+pub struct GrainKind {
+    pub lo: f64,
+    pub hi: f64,
+    pub rise_db: f64,
+    pub before_ms: f64,
+    pub after_ms: f64,
+    pub len_s: f64,
+}
+pub const DRIP_GRAIN: GrainKind = GrainKind { lo: 1000.0, hi: 8000.0, rise_db: 18.0, before_ms: 100.0, after_ms: 250.0, len_s: 0.3 };
+/// hail: bright hard hits, closer together than drops, short
+pub const HAIL_GRAIN: GrainKind = GrainKind { lo: 2000.0, hi: 10000.0, rise_db: 14.0, before_ms: 40.0, after_ms: 80.0, len_s: 0.12 };
+
+/// Impact grains in a block, cleaned to true silence (the user, 2026-11-26, of the round-4 drips: "every time a drip
+/// sound is played I can hear its background noise with it"):
+/// - found: 5 ms envelope peaks of the kind's band rise_db over its 1 s running median, alone from before_ms ahead to
+///   after_ms behind;
+/// - the take's noise there measured in the gap just before the hit (150 to 20 ms ahead of its onset) and subtracted
+///   (grainbuild::denoise: Wiener-style gain, over-subtraction 2, floor 0), so no bed rides along;
+/// - then gated to the hit: its 2 ms envelope from the peak on, the grain ends where it falls GRAIN_GATE_DB under the
+///   peak (a 10 ms cos fade to exact zeros), and starts 3 ms before the onset (a 3 ms fade in);
+/// - peak set to DRIP_PEAK_DBFS. Returns (start s in the block, samples).
+pub fn impact_grains(x: &[f64], k: &GrainKind) -> Vec<(f64, Vec<f64>)> {
+    let b = gb::bandpass_fft(x, k.lo, k.hi);
     let w = (0.005 * SR) as usize;
     let env: Vec<f64> = (0..b.len() / w).map(|i| gb::db10(gb::mean_sq(&b[i * w..(i + 1) * w]))).collect();
     let n = env.len();
-    let mut cand = Vec::new();
     let mut floor = vec![0.0; n];
     for j in 0..n {
         let a = j.saturating_sub(100);
         let c = (j + 101).min(n);
         floor[j] = crate::npx::median(&env[a..c]);
     }
+    let mut cand = Vec::new();
     for j in 6..n.saturating_sub(6) {
-        let md = floor[j];
-        let local_max = (j.saturating_sub(6)..=(j + 6).min(n - 1)).all(|k| env[k] <= env[j]);
-        if local_max && env[j] - md > DRIP_RISE_DB {
+        let local_max = (j.saturating_sub(4)..=(j + 4).min(n - 1)).all(|q| env[q] <= env[j]);
+        if local_max && env[j] - floor[j] > k.rise_db {
             cand.push(j);
         }
     }
+    let (fb, fa) = ((k.before_ms / 5.0) as usize, (k.after_ms / 5.0) as usize);
+    let len = (k.len_s * SR) as usize;
+    let pad = 2048usize;
     let mut out = Vec::new();
     for (ci, &j) in cand.iter().enumerate() {
-        let near = cand.iter().enumerate().any(|(k, &o)| k != ci && (o + 20 > j && o < j + 50));
-        if near {
+        if cand.iter().enumerate().any(|(q, &o)| q != ci && o + fb > j && o < j + fa) {
             continue;
         }
         let mut on = j;
         while on > 0 && j - on < 4 && env[on - 1] > env[j] - 20.0 {
             on -= 1;
         }
-        let s0 = (on * w).saturating_sub((0.005 * SR) as usize);
-        let len = (0.3 * SR) as usize;
-        if s0 + len > x.len() {
+        let onset = on * w;
+        let s0 = onset.saturating_sub((0.003 * SR) as usize);
+        let (b0, b1) = (onset.saturating_sub((0.15 * SR) as usize), onset.saturating_sub((0.02 * SR) as usize));
+        if b1 <= b0 + (0.08 * SR) as usize || s0 < pad || s0 + len + pad > x.len() {
             continue;
         }
-        let tail = &env[(s0 + len) / w - 20..(s0 + len) / w];
-        // (decayed into the bed by the grain's end: no ringing cut off)
-        if tail.iter().cloned().fold(f64::NEG_INFINITY, f64::max) > floor[j] + 4.0 {
-            continue;
-        }
-        let mut g: Vec<f64> = x[s0..s0 + len].to_vec();
+        let bed = &x[b0..b1];
+        let clean = gb::denoise(&x[s0 - pad..s0 + len + pad], bed, 2.0, 0.0);
+        let mut g: Vec<f64> = clean[pad..pad + len].to_vec();
+        // the gate: from the peak on, the first 2 ms frame GRAIN_GATE_DB under the peak frame ends the grain
+        let w2 = (0.002 * SR) as usize;
+        let e2: Vec<f64> = (0..len / w2).map(|i| gb::db10(gb::mean_sq(&g[i * w2..(i + 1) * w2]))).collect();
+        let pk_i = e2.iter().enumerate().fold(0, |a, (i, v)| if *v > e2[a] { i } else { a });
+        let stop = (pk_i..e2.len()).find(|&i| e2[i] < e2[pk_i] - GRAIN_GATE_DB).map(|i| (i + 1) * w2).unwrap_or(len);
+        let fo = ((0.01 * SR) as usize).min(stop);
         let fi = (0.003 * SR) as usize;
-        let fo = (0.15 * SR) as usize;
         for (i, v) in g.iter_mut().enumerate() {
             if i < fi {
                 *v *= m::sin(0.5 * m::PI * i as f64 / fi as f64);
             }
-            if i >= len - fo {
-                *v *= m::cos(0.5 * m::PI * (i - (len - fo)) as f64 / fo as f64);
+            if i >= stop {
+                *v = 0.0;
+            } else if i >= stop - fo {
+                *v *= m::cos(0.5 * m::PI * (i - (stop - fo)) as f64 / fo as f64);
             }
         }
+        g.truncate(stop.max(fi + 1));
         let pk = g.iter().fold(0.0f64, |a, v| a.max(v.abs()));
-        let k = m::undb(DRIP_PEAK_DBFS) / pk.max(1e-9);
+        if pk <= 0.0 {
+            continue;
+        }
+        let kk = m::undb(DRIP_PEAK_DBFS) / pk;
         for v in g.iter_mut() {
-            *v *= k;
+            *v *= kk;
         }
         out.push((s0 as f64 / SR, g));
     }
     out
 }
-const DRIP_RISE_DB: f64 = 18.0;
+const GRAIN_GATE_DB: f64 = 40.0;
 const DRIP_PEAK_DBFS: f64 = -6.0;
 
 /// Envelope statistics of a block: (kurtosis of the 2.5-6 kHz 5 ms envelope, onsets per s >= 6 dB over the 1 s
@@ -588,7 +650,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let shas = gb::read_sha_list(&gbdir)?;
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     // per source: decode (checked), screen, runs, and the run samples cut
-    let per: Vec<Result<(Vec<(f64, Vec<String>)>, Vec<(Run, Vec<f64>)>, String, String), String>> =
+    #[allow(clippy::type_complexity)]
+    let per: Vec<Result<(Vec<(f64, Vec<String>)>, Vec<(Run, Vec<f64>)>, String, String, Vec<(f64, f64, f64)>), String>> =
         gb::par_map(srcs.len(), threads, |i| {
             let s = &srcs[i];
             let p = gb::original_of(&gbdir, &s.id).ok_or(format!("fs{}: no original", s.id))?;
@@ -610,6 +673,25 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 .into_iter()
                 .map(|(t, r)| (t, r.into_iter().filter(|w| crest_of(w).map(|c| c > crest_max(&s.cls)).unwrap_or(true)).collect()))
                 .collect();
+            // the wind patter check (the user, 2026-11-26: "wind sounds like rain"): rain patter, leaf ticks and hiss
+            // show as dense 2-8 kHz transients and a bright spectrum, wind as smooth low-mid noise (per window: onsets
+            // per s and the 2-8 kHz share; every class's windows measured for the comparison, wind ones judged)
+            let n5 = (WIN_S * SR) as usize;
+            let mut metrics = Vec::new();
+            let v: Vec<(f64, Vec<String>)> = v
+                .into_iter()
+                .enumerate()
+                .map(|(wi, (t, mut r))| {
+                    if (wi + 1) * n5 <= x.len() {
+                        let (on, hf) = patter(&x[wi * n5..(wi + 1) * n5]);
+                        metrics.push((t, on, hf));
+                        if s.cls.starts_with("wind") && (on > WIND_ONSETS_MAX || hf > WIND_HF_MAX_DB) {
+                            r.push(format!("patter or hiss (onsets {on:.1}/s, 2-8 kHz {hf:.1} dB)"));
+                        }
+                    }
+                    (t, r)
+                })
+                .collect();
             let runs = runs_of(&v, i);
             let cut: Vec<(Run, Vec<f64>)> = runs
                 .into_iter()
@@ -620,13 +702,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     (r, y)
                 })
                 .collect();
-            Ok((v, cut, name, sha))
+            Ok((v, cut, name, sha, metrics))
         });
     let mut screening = String::from("source\tclass\tstart_s\tok\treasons\n");
     let mut runs: Vec<(Run, Vec<f64>)> = Vec::new();
     let mut names: BTreeMap<usize, (String, String)> = BTreeMap::new();
+    let mut patter_log = String::from("source\tclass\tstart_s\tonsets_per_s\thf_2_8k_db\n");
     for (i, r) in per.into_iter().enumerate() {
-        let (v, cut, name, sha) = r?;
+        let (v, cut, name, sha, metrics) = r?;
+        for (t, on, hf) in &metrics {
+            patter_log.push_str(&format!("{}\t{}\t{t:.1}\t{on:.2}\t{hf:.2}\n", srcs[i].id, srcs[i].cls));
+        }
         for (t, why) in &v {
             screening.push_str(&format!("{}\t{}\t{:.1}\t{}\t{}\n", srcs[i].id, srcs[i].cls, t, why.is_empty(), why.join("; ")));
         }
@@ -634,6 +720,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         runs.extend(cut);
     }
     std::fs::write(out.join("screening.tsv"), &screening).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("patter.tsv"), &patter_log).map_err(|e| e.to_string())?;
     // processing and stats per run
     let blocks_all: Vec<Block> = gb::par_map(runs.len(), threads, |k| {
         let (r, x) = &runs[k];
@@ -736,13 +823,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
     blocks_all.retain(|b| !drop_pair.contains(&(b.cls, b.src)));
     // single drops from the after-rain takes
     let drip_ci = class_index("drip").unwrap();
+    let hit_ci = class_index("hail_hit").unwrap();
     let mut grains: Vec<Block> = Vec::new();
-    // (the after-rain takes, and the light-rain and gutter takes with distinct drops: the drops are the same water on
-    // leaves, ground and eaves)
-    for b in blocks_all.iter().filter(|b| matches!(srcs[b.src].cls.as_str(), "drips" | "rain_light" | "gutter")) {
-        for (t, g) in drip_grains(&b.samples) {
+    // drops: the after-rain takes, and the light-rain and gutter takes with distinct drops (the same water on leaves,
+    // ground and eaves); hail hits: the hail takes
+    for b in blocks_all.iter() {
+        let (ci, kind) = match srcs[b.src].cls.as_str() {
+            "drips" | "rain_light" | "gutter" => (drip_ci, DRIP_GRAIN),
+            "hail" => (hit_ci, HAIL_GRAIN),
+            _ => continue,
+        };
+        for (t, g) in impact_grains(&b.samples, &kind) {
             grains.push(Block {
-                cls: drip_ci,
+                cls: ci,
                 src: b.src,
                 t0: b.t0 + t,
                 t1: b.t0 + t + g.len() as f64 / SR,
