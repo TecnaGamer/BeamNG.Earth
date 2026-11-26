@@ -459,12 +459,12 @@ function M._rewetBlock(force)
   if not terrain.wetDirty then return 'clean' end
   local tr = st.blockMsg
   if not (st.inOurLevel and M.TER_SWAP and type(tr) == 'table' and type(tr.ter) == 'string' and st.block
-      and tr.cx == st.block.cx and tr.cy == st.block.cy and tr.anchorId == st.anchorId) then return 'no block' end
+      and tr.cx == st.block.cx and tr.cy == st.block.cy) then return 'no block' end
   if st.swap or M._loadCover() then return 'busy' end
   if not terrain.wetPending() then terrain.wetDirty = false; return 'on step' end
   local p = st.player
   if not force and p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) > M.REWET_STILL_MS then return 'moving' end
-  local orig = tr.terOrig or tr.ter
+  local orig = tr.ter         -- (the block as sent; the copy is ours, never in blockMsg)
   local alt = orig:gsub('%.ter$', '') .. '_wet.ter'
   local tb = terrain.get()
   local want = (tb and tb:getField('terrainFile', 0) == alt) and orig or alt
@@ -675,7 +675,8 @@ local function commitTeleport(msg)
 
   local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
-  st.koppen = tonumber(msg.koppen)  -- (the place's climate class, server climate.py: the trees' leaf cycle, seasonlook.lua)
+  st.koppen = tonumber(msg.koppen)  -- (anchor_ready.koppen: the place's Koppen-Geiger class, server climate.py; nil when not
+                                    -- sent: the full leaf cycle; seasonlook.climateFactor, baretrees.lua)
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
   require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)

@@ -400,7 +400,10 @@ class LevelObjectsTest(unittest.TestCase):
         tex = flake["dropTexture"].lstrip("/").replace("levels/beamng_earth/", "")
         manifest = json.loads((REPO / "mod" / "texture_sources" / "textures.json").read_text())["textures"]
         self.assertIn("levels/beamng_earth/" + tex, manifest)
-        self.assertIs(names[snow]["doCollision"], True)                 # (snow fell through roofs, bridges, tunnels)
+        # (no drop collides: 5200 colliding drops cost the 2026-11-26 playtest's storm its frame rate; the shelter fade,
+        # weather.lua shelterCheck, keeps rain and snow out from under roofs, bridges and tunnels instead)
+        self.assertIs(names[rain]["doCollision"], False)
+        self.assertIs(names[snow]["doCollision"], False)
         self.assertLess(names[rain]["fadeDistEnd"], names[rain]["boxWidth"] / 2)   # (no pops at the box faces)
         self.assertLess(names[snow]["fadeDistEnd"], names[snow]["boxWidth"] / 2)
         self.assertEqual(names[rain]["splashSize"], 0)                   # (GitHub #615's floating splash stars)
