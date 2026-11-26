@@ -84,6 +84,11 @@ What changed in each release of BeamNG.Earth, newest first.
 - Reduced the chance of the world stopping loading with Revamped roads (Experimental) on: after driving a while, the
   ground ahead could fail to build again and again.
 
+### Changed
+- **BeamMP hosting:** the releases no longer carry the Windows and Linux host bundles with BeamMP's own server program
+  inside. Get the server from BeamMP's own releases and add `BeamNG.Earth-BeamMP-Server-<version>.zip` (the mod and
+  the server plugin). The Docker image is unchanged.
+
 ## 1.10.1 beta (2026-11-15)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

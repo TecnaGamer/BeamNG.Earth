@@ -649,11 +649,10 @@ Update the server zip with every release: it carries the mod the server sends to
 (`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real, real-host (everyone gets the weather
 where the longest-joined player is) or a preset such as clear, overcast, rain, heavyrain, storm, fog, snow, blizzard)
 are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
-little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. Releases may also carry
-ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
-`tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
-checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` with an empty AuthKey for your own.
-With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
+little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. The releases carry only that
+zip: get the BeamMP server program itself from [BeamMP's own releases](https://github.com/BeamMP/BeamMP-Server/releases).
+With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, BeamMP's server with the plugin in a container
+(`tools/build_host.py` builds it), set up through
 its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
 [beammp/README.md](beammp/README.md#docker)).
 
