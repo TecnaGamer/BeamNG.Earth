@@ -79,7 +79,9 @@ struct Disc {
     view: Option<([f64; 6], i64)>,
 }
 
-type PieceKey = (i32, i64, i64, u32, i64, i64);
+type MercatorTile = (u32, i64, i64);
+type Seam = (usize, u32, i64, i64);
+type PieceKey = (i32, i64, i64, u32, i64, i64, Vec<Seam>);
 
 /// The selection's part of a connection's far state.
 #[derive(Default)]
@@ -251,8 +253,47 @@ impl Out {
 
 /// The refined finest global tiles the anchor's nodes fill (farfield.Region): [(z, x, y)], their quads.
 struct RegionA {
-    tiles: Vec<(u32, i64, i64)>,
+    tiles: Vec<MercatorTile>,
     quads: Vec<Vec<f64>>,
+    seams: Vec<[Option<MercatorTile>; 4]>,
+}
+
+/// The selected tile covering the next cell across an edge. A coarser
+/// neighbour can reach the edge only if it does not also cover this region.
+fn global_neighbours((z, x, y): MercatorTile, selected: &HashSet<MercatorTile>) -> [Option<MercatorTile>; 4] {
+    let width = 1i64 << z;
+    [(0, 1), (1, 0), (0, -1), (-1, 0)].map(|(dx, dy)| {
+        let nx = (x + dx).rem_euclid(width);
+        let ny = y + dy;
+        if !(0..width).contains(&ny) {
+            return None;
+        }
+        for level in (0..=z).rev() {
+            let shift = z - level;
+            let (xx, yy) = (nx >> shift, ny >> shift);
+            if (xx, yy) == (x >> shift, y >> shift) {
+                break;
+            }
+            if selected.contains(&(level, xx, yy)) {
+                return Some((level, xx, yy));
+            }
+        }
+        None
+    })
+}
+
+/// A corner alone does not produce a shared strip. A clipped polygon meets
+/// the side when one complete polygon edge lies on the side's straight cut.
+fn touches_side(poly: &[f64], quad: &[f64], side: usize) -> bool {
+    let end = (side + 1) % 4;
+    let (x, y) = (quad[2 * side], quad[2 * side + 1]);
+    let (dx, dy) = (quad[2 * end] - x, quad[2 * end + 1] - y);
+    let length = dx.hypot(dy);
+    let on = |p: usize| ((poly[p] - x) * dy - (poly[p + 1] - y) * dx).abs() <= length * 1e-6;
+    (0..poly.len()).step_by(2).any(|a| {
+        let b = (a + 2) % poly.len();
+        on(a) && on(b) && (poly[a] - poly[b]).hypot(poly[a + 1] - poly[b + 1]) > 1e-6
+    })
 }
 
 fn horizon_reach(ff: &Bound<'_, PyModule>, eye: f64) -> PyResult<f64> {
@@ -299,20 +340,25 @@ fn sel_plain<'py>(py: Python<'py>, ff: &Bound<'py, PyModule>, a: &SelIn<'py>, ma
             let r = region.ok_or_else(|| PyRuntimeError::new_err("a piece without a region"))?;
             let (z, x, y) = r.tiles[qi as usize];
             let quad = &r.quads[qi as usize];
-            let pk: PieceKey = (lvl, i, j, z, x, y);
-            let k = Key::from(format!("{lvl}_{i}_{j}_c{z}_{x}_{y}").as_str());
+            let seams: Vec<Seam> = r.seams[qi as usize].iter().enumerate().filter_map(|(side, address)| {
+                let (z, x, y) = (*address)?;
+                touches_side(&poly, quad, side).then_some((side, z, x, y))
+            }).collect();
+            let pk: PieceKey = (lvl, i, j, z, x, y, seams);
             let have = memo.as_ref().and_then(|m| m.get(&pk)).filter(|(p, q, _)| *p == poly && q == quad)
                 .map(|(_, _, o)| o.clone_ref(py));
             let t = match have {
                 Some(t) => t,
                 None => {
-                    let t = piece.call1((lvl, i, j, z, x, y, PyTuple::new(py, &poly)?, PyTuple::new(py, quad)?))?.unbind();
+                    let t = piece.call1((lvl, i, j, z, x, y, PyTuple::new(py, &poly)?, PyTuple::new(py, quad)?,
+                                         PyTuple::new(py, &pk.6)?))?.unbind();
                     if let Some(m) = memo.as_mut() {
-                        m.insert(pk, (poly, quad.clone(), t.clone_ref(py)));
+                        m.insert(pk.clone(), (poly, quad.clone(), t.clone_ref(py)));
                     }
                     t
                 }
             };
+            let k = Key::from(t.bind(py).getattr("key")?.extract::<String>()?.as_str());
             seen.push(pk);
             out.put(k, t);
         }
@@ -363,6 +409,7 @@ fn sel_global<'py>(py: Python<'py>, ff: &Bound<'py, PyModule>, lat0: f64, lon0: 
         a.eye_h, a.cone.clone(), view)?;
     let gtile = ff.getattr("GTile")?;
     let ntiles = tiles.len();
+    let selected: HashSet<MercatorTile> = tiles.iter().map(|(z, x, y, _, _)| (*z, *x, *y)).collect();
     {
         // (the memo's lock is never held while Python runs: no GTile made, nor one let go, under it; another thread
         // waiting for it holds the GIL)
@@ -433,7 +480,9 @@ fn sel_global<'py>(py: Python<'py>, ff: &Bound<'py, PyModule>, lat0: f64, lon0: 
     let mut slack = gslack;
     let nreg = regions.len();
     if !regions.is_empty() {
-        let reg = RegionA { tiles: regions.iter().map(|(x, y, _)| (zf, *x, *y)).collect(),
+        let region_tiles: Vec<_> = regions.iter().map(|(x, y, _)| (zf, *x, *y)).collect();
+        let reg = RegionA { seams: region_tiles.iter().map(|tile| global_neighbours(*tile, &selected)).collect(),
+                            tiles: region_tiles,
                             quads: regions.into_iter().map(|(_, _, q)| q).collect() };
         let a2 = SelIn { horizon: None, max_level: gmin - 1, ..clone_in(a) };
         let (aref, s2) = sel_plain(py, ff, &a2, gmin - 1, false, Some(&reg), memo, seen, out)?;
@@ -579,7 +628,8 @@ pub fn far_select<'py>(gil: Python<'py>, px: f64, py: f64, forced: Option<&Bound
                 tiles.push((zf, it.get_item(0)?.extract()?, it.get_item(1)?.extract()?));
                 quads.push(floats(&it.get_item(2)?)?);
             }
-            Some(RegionA { tiles, quads })
+            let seams = vec![[None; 4]; tiles.len()];
+            Some(RegionA { tiles, quads, seams })
         }
         None => None,
     };

@@ -897,7 +897,12 @@ local function startGroup(g, cam)
     end
   end
   local mode, dIn, dOut = 'instant', 0, 0
-  if #visAdds > 0 or #visRems > 0 then
+  local stitched = false
+  for _, tile in ipairs(visAdds) do stitched = stitched or tile.key:find('_h', 1, true) end
+  for _, tile in ipairs(visRems) do stitched = stitched or tile.key:find('_h', 1, true) end
+  -- A vertical crossover would pull the joined edge away from a neighbour
+  -- that stays visible. The group still waits for all its replacements.
+  if not stitched and (#visAdds > 0 or #visRems > 0) then
     local bound = crossover.delta(errN, errO)
     if #visAdds > 0 and #visRems > 0 and g.msgIn and g.msgOut then
       dIn, dOut = g.msgIn, g.msgOut

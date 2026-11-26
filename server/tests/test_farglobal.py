@@ -180,8 +180,139 @@ class SelectionTest(unittest.TestCase):
             aa, ar = area(adds, b), area(removes, a)
             self.assertLess(abs(aa - ar), 0.01 * max(aa, ar) + 1.0, (adds, removes))
 
+    def test_handoff_piece_and_its_touching_neighbour_swap_together(self):
+        piece = '2_0_0_c14_8150_4000'
+        neighbour = 'm14_8151_4000'
+        stitched = piece + '_h1' + neighbour
+        replacement = '2_1_0_c14_8151_4000'
+        left = (0, 0, 1, 0, 1, 1, 0, 1)
+        right = (1, 0, 2, 0, 2, 1, 1, 1)
+        polys = {piece: left, stitched: left, neighbour: right, replacement: right}
+        self.assertEqual(ff.swap_groups([stitched, neighbour], [piece, replacement], polys.get),
+                         [(sorted([piece, replacement]), sorted([stitched, neighbour]))])
+
+    def test_handoff_selection_names_only_visible_global_neighbours(self):
+        _, _, (tiles, _) = self.select(LAT, LON)
+        touching = [t for t in tiles.values() if isinstance(t, ff.Piece) and t.seams]
+        self.assertTrue(touching)
+        for tile in touching:
+            self.assertIs(tiles[tile.key], tile)
+            for side, z, x, y in tile.seams:
+                self.assertIn(side, range(4))
+                self.assertIn(ff.global_key(z, x, y), tiles)
+
 
 class MeshTest(unittest.TestCase):
+    def test_handoff_uses_the_right_half_of_a_coarse_neighbours_edge(self):
+        from farhandoff import global_edge
+
+        z = 13
+        x, y = geotiles.tile_of(LAT, LON, z)
+        global_mesh = self.built(z, x, y)
+        tile = ff.Piece(2, 0, 0, z + 1, 2*x - 1, 2*y + 1, (), ())
+        along, edge = global_edge(global_mesh, geotiles.frame(x, y, z), tile, 1, z, x, y)
+        np.testing.assert_array_equal(along[[0, -1]], [0., 1.])
+        for target, v in zip(edge[[0, -1]], (0., .5)):
+            outer = global_mesh.positions[(global_mesh.planar[:, 0] == 0.) & (global_mesh.planar[:, 1] == v)]
+            expected = outer[np.argmax(outer[:, 2])] + global_mesh.pos
+            np.testing.assert_allclose(target, expected, atol=1e-8)
+
+    def test_local_strip_keeps_global_breakpoints_and_the_inland_mesh(self):
+        from farhandoff import join_edges
+
+        positions = np.array([[0., 0., 0.], [10., 0., 0.], [0., 10., 0.], [10., 10., 0.],
+                              [0., 0., -1.], [10., 0., -1.]])
+        normals = np.tile([0., 0., 1.], (6, 1))
+        uv = positions[:, :2] / 10
+        faces = np.array([[0, 1, 2], [1, 3, 2], [0, 4, 1], [1, 4, 5]])
+        built = ff.Built([0., 0., 0.], positions, normals, uv, uv, faces,
+                         np.zeros((2, 2)), 0., None, 1., 10.)
+        rim = np.array([[0., -.125, .125], [4., -.1, .5], [10., 0., .125]])
+        south = ((0., 0.), (10., 0.), (np.array([0., .4, 1.]), rim), 2.)
+        joined = join_edges(built, [south])
+        for point in rim:
+            self.assertTrue(np.any(np.linalg.norm(joined.positions - point, axis=1) < 1e-9))
+        np.testing.assert_array_equal(joined.positions[2:4], positions[2:4])
+        self.assertTrue(np.all(joined.positions[:, 2] >= 0.), 'drop the old skirt along the joined border')
+        self.assertTrue(np.all(np.cross(joined.positions[joined.tris[:, 1]] - joined.positions[joined.tris[:, 0]],
+                                       joined.positions[joined.tris[:, 2]] - joined.positions[joined.tris[:, 0]])[:, 2] > 0))
+        other = np.array([[10., 0., .125], [10.12, 3.5, .75], [10.125, 10., .125]])
+        east = ((10., 0.), (10., 10.), (np.array([0., .35, 1.]), other), 2.)
+        joined = join_edges(built, [south, east])
+        for point in np.concatenate((rim, other)):
+            self.assertTrue(np.any(np.linalg.norm(joined.positions - point, axis=1) < 1e-9), point)
+
+    def test_corner_closes_between_separately_placed_rims(self):
+        from farhandoff import join_edges
+
+        positions = np.array([[0., 0., 0.], [10., 0., 0.], [10., 10., 0.], [0., 10., 0.]])
+        uv = positions[:, :2] / 10
+        faces = np.array([[0, 1, 2], [0, 2, 3]])
+        built = ff.Built([0., 0., 0.], positions, np.tile([0., 0., 1.], (4, 1)), uv, uv, faces,
+                         np.zeros((2, 2)), 0., None, 1., 10.)
+        # Opposite 3D offsets at the same flat corner, as on two global tiles
+        # placed independently. Include knots close to the corner on both rims.
+        south = np.array([[.029, .033, .4], [3.029, .033, .5], [10.029, .033, .4]])
+        west = np.array([[-.059, 9.977, .4], [-.059, 2.977, .45], [-.059, -.023, .400045]])
+        joined = join_edges(built, [((0., 0.), (10., 0.), (np.array([0., .3, 1.]), south), 2.),
+                                   ((0., 10.), (0., 0.), (np.array([0., .7, 1.]), west), 2.)])
+        a, b, c = joined.positions[joined.tris].transpose(1, 0, 2)
+        self.assertTrue(np.all(np.cross(b-a, c-a)[:, 2] > 0))
+        edges, counts = np.unique(np.sort(np.concatenate([joined.tris[:, [0, 1]], joined.tris[:, [1, 2]],
+                                                          joined.tris[:, [2, 0]]]), axis=1), axis=0, return_counts=True)
+        boundary = {tuple(edge) for edge in edges[counts == 1]}
+
+        def vertex(point):
+            nearest = np.linalg.norm(joined.positions - point, axis=1).argmin()
+            np.testing.assert_allclose(joined.positions[nearest], point, atol=1e-9)
+            return nearest
+
+        for rim in (south, west, np.array([west[-1], south[0]])):
+            indices = list(map(vertex, rim))
+            for first, second in zip(indices, indices[1:]):
+                self.assertIn(tuple(sorted((first, second))), boundary)
+
+    def test_corner_trims_rims_that_cross_in_world_space(self):
+        from farhandoff import join_edges
+
+        p = np.array([[-10., -10., 0.], [0., -10., 0.], [0., 0., 0.], [-10., 0., 0.]])
+        uv = (p[:, :2] + 10) / 10
+        built = ff.Built([0., 0., 0.], p, np.tile([0., 0., 1.], (4, 1)), uv, uv, np.array([[0, 1, 2], [0, 2, 3]]),
+                         np.zeros((2, 2)), 0., None, 1., 10.)
+        # Both tips extend past the other tile's rim. Each rim has a knot
+        # before reaching the crossing from its end at the nominal corner.
+        east = np.array([[-.0853, -10.1209, .4], [-.0853, -.1409, .4], [-.0853, -.1209, .4]])
+        north = np.array([[-.0120, -.1497, .4], [-.0420, -.1497, .4], [-10.0120, -.1497, .4]])
+        joined = join_edges(built, [((0., -10.), (0., 0.), (np.array([0., .998, 1.]), east), 2.),
+                                   ((0., 0.), (-10., 0.), (np.array([0., .003, 1.]), north), 2.)])
+        a, b, c = joined.positions[joined.tris].transpose(1, 0, 2)
+        self.assertTrue(np.all(np.cross(b-a, c-a)[:, 2] > 0))
+        point = [-.0853, -.1497, .4]
+        self.assertTrue(np.any(np.linalg.norm(joined.positions - point, axis=1) < 1e-9))
+        for tip in np.concatenate((east[-2:], north[:2])):
+            self.assertFalse(np.any(np.linalg.norm(joined.positions - tip, axis=1) < 1e-9))
+
+    def test_corner_refans_a_narrow_boundary_knot(self):
+        from farhandoff import _close_corners
+
+        original = np.array([[0., 0., 0.], [0., -52., 0.], [.13, -52.13, 0.], [64., -52., 0.],
+                             [11.9, 0., 0.], [.108, 0., 0.]])
+        moved = np.array([[.1487, -.1205, .4], [.2126, -52.192, .4], [.3419, -52.322, .4],
+                          [64.108, -52.181, .4], [11.9926, -.0994, .4], [.1697, -.0946, .4]])
+        faces = np.array([[0, 1, 5], [5, 1, 2], [5, 2, 3], [5, 3, 4]])
+        uv = original[:, :2] / 64
+        built = ff.Built([0., 0., 0.], moved, np.tile([0., 0., 1.], (6, 1)), uv, uv, faces,
+                         np.zeros((2, 2)), 0., None, 1., 64.)
+        on_rim = np.array([[True, True, False, False, False, False], [True, False, False, False, True, True]])
+        displacement = np.zeros((2, 6, 3))
+        displacement[:, 0] = [[.2357, -.1464, .4], [.0617, -.0945, .4]]
+        joined = _close_corners(built, original, on_rim, displacement)
+        for endpoint in displacement[:, 0]:
+            self.assertTrue(np.any(np.linalg.norm(joined.positions - endpoint, axis=1) < 1e-9))
+        a, b, c = joined.positions[joined.tris].transpose(1, 0, 2)
+        self.assertTrue(np.all(np.cross(b-a, c-a)[:, 2] > 0))
+        self.assertEqual(len(joined.tris), len(faces) + 1)
+
     def built(self, z, x, y):
         zoom = ff.global_dem_zoom(z, 64)
         return ff.build_global(FakeDem(), z, x, y, zoom, ff.global_dem_zoom(z + 1, 64), LAY)
