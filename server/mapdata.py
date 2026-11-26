@@ -237,6 +237,17 @@ def digest_arrays(arrays):
 # layers' `en` (the cell frame's metres, Features.localize) is kept with them.
 STAND_IN_S = 30.0           # s a parquet cell standing in for the tiles' is served from memory (cell()), then the
                             # tiles asked again (a memory hit does not extend it)
+# A layer whose tiles failed is not asked of them, nor of its parquet fallback, again for STAND_IN_S (layer_arrays):
+# the fallback's outcome, the parquet cell's arrays (a StandIn) or the error the fallback raised, is kept per cell
+# layer and served from memory, still a stand-in (a revisit fault each time, as the fallback's own), until the tiles'
+# file is there or STAND_IN_S has passed since. Every read of such a layer went to the tiles and the parquet files
+# again: a road tile's walls ask each building cell hundreds of times (roadwidth keeps nothing made of a stand-in), and
+# with the parquet cell missing too (offline) the fallback failed every time: 73,096 failed fallbacks at study-express,
+# 59 s of CPU -> 133 s (BNE_ROADSYS=surface, whose _raw_lines measure the road widths there, M5 round 6). At most
+# STAND_IN_MB of the kept arrays in memory (the mirror's mapped ones not counted: shared pages) and STAND_IN_N layers.
+STAND_IN_MB = 64
+STAND_IN_N = 256
+_FALLBACK_KINDS = ("demand", "urgent")      # (the kinds _build falls back to the parquet files for: DEFERRED)
 BUILD_WAIT_S = 180.0        # a cell layer another process is building is waited for this long (xproc.once)
 MIRROR_MB = 2048
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
@@ -383,7 +394,9 @@ def _savez_deflated(path, arrays, level):
                 np.lib.format.write_array(fh, np.asanyarray(val), allow_pickle=True)
 
 class StandIn(dict):
-    """A layer's arrays from the parquet cell standing in for the tiles' (MapData.layer_arrays): a dict, marked."""
+    """A layer's arrays from the parquet cell standing in for the tiles' (MapData.layer_arrays): a dict, marked.
+    since: the monotonic time its fallback ended, when served from the kept ones (MapData._stand_in_get)."""
+    since = None
 
 
 class _NoTags(tuple):
@@ -407,6 +420,23 @@ def _stand_in_stale(f):
     """Is decoded layer f a stand-in (_bnge_fallback: when it was decoded) older than STAND_IN_S?"""
     t = getattr(f, "__dict__", {}).get("_bnge_fallback")
     return t is not None and time.monotonic() - t >= STAND_IN_S   # (>=: a coarse clock (Windows: 15.6 ms ticks) can read 0.0 since)
+
+
+_fell = threading.local()      # (.on: this thread's _build found the tiles failed and fell back to the parquet files)
+
+
+def _resident(arrays):
+    """Bytes of arrays held in this process's memory: not the mirror's read-only mapped views (shared pages)."""
+    return sum(v.nbytes for v in arrays.values() if getattr(v, "flags", None) is not None and v.flags.writeable)
+
+
+def _fresh(arrays, since):
+    """A StandIn of kept arrays as a load gives them: the writable ones (in memory) copied, so no caller changes the
+    kept ones; the mirror's read-only mapped views shared, as every load of the mirror maps the same pages."""
+    out = StandIn({k: (v.copy() if getattr(v, "flags", None) is not None and v.flags.writeable else v)
+                   for k, v in arrays.items()})
+    out.since = since
+    return out
 
 
 class MapData:
@@ -478,6 +508,10 @@ class MapData:
         self._slim = OrderedDict()          # cell -> (slim places, bytes): places_slim's LRU (PLACES_SLIM_MB)
         self._slim_bytes = 0
         self._slim_locks = [threading.Lock() for _ in range(16)]    # (one thread makes a cell's)
+        # tiles' path -> (monotonic when the fallback ended, StandIn arrays or None, error or None, resident bytes):
+        # the fallback's outcomes (STAND_IN_S, STAND_IN_MB, STAND_IN_N), least recently used first; _mem_lock
+        self._stand_ins = OrderedDict()
+        self._stand_ins_bytes = 0
         self._warm_ex = None
         self._warming = set()               # (cell, layer)s queued or building in warm()
 
@@ -1126,6 +1160,7 @@ class MapData:
                             osm.cancel()
                         raise               # (a prefetch the hosts had no room for: as the parquet path's)
                     fell = e
+                    _fell.on = True         # (layer_arrays: what follows is the fallback's, kept STAND_IN_S)
                     log.warning("mapdata %s %s: Overture's tiles failed (%s: %s): from its parquet files", key, layer,
                                 type(e).__name__, e)
             if fell is not None:
@@ -1522,25 +1557,96 @@ class MapData:
             got = cip.layer_arrays(self.cip, key, self.layer_name(layer), kind)
             if got is not None:
                 return got, True
+        # (the tiles failed less than STAND_IN_S ago: the fallback's outcome again, a stand-in still; the tiles' file,
+        # once there, is read above before this)
+        got = self._stand_in_get(path, kind)
+        if got is not None:
+            return got, False
         with self._key_lock(key, layer):
             # another thread, or another of the server's processes (xproc), built it meanwhile
             arrays, mine = xproc.once(path + ".lock", lambda: self._load(path), BUILD_WAIT_S, kind)
             if arrays is not None:
+                self._stand_in_drop(path)
                 return self._mirrored(key, layer, path, arrays), True
             try:
-                arrays = self._build(key, layer, kind)
+                got = self._stand_in_get(path, kind)    # (another thread's fallback while this one waited)
+                if got is not None:
+                    return got, False
+                _fell.on = False
+                try:
+                    arrays = self._build(key, layer, kind)
+                except Exception as e:
+                    if _fell.on and kind in _FALLBACK_KINDS and not executor_closed(e):
+                        self._stand_in_put(path, None, e)      # (the fallback failed too: not asked again either)
+                    raise
+                finally:
+                    fell, _fell.on = _fell.on, False
                 if arrays.pop("_fallback", None) is not None:
                     # (the tiles failed: the parquet cell, kept with the parquet ones; asked of the tiles again next
-                    # time it is not in memory)
+                    # time it is not in memory and STAND_IN_S has passed)
                     ppath = self.path(key, layer, parquet=True)
                     if not os.path.exists(ppath):
                         self._store(ppath, arrays)
-                    return StandIn(self._mirrored(key, layer, ppath, arrays)), False
+                    got = StandIn(self._mirrored(key, layer, ppath, arrays))
+                    since = self._stand_in_put(path, got, None) if fell and kind in _FALLBACK_KINDS else None
+                    if since is not None:
+                        return _fresh(got, since), False    # (the kept arrays never handed out: no caller changes them)
+                    return got, False
                 self._store(path, arrays)
+                self._stand_in_drop(path)
             finally:
                 if mine:
                     xproc.release(path + ".lock")
             return self._mirrored(key, layer, path, arrays), False
+
+    def _stand_in_get(self, path, kind):
+        """The fallback's kept outcome for the tiles' path (STAND_IN_S): a fresh StandIn of its arrays, or its error
+        raised; None when there is none (or it is old, then dropped, or kind would not fall back). A revisit fault
+        each time, as _build's own when the tiles failed: nothing built from it is kept."""
+        if kind not in _FALLBACK_KINDS:
+            return None
+        with self._mem_lock:
+            got = self.__dict__.get("_stand_ins", {}).get(path)
+            if got is None:
+                return None
+            if time.monotonic() - got[0] >= STAND_IN_S:     # (>=: as _stand_in_stale, a coarse clock reads 0.0)
+                self._stand_ins_bytes -= self._stand_ins.pop(path)[3]
+                return None
+            self._stand_ins.move_to_end(path)
+            self._cell_stats["stand_in_hits"] = self._cell_stats.get("stand_in_hits", 0) + 1
+        revisit.fault()
+        if got[2] is not None:
+            raise got[2].with_traceback(None)
+        return _fresh(got[1], got[0])
+
+    def _stand_in_put(self, path, arrays, err):
+        """Keep the fallback's outcome for path: StandIn arrays, or the error it raised (STAND_IN_MB, STAND_IN_N).
+        The monotonic time it is kept from, None when not kept (larger than STAND_IN_MB alone)."""
+        if "_stand_ins" not in self.__dict__:
+            return None
+        n = _resident(arrays) if arrays is not None else 0
+        if n > STAND_IN_MB * 1e6:
+            return None
+        now = time.monotonic()
+        with self._mem_lock:
+            old = self._stand_ins.pop(path, None)
+            if old is not None:
+                self._stand_ins_bytes -= old[3]
+            for p in [p for p, v in self._stand_ins.items() if now - v[0] >= STAND_IN_S]:
+                self._stand_ins_bytes -= self._stand_ins.pop(p)[3]
+            self._stand_ins[path] = (now, arrays, err, n)
+            self._stand_ins_bytes += n
+            while len(self._stand_ins) > 1 and (self._stand_ins_bytes > STAND_IN_MB * 1e6
+                                                or len(self._stand_ins) > STAND_IN_N):
+                self._stand_ins_bytes -= self._stand_ins.popitem(last=False)[1][3]
+        return now
+
+    def _stand_in_drop(self, path):
+        """The tiles' file is there: the fallback's kept outcome for it is not served again."""
+        with self._mem_lock:
+            got = self.__dict__.get("_stand_ins", {}).pop(path, None)
+            if got is not None:
+                self._stand_ins_bytes -= got[3]
 
     # --- the uncompressed mirror (MIRROR_MB) ---------------------------------------------------
     def _mirror_dir(self, path):
@@ -1670,6 +1776,7 @@ class MapData:
             arrays, hit = self.layer_arrays(key, layer, kind)
             t1 = time.perf_counter()
             fallback = isinstance(arrays, StandIn)
+            since = getattr(arrays, "since", None) if fallback else None    # (a kept fallback's: when it ended)
             arrays = dict(arrays)
             prov = json.loads(str(arrays.pop("provenance")))
             en = arrays.pop("en.local", None)
@@ -1718,7 +1825,9 @@ class MapData:
                     # its OSM road tags are not the run's build's, the shards unreachable a moment ago: what is kept
                     # under the tiles' keys is not made from it, roadwidth's walls, widths and clearances; and a build
                     # that takes the layer is not kept: _cell_collect; decoded again after STAND_IN_S)
-                    f.__dict__["_bnge_fallback"] = time.monotonic()     # (when: STAND_IN_S)
+                    # (when: STAND_IN_S; a kept fallback's from when it ended, so the tiles are asked again
+                    # STAND_IN_S after they failed, as before it was kept)
+                    f.__dict__["_bnge_fallback"] = since if since is not None else time.monotonic()
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
@@ -1917,6 +2026,8 @@ class MapData:
             self._mem_bytes = 0
             self._slim.clear()
             self._slim_bytes = 0
+            self.__dict__.get("_stand_ins", {}).clear()     # (the tiles asked again at the next read)
+            self._stand_ins_bytes = 0
         # (the OSM tag shards: ~20 MB each; the station shards too, Codex on #1111, 2026-11-10)
         for tags in (self.rail_tags, self.lane_tags, getattr(self, "station_tags", None),
                      getattr(self, "osm_shards", None)):
@@ -2036,6 +2147,8 @@ class MapData:
                     if os.path.exists(dest):
                         return False
                 self._store(dest, arrays)
+                if dest == path:
+                    self._stand_in_drop(path)       # (the tiles' file: read before any kept fallback)
             finally:
                 if mine:
                     xproc.release(path + ".lock")
