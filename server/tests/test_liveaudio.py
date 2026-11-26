@@ -227,6 +227,38 @@ class LiveAudioTest(unittest.TestCase):
         self.clock.t += liveaudio.LIVE_RESET_S + 1
         self.assertIn("5 s", die_once()["reason"])
 
+    def test_reason_waits_for_late_stderr(self):
+        # the child has exited but its last stderr line arrives 0.5 s later (a loaded box): the reason is still
+        # the stderr text, not "weathersynth exited (3)"
+        class Pipe:
+            def __init__(s, lines, delay=0.0):
+                s.lines, s.delay = list(lines), delay
+
+            def readline(s):
+                if s.lines:
+                    time.sleep(s.delay)
+                    return s.lines.pop(0)
+                return b""
+
+            def close(s):
+                pass
+
+        class Proc:
+            stdin = mock.Mock()
+            stdout = Pipe([])
+            stderr = Pipe([b"no audio device: ALSA said no\n"], 0.5)
+
+            def wait(s, timeout=None):
+                return 3
+
+        la = liveaudio.LiveAudio(call=lambda fn, *a: fn(*a), binary="weathersynth", clock=self.clock,
+                                 popen=lambda *a, **k: Proc())
+        c = Conn()
+        la.on_message(c, {"mode": "live"})
+        self.assertTrue(c.wait(1))
+        self.assertIn("no audio device", c.states("failed")[-1]["reason"])
+        la.stop()
+
     def test_oserror_retries(self):
         calls = []
 
