@@ -7734,15 +7734,20 @@ class _Planner:
     def open_tunnels(self, lat, lon):
         """[(lat (k,), lon (k,), Spec)] of the tunnels' open sections planned near the points: roads on the ground
         that the map calls tunnels (surface.paint_roads paints them: grass grew over the open road of Central Park's
-        79th Street Transverse, 2026-10-17)."""
+        79th Street Transverse, 2026-10-17). The points' own cells' sections, in their keys' order: one section is in
+        every cell its tunnel part reaches, each with its own copy's Spec (a road's tunnel spec is its cell's copy's:
+        roads.tunnel_specs, 10 m in one cell and 8.6 m in the next at CA-1's Malibu tunnel), and the first of them was
+        taken in the order the cells happened to be planned, with whatever cells other threads had planned: two
+        builds of one place painted the mouth's asphalt and dirt 1.4 m apart (the tunnel corpus's Malibu S, 2026-11-26)."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
         if lat.size == 0:
             return []
-        for key in mapcells.cells_for_points(lat, lon):
+        keys = sorted(set(mapcells.cells_for_points(lat, lon)))
+        for key in keys:
             self._cell_plans(key)
         with self.lock:
-            secs = [o for v in self.opens.values() for o in v]
+            secs = [o for key in keys for o in self.opens.get(key, ())]
         out, seen = [], set()
         for xy, spec in secs:
             k = (round(float(xy[0, 0]), 2), round(float(xy[0, 1]), 2), len(xy))
