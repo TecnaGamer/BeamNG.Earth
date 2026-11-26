@@ -1,0 +1,29 @@
+{
+  "bne_puddle": {
+    "name": "bne_puddle",
+    "mapTo": "bne_puddle",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0001-4a11-9c01-000000000020",
+    "annotation": "ASPHALT",
+    "alphaTest": true,
+    "alphaRef": 255,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.03,
+          0.032,
+          0.036,
+          1
+        ],
+        "roughnessFactor": 0.03,
+        "metallicFactor": 0,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_puddle_o.data.dds"
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

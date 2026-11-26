@@ -2328,7 +2328,7 @@ def geo_names(key, aid=None):
                 out[what] = f"rg_{key}_{what}.cdae"
         return out
     out = {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
-           "walkcol": f"rs_{aid}_{key}_walkcol.cdae"}
+           "walkcol": f"rs_{aid}_{key}_walkcol.cdae", "puddle": f"rs_{aid}_{key}_puddle.cdae"}
     import cliffsettings
     if cliffsettings.SETTINGS.enabled:      # (the cliffs' contact strips: only with BNE_CLIFFS on)
         import cliffscene
@@ -2951,9 +2951,17 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
     if mesh is not None:
         roadmeshmod.write(os.path.join(out_dir, names["road"]), mesh)
         data["road"] = {"shape": f"{vfs_dir}/{names['road']}", "pos": list(origin)}
+        # the puddles (roadwear.puddle_chunks): a mesh of their own, draped as the road's, which the mod draws only
+        # while the ground is wet (roads.lua setPuddles)
+        pmesh = roadmeshmod.build(frame, chunks, elev, origin, lift, clip=bbox, follow=True, q=q, drawn=drawn,
+                                  clip_poly=quad, puddles=True) if any(c.get("puddle") for c in chunks) else None
+        if pmesh is not None:
+            roadmeshmod.write(os.path.join(out_dir, names["puddle"]), pmesh)
+            data["puddle"] = {"shape": f"{vfs_dir}/{names['puddle']}", "pos": list(origin)}
+        mark("puddles")
     elif chunks:                    # (no mesh: the mod's DecalRoads, as an anchor tile's)
         data["chunks"] = [dict(c, n=np.asarray(c["n"]).tolist()) if c.get("n") is not None else c
-                          for c in chunks if not c.get("tube_only") and not c.get("tri")]
+                          for c in chunks if not c.get("tube_only") and not c.get("tri") and not c.get("puddle")]
     walks = _map_walks(tile.frame, frame, inputs.get("walks") or []) if sidewalks else []
     if walks:
         def walk_ground(x, y):

@@ -68,6 +68,32 @@ M.WET_DARK = 0.85         -- a porosity-1 surface's colour at full wetness: x (1
 M.WET_ROUGH = 0.85        -- a gloss-1 surface's roughness falls by this share at full wetness
 M.ROUGH_MIN = 0.06
 
+-- Puddles (the skins' puddle meshes, server roadwear.puddle_chunks: the road's sags, gutters and ruts; roads.lua
+-- setPuddles): drawn from PUDDLE_MIN wetness on, hidden below it (no draw at all). Their one material (bne_puddle: a
+-- near-mirror water film, roughness 0.03, the engine's reflections in it) masks them by the atlas's depth: its alpha
+-- test threshold falls as the rain fills them (the deep sag pools first, the shallow ruts last) and rises as they dry,
+-- in PUDDLE_STEPS steps (one material write a step, never per frame).
+M.PUDDLE_MIN = 0.45
+M.PUDDLE_STEPS = 6
+M.PUDDLE_REF = { 250, 15 }  -- the alpha threshold just shown, soaked
+M.PUDDLE_MAT = 'bne_puddle'
+
+-- Pure: the puddles' step (0 none .. PUDDLE_STEPS full) at wetness w (0..1).
+function M.puddleStep(w)
+  w = tonumber(w) or 0
+  if w < M.PUDDLE_MIN then return 0 end
+  local f = (w - M.PUDDLE_MIN) / (1 - M.PUDDLE_MIN)
+  return math.max(1, math.min(M.PUDDLE_STEPS, math.floor(f * M.PUDDLE_STEPS + 0.5)))
+end
+
+-- Pure: the puddle material's alpha test threshold at a step (255: nothing drawn).
+function M.puddleRef(step)
+  step = tonumber(step) or 0
+  if step <= 0 then return 255 end
+  local a, b = M.PUDDLE_REF[1], M.PUDDLE_REF[2]
+  return math.floor(a + (b - a) * (step - 1) / math.max(1, M.PUDDLE_STEPS - 1) + 0.5)
+end
+
 -- W1's road conditions -> wetness (0..1)
 M.CONDITION_WET = { dry = 0, damp = 0.35, wet = 0.8, salt_wet = 0.8, slush = 1, wet_ice = 0.9, frost = 0.15,
   black_ice = 0.5, ice = 0.4, dusting = 0.3, loose = 0.2, packed = 0.2, packed_icy = 0.3 }
@@ -157,7 +183,25 @@ local queue = nil         -- names left to write for the level
 local orig = {}           -- name -> { class, color = {...} or nil, rough = number or nil, ours = { color, rough } }
 local known = nil         -- name -> class of the materials seen (nil: not scanned)
 local timer, rescan = 0, 0
+local puddle = 0          -- the puddles' step applied
 M.writes, M.source = 0, 'none'
+
+-- The puddles to step k: the material's threshold, then shown or hidden (roads.lua setPuddles).
+local function setPuddles(k)
+  if k == puddle then return end
+  puddle = k
+  local m = scenetree and scenetree.findObject(M.PUDDLE_MAT)
+  if m then
+    pcall(function()
+      m:setField('alphaRef', 0, tostring(M.puddleRef(k)))
+      m:flush()
+      m:reload()
+    end)
+    M.writes = M.writes + 1
+  end
+  local roads = package.loaded['beamngEarth/roads']
+  if roads and roads.setPuddles then pcall(roads.setPuddles, k > 0) end
+end
 
 local function parse(s)
   local t = {}
@@ -253,6 +297,7 @@ function M.update(dt, rainMmH, on)
   timer = 0
   local w, src = M.wetOf(on, winterWet(), own)
   M.source = src
+  setPuddles(M.puddleStep(w))
   local k = M.levelOf(w)
   if k ~= level then
     startLevel(k)
@@ -278,7 +323,7 @@ function M.debugLine()
   for k, n in pairs(per) do parts[#parts + 1] = k .. '=' .. n end
   table.sort(parts)
   table.sort(names)
-  return string.format('wet lvl=%d own=%.2f src=%s writes=%d %s | %s', level, own, tostring(M.source), M.writes,
+  return string.format('wet lvl=%d own=%.2f src=%s puddles=%d writes=%d %s | %s', level, own, tostring(M.source), puddle, M.writes,
     table.concat(parts, ' '), table.concat(names, ' '))
 end
 
@@ -295,13 +340,16 @@ function M.wetness() return own end
 
 -- The level goes: nothing to restore (the materials load again with the next level); state cleared.
 function M.reset()
-  own, level, queue, orig, known, timer, rescan = 0, 0, nil, {}, nil, 0, 0
+  own, level, queue, orig, known, timer, rescan, puddle = 0, 0, nil, {}, nil, 0, 0, 0
+  local roads = package.loaded['beamngEarth/roads']
+  if roads and roads.setPuddles then pcall(roads.setPuddles, false) end      -- (the next level's puddles made hidden)
 end
 
 -- Off now (the setting, weather Off): every material back at once.
 function M.restoreAll()
   for name in pairs(orig) do pcall(writeOne, name, 0) end
   orig, queue, level = {}, nil, 0
+  setPuddles(0)
   local ter = package.loaded['beamngEarth/terrain']
   if ter and ter.setWet then pcall(ter.setWet, 0) end
 end

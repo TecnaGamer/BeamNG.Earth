@@ -7607,6 +7607,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 500: enu_rings and enu_bounds (mapgeom.enu_rings / enu_bounds: many rings' frame conversion in one call, the
     // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like)
     m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_atlas_px, m)?)?;
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
     // where the ground bulges inside it: no dip under its lift). 495-498 are other branches'
@@ -7824,6 +7826,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 636 (the tunnel branch's 633 renumbered over dev's 635): tunnel plan T1 round 3, the tunnel record's lids under
     // a road crossing over the tube kept (tunnel.rs StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as
     // without the record: roadsys.pins_near legacy)
-    m.add("VERSION", 636)?;
+    // 637: roadwear::puddle_plan (a tile's puddles: sags, gutters, ruts) and puddle_atlas_px (their masks)
+    m.add("VERSION", 637)?;
     Ok(())
 }

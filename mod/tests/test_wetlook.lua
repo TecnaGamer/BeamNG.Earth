@@ -72,4 +72,39 @@ check(select(1, W.wetOf(true, 0.8, 0.2)) == 0.8 and select(2, W.wetOf(true, 0.8,
   and select(1, W.wetOf(true, nil, 0.3)) == 0.3 and select(1, W.wetOf(false, 1, 1)) == 0, 'wetOf: the wetter one; off: dry')
 package.loaded['beamngEarth/winter'] = nil
 
+-- puddles: none below PUDDLE_MIN, then deeper steps lower the material's alpha threshold (the deep pools first);
+-- shown and hidden through roads.setPuddles at step changes only, never per frame
+check(W.puddleStep(0) == 0 and W.puddleStep(W.PUDDLE_MIN - 0.01) == 0 and W.puddleStep(W.PUDDLE_MIN) == 1
+  and W.puddleStep(1) == W.PUDDLE_STEPS, 'puddle steps')
+check(W.puddleRef(0) == 255 and W.puddleRef(1) == W.PUDDLE_REF[1] and W.puddleRef(W.PUDDLE_STEPS) == W.PUDDLE_REF[2]
+  and W.puddleRef(2) < W.puddleRef(1), 'thresholds fall as they fill')
+do
+  local pm = S.newObject('Material')
+  pm:registerObject(W.PUDDLE_MAT)
+  pm:setField('alphaRef', 0, '255')
+  local shown, calls = nil, 0
+  package.loaded['beamngEarth/roads'] = { setPuddles = function(on) shown = on; calls = calls + 1 end }
+  W.reset()
+  check(shown == false, 'a level start: the puddles made hidden')
+  W._setOwn(1)
+  W.update(W.CHECK_S, 8, true)
+  check(shown == true and pm.fields.alphaRef == tostring(W.PUDDLE_REF[2]), 'soaked: shown, the full extent')
+  local c0 = calls
+  for _ = 1, 30 do W.update(0.016, 8, true) end
+  W.update(W.CHECK_S, 8, true)
+  check(calls == c0, 'steady: no more calls')
+  W._setOwn(0.5)
+  W.update(W.CHECK_S, 0, true)
+  check(shown == true and tonumber(pm.fields.alphaRef) > W.PUDDLE_REF[2], 'drying: smaller')
+  for _ = 1, 10 do W.update(0.016, 0, true) end      -- (the drying's material batch)
+  W._setOwn(0.1)
+  W.update(W.CHECK_S, 0, true)
+  check(shown == false and pm.fields.alphaRef == '255', 'dry: hidden')
+  W._setOwn(1)
+  W.update(W.CHECK_S, 8, true)
+  W.restoreAll()
+  check(shown == false, 'the weather off: hidden at once')
+  package.loaded['beamngEarth/roads'] = nil
+end
+
 T.done('test_wetlook')

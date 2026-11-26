@@ -14,7 +14,9 @@ What changed in each release of BeamNG.Earth, newest first.
   (slow enough to stop within the visible distance in thick fog); street lamps come on earlier under a dark stormy sky.
 - **Winter (Experimental): bare trees.** With Winter on, oaks, beeches, birches, aspens and poplars lose their leaves
   tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
-  young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green.
+  young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green. Each tree has one
+  look at every distance (bare, autumn-coloured or green), and towns in hot deserts (such as Phoenix) and the tropics
+  keep most of their trees green through the winter.
 - **BeamMP**: `G.WEATHER` takes the new presets and `real-host` (everyone gets the live weather where the
   longest-joined player is). `real` (each player's own weather) stays the default.
 - **Lightning and thunder** in thunderstorms (the real ones where the weather data has them, and the Thunderstorm and
@@ -28,8 +30,11 @@ What changed in each release of BeamNG.Earth, newest first.
 - **Rain streaks** (off by default, on the Weather page): streaks of falling rain around you, lit by the sun, headlights and street lamps, leaning in the wind
   and as you drive, so rain shows by day and in the distance.
 - **Wet look**: sidewalks, markings, bridges and buildings get darker and glossier in rain and dry slowly after it (with
-  the winter road conditions on, they follow the road condition). City streets get darker too, with the sky shining
-  on them further away; they change as new ground loads around you (every few hundred metres while driving).
+  the winter road conditions on, the wetter of the road condition and the rain you see). City streets get darker too,
+  with the sky shining on them further away, also while you stand still in the rain.
+- **Puddles**: in rain, water collects in the low points of roads, along the kerbs and in the wheel ruts of worn
+  roads: mirror-like water that reflects the sky and the street. They grow as it keeps raining and shrink as the road
+  dries.
 - **Rain sounds**: light, steady and heavy rain by the rain's strength, muffled under roofs and bridges and in tunnels,
   and rain drumming on the roof in the driver's view.
 - **Weather sounds: Live** (experimental, on the Weather page; Pre-recorded stays the default): the BeamNG.Earth app
@@ -53,6 +58,11 @@ What changed in each release of BeamNG.Earth, newest first.
   hanging in the air.
 - Reduced the chance of rain staying on after switching the weather off, over the 3D map or in a mission.
 - Reduced the chance of raindrops right in front of the camera showing as big white flakes.
+- Reduced the frame rate drop in heavy rain and snow: the drops no longer collide with the world one by one (the rain
+  still fades out under roofs and bridges and in tunnels).
+- Reduced the chance of trees losing their leaves as you get closer (with Winter on): far trees showed summer green
+  while the near ones had turned or gone bare.
+- Reduced the chance of streets staying dry in a rain preset with Winter on where the real weather is dry.
 
 ## 1.10.1 beta (2026-11-15)
 
