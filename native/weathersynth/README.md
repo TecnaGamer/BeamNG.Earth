@@ -105,38 +105,44 @@ Deck. It runs on its own thread, so the output never waits for it. On the Deck, 
 (their renders took longer than the 3 s look-ahead). Not yet checked: the Deck in Desktop
 Mode, and anything with the game in the loop (the broker).
 
-## Thunder from the grain bank (src/grainbank.rs; method A, the user's pick on 2026-11-25)
+## Thunder from the grain bank (src/grainbank.rs; method A: the Recorded thunder set, bank v3)
 
-The thunder is built from 118 short CC0 field recordings ("grains": bodies, cracks, claps and rolls, from 42
-recordings), layered and spread in time by a random lightning channel. The behaviour follows
-`~/bnge-tests/weather/procedural/grainbank/v1/SPEC.md`, ported from its Python reference renderer. Over 10 seeds per
-class the port passes the spec's acceptance checks (`~/bnge-tests/weather/procedural/finalA/accept.py`).
+The Recorded thunder set is built from 97 short CC0 field recordings ("grains": bodies, cracks, claps, rolls and mid /
+far rolls, cut from 23 Freesound originals), layered and spread in time by a random lightning channel. The behaviour
+follows `~/bnge-tests/weather/procedural/grainbank/v3/SPEC.md` (sections 6-7), ported from its Python reference
+renderer (render_v3.py; the user approved its references on 2026-11-25).
 
+- **The same schedule as the reference:** the draws go through `nprng` (numpy's Generator, bit for bit), so a seed
+  picks the same grains, times and gains as render_v3.py: 40 of 40 stats renders (seeds 101-110 per class) schedule
+  identically, the samples differ by about 3.7e-3 of the peak (the absorption kernels are cut short and the grains are
+  i16), and every class passes the spec's acceptance with medians at the reference's
+  (`~/bnge-tests/weather/procedural/finalA_v3/accept_v3.py`; score.py's jag and first300 are measured on Ogg q6 as the
+  references were: on a WAV, an onset from silence is one bigger step).
 - **The sources (committed):** `assets/grains/` is the cutting tool's output as it comes: `manifest.json`,
-  `grains/*.ogg` (2.2 MB, Vorbis q5) and `CREDITS.md` (the 42 recordists). A re-cut from the original recordings
-  replaces that folder.
-- **The bank (built, gitignored):** `assets/thunder_grains.bin`, raw i16 PCM with a small header and an FNV checksum,
-  so no Vorbis decoder is involved at run time. Build it with `weathersynth grainbank-pack`, run in this folder (the
-  defaults are `--manifest assets/grains/manifest.json --out assets/thunder_grains.bin`).
+  `grains/*.ogg` (1.8 MB, Vorbis q5) and `CREDITS.md` (the 23 recordings and their recordists). A re-cut from the
+  originals replaces that folder.
+- **The bank (built, gitignored):** `assets/thunder_grains.bin` ("WSGRAIN2"), raw i16 PCM with a small header (each
+  grain's kind and the class of the recording it came from) and an FNV checksum, so no Vorbis decoder is involved at
+  run time. Build it with `weathersynth grainbank-pack`, run in this folder (the defaults are
+  `--manifest assets/grains/manifest.json --out assets/thunder_grains.bin`).
 - **How the pack decodes:**
   - ffmpeg's own Vorbis decoder, named explicitly (`-c:a vorbis`, not libvorbis);
   - its float output taken as is (`-f f32le`; the grains are mono 44.1 kHz, so nothing is remixed or resampled);
   - the conversion to 16 bits done in Rust (x 32767, rounded half away from zero, clamped).
 - **The decoder as the only variable:** `assets/grains/thunder_grains.bin.sha256` is the bank packed with ffmpeg
   n9.0.2. The release workflow packs once (Ubuntu 22.04's ffmpeg) and warns when its sha256 differs; both platforms'
-  apps then bundle that one file. A different decoder build moves samples by at most a few LSB (the finalA renders
-  moved by at most -70 dB re peak between the two pack paths).
-- **Offline:** `weathersynth grains-set --bank assets/thunder_grains.bin --out DIR --ogg` renders `bne_thunder_<class>1/2`
-  (seeds 1 and 2), each levelled to its class target with a sample peak at most -1 dBFS.
-  `grains-render ... --class C --seed N [--dist M] [--live]` renders a single strike.
-- **Live:** `live-serve --thunder grains` (the default) reads the bank from next to the program, or from `assets/` in a
-  source tree. A strike renders in 66-120 ms on the PC, against 0.8-1.9 s for the procedural model, which is the
-  fallback when the bank file is missing.
-- **Determinism:**
-  - one named `Rng` stream per strike (`thunder-grains`);
-  - libm maths and f64 mixing in a fixed order;
-  - absorption through minimum-phase kernels designed per distance in 1 % steps. A kernel depends only on its key, so
-    the cache never changes the output.
+  apps then bundle that one file. A different decoder build moves samples by at most a few LSB.
+- **v3's rules on top of v1's scheduling:** only the distance beyond each grain's own recording (k_rec by the source's
+  class: 250 / 1000 / 3500 / 9000 m) is filtered, times the class's abs_scale (1 / 0.1 / 0 / 0.3); far rolls draw
+  from every roll pool; the rumble balance shelves (low at 150-250 Hz, high at 1 kHz) crossfade in from 0.6 s after
+  the first arrival.
+- **Offline:** `weathersynth grains-set --bank assets/thunder_grains.bin --out DIR --ogg [--seeds 1,2,...]
+  [--prefix bne_thunder_rec_]` renders `<prefix><class><k>`, each levelled to its class target with a sample peak at
+  most -1 dBFS. `grains-render ... --class C --seed N [--dist M] [--live]` renders a single strike.
+- **Live:** `live-serve` plays the Recorded set through this renderer; it reads the bank from next to the program, or
+  from `assets/` in a source tree. A strike renders in tens of ms.
+- **Determinism:** nprng, libm maths and f64 mixing in a fixed order; absorption through minimum-phase kernels designed
+  per distance in 1 % steps (a kernel depends only on its key, so the cache never changes the output).
 
 ## Audio rules (src/audio.rs)
 

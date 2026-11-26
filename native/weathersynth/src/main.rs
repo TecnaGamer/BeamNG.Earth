@@ -427,7 +427,9 @@ fn run() -> Result<(), String> {
                         break;
                     }
                     ceil -= (tp + 1.0) + 0.1;
-                    y = methodb::smooth_tp_limit(&y, ceil, 2.0, 25.0).0;
+                    // (synth_b3.smooth_tp_limit's defaults, as the approved files' loop called it: 5 ms look-ahead,
+                    // 80 ms release)
+                    y = methodb::smooth_tp_limit(&y, ceil, 5.0, 80.0).0;
                 }
                 println!("bne_thunder_{name}\tseed={seed} dist={dist:.3} micro_w={micro_w} ogg_true_peak_dbtp={tp:.2} \
                           ceil_db={ceil:.2} render_s={:.1}", t0.elapsed().as_secs_f64());
@@ -465,10 +467,12 @@ fn run() -> Result<(), String> {
                 .filter_map(|v| v.trim().parse().ok())
                 .collect();
             let ogg = args.iter().any(|a| a == "--ogg");
+            // the shipped Recorded set: --prefix bne_thunder_rec_
+            let prefix = arg(&args, "--prefix").unwrap_or_else(|| "bne_thunder_".into());
             std::fs::create_dir_all(format!("{dir}/wav")).map_err(|e| e.to_string())?;
             for kind in [proto::Kind::Strike, proto::Kind::Close, proto::Kind::Mid, proto::Kind::Far] {
                 for (i, seed) in seeds.iter().enumerate() {
-                    let name = format!("bne_thunder_{}{}", kind.name(), i + 1);
+                    let name = format!("{prefix}{}{}", kind.name(), i + 1);
                     let (mix, info) = grainbank::render_mix(&bank, kind, *seed, None, grainbank::PRE_S);
                     let (y, lufs, gr) = grainbank::level_offline(&mix, grainbank::class(kind).lufs);
                     let w = format!("{dir}/wav/{name}.wav");

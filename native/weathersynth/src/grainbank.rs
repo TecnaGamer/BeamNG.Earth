@@ -1,14 +1,19 @@
-//! Thunder from a bank of CC0 recordings ("grains"): method A, grain bank v1 (the user picked it on 2026-11-25).
-//! The behaviour is ~/bnge-tests/weather/procedural/grainbank/v1/SPEC.md, ported from its reference renderer
-//! (tools/render_v1.py). The port matches it statistically, not bit for bit, and it is deterministic in its own right:
-//! one named Rng stream per strike, libm maths, f64 mixing in a fixed order, and grains read from raw i16 PCM, so no
-//! Vorbis decoder is involved at run time.
+//! Thunder from a bank of CC0 recordings ("grains"): method A, the Recorded thunder set, grain bank v3 (the user
+//! approved its references on 2026-11-25). The behaviour is ~/bnge-tests/weather/procedural/grainbank/v3/SPEC.md
+//! sections 6-7, ported from its reference renderer (tools/render_v3.py: v1's scheduling; absorption only for the
+//! distance beyond each grain's own recording, scaled per class; far rolls drawn from every roll pool; the rumble
+//! balance shelves crossfaded in from 0.6 s after the first arrival).
+//! The draws are numpy's Generator (nprng: the same values in the same order as render_v3.py's
+//! default_rng(seed)), so a seed schedules the same grains, times and gains as the reference; the filters and the
+//! decoded grains differ slightly (kernels cut short, i16 PCM). Deterministic on every platform: nprng, libm maths,
+//! f64 mixing in a fixed order, and grains read from raw i16 PCM, so no Vorbis decoder is involved at run time.
 //!
 //! - **The bank file:** `thunder_grains.bin`, written by `weathersynth grainbank-pack` from the cutting tool's
 //!   manifest.json and grains/*.ogg (ffmpeg decodes them once, at pack time). Re-cutting the bank from the originals
 //!   only swaps this file.
-//!   - Layout: "WSGRAIN1"; u32 count; per grain u8 kind, u8 id length, the id, u32 source id, f32 centroid Hz (-1:
-//!     none), u32 samples; then every grain's i16 LE samples in order; then u64 FNV-1a of those sample bytes.
+//!   - Layout: "WSGRAIN2"; u32 count; per grain u8 kind, u8 the source recording's class (0 strike, 1 close, 2 mid,
+//!     3 far), u8 id length, the id, u32 source id, f32 centroid Hz (-1: none), u32 samples; then every grain's i16
+//!     LE samples in order; then u64 FNV-1a of those sample bytes.
 //! - **Absorption:** the reference's FFT minimum-phase filter (spec 6b). Each kernel is designed once per distance,
 //!   quantised to 1 % steps; the result depends only on that key, so the cache never changes output. The kernel is cut
 //!   where it holds all but 1e-7 of its energy, then applied directly when short or by overlap-add when long. A strike
@@ -17,7 +22,7 @@
 use crate::dsp::{self, Biquad, C};
 use crate::m;
 use crate::proto::Kind;
-use crate::rng::Rng;
+use crate::nprng::NpRng as Rng;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -31,7 +36,7 @@ pub const LIM_LOOK_MS: f64 = 5.0;
 pub const LIM_REL_MS: f64 = 80.0;
 pub const HP_HZ: f64 = 28.0;
 pub const FADE_OUT_S: f64 = 3.0;
-const MAGIC: &[u8; 8] = b"WSGRAIN1";
+const MAGIC: &[u8; 8] = b"WSGRAIN2";
 /// The bank's file name. `grainbank-pack` writes it to native/weathersynth/assets/ from assets/grains/ (the cutting
 /// tool's manifest.json, grains/*.ogg and CREDITS.md, committed: a re-cut replaces that folder); the release workflow
 /// packs it once and bundles it next to weathersynth.
@@ -80,6 +85,8 @@ impl GKind {
 pub struct Grain {
     pub id: String,
     pub kind: GKind,
+    /// the class of the recording it was cut from (its recording distance: k_rec)
+    pub src_class: Kind,
     pub source_id: u32,
     pub centroid_hz: f32,
     pub pcm: Vec<i16>,
@@ -123,6 +130,7 @@ impl Bank {
         let mut heads = Vec::with_capacity(count);
         for _ in 0..count {
             let kind = GKind::from_u8(take(&mut i, 1)?[0]).ok_or("bad grain kind")?;
+            let src_class = kind_from_u8(take(&mut i, 1)?[0]).ok_or("bad source class")?;
             let idn = take(&mut i, 1)?[0] as usize;
             let id = String::from_utf8(take(&mut i, idn)?.to_vec()).map_err(|_| "bad grain id")?;
             let source_id = u32le(take(&mut i, 4)?);
@@ -132,9 +140,9 @@ impl Bank {
             if n == 0 || n > 60 * 44100 {
                 return Err(format!("bad grain length {n}"));
             }
-            heads.push((id, kind, source_id, centroid_hz, n));
+            heads.push((id, kind, src_class, source_id, centroid_hz, n));
         }
-        let total: usize = heads.iter().map(|h| h.4).sum();
+        let total: usize = heads.iter().map(|h| h.5).sum();
         let data = take(&mut i, total * 2)?;
         let sum = u64::from_le_bytes(take(&mut i, 8)?.try_into().map_err(|_| "truncated")?);
         if fnv(data, FNV0) != sum {
@@ -145,10 +153,10 @@ impl Bank {
         }
         let mut grains = Vec::with_capacity(count);
         let mut off = 0;
-        for (id, kind, source_id, centroid_hz, n) in heads {
+        for (id, kind, src_class, source_id, centroid_hz, n) in heads {
             let pcm = data[off..off + 2 * n].chunks_exact(2).map(|p| i16::from_le_bytes([p[0], p[1]])).collect();
             off += 2 * n;
-            grains.push(Grain { id, kind, source_id, centroid_hz, pcm });
+            grains.push(Grain { id, kind, src_class, source_id, centroid_hz, pcm });
         }
         Ok(Bank { grains })
     }
@@ -159,6 +167,7 @@ impl Bank {
         out.extend_from_slice(&(self.grains.len() as u32).to_le_bytes());
         for g in &self.grains {
             out.push(g.kind as u8);
+            out.push(kind_to_u8(g.src_class));
             out.push(g.id.len() as u8);
             out.extend_from_slice(g.id.as_bytes());
             out.extend_from_slice(&g.source_id.to_le_bytes());
@@ -198,6 +207,10 @@ pub fn pack(manifest: &str, out: &str) -> Result<String, String> {
     for g in list {
         let id = g.str("id").ok_or("grain without id")?.to_string();
         let kind = g.str("kind").and_then(GKind::from_name).ok_or_else(|| format!("{id}: unknown kind"))?;
+        let src_class = g
+            .str("class_of_source")
+            .and_then(|c| Kind::from_str(c.trim_start_matches("thunder_")))
+            .ok_or_else(|| format!("{id}: no class_of_source"))?;
         let file = g.str("file").ok_or_else(|| format!("{id}: no file"))?;
         let path = dir.join(file);
         // ffmpeg's own Vorbis decoder named explicitly (-c:a vorbis, not libvorbis), its float output taken as is
@@ -220,6 +233,7 @@ pub fn pack(manifest: &str, out: &str) -> Result<String, String> {
         grains.push(Grain {
             id,
             kind,
+            src_class,
             source_id: g.num("source_id").unwrap_or(0.0) as u32,
             centroid_hz: g.num("centroid_hz").map(|v| v as f32).unwrap_or(-1.0),
             pcm,
@@ -231,6 +245,29 @@ pub fn pack(manifest: &str, out: &str) -> Result<String, String> {
     std::fs::write(&tmp, &bytes).map_err(|e| format!("{tmp}: {e}"))?;
     std::fs::rename(&tmp, out).map_err(|e| format!("{out}: {e}"))?;
     Ok(format!("{} grains, {:.1} s, {:.1} MB -> {out}", bank.grains.len(), bank.seconds(), bytes.len() as f64 / 1e6))
+}
+
+fn kind_to_u8(k: Kind) -> u8 {
+    match k {
+        Kind::Strike => 0,
+        Kind::Close => 1,
+        Kind::Mid => 2,
+        Kind::Far => 3,
+    }
+}
+
+fn kind_from_u8(v: u8) -> Option<Kind> {
+    [Kind::Strike, Kind::Close, Kind::Mid, Kind::Far].get(v as usize).copied()
+}
+
+/// The distance a source class's recordings were made at (v3: only the distance beyond it is filtered).
+pub fn k_rec(k: Kind) -> f64 {
+    match k {
+        Kind::Strike => 250.0,
+        Kind::Close => 1000.0,
+        Kind::Mid => 3500.0,
+        Kind::Far => 9000.0,
+    }
 }
 
 /// A float sample to 16 bits: x 32767, rounded half away from zero, clamped (NaN: 0).
@@ -253,18 +290,28 @@ pub struct Class {
     pub crack_db: Option<(f64, f64)>,
     pub n_echo: (u64, u64),
     pub echo_db: (f64, f64),
+    /// the extra distance's absorption x this (spec 7)
+    pub abs_scale: f64,
+    /// the rumble balance: low shelf dB at f_lo, high shelf dB at 1 kHz (spec 7)
+    pub tail_lo_db: f64,
+    pub tail_f_lo: f64,
+    pub tail_hi_db: f64,
 }
 
 pub fn class(kind: Kind) -> Class {
     match kind {
         Kind::Strike => Class { name: "strike", d: (60.0, 300.0), lufs: -9.5, d_rec: 300.0, body: Some(GKind::Body),
-            crack_db: Some((-15.0, -9.0)), n_echo: (1, 3), echo_db: (-20.0, -12.0) },
+            crack_db: Some((-15.0, -9.0)), n_echo: (1, 3), echo_db: (-20.0, -12.0), abs_scale: 1.0, tail_lo_db: -4.0,
+            tail_f_lo: 150.0, tail_hi_db: 0.0 },
         Kind::Close => Class { name: "close", d: (600.0, 1400.0), lufs: -14.0, d_rec: 800.0, body: Some(GKind::Body),
-            crack_db: Some((-21.0, -15.0)), n_echo: (1, 3), echo_db: (-20.0, -12.0) },
+            crack_db: Some((-21.0, -15.0)), n_echo: (1, 3), echo_db: (-20.0, -12.0), abs_scale: 0.1, tail_lo_db: -10.0,
+            tail_f_lo: 220.0, tail_hi_db: 3.0 },
         Kind::Mid => Class { name: "mid", d: (2500.0, 5000.0), lufs: -18.0, d_rec: 3000.0, body: Some(GKind::MidBody),
-            crack_db: None, n_echo: (0, 2), echo_db: (-22.0, -14.0) },
+            crack_db: None, n_echo: (0, 2), echo_db: (-22.0, -14.0), abs_scale: 0.0, tail_lo_db: -12.0, tail_f_lo: 250.0,
+            tail_hi_db: 6.0 },
         Kind::Far => Class { name: "far", d: (7000.0, 12000.0), lufs: -22.0, d_rec: 8000.0, body: None, crack_db: None,
-            n_echo: (0, 2), echo_db: (-22.0, -14.0) },
+            n_echo: (0, 2), echo_db: (-22.0, -14.0), abs_scale: 0.3, tail_lo_db: -4.0, tail_f_lo: 150.0,
+            tail_hi_db: 5.0 },
     }
 }
 
@@ -286,13 +333,25 @@ pub fn live_target(d: f64) -> f64 {
 
 // ------------------------------------------------------------------ random helpers
 
+/// numpy's rng.integers(n) (an index; no draw for n = 1).
 fn pick(rng: &mut Rng, n: usize) -> usize {
-    ((rng.f() * n as f64) as usize).min(n.saturating_sub(1))
+    rng.integers(0, n as i64) as usize
+}
+
+/// numpy's rng.uniform(a, b).
+trait Uniform {
+    fn range(&mut self, a: f64, b: f64) -> f64;
+}
+
+impl Uniform for Rng {
+    fn range(&mut self, a: f64, b: f64) -> f64 {
+        self.uniform(a, b)
+    }
 }
 
 /// An integer uniform in [lo, hi] (both inclusive).
 fn int_in(rng: &mut Rng, lo: u64, hi: u64) -> u64 {
-    lo + ((rng.f() * (hi - lo + 1) as f64) as u64).min(hi - lo)
+    rng.integers(lo as i64, hi as i64 + 1) as u64
 }
 
 // ------------------------------------------------------------------ channel walk (spec section 4)
@@ -314,14 +373,14 @@ fn vdist(a: V3, b: V3) -> f64 {
     vlen([a[0] - b[0], a[1] - b[1], a[2] - b[2]])
 }
 fn nvec(rng: &mut Rng) -> V3 {
-    [rng.normal(), rng.normal(), rng.normal()]
+    [rng.standard_normal(), rng.standard_normal(), rng.standard_normal()]
 }
 
 fn walk(rng: &mut Rng, mut p: V3, mut d: V3, bias: &dyn Fn(V3) -> V3, stop: &dyn Fn(V3, f64) -> bool) -> Vec<V3> {
     let mut pts = vec![p];
     let mut run = 0.0;
     while !stop(p, run) && pts.len() < 1500 {
-        let step = rng.lognormal(25.0, 0.5);
+        let step = rng.lognormal(m::ln(25.0), 0.5);
         d = vnorm(vadd(vadd(d, vsc(nvec(rng), 0.3)), bias(p)));
         p = vadd(p, vsc(d, step));
         run += step;
@@ -348,7 +407,7 @@ pub fn channel_claps(rng: &mut Rng, dist: f64) -> Vec<(f64, f64, f64)> {
     let nb = int_in(rng, 1, 3);
     for _ in 0..nb {
         let n = main.len();
-        let k = n / 3 + pick(rng, n - n / 3);
+        let k = rng.integers((n / 3) as i64, n as i64) as usize;
         let mut dd = nvec(rng);
         dd[2] = -dd[2].abs() - 0.5;
         let dd = vnorm(dd);
@@ -528,7 +587,8 @@ fn allpass_chain(x: &[f64], rng: &mut Rng) -> Vec<f64> {
     let mut y = x.to_vec();
     for _ in 0..4 {
         let dl = ((rng.range(1.5, 12.0) * SR / 1000.0) as usize).max(1);
-        let g = rng.range(0.3, 0.6) * if rng.f() < 0.5 { -1.0 } else { 1.0 };
+        // rng.choice([-1, 1])
+        let g = rng.range(0.3, 0.6) * if rng.integers(0, 2) == 0 { -1.0 } else { 1.0 };
         let mut out = vec![0.0; y.len()];
         for i in 0..y.len() {
             let xd = if i >= dl { y[i - dl] } else { 0.0 };
@@ -633,18 +693,21 @@ pub struct Info {
 /// first arrival (offline PRE_S, live 0).
 pub fn render_mix(bank: &Bank, kind: Kind, seed: u64, dist: Option<f64>, pre: f64) -> (Vec<f64>, Info) {
     let c = class(kind);
-    let mut rng = Rng::new(seed, "thunder-grains");
+    let mut rng = Rng::new(&[seed]);
     let dist = dist.unwrap_or_else(|| rng.range(c.d.0, c.d.1));
     let n = (LENGTH_S * SR) as usize;
     let mut out = vec![0.0f64; n];
     let mut info = Info { class: c.name, dist, claps: 0, grains: Vec::new(), echoes: Vec::new() };
     let drec = c.d_rec;
 
-    let take = |out: &mut Vec<f64>, rng: &mut Rng, gi: usize, at: f64, gain: f64, vs: GKind, extra_r: f64,
+    // (the v1 scheduling passes each grain's channel distance; v3 filters only the strike's distance beyond the
+    // grain's recording, x the class's abs_scale)
+    let take = |out: &mut Vec<f64>, rng: &mut Rng, gi: usize, at: f64, gain: f64, vs: GKind, _channel_r: f64,
                     info: &mut Info| {
         let (lo, hi) = vs.varispeed();
         let g = resample(&bank.grains[gi].pcm, rng.range(lo, hi));
-        let g = absorb(g, extra_r.max(0.0), None);
+        let extra = (dist - k_rec(bank.grains[gi].src_class)).max(0.0);
+        let g = if extra > 1.0 { absorb(g, extra * c.abs_scale, None) } else { g };
         place(out, &g, at, gain);
         info.grains.push((bank.grains[gi].id.clone(), at, 20.0 * m::log10(gain + 1e-12)));
     };
@@ -699,6 +762,7 @@ pub fn render_mix(bank: &Bank, kind: Kind, seed: u64, dist: Option<f64>, pre: f6
     if kind == Kind::Far {
         let mut rp = bank.pool(GKind::FarRoll);
         rp.extend(bank.pool(GKind::MidRoll));
+        rp.extend(bank.pool(GKind::Roll));
         let mut tt = pre;
         let mut lvl = 1.0;
         let mut k = 0;
@@ -752,6 +816,22 @@ pub fn render_mix(bank: &Bank, kind: Kind, seed: u64, dist: Option<f64>, pre: f6
         place(&mut out, &e, dly, m::undb(gdb));
         info.echoes.push((dly, fc, gdb));
     }
+    // the rumble balance (spec 7): low / high shelves as a minimum-phase filter, crossfaded in linearly from 0.6 to
+    // 1.2 s after the first arrival (the crack and the first clap stay as recorded)
+    if c.tail_lo_db != 0.0 || c.tail_hi_db != 0.0 {
+        let (gl, gh, flo) = (m::undb(c.tail_lo_db), m::undb(c.tail_hi_db), c.tail_f_lo);
+        let mag = move |f: f64| {
+            let a = (f / flo) * (f / flo);
+            let b = (f / 1000.0) * (f / 1000.0);
+            m::sqrt(gl + (1.0 - gl) * a / (1.0 + a)) * (1.0 + (gh - 1.0) * b / (1.0 + b))
+        };
+        let h = crate::methodb::min_phase_ir(&mag, 16384);
+        let eq = crate::methodb::conv_crop(&out, &h, out.len());
+        for (i, (o, e)) in out.iter_mut().zip(&eq).enumerate() {
+            let w = ((i as f64 / SR - pre - 0.6) / 0.6).clamp(0.0, 1.0);
+            *o = *o * (1.0 - w) + e * w;
+        }
+    }
     // 28 Hz high-pass (Butterworth: minimum phase), the 3 s cos² fade-out
     let mut hp = Biquad::highpass(SR, HP_HZ, std::f64::consts::FRAC_1_SQRT_2);
     hp.run(&mut out);
@@ -794,7 +874,8 @@ mod tests {
                 let pcm = (0..n)
                     .map(|t| (m::sin(t as f64 * 0.05 * (1 + i + j) as f64) * 8000.0 * (1.0 - t as f64 / n as f64)) as i16)
                     .collect();
-                grains.push(Grain { id: format!("{k:?}_{j}"), kind: *k, source_id: (i * 10 + j) as u32,
+                grains.push(Grain { id: format!("{k:?}_{j}"), kind: *k, src_class: kind_from_u8((i % 4) as u8).unwrap(),
+                    source_id: (i * 10 + j) as u32,
                     centroid_hz: 200.0 + 200.0 * j as f32, pcm });
             }
         }
@@ -814,7 +895,9 @@ mod tests {
         bad[k] ^= 1;
         assert!(Bank::parse(&bad).is_err(), "checksum");
         assert!(Bank::parse(&bytes[..bytes.len() - 3]).is_err(), "truncated");
-        assert!(Bank::parse(b"WSGRAIN1\xff\xff\xff\xff").is_err(), "bad count");
+        assert!(Bank::parse(b"WSGRAIN2\xff\xff\xff\xff").is_err(), "bad count");
+        assert!(Bank::parse(b"WSGRAIN1\x01\x00\x00\x00").is_err(), "the v1 format is refused");
+        assert_eq!(c.grains[5].src_class, b.grains[5].src_class);
         assert_eq!((to_i16(0.5), to_i16(-1.5), to_i16(f32::NAN), to_i16(1.0), to_i16(-0.25)), (16384, -32768, 0, 32767, -8192));
     }
 
