@@ -10,13 +10,20 @@
 //!   roadscan compare A_DIR B_DIR OUTDIR
 //!       two states' issues on the same corridor (only tiles scanned in both): OUTDIR/compare.json, compare.tsv;
 //!       exits 1 when B has new or worse issues of severity 2 or more.
+//!   roadscan report SCAN_DIR [--against SCAN_DIR] [--top N] [--title T] [--miles M] [--px PX]
+//!       the browsable report (report.rs): SCAN_DIR/report/index.html, the aerials it wants in report/aerials.tsv.
+//!   roadscan tiles LINES.txt OUT.tsv [--halfwidth M] [--clip A,B] [--route-out ROUTE.bin] [--route-txt ROUTE.txt]
+//!       a corridor's geotiles (corridor.rs).
 //!   roadscan plan INDEX LAT LON HALF_M PX OUT.ppm [LAT,LON ...]
 //!       a plan view of the built scene round a point, the points marked (plan.rs).
 #![allow(dead_code)]     // (format fields read by some commands only)
 mod checks;
+mod corridor;
 mod pack;
 mod plan;
+mod png;
 mod rank;
+mod report;
 mod scene;
 
 use roadsys::audit::{audit_findings, Finding};
@@ -152,12 +159,12 @@ fn cmd_rank(args: &[String]) {
     eprintln!("{} findings in {} tiles -> {} issues", recs.len(), n_tiles, issues.len());
 }
 
-fn read_issues(dir: &Path) -> Vec<rank::Row> {
+pub(crate) fn read_issues(dir: &Path) -> Vec<rank::Row> {
     let p = dir.join("issues.tsv");
     std::fs::read_to_string(&p).unwrap_or_else(|e| die(format!("{}: {}", p.display(), e))).lines().filter_map(rank::parse_issue).collect()
 }
 
-fn scanned(dir: &Path) -> std::collections::BTreeSet<String> {
+pub(crate) fn scanned(dir: &Path) -> std::collections::BTreeSet<String> {
     std::fs::read_dir(dir.join("tiles")).map(|r| r.filter_map(|e| e.ok()).filter_map(|e| {
         let n = e.file_name().to_string_lossy().to_string();
         n.strip_suffix(".tsv").map(String::from)
@@ -200,6 +207,42 @@ fn cmd_compare(args: &[String]) {
     if bad > 0 { std::process::exit(1); }
 }
 
+fn cmd_report(args: &[String]) {
+    let scan = PathBuf::from(&args[0]);
+    let opt = |f: &str| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1)).cloned();
+    let against = opt("--against").map(PathBuf::from);
+    let o = report::Opts { against: against.as_deref(), top: opt("--top").and_then(|v| v.parse().ok()).unwrap_or(30),
+                           title: opt("--title").unwrap_or_else(|| scan.to_string_lossy().to_string()),
+                           miles: opt("--miles").and_then(|v| v.parse().ok()).unwrap_or(f64::NAN),
+                           px: opt("--px").and_then(|v| v.parse().ok()).unwrap_or(480).clamp(64, 2048) };
+    let ix = pack::read_index(&scan.join("index.bin")).unwrap_or_else(|e| die(e));
+    let mut packs = scene::Packs::new(&ix);
+    let rows = read_issues(&scan);
+    let ix0 = against.as_ref().map(|a| pack::read_index(&a.join("index.bin")).unwrap_or_else(|e| die(e)));
+    let mut before = ix0.as_ref().map(scene::Packs::new);
+    println!("{}", report::write(&scan, &rows, &o, &mut packs, before.as_mut()).unwrap_or_else(|e| die(e)));
+}
+
+fn cmd_tiles(args: &[String]) {
+    let opt = |f: &str| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1)).cloned();
+    let text = std::fs::read_to_string(&args[0]).unwrap_or_else(|e| die(format!("{}: {}", args[0], e)));
+    let mut lines = corridor::read_lines(&text).unwrap_or_else(|e| die(e));
+    if lines.is_empty() { die("no line of two points or more".into()); }
+    if let Some(c) = opt("--clip") {
+        let mut w = c.split(',').map(|v| v.parse::<f64>().unwrap_or_else(|_| die(format!("--clip A,B: {}", c))));
+        let (a, b) = (w.next().unwrap_or(0.0), w.next().unwrap_or(f64::INFINITY));
+        lines[0] = corridor::clip(&lines[0], a, b);
+        if lines[0].len() < 2 { die(format!("nothing of the route between miles {} and {}", a, b)); }
+    }
+    let hw: f64 = opt("--halfwidth").and_then(|v| v.parse().ok()).unwrap_or(40.0);
+    write_atomic(Path::new(&args[1]), corridor::run(&lines, hw).as_bytes()).unwrap_or_else(|e| die(e));
+    if let Some(r) = opt("--route-out") { write_atomic(Path::new(&r), &corridor::route_bin(&lines[0])).unwrap_or_else(|e| die(e)); }
+    if let Some(r) = opt("--route-txt") {
+        let s: String = lines[0].iter().map(|p| format!("{:.7},{:.7}\n", p.0, p.1)).collect();
+        write_atomic(Path::new(&r), s.as_bytes()).unwrap_or_else(|e| die(e));
+    }
+}
+
 fn cmd_plan(args: &[String]) {
     let ix = pack::read_index(Path::new(&args[0])).unwrap_or_else(|e| die(e));
     let num = |s: &str| s.parse::<f64>().unwrap_or_else(|_| die(format!("not a number: {}", s)));
@@ -220,6 +263,8 @@ fn main() {
         Some("rank") if args.len() >= 3 => cmd_rank(&args[2..]),
         Some("compare") if args.len() == 5 => cmd_compare(&args[2..]),
         Some("plan") if args.len() >= 8 => cmd_plan(&args[2..]),
+        Some("tiles") if args.len() >= 4 => cmd_tiles(&args[2..]),
+        Some("report") if args.len() >= 3 => cmd_report(&args[2..]),
         Some("version") => println!("{} {}", SCAN_VERSION, roadsys::audit::AUDIT_VERSION),
         _ => { eprintln!("{}", usage); std::process::exit(2); }
     }

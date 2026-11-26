@@ -11,7 +11,7 @@ aerial | built plan views of the worst. Two code states built from the same snap
 (the regression gate).
 
     python3 tools/roadscan/roadscan.py corridor NAME --route "Baltimore, MD" "New York, NY" [--via LAT,LON ...]
-    python3 tools/roadscan/roadscan.py corridor NAME --from LAT,LON --to LAT,LON
+    python3 tools/roadscan/roadscan.py corridor NAME --from LAT,LON --to LAT,LON [--clip A,B]   # miles A-B only
     python3 tools/roadscan/roadscan.py corridor NAME --polyline FILE      # JSON [[lat, lon], ...] / GeoJSON / "lat,lon" lines
     python3 tools/roadscan/roadscan.py corridor NAME --region S,W,N,E --classes motorway,trunk
     python3 tools/roadscan/roadscan.py warm   NAME [--revamped] [--env K=V ...]       # online: the inputs' snapshot
@@ -23,7 +23,10 @@ aerial | built plan views of the worst. Two code states built from the same snap
 
 Every step resumes where it stopped. Scratch: ~/bnge-tests/roadscan/NAME (ROADSCAN_ROOT for another folder under
 ~/bnge-tests); never the game's cache. CPU: --cpus N (default half the machine's) bounds every process (affinity),
---jobs the parallel builds (default: --cpus / 2), all at nice 10 and idle scheduling. A state is one code tree and
+--jobs the parallel builds (default: --cpus / 2, at most 3), all at nice 19 in the idle CPU and I/O classes; nothing
+heavy starts while a gate is queued on the machine (ROADSCAN_WAIT_FOR, default "[g]ate_when_free"), checked before
+every batch. On a machine without cargo set ROADSCAN_BIN to a static build (cargo build --release --target
+x86_64-unknown-linux-musl). A state is one code tree and
 one set of switches; states of one corridor share the inputs' snapshot (cache/seed, reflinked), so only the code
 differs between them (the online warm builds only fill the snapshot: build.py records what the scan reads only
 offline). Linux and Windows (no affinity / idle class there); the Rust part needs cargo.
@@ -48,7 +51,6 @@ TREE = HERE.parents[1]
 TESTS = Path.home() / "bnge-tests"
 BASE = Path(os.environ.get("ROADSCAN_ROOT") or TESTS / "roadscan")
 RAW = ("dem", "mapdata", "pagesdata", "roadz", "gravity", "cdn", "airports", "seacarve")
-SPACING_M = 10.0            # m between the route's points where its tiles are looked up
 
 
 def corridor_dir(name):
@@ -76,8 +78,13 @@ def digest(obj):
     return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()
 
 
+MAX_JOBS = 3                # builds at once (with this process: at most 4 heavy processes, the PC's etiquette)
+WAIT_FOR = os.environ.get("ROADSCAN_WAIT_FOR", "[g]ate_when_free")      # a gate queued on this machine: start nothing
+
+
 def budget(cpus):
-    """This process and its children: CPUs 0..cpus-1 of the allowed set, nice 10, the idle class (Linux)."""
+    """This process and its children: CPUs 0..cpus-1 of the allowed set, nice 19, the idle CPU and I/O classes
+    (Linux)."""
     try:
         allowed = sorted(os.sched_getaffinity(0))
         n = min(cpus, len(allowed)) if cpus else max(1, len(allowed) // 2)
@@ -85,14 +92,28 @@ def budget(cpus):
     except (AttributeError, OSError):
         n = cpus or max(1, (os.cpu_count() or 2) // 2)
     try:
-        os.nice(max(0, 10 - os.nice(0)))
+        os.nice(max(0, 19 - os.nice(0)))
     except (AttributeError, OSError):
         pass
     try:
         os.sched_setscheduler(0, os.SCHED_IDLE, os.sched_param(0))
     except (AttributeError, OSError):
         pass
+    if shutil.which("ionice"):
+        subprocess.run(["ionice", "-c3", "-p", str(os.getpid())], stdin=subprocess.DEVNULL, capture_output=True)
     return n
+
+
+def wait_for_gate():
+    """Before anything heavy: while a gate is queued or running here (ROADSCAN_WAIT_FOR, a pgrep -f pattern), wait."""
+    if not WAIT_FOR or os.name == "nt" or not shutil.which("pgrep"):
+        return
+    said = False
+    while subprocess.run(["pgrep", "-f", WAIT_FOR], capture_output=True, stdin=subprocess.DEVNULL).returncode == 0:
+        if not said:
+            print(f"waiting: a gate ({WAIT_FOR}) is on this machine", flush=True)
+            said = True
+        time.sleep(60)
 
 
 def child_env(runtime, env):
@@ -155,30 +176,6 @@ def _dist(a, b):
     return math.hypot((a[0] - b[0]) * 111320.0, (a[1] - b[1]) * 111320.0 * c)
 
 
-def tiles_along(lines, halfwidth):
-    """{key: (gx, gy, metres along)} of the geotiles within halfwidth of the lines (each densified every SPACING_M),
-    at their first touch; the lines in order, their lengths added."""
-    sys.path.insert(0, str(TREE / "server"))
-    import geodesy
-    import geotiles
-    got = {}
-    base = 0.0
-    for line in lines:
-        s = 0.0
-        for a, b in zip(line, line[1:] + [line[-1]]):
-            d = _dist(a, b)
-            k = max(1, int(d / SPACING_M))
-            for i in range(k):
-                t = i / k
-                la, lo = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
-                fr = geodesy.EnuFrame(la, lo)
-                for gx, gy, _m in geotiles.tiles_near(fr, 0.0, 0.0, halfwidth, exact=True):
-                    got.setdefault(geotiles.key(gx, gy), (gx, gy, base + s + d * t))
-            s += d
-        base += s
-    return got
-
-
 def route_points(args, d):
     """The route asked for: OSRM on OpenStreetMap through the server's own routing (one request, its fair use), the
     places geocoded by the server's search. In a child process whose home is the corridor's runtime folder."""
@@ -213,12 +210,6 @@ def _route(jf):
     print(json.dumps(dict(points=r["points"], dist=r["dist"], ends=[list(e) for e in ends])))
 
 
-def write_route_bin(path, pts):
-    import struct
-    b = [b"RSROUTE1", struct.pack("<I", len(pts))] + [struct.pack("<dd", float(a), float(o)) for a, o in pts]
-    Path(path).write_bytes(b"".join(b))
-
-
 def cmd_corridor(args):
     d = corridor_dir(args.name)
     if (d / "corridor.json").exists() and not args.replace:
@@ -247,18 +238,25 @@ def cmd_corridor(args):
     lines = [ln for ln in lines if len(ln) >= 2]
     if not lines:
         raise SystemExit("no road line")
-    got = tiles_along(lines, args.halfwidth)
-    import geotiles
-    tiles = []
-    for k, (gx, gy, s) in sorted(got.items(), key=lambda kv: (kv[1][2], kv[0])):
-        la, lo = geotiles.centre(gx, gy)
-        tiles.append(dict(key=k, gx=gx, gy=gy, s=round(s, 1), lat=round(float(la), 9), lon=round(float(lo), 9)))
-    route = lines[0] if source["kind"] != "region" else []
-    miles = sum(_dist(a, b) for ln in lines for a, b in zip(ln, ln[1:])) / 1609.344
-    save(d / "corridor.json", dict(name=args.name, source=source, halfwidth_m=args.halfwidth, miles=round(miles, 2),
-                                   route=route, tiles=tiles))
+    # the tiles (native/roadscan corridor.rs): the lines, the route clipped to --clip miles
+    rt = d / "runtime"
+    rt.mkdir(parents=True, exist_ok=True)
+    (rt / "lines.txt").write_text("\n\n".join("\n".join(f"{a:.7f},{o:.7f}" for a, o in ln) for ln in lines) + "\n")
+    cmd = [str(scanner(2)), "tiles", str(rt / "lines.txt"), str(rt / "tiles.tsv"), "--halfwidth", str(args.halfwidth)]
+    route = source["kind"] != "region"
     if route:
-        write_route_bin(d / "route.bin", route)
+        cmd += ["--route-out", str(d / "route.bin"), "--route-txt", str(rt / "route.txt")]
+    if args.clip:
+        cmd += ["--clip", args.clip]
+        source["clip_miles"] = args.clip
+    subprocess.run(cmd, check=True, stdin=subprocess.DEVNULL)
+    rows = (rt / "tiles.tsv").read_text().splitlines()
+    tiles = [dict(key=w[0], gx=int(w[1]), gy=int(w[2]), s=float(w[3]), lat=float(w[4]), lon=float(w[5]))
+             for w in (r.split("\t") for r in rows[1:] if not r.startswith("#"))]
+    miles = float(rows[-1].split()[-1])
+    pts = [[float(v) for v in r.split(",")] for r in (rt / "route.txt").read_text().split()] if route else []
+    save(d / "corridor.json", dict(name=args.name, source=source, halfwidth_m=args.halfwidth, miles=round(miles, 2),
+                                   route=pts, tiles=tiles))
     print(f"{args.name}: {miles:.1f} miles of road, {len(tiles)} tiles ({len(tiles) / max(miles, 0.01):.1f} per mile)")
 
 
@@ -294,6 +292,7 @@ def run_batches(d, label, tiles, cache, offline, tree, env, jobs):
     slots = list(range(jobs))
     while batches or running:
         while batches and slots:
+            wait_for_gate()
             b = batches.pop(0)
             slot = slots.pop(0)
             jf = d / "runtime" / f"job-{label}-{serial:05d}.json"
@@ -378,7 +377,11 @@ def cmd_build(args):
 # --- scan ---------------------------------------------------------------------------------------------------------
 
 def scanner(jobs):
-    """This checkout's native/roadscan, built (incrementally) into the scratch's bin."""
+    """This checkout's native/roadscan, built (incrementally) into the scratch's bin; ROADSCAN_BIN: a binary built
+    elsewhere (a machine without cargo: the static musl build)."""
+    if os.environ.get("ROADSCAN_BIN"):
+        return Path(os.environ["ROADSCAN_BIN"])
+    wait_for_gate()
     target = BASE / "bin" / "roadscan-target"
     subprocess.run(["cargo", "build", "--release", "--quiet", "-j", str(max(1, jobs)), "--bin", "roadscan"],
                    cwd=TREE / "native" / "roadscan", check=True, stdin=subprocess.DEVNULL,
@@ -406,11 +409,13 @@ def scan_sources(out, sources, jobs, threads, route=None, halfwidth=40.0, force=
     sys.path.insert(0, str(HERE))
     import export
     out.mkdir(parents=True, exist_ok=True)
+    wait_for_gate()
     t0 = time.monotonic()
     bad = export.export(out / "index.bin", sources, jobs)
     t1 = time.monotonic()
     exe = scanner(jobs)
     cmd = [str(exe), "scan", str(out / "index.bin"), str(out), "--threads", str(threads)] + (["--force"] if force else [])
+    wait_for_gate()
     r = subprocess.run(cmd, stdin=subprocess.DEVNULL)
     t2 = time.monotonic()
     rank = [str(exe), "rank", str(out), "--halfwidth", str(halfwidth)]
@@ -432,14 +437,33 @@ def summary(out, total):
               f"{i['lat']:.6f},{i['lon']:.6f} {mi}")
 
 
+def report(scan, top, title, miles=None, against=None, aerial=True, jobs=2):
+    """The report (native/roadscan report.rs), then the aerials it asks for (tools/ortho_hi.py: the project's own
+    fetcher and sources), each once."""
+    cmd = [str(scanner(jobs)), "report", str(scan), "--top", str(top), "--title", title]
+    if miles:
+        cmd += ["--miles", str(miles)]
+    if against:
+        cmd += ["--against", str(against)]
+    page = subprocess.run(cmd, check=True, stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.strip()
+    if aerial:
+        ad = Path(scan) / "report" / "aerial"
+        ad.mkdir(parents=True, exist_ok=True)
+        net = Path(scan) / "report" / "net"
+        env = child_env(net, {})
+        for ln in (Path(scan) / "report" / "aerials.tsv").read_text().splitlines()[1:]:
+            name, la, lo, half = ln.split("\t")
+            if not (ad / name).exists():
+                subprocess.run([sys.executable, str(TREE / "tools" / "ortho_hi.py"), la, lo, half, str(ad / name), "auto", "480"],
+                               env=env, cwd=net, stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
+    return page
+
+
 def cmd_report(args):
     d, c = corridor(args.name)
-    sys.path.insert(0, str(HERE))
-    import report
     against = d / "scan" / args.against if args.against else None
-    page = report.write(d / "scan" / args.state, c, against, args.top, not args.no_aerial, scanner(args.jobs),
-                        title=f"{args.name}: {args.state}")
-    print(page)
+    print(report(d / "scan" / args.state, args.top, f"{args.name}: {args.state}", c.get("miles"), against,
+                 not args.no_aerial, args.jobs))
 
 
 def cmd_run(args):
@@ -482,6 +506,7 @@ def main():
     p.add_argument("--region")
     p.add_argument("--classes", default="motorway,trunk,motorway_link,trunk_link")
     p.add_argument("--halfwidth", type=float, default=40.0, help="m either side of the line whose tiles are built")
+    p.add_argument("--clip", help="A,B: only miles A to B of the route")
     p.add_argument("--replace", action="store_true")
     common_opts(sub.add_parser("warm"), True)
     p = sub.add_parser("build")
@@ -507,9 +532,9 @@ def main():
         return _route(args.job)
     if args.cmd in ("warm", "build", "scan", "report", "run"):
         n = budget(args.cpus)
-        args.jobs = args.jobs or max(1, n // 2)
+        args.jobs = min(args.jobs or max(1, n // 2), MAX_JOBS)
         if hasattr(args, "threads"):
-            args.threads = args.threads or n
+            args.threads = min(args.threads or n, MAX_JOBS)
     d = corridor_dir(args.name)
     d.mkdir(parents=True, exist_ok=True)
     if args.cmd in ("warm", "build", "run") and os.name != "nt":

@@ -224,7 +224,7 @@ def main():
     ap.add_argument("--only", default="tunnel,m5")
     a = ap.parse_args()
     n = roadscan.budget(a.cpus)
-    jobs, threads = max(1, n // 2), n
+    jobs, threads = min(roadscan.MAX_JOBS, max(1, n // 2)), min(n, roadscan.MAX_JOBS)
     rep = {}
     only = a.only.split(",")
     if "tunnel" in only:

@@ -326,23 +326,29 @@ pub fn issue_json(i: &Issue, rank: usize) -> String {
         i.lat0, i.lon0, i.lat1, i.lon1, json_str(what))
 }
 
-pub const ISSUE_HEADER: &str = "rank\tkind\tseverity\tscore\tlat\tlon\tmagnitude\tcells\tlevel\tcls\tline\ttile\tmile\toff_m\ton_route";
+pub const ISSUE_HEADER: &str = "rank\tkind\tseverity\tscore\tlat\tlon\tmagnitude\tcells\tlevel\tcls\tline\ttile\tmile\toff_m\ton_route\tlat0\tlon0\tlat1\tlon1";
 
 pub fn issue_tsv(i: &Issue, rank: usize) -> String {
-    format!("{}\t{}\t{}\t{:.4}\t{:.8}\t{:.8}\t{:.4}\t{}\t{}\t{}\t{}\t{}\t{:.4}\t{:.2}\t{}", rank, i.kind, i.sev, i.score, i.lat, i.lon,
-            i.mag, i.n, i.level, i.cls, i.line, i.tile, i.mile, i.off_m, i.on_route as u8)
+    format!("{}\t{}\t{}\t{:.4}\t{:.8}\t{:.8}\t{:.4}\t{}\t{}\t{}\t{}\t{}\t{:.4}\t{:.2}\t{}\t{:.8}\t{:.8}\t{:.8}\t{:.8}", rank, i.kind, i.sev,
+            i.score, i.lat, i.lon, i.mag, i.n, i.level, i.cls, i.line, i.tile, i.mile, i.off_m, i.on_route as u8, i.lat0, i.lon0,
+            i.lat1, i.lon1)
 }
 
 #[derive(Clone, Debug)]
 pub struct Row { pub rank: usize, pub kind: String, pub sev: u8, pub score: f64, pub lat: f64, pub lon: f64, pub mag: f64,
-                 pub n: usize, pub tile: String, pub mile: f64, pub on_route: bool }
+                 pub n: usize, pub tile: String, pub mile: f64, pub on_route: bool, pub level: u8, pub cls: String,
+                 pub line: String, pub bbox: [f64; 4] }
 
 pub fn parse_issue(s: &str) -> Option<Row> {
     let w: Vec<&str> = s.split('\t').collect();
-    if w.len() != 15 || w[0] == "rank" { return None; }
+    if w.len() < 15 || w[0] == "rank" { return None; }
+    let (lat, lon): (f64, f64) = (w[4].parse().ok()?, w[5].parse().ok()?);
+    let f = |k: usize, d: f64| w.get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
     Some(Row { rank: w[0].parse().ok()?, kind: w[1].into(), sev: w[2].parse().ok()?, score: w[3].parse().ok()?,
-               lat: w[4].parse().ok()?, lon: w[5].parse().ok()?, mag: w[6].parse().unwrap_or(f64::NAN), n: w[7].parse().ok()?,
-               tile: w[11].into(), mile: w[12].parse().unwrap_or(f64::NAN), on_route: w[14] == "1" })
+               lat, lon, mag: w[6].parse().unwrap_or(f64::NAN), n: w[7].parse().ok()?,
+               tile: w[11].into(), mile: w[12].parse().unwrap_or(f64::NAN), on_route: w[14] == "1",
+               level: w[8].parse().unwrap_or(0), cls: w[9].into(), line: w[10].into(),
+               bbox: [f(15, lat), f(16, lon), f(17, lat), f(18, lon)] })
 }
 
 /// A before / after comparison of two states' issues on the same corridor: each B issue matched to the nearest
@@ -420,7 +426,8 @@ mod tests {
 
     #[test]
     fn compare_states() {
-        let row = |k: &str, lat: f64, sev: u8| Row { rank: 1, kind: k.into(), sev, score: 1.0, lat, lon: 0.0, mag: 0.1, n: 1, tile: "t".into(), mile: 0.0, on_route: true };
+        let row = |k: &str, lat: f64, sev: u8| Row { rank: 1, kind: k.into(), sev, score: 1.0, lat, lon: 0.0, mag: 0.1, n: 1, tile: "t".into(), mile: 0.0, on_route: true,
+                                                     level: 0, cls: String::new(), line: String::new(), bbox: [lat, 0.0, lat, 0.0] };
         let d = 1.0 / M_PER_DEG;
         let a = vec![row("step", 0.0, 2), row("lip", 10.0 * d, 1)];
         let b = vec![row("step", 2.0 * d, 3), row("hole", 30.0 * d, 3)];
