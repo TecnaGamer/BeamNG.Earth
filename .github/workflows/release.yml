@@ -95,10 +95,24 @@ jobs:
           if [ "$got" != "$want" ]; then
             echo "::warning::thunder_grains.bin sha256 $got differs from the committed $want (another ffmpeg Vorbis decoder build: samples move by a few LSB; both platforms still get this one file)"
           fi
+      # the live recorded rain / wind (assets/tex: CC0 blocks as Ogg -> tex_bank.bin, ~33 MB of raw i16), packed the
+      # same way and handed on with the grains
+      - name: Pack the texture bank
+        working-directory: native/weathersynth
+        run: |
+          target/release/weathersynth texbank-pack --out tex_bank.bin
+          want=$(cut -d' ' -f1 assets/tex/tex_bank.bin.sha256)
+          got=$(sha256sum tex_bank.bin | cut -d' ' -f1)
+          echo "tex_bank.bin sha256 $got"
+          if [ "$got" != "$want" ]; then
+            echo "::warning::tex_bank.bin sha256 $got differs from the committed $want (another ffmpeg Vorbis decoder build: samples move by a few LSB; both platforms still get this one file)"
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: thunder-grains
-          path: native/weathersynth/thunder_grains.bin
+          path: |
+            native/weathersynth/thunder_grains.bin
+            native/weathersynth/tex_bank.bin
           if-no-files-found: error
           retention-days: 7
 
@@ -160,6 +174,7 @@ jobs:
           "$ws" storm-dump | head -2
           # the grain bank next to it, the grains job's file unchanged
           cmp squashfs-root/usr/lib/BeamNG.Earth/_internal/thunder_grains.bin build/weathersynth/thunder_grains.bin
+          cmp squashfs-root/usr/lib/BeamNG.Earth/_internal/tex_bank.bin build/weathersynth/tex_bank.bin
           rm -rf squashfs-root
       - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
         run: |
@@ -287,6 +302,7 @@ jobs:
           grep -q -- "--near-visual" help.txt
           build/weathersynth/weathersynth.exe storm-dump | head -2   # (the signed file the .exe bundles runs)
           sha256sum build/weathersynth/thunder_grains.bin            # (the same as the grains job's: one file for both)
+          sha256sum build/weathersynth/tex_bank.bin
           head -3 help.txt
       - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
         shell: bash
