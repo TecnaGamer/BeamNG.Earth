@@ -70,7 +70,7 @@ class SkinPart(unittest.TestCase):
             self.assertEqual(snowroad.wear_snow({"bank_bin": [1, 1, 0, 0, 0]}), {"q": 1, "banks": [1, 1, 0, 0, 0]})
 
 
-@unittest.skipUnless(native(), "earthfast 637")
+@unittest.skipUnless(native(), "earthfast 638")
 class Remaps(unittest.TestCase):
     def setUp(self):
         # a P1 east-west, a P3 north-south crossing it at (0, 0)
@@ -135,7 +135,7 @@ class Remaps(unittest.TestCase):
                                              lambda xy: np.zeros(len(xy)), (0, 0, 0)))
 
 
-@unittest.skipUnless(native(), "earthfast 637")
+@unittest.skipUnless(native(), "earthfast 638")
 class Kernel(unittest.TestCase):
     def test_classes(self):
         self.assertEqual(list(fast._ef.snowroad_classes(["motorway", "trunk_link", "primary", "tertiary",
