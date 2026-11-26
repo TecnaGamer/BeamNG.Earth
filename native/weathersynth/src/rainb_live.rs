@@ -285,6 +285,7 @@ impl Tables {
 pub struct LiveRainB {
     tn: rainb::Tune,
     tab: Tables,
+    rain_vol: Option<f64>,
     pub tap: Tap,
     grains: Vec<Grain>,
     /// mean octave energies of each (surface, band) grain group: (dipole, every way)
@@ -604,6 +605,7 @@ impl LiveRainB {
         LiveRainB {
             tn,
             tab,
+            rain_vol: None,
             tap: Tap::Mix,
             grains,
             oct_e,
@@ -674,6 +676,14 @@ impl LiveRainB {
 
     pub fn set(&mut self, c: Controls) {
         self.target = c;
+    }
+
+    /// The mod's own rain volume for its layers (RAIN_GAIN x the rain share, 0..1; proto rainVol): the engine plays at
+    /// the loops' loudness x this, as the game plays its files. None (an older mod): live.rs's RAIN_BED_GAIN x the
+    /// share (rain_target_lufs).
+    #[cfg_attr(not(feature = "audio"), allow(dead_code))]
+    pub fn set_rain_volume(&mut self, v: Option<f64>) {
+        self.rain_vol = v.map(|x| x.clamp(0.0, 1.0));
     }
 
     pub fn active_voices(&self) -> usize {
@@ -1147,7 +1157,20 @@ impl LiveRainB {
             }
         }
         // levels: the open air (shelter interpolated in dB) and the cabin, to the game's loop loudness for the rate
-        let tgt = if dry { -100.0 } else { crate::live::rain_target_lufs(r.max(0.03)) };
+        let tgt = if dry {
+            -100.0
+        } else {
+            let base = crate::live::rain_target_lufs(r.max(0.03));
+            match self.rain_vol {
+                // the loops' own loudness (the target without RAIN_BED_GAIN x the share) x the mod's volume
+                Some(v) if v > 1e-6 => {
+                    let share = crate::live::rain_share(r.max(0.03)).max(1e-6);
+                    base - 20.0 * m::log10(crate::live::RAIN_BED_GAIN * share) + 20.0 * m::log10(v)
+                }
+                Some(_) => -100.0,
+                None => base,
+            }
+        };
         let l_open = lerp(by_rate(&self.tab.open, r), by_rate(&self.tab.shelter, r) - SHELTER_DB, sh);
         let g_open = if self.tap == Tap::OpenRaw { 1.0 } else { m::undb(tgt - l_open) * fade };
         let g_cab = if self.tap == Tap::CabinRaw { 1.0 } else { m::undb(tgt - by_rate(&self.tab.cabin, r)) * fade };

@@ -25,6 +25,7 @@
 //!   weathersynth tex-check FILE.wav ...              loudness, true peak, loop seam and texture statistics
 //!   weathersynth rainb --kind K --seed N [--secs S] --out F.wav   method B rain: the physical drop model (rainb.rs)
 //!   weathersynth rainb-set --out DIR [--seed N] [--ogg] [--only a,b]   its reference loops (bne_rainb_<kind>)
+//!   weathersynth rainb-modset --out DIR [--seed N]    the mod's Generated rain files (bne_rain_*.ogg, Vorbis q4)
 //!   weathersynth rainb-stats | rainb-phys            drop statistics per rain rate; unlevelled loudness by rate
 //!   weathersynth rainb-live-bench [--per S] [--block N] [--wav F]   method B live engine: the sweep, S s a state, timed
 //!   weathersynth rainb-live-calibrate                 its level tables (printed as Rust, pasted into rainb_live.rs)
@@ -547,6 +548,7 @@ fn run() -> Result<(), String> {
         "tex-check" => texmix::run_check(&args)?,
         "rainb" => rainb::run_one(&args)?,
         "rainb-set" => rainb::run_set(&args)?,
+        "rainb-modset" => rainb::run_modset(&args)?,
         "rainb-stats" => print!("{}", rainb::stats()),
         "click-check" => clickcheck::run(&args)?,
         "rainb-live-bench" => {

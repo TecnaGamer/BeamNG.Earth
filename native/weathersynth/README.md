@@ -279,7 +279,7 @@ clean stretches ("blocks"), not events.
   22.3 / 24.0 dB louder at 0.7 / 5 / 35 mm/h than the loop the mod plays at the same volume, and it had no `rainVol`.
   The bus limiter crushed it.
 
-## Rain method B: the physical drop model (src/rainb.rs, rainb_live.rs; not shipped yet)
+## Rain method B: the physical drop model (src/rainb.rs, rainb_live.rs; the Generated rain since 2026-11-26)
 
 This is the rain counterpart of thunder method B. It renders drop by drop:
 - **Drops:** a gamma drop-size distribution that carries exactly the rain rate (Marshall-Palmer D0, blending to Joss
@@ -302,7 +302,9 @@ Commands:
 - `rainb-live-bench [--per S]` runs the live engine (rainb_live.rs, v2) through a sweep and times it.
   `rainb-live-calibrate` measures its level tables. `click-check` measures sample jumps, HF spikes and block level
   steps.
-- **Live engine:** not wired into live-serve: the user decides by ear first.
+- **Live engine:** the Generated rain of live-serve (audio.rs, since 2026-11-26), offered to the mod as the rain set
+  `generated_b` (liveaudio.lua LIVE_RAIN_NEEDS; an older synth's `generated` was live.rs's procedural drops). The
+  mod's Generated files are `rainb-modset`'s (SOURCES.md).
   - **v1 was broken:** its cabin path was about 40 dB hot and clipped. Every drop in a block started on the block's
     first sample. Heavily thinned, loud grains made crackle.
   - **Chunks:** v2 runs in fixed 256-sample chunks, so the output is identical at any block size (a test checks it).

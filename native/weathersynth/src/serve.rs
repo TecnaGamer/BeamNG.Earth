@@ -223,7 +223,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
             (Box::new(thunderlive::BySet { generated: Box::new(thunderlive::MethodB), recorded }), sets)
         }
     };
-    let rain_sets = if crate::texbuild::default_bank().is_some() { r#"["generated","recorded"]"# } else { r#"["generated"]"# };
+    // ('generated_b': the Generated rain is method B's live engine; the mod hands it the rain only then: liveaudio.lua
+    // LIVE_RAIN_NEEDS)
+    let rain_sets = if crate::texbuild::default_bank().is_some() {
+        r#"["generated","generated_b","recorded"]"#
+    } else {
+        r#"["generated","generated_b"]"#
+    };
     let sets_json = format!("[{}]", sets.iter().map(|v| crate::proto::quote(v)).collect::<Vec<_>>().join(","));
     let rname = renderer.name();
     let bus = Arc::new(Bus::new());

@@ -406,4 +406,22 @@ do
   Engine.Audio = nil
 end
 
+-- the Generated rain (method B, 2026-11-26): every file the layers name is shipped, the cabin and the open shelter
+-- with their own loops (not the outside roof's / the enclosed muffled loop as before)
+do
+  local base = dir .. '/../beamng_earth/levels/beamng_earth/art/sound/weather/'
+  local files = { amb.RAIN_MUFFLED, amb.RAIN_MUFFLED_OPEN }
+  for _, l in ipairs(amb.RAIN_LAYERS) do files[#files + 1] = l[2] end
+  for _, f in pairs(amb.RAIN_ROOF_LAYERS) do files[#files + 1] = f end
+  for _, f in pairs(amb.RAIN_CABIN_LAYERS) do files[#files + 1] = f end
+  local missing = {}
+  for _, f in ipairs(files) do
+    local h = io.open(base .. f, 'rb')
+    if h then h:close() else missing[#missing + 1] = f end
+  end
+  T.check(#files == 11 and #missing == 0, 'Generated rain: all 11 files shipped (missing: ' .. table.concat(missing, ', ') .. ')')
+  T.check(amb.RAIN_CABIN_LAYERS.medium ~= amb.RAIN_ROOF_LAYERS.medium and amb.RAIN_MUFFLED_OPEN ~= amb.RAIN_MUFFLED,
+    'Generated rain: own cabin and open-shelter loops')
+end
+
 T.done('test_ambience')

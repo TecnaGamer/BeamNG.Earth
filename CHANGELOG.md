@@ -42,11 +42,14 @@ What changed in each release of BeamNG.Earth, newest first.
   roads: mirror-like water that reflects the sky and the street. They grow as it keeps raining and shrink as the road
   dries.
 - **Rain sounds**: light, steady and heavy rain by the rain's strength, muffled under roofs and bridges and in tunnels,
-  and rain drumming on the roof in the driver's view.
+  and rain drumming on the roof in the driver's view. The Generated rain (the Weather page's Rain sound) is made drop
+  by drop by our own physical model of rain: light rain is a sparse patter, heavy rain a dense roar, and the car's
+  roof heard from inside is its own muffled drumming.
 - **Weather sounds: Live** (experimental, on the Weather page; Pre-recorded stays the default): the BeamNG.Earth app
   makes the thunder as you hear it and plays it through your default audio device at the game's volume. Nearby
   strikes are made fresh for each strike (with the Recorded thunder, every strike); distant thunder, and any strike
-  the app couldn't make in time, plays from the pre-recorded set. The rain stays the pre-recorded loops for now. If
+  the app couldn't make in time, plays from the pre-recorded set. With either Rain sound the app makes the rain too
+  (the Generated rain outdoors, under shelters and inside the car; the Recorded rain from its recordings). If
   the live sound can't start or stops, the pre-recorded sounds come back by themselves, and the page says why.
 - Each of these can be switched off on the Weather page.
 

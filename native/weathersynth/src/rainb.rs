@@ -661,6 +661,11 @@ pub fn scene(kind: &str) -> Option<Scene> {
         "cabin" => Scene { mode: Mode::Cabin, ..open("cabin", 5.0, -24.1, 0.10, 0.5, 0.2, 0.4) },
         "cabin_heavy" => Scene { mode: Mode::Cabin, ..open("cabin_heavy", 35.0, -17.2, 0.30, 1.5, 1.0, 0.45) },
         "muffled" => Scene { mode: Mode::Shelter, ..open("muffled", 5.0, -25.9, 0.10, 0.5, 0.2, 0.4) },
+        // the mod's file set: the roof next to the car at the other rates, and an enclosed shelter (a tunnel, a closed
+        // bridge, a building: the medium rain through the walls, two 900 Hz low-passes as the mod's muffled A)
+        "roof_light" => Scene { mode: Mode::NearCar, ..open("roof_light", 0.7, -30.0, 0.04, 0.2, 0.0, 0.3) },
+        "roof_heavy" => Scene { mode: Mode::NearCar, ..open("roof_heavy", 35.0, -17.2, 0.30, 1.5, 1.0, 0.45) },
+        "muffled_closed" => Scene { name: "medium", lufs: -25.9, ..open("medium", 5.0, -25.9, 0.10, 0.5, 0.2, 0.4) },
         _ => return None,
     })
 }
@@ -1145,6 +1150,11 @@ pub fn render(kind: &str, seed: u64, secs: f64) -> Result<(Vec<f64>, String), St
     if sc.mode == Mode::Cabin {
         x = cabin(seed, &sc, &tn, n, &x);
     }
+    if kind == "muffled_closed" {
+        for _ in 0..2 {
+            Biquad::lowpass(FS, 900.0, std::f64::consts::FRAC_1_SQRT_2).run_circular(&mut x);
+        }
+    }
     let lufs = finish(&mut x, sc.lufs);
     let tp = loudness::true_peak_db(&x, true);
     let dsd = Dsd::new(sc.rate);
@@ -1224,7 +1234,47 @@ fn arg(args: &[String], key: &str) -> Option<String> {
     args.iter().position(|a| a == key).and_then(|i| args.get(i + 1).cloned())
 }
 
-pub const KINDS: [&str; 8] = ["light", "medium", "heavy", "roof", "cabin_light", "cabin", "cabin_heavy", "muffled"];
+pub const KINDS: [&str; 11] =
+    ["light", "medium", "heavy", "roof", "cabin_light", "cabin", "cabin_heavy", "muffled", "roof_light", "roof_heavy", "muffled_closed"];
+
+/// The mod's Generated rain files (ambience.lua RAIN_LAYERS, RAIN_ROOF_LAYERS, RAIN_CABIN_LAYERS, RAIN_MUFFLED,
+/// RAIN_MUFFLED_OPEN): (file stem, kind).
+pub const MOD_FILES: [(&str, &str); 11] = [
+    ("bne_rain_light", "light"),
+    ("bne_rain_medium", "medium"),
+    ("bne_rain_heavy", "heavy"),
+    ("bne_rain_roof_light", "roof_light"),
+    ("bne_rain_roof", "roof"),
+    ("bne_rain_roof_heavy", "roof_heavy"),
+    ("bne_rain_roof_cabin_light", "cabin_light"),
+    ("bne_rain_roof_cabin", "cabin"),
+    ("bne_rain_roof_cabin_heavy", "cabin_heavy"),
+    ("bne_rain_muffled", "muffled_closed"),
+    ("bne_rain_muffled_open", "muffled"),
+];
+
+/// weathersynth rainb-modset --out DIR [--seed N] [--secs S]: the mod's Generated rain loops (Vorbis q4, as the
+/// recorded set) and a table of their loudness, true peak and size for SOURCES.md.
+pub fn run_modset(args: &[String]) -> Result<(), String> {
+    let dir = arg(args, "--out").ok_or("--out DIR")?;
+    let seed: u64 = arg(args, "--seed").and_then(|v| v.parse().ok()).unwrap_or(1);
+    let secs: f64 = arg(args, "--secs").and_then(|v| v.parse().ok()).unwrap_or(30.0);
+    std::fs::create_dir_all(format!("{dir}/wav")).map_err(|e| e.to_string())?;
+    println!("file\tkind\tLUFS\ttrue peak dBTP\tbytes");
+    for (stem, kind) in MOD_FILES {
+        let (x, _) = render(kind, seed, secs)?;
+        crate::wav::write_f32(&format!("{dir}/wav/{stem}.wav"), &x, 44100).map_err(|e| e.to_string())?;
+        let path = format!("{dir}/{stem}.ogg");
+        write_ogg_q(&path, &x, "4")?;
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        println!(
+            "{stem}.ogg\t{kind}\t{:.2}\t{:.2}\t{bytes}",
+            loudness::integrated(&x, FS, true),
+            loudness::true_peak_db(&x, true)
+        );
+    }
+    Ok(())
+}
 
 pub fn run_one(args: &[String]) -> Result<(), String> {
     let kind = arg(args, "--kind").ok_or("--kind K")?;
@@ -1264,12 +1314,16 @@ pub fn run_set(args: &[String]) -> Result<(), String> {
 }
 
 fn write_ogg(path: &str, x: &[f64]) -> Result<(), String> {
+    write_ogg_q(path, x, "6")
+}
+
+fn write_ogg_q(path: &str, x: &[f64], q: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let raw: Vec<u8> = x.iter().flat_map(|v| (*v as f32).to_le_bytes()).collect();
     let mut ch = Command::new("ffmpeg")
         .args(["-nostdin", "-v", "error", "-y", "-f", "f32le", "-ar", "44100", "-ac", "1", "-i", "-"])
-        .args(["-c:a", "libvorbis", "-q:a", "6", "-map_metadata", "-1", "-fflags", "+bitexact"])
+        .args(["-c:a", "libvorbis", "-q:a", q, "-map_metadata", "-1", "-fflags", "+bitexact"])
         .arg(path)
         .stdin(Stdio::piped())
         .spawn()
