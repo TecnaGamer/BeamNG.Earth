@@ -3,7 +3,7 @@
 
     python3 tools/package.py [--out DIR] [--beammp]
 
-The zip has one top folder, BeamNG.Earth-<VERSION>/, with the mod, the server (no tests, no
+The zip has one top folder, BeamNG.Earth-<VERSION>/, with the mod, the server (no tests, no evals, no
 __pycache__), the installer and launchers, and the player docs. The version is the VERSION file.
 
 --beammp also builds dist/BeamNG.Earth-BeamMP-Server-<VERSION>.zip: unzipped into a BeamMP server's folder it adds
@@ -32,7 +32,7 @@ FILES = ["install.py", "modtextures.py", "cliffstock.py", "clifftextures.py", "s
          "beammp/MODERNIZATION.md"]
 TREES = ["mod/beamng_earth", "mod/texture_sources", "server"]     # (the DDS made from texture_sources at install)
 TOOLS = ["tools/reports.py", "tools/sketchfab_assets.py"]  # no stored credentials
-SKIP_DIRS = {"__pycache__", "tests", ".git", "backups", "probes", "research", ".venv", "dist"}
+SKIP_DIRS = {"__pycache__", "tests", "evals", ".git", "backups", "probes", "research", ".venv", "dist"}
 SKIP_EXT = {".pyc", ".pyo", ".log", ".swp"}
 EXECUTABLE = {"run_server.sh", "install.py", "start.py"}
 
