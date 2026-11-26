@@ -1170,6 +1170,93 @@ class OverTunnels(unittest.TestCase):
         self.assertIsNone(grading.Grader._over_tunnels(g, np.array([50.0]), np.array([30.0])))
 
 
+class OpenTunnelsOrderTest(unittest.TestCase):
+    """_Planner.open_tunnels: one open section is in every cell its tunnel part reaches, each with its own copy's Spec
+    (CA-1's Malibu tunnel: 10 m in one cell, 8.6 m in the next). The block's paint takes the points' own cells' in
+    their keys' order, whatever order the cells were planned in and whatever other cells are planned already (two
+    builds of the tunnel corpus's Malibu S painted the mouth 1.4 m apart, 2026-11-26)."""
+
+    def planner(self, order, own):
+        g = grading._Planner(FRAME, FakeMD(None), lambda la, lo: np.zeros(np.shape(la)))
+        g._cell_plans = lambda key: []           # (planned already: the opens below)
+        xy = np.array([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]])
+        for key in order:
+            g.opens[key] = [(xy.copy(), own[key])]
+        return g
+
+    def test_the_same_spec_whatever_order_the_cells_were_planned_in(self):
+        lat = np.array([LAT, LAT + 0.0005])
+        lon = np.array([LON, LON])
+        mine = sorted(set(mapcells.cells_for_points(lat, lon)))
+        if len(mine) == 1:          # (the points in two cells: the one next to it north or south)
+            lat = np.array([LAT, LAT - 0.03])
+            mine = sorted(set(mapcells.cells_for_points(lat, lon)))
+        self.assertGreaterEqual(len(mine), 2)
+        far = mapcells.cell_of(LAT + 1.0, LON + 1.0)
+        a, b = mine[0], mine[1]
+        own = {a: roads.Spec(10.0, "paved", False, "primary"), b: roads.Spec(8.6, "paved", False, "primary"),
+               far: roads.Spec(12.0, "paved", False, "primary")}
+        widths = set()
+        for order in ((a, b), (b, a), (far, b, a), (far, a, b), (b, far, a)):
+            got = self.planner(order, own).open_tunnels(lat, lon)
+            self.assertEqual(len(got), 1)
+            widths.add(got[0][2].width)
+        self.assertEqual(widths, {10.0}, "the first of the points' own cells by key, every time")
+
+
+class QueryCellsZonesTest(unittest.TestCase):
+    """_Planner.apply: the ground left over a covered tunnel (covers) and the UNGRADED roads' surfaces (keeps) come
+    from the points' own cells (apply's keys), not from whatever other cells other threads planned already: each cell
+    holds a tunnel part with its own copy's width (b29a785a1: 10 m in one cell, 8.6 m in the next at CA-1's Malibu
+    tunnel), so a wider copy in a neighbour planned first widened the cover by the order the cells were planned in."""
+
+    def setUp(self):
+        self.mine = mapcells.cell_of(LAT, LON)
+        self.far = mapcells.cell_of(LAT + 1.0, LON + 1.0)
+        x = np.arange(-60.0, 61.0, 4.0)
+        self.e, self.n = x, np.full(len(x), 3.0)
+        la, lo, _ = FRAME.enu_to_geodetic(self.e, self.n, 0.0)
+        self.lat, self.lon = np.asarray(la), np.asarray(lo)
+        self.line = np.array([[-200.0, 0.0], [0.0, 0.0], [200.0, 0.0]])
+
+    def planner(self, plans, elev):
+        g = grading._Planner(FRAME, FakeMD(None), elev)
+        g._plan_missing = lambda keys: None
+        g._plan_set = lambda keys, roads_only: (plans, grading.merge_plan_set(plans))
+        g._keys = lambda lat, lon, reach_m=None: [self.mine]
+        return g
+
+    def heights(self, g, base):
+        with unittest.mock.patch.object(grading, "DECK_GROUND_ON", False), \
+                unittest.mock.patch.object(grading, "BATTER_ON", False):
+            return g.apply(self.lat, self.lon, base)
+
+    def test_a_cover_in_a_cell_planned_elsewhere_keeps_no_ground(self):
+        s = np.arange(-200.0, 201.0, 2.0)
+        road = grading._plan(np.stack([s, np.zeros(len(s))], axis=1), np.zeros(len(s)),
+                             roads.Spec(7.0, "paved", False, "residential"))
+        base = np.full(len(self.e), 5.0)       # (the road graded 5 m under the hill: undone over a tube)
+        flat = lambda la, lo: np.zeros(np.shape(la))    # noqa: E731
+        ref = self.heights(self.planner([road], flat), base)
+        self.assertLess(float(ref.max()), 1.0, "graded down to the road")
+        g = self.planner([road], flat)
+        g.covers[self.far] = [(self.line.copy(), 12.0)]
+        np.testing.assert_array_equal(self.heights(g, base), ref)
+        g.covers[self.mine] = [(self.line.copy(), 12.0)]
+        np.testing.assert_array_equal(self.heights(g, base), base, "its own cell's cover keeps the ground")
+
+    def test_an_ungraded_road_in_a_cell_planned_elsewhere_shapes_no_ground(self):
+        bumpy = lambda la, lo: 3.0 * np.sin(np.asarray(la, np.float64) * 1e5)   # noqa: E731
+        base = np.asarray(bumpy(self.lat, self.lon), np.float64) + 2.0 * np.cos(self.e / 7.0)
+        ref = self.heights(self.planner([], bumpy), base)
+        np.testing.assert_array_equal(ref, base, "no roads: the ground as it is")
+        g = self.planner([], bumpy)
+        g.keeps[self.far] = [(self.line.copy(), 6.0)]
+        np.testing.assert_array_equal(self.heights(g, base), ref)
+        g.keeps[self.mine] = [(self.line.copy(), 6.0)]
+        self.assertGreater(float(np.abs(self.heights(g, base) - base).max()), 0.1, "its own cell's raceway smooths")
+
+
 class WallHeightTest(unittest.TestCase):
     def test_city_concrete_walls_full_height(self):
         """A major road's cutting in town keeps a full-height concrete wall (McGraw-Graben); stone walls elsewhere

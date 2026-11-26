@@ -43,7 +43,8 @@
 -- Rain and snow (the level's two Precipitation objects) have ONE owner, precipBlock: shown only in real / preset mode,
 -- with "Show rain and snow" on, outside the 3D map, the big map and missions, below the cloud base; and faded out in
 -- shelter (a road tile's tunnel, arch, parking structure or under-bridge space, or a roof straight above the camera:
--- shelterStep). Rain thickens the fog (rainSigma / snowSigma) and turns its colour grey (fogGrey: the sky's sun
+-- shelterStep). The drops do not collide (doCollision off: thousands of colliding drops cost the 2026-11-26 playtest
+-- its frame rate); the shelter fade keeps them out from under roofs instead. Rain thickens the fog (rainSigma / snowSigma) and turns its colour grey (fogGrey: the sky's sun
 -- term in the lit fog dimmed, applyFogTint). Traffic reads trafficDark / trafficSpeedFactor (headlights, slower).
 -- Console: beamngEarth_weather.setMode('real'|'preset'|'manual')   .setPresetChoice(name)   .status()
 --          .setGravityEnabled(bool)
@@ -1023,6 +1024,17 @@ local function drivePrecip(name, pct, pool, flake)
   if pct < M.PRECIP_NONE then pct = 0 end
   local st = S.precip[name]
   if pct > 0 and flake then applyFlakes(o, flake, st) end
+  if pct > 0 and not st.noCollision then
+    -- (no drop collision, once per level: the level file says so, but a level saved by an editor or an older install
+    -- may not. Thousands of colliding drops each cast rays every fall, the 2026-11-26 playtest's lost frame rate; the
+    -- shelter fade hides the rain under roofs instead)
+    st.noCollision = true
+    local okc, dc = pcall(function() return o:getField('doCollision', 0) end)
+    if okc and (dc == '1' or dc == 'true') then
+      o:setField('doCollision', 0, '0')
+      st.pool = nil         -- (made again below, with the pool)
+    end
+  end
   if pct > 0 and st.pool ~= pool then
     o.numDrops = pool
     o:setField('numDrops', 0, tostring(pool))

@@ -878,7 +878,8 @@
     "provisional": {"type": "bool", "optional": true, "doc": "2026-10-22: a teleport's ungraded first block"},
     "px": {"type": "num", "nullable": true, "optional": true},
     "py": {"type": "num", "nullable": true, "optional": true, "doc": "the prepare_anchor's spot, echoed"},
-    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"}
+    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"},
+    "koppen": {"type": "int", "optional": true, "doc": "2026-11-26: the anchor's Koppen-Geiger class (climate.koppen_at, Beck et al. 1-30, 0 the sea): the trees' leaf cycle (seasonlook.climateFactor); left out when it cannot be read"}
    }
   },
   "anchor_progress": {
@@ -1066,7 +1067,8 @@
     "bridges": {"type": "list"},
     "bands": {"type": "list"},
     "lake": {"type": "list"},
-    "credit": {"type": "str"}
+    "credit": {"type": "str"},
+    "look": {"type": "dict", "optional": true, "doc": "winter W3 (snowroad.py, BNE_WINTER; winterroad.lua): per plow class P0..P4 marking (paint shown 0..1), deck (a deck's snow 0..1), banks (bin 0..4), dirt (0..2); walks [state, cover 0..8] by sidewalk slot (main, residential cleared, residential left, unmaintained)"}
    }
   },
   "block_base": {

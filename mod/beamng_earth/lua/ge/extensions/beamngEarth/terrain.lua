@@ -755,11 +755,47 @@ function M.isWetLayer(name)
   return false
 end
 
--- The step wanted (0..2); applied at the next swap.
+-- The step wanted (0..2); applied at the next swap (or core.lua's re-wet swap of the block in use: M.wetDirty).
+M.wetDirty = false
 function M.setWet(step)
-  wetWant = math.max(0, math.min(2, math.floor(tonumber(step) or 0)))
+  local s = math.max(0, math.min(2, math.floor(tonumber(step) or 0)))
+  if s ~= wetWant then M.wetDirty = true end
+  wetWant = s
 end
 function M.wetStep() return wetWant end
+
+-- Is a paved layer of the block in use not on the wanted step yet?
+function M.wetPending()
+  local list = M.WET_FIELDS[wetWant] or false
+  for _, name in ipairs(M.slots or {}) do
+    if M.isWetLayer(name) and (wetHave[name] or false) ~= list then return true end
+  end
+  return false
+end
+
+-- The block in use swapped in again from `path`, another file of the same content (core.lua's re-wet: a terrainFile
+-- the block does not have, or the engine skips it): the paved layers' wet maps ride on the swap's own rebind, as at
+-- every block swap (applyWet before the file is set); position, height scale and photo stay. false: nothing done.
+function M.reswap(path)
+  local tb = M.get()
+  if not tb or not M.slots or type(path) ~= 'string' or not FS:fileExists(path) then return false end
+  if tb:getField('terrainFile', 0) == path then return false end
+  local sw = stopwatch.new()
+  local ok, err = pcall(function()
+    M.applyWet(M.slots)
+    tb:setField('terrainFile', 0, path)
+    tb:postApply()
+  end)
+  if not ok then
+    log('W', 'beamngEarth', 'terrain re-wet swap failed: ' .. tostring(err))
+    return false
+  end
+  local tApply = sw()
+  applyRender(tb)
+  M.swaps = (M.swaps or 0) + 1
+  M.lastSwap = { apply = tApply, total = sw(), mats = #M.slots, rewet = true }
+  return true
+end
 
 -- Pure: the value a wet field entry sets.
 function M.wetValue(v)
@@ -799,6 +835,7 @@ end
 function M.onLevelChanged()
   materialsChecked = false
   wetHave, wetOrig = {}, {}
+  M.wetDirty = false
 end
 
 return M

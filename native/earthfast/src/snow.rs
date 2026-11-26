@@ -429,6 +429,15 @@ fn plowed(regime: i64, class: usize) -> bool {
     }
 }
 
+/// Whether a regime plows / salts a class (snowroad.rs: banks, their dirt).
+pub fn plowed_class(regime: i64, class: usize) -> bool {
+    plowed(regime, class)
+}
+
+pub fn salted_class(regime: i64, class: usize) -> bool {
+    salted(regime, class)
+}
+
 fn salted(regime: i64, class: usize) -> bool {
     match regime {
         1 => class <= 1,
@@ -927,6 +936,10 @@ pub fn preset(name: &str) -> Option<(Vec<i32>, i64, i32, i32)> {
     let plan: &[(usize, i32, i32, i32, i32, i32, i32, i32)] = match name {
         "light" => &[(48, -400, -700, 0, 0, 30, 60, -100), (6, -300, -400, 50, 1000, 30, 100, -100),
                      (12, -400, -600, 0, 0, 20, 90, -100)],
+        // (W3's look: two cold days, a 14 h storm of ~28 cm at -5 degC, a cold dry day and a half after it in an M3
+        // climate: main roads salted bare, banks along the plowed ones, side streets packed with wheel tracks)
+        "heavy" => &[(48, -600, -900, 0, 0, 30, 60, -100), (14, -500, -600, 200, 1000, 40, 100, -100),
+                     (30, -700, -1000, 0, 0, 20, 50, -150)],
         "ice" => &[(24, -600, -900, 0, 0, 20, 40, -100), (6, 200, 150, 100, 0, 30, 100, 100),
                    (8, -500, -600, 0, 0, 10, 0, -300), (4, -200, -250, 30, 0, 20, 100, -200),
                    (6, -400, -500, 0, 0, 10, 80, -300)],
@@ -956,7 +969,7 @@ pub fn preset(name: &str) -> Option<(Vec<i32>, i64, i32, i32)> {
             hour += 1;
         }
     }
-    let regime = if name == "ice" { 0 } else { 2 };
+    let regime = match name { "ice" => 0, "heavy" => 3, _ => 2 };
     Some((out, regime, 200, 4500))
 }
 

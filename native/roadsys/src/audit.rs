@@ -112,7 +112,7 @@ impl Rd<'_> {
     fn f32(&mut self) -> Result<f32, String> { Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap())) }
 }
 
-pub(crate) fn classify(p: &[[f64; 3]; 3]) -> u8 {
+pub fn classify(p: &[[f64; 3]; 3]) -> u8 {
     let (ux, uy, uz) = (p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]);
     let (vx, vy, vz) = (p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]);
     let n = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
@@ -368,6 +368,55 @@ fn fmt(v: f64) -> String {
     if v == v.trunc() && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{:.6}", v) }
 }
 
+/// One located cell of the audit (tools/roadscan, the corridor scanner): what ROADSYS_AUDIT_DUMP prints, as data.
+/// `code`: "SA" (every lane cell: z = drive height or NaN in a hole, v = the terrain's, kind = what was driven on:
+/// 0 terrain, else 1 + the entry kind), "HOLE", "DO", "EN" (mask: the kinds), "TE", "RF", "CS" (v = the gap), "PI",
+/// "PARAPET", "STEP" (v = the second difference, kind 1 along / 2 across), "LIP" (v = mm, kind = the top's kind,
+/// mask 1 = to the terrain), "HO", "HE", "MOUTH" (v = the step, m), "MOUTHHOLE". Collected only inside
+/// `audit_findings`; the metrics are the same either way.
+#[derive(Clone, Copy, Debug)]
+pub struct Finding {
+    pub code: &'static str,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub v: f64,
+    pub line: u32,
+    pub station: i64,
+    pub across: i64,
+    pub level: u8,
+    pub kind: u8,
+    pub mask: u32,
+}
+
+impl Finding {
+    pub fn at(code: &'static str, x: f64, y: f64) -> Finding {
+        Finding { code, x, y, z: f64::NAN, v: f64::NAN, line: u32::MAX, station: 0, across: 0, level: 0, kind: 0, mask: 0 }
+    }
+}
+
+thread_local! {
+    static SINK: std::cell::RefCell<Option<Vec<Finding>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Findings are being collected on this thread (audit_findings).
+pub fn collecting() -> bool { SINK.with(|s| s.borrow().is_some()) }
+
+pub(crate) fn note(f: Finding) {
+    SINK.with(|s| if let Some(v) = s.borrow_mut().as_mut() { v.push(f) });
+}
+
+/// The audit of one scene and its located cells (deterministic: the audit's own order).
+pub fn audit_findings(sc: &Scene) -> (Metrics, Vec<Finding>) {
+    SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+    let m = audit(sc);
+    let f = SINK.with(|s| s.borrow_mut().take().unwrap_or_default());
+    (m, f)
+}
+
+/// z of triangle t's plane at (x, y) inside its XY projection (the audit's vertical ray).
+pub fn ray_z(t: &Tri, x: f64, y: f64) -> Option<f64> { ray(t, x, y) }
+
 /// A tunnel lane's floor per sample (NaN for the other levels, and in a hole), traced as a car drives it: per cell
 /// the floor candidates (deck tops, floor faces, the ground), along each row of cells (one line, one across offset,
 /// its stations in order) the one nearest the previous cell's within TRACK_JUMP; a row's start, or a cell after a gap,
@@ -442,6 +491,17 @@ pub fn audit(sc: &Scene) -> Metrics {
     let mut heights: BTreeMap<(u32, i64, i64), (f64, f64, f64, u8)> = BTreeMap::new();
     let samples_dump = std::env::var("ROADSYS_AUDIT_SAMPLES").is_ok();
     let dump = std::env::var("ROADSYS_AUDIT_DUMP").is_ok();
+    let sink = collecting();
+    let mut entry_kind: Vec<u8> = Vec::new();
+    if sink {
+        for t in tris.iter() {
+            let e = t.entry as usize;
+            if e >= entry_kind.len() { entry_kind.resize(e + 1, 0); }
+            entry_kind[e] = t.kind;
+        }
+    }
+    let cell = |code: &'static str, s: &Sample| Finding { code, x: s.x, y: s.y, z: f64::NAN, v: f64::NAN, line: s.line,
+        station: s.station, across: s.across, level: s.level, kind: 0, mask: 0 };
     for (si, s) in ss.iter().enumerate() {
         let (x, y) = (s.x, s.y);
         m.add("lane_cells", 1.0);
@@ -466,6 +526,10 @@ pub fn audit(sc: &Scene) -> Metrics {
             m.add("hole_cells", 1.0);
             heights.insert((s.line, s.station, s.across), (f64::NAN, x, y, s.level));
             if samples_dump { eprintln!("SA {} {} {} {:.3} {:.3} {} NaN", s.line, s.station, s.across, x, y, s.level); }
+            if sink {
+                note(Finding { v: zt, ..cell("SA", s) });
+                note(Finding { v: zt, ..cell("HOLE", s) });
+            }
             continue;
         }
         let win = if s.level == 0 { 0.5 } else { 0.3 };
@@ -474,6 +538,16 @@ pub fn audit(sc: &Scene) -> Metrics {
         if !drive.is_finite() { drive = zref; }
         heights.insert((s.line, s.station, s.across), (drive, x, y, s.level));
         if samples_dump { eprintln!("SA {} {} {} {:.3} {:.3} {} {:.3}", s.line, s.station, s.across, x, y, s.level, drive); }
+        if sink {
+            // what the drive height lies on: the terrain, else the colliding top (or the traced floor's face) there
+            let on = if zt.is_finite() && zt == drive { 0 } else {
+                hits.iter().find(|h| h.0 == drive).map(|h| 1 + entry_kind[h.1 as usize])
+                    .or_else(|| col_flat.at(x, y).iter().chain(floors.at(x, y).iter()).find(|&&k| ray(&tris[k as usize], x, y) == Some(drive))
+                        .map(|&k| 1 + tris[k as usize].kind))
+                    .unwrap_or(if zt.is_finite() && (zt - drive).abs() < 1e-9 { 0 } else { 255 })
+            };
+            note(Finding { z: drive, v: zt, kind: on, ..cell("SA", s) });
+        }
         // double owner: distinct surfaces within 5 cm under the drivable one
         let mut owners: Vec<(u32, f64)> = Vec::new();
         let terrain_own = zt.is_finite() && zt >= drive - OWN && zt <= drive + 1e-9;
@@ -487,6 +561,7 @@ pub fn audit(sc: &Scene) -> Metrics {
             m.add("double_owner_m2", area);
             if terrain_own { m.add("double_owner_terrain_m2", area); } else { m.add("double_owner_collider_m2", area); }
             if std::env::var("ROADSYS_AUDIT_DUMP").is_ok() { eprintln!("DO {:.1} {:.1} lvl {} ter {} zt {:.2} drive {:.2} n {} line {}", x, y, s.level, terrain_own, zt, drive, n_own, s.line); }
+            if sink { note(Finding { z: drive, v: n_own as f64, mask: terrain_own as u32, ..cell("DO", s) }); }
         }
         // the envelope above: colliding faces in (drive + 5 cm, drive + 4.5 m]
         let (lo, hi) = (drive + OWN, drive + ENVELOPE);
@@ -530,6 +605,10 @@ pub fn audit(sc: &Scene) -> Metrics {
                 let ks: Vec<usize> = (0..10).filter(|&k| intr_kind[k]).collect();
                 eprintln!("EN {:.1} {:.1} lvl {} drive {:.2} line {} kinds {:?}", x, y, s.level, drive, s.line, ks);
             }
+            if sink {
+                let mask = (0..10).filter(|&k| intr_kind[k]).fold(0u32, |a, k| a | 1 << k);
+                note(Finding { z: drive, mask, ..cell("EN", s) });
+            }
             for (kind, name) in [(KIND_BARRIER, "envelope_intrusion_barrier_m2"), (KIND_DECK, "envelope_intrusion_deck_m2"),
                                  (KIND_WALK, "envelope_intrusion_walk_m2"), (KIND_WALKCOL, "envelope_intrusion_walk_m2"),
                                  (KIND_TUNNEL, "envelope_intrusion_tunnel_m2"), (KIND_RAIL, "envelope_intrusion_rail_m2"),
@@ -539,7 +618,7 @@ pub fn audit(sc: &Scene) -> Metrics {
             // (T0) a tube through the road over it: a tunnel part inside a ground or bridge lane's envelope
             if s.level != 2 && intr_kind[KIND_TUNNEL as usize] { m.add("tube_breaks_upper_m2", area); }
         }
-        if parapet { m.add("parapet_in_cw_m", CELL); }
+        if parapet { m.add("parapet_in_cw_m", CELL); if sink { note(Finding { z: drive, ..cell("PARAPET", s) }); } }
         if over_min.is_finite() && over_min <= hi { m.add("envelope_overhead_m2", area); }
         // a deck or a tunnel lane: the physics ground inside its clearance (ground left in a tube, a deck under the
         // hill); a tunnel lane with no vault over it (a road under the hill without its tube: the Milchbucktunnel's
@@ -548,11 +627,13 @@ pub fn audit(sc: &Scene) -> Metrics {
             m.add("envelope_intrusion_terrain_m2", area);
             if s.level == 2 { m.add("opening_blocked_tunnel_m2", area); }       // (T0: terrain across a tunnel's mouth)
             if dump { eprintln!("TE {:.3} {:.3} lvl {} drive {:.2} ter {:.2} line {}", x, y, s.level, drive, zt, s.line); }
+            if sink { note(Finding { z: drive, v: zt - drive, ..cell("TE", s) }); }
         }
         if s.level == 2 { roofed.insert((s.line, s.station, s.across), over_min.is_finite() && over_min <= drive + ROOF_MAX); }
         if s.level == 2 && !(over_min.is_finite() && over_min <= drive + ROOF_MAX) {
             m.add("tunnel_roofless_cells", 1.0);
             if dump { eprintln!("RF {:.3} {:.3} drive {:.2} line {}", x, y, drive, s.line); }
+            if sink { note(Finding { z: drive, ..cell("RF", s) }); }
         }
         if s.level == 0 && (over_min.is_finite() || top_above.is_finite()) && over_min < drive + 15.0 {
             m.add("under_structure_cells", 1.0);
@@ -560,6 +641,7 @@ pub fn audit(sc: &Scene) -> Metrics {
             if gap < 2.5 { m.add("opening_blocked_m2", area); }
             if gap < 4.25 { m.add("clearance_short_cells", 1.0); }
             if gap < 4.25 && std::env::var("ROADSYS_AUDIT_DUMP").is_ok() { eprintln!("CS {:.1} {:.1} gap {:.2} drive {:.2} top {:.2}", x, y, gap, drive, top_above); }
+            if gap < 4.25 && sink { note(Finding { z: drive, v: gap, ..cell("CS", s) }); }
             if top_above.is_finite() {
                 let rr = top_above - drive;
                 r2r.push(rr);
@@ -578,6 +660,7 @@ pub fn audit(sc: &Scene) -> Metrics {
             if pier {
                 m.add("pier_in_face_m2", area);
                 if std::env::var("ROADSYS_AUDIT_DUMP").is_ok() { eprintln!("PI {:.1} {:.1} drive {:.2} over {:.2}", x, y, drive, over_min); }
+                if sink { note(Finding { z: drive, v: over_min - drive, ..cell("PI", s) }); }
             }
         }
     }
@@ -593,6 +676,9 @@ pub fn audit(sc: &Scene) -> Metrics {
             if d2 > STEP {
                 if ds == 1 { m.add("lane_step_along_cells", 1.0); } else { m.add("lane_step_across_cells", 1.0); }
                 if dump { eprintln!("STEP {:.3} {:.3} lvl {} {} {:.3} line {}", x, y, level, if ds == 1 { "along" } else { "across" }, d2, li); }
+                if sink {
+                    note(Finding { z, v: d2, line: li, station: st, across: ac, level, kind: if ds == 1 { 1 } else { 2 }, ..Finding::at("STEP", x, y) });
+                }
             }
             worst = worst.max(d2);
         }
@@ -711,6 +797,9 @@ pub fn audit(sc: &Scene) -> Metrics {
                 }
                 if best.is_finite() {
                     if dump && best > 0.005 { eprintln!("lip {:.3} {:.3} {:.3} {:.1} terrain={} entry={} kind={}", p[0], p[1], ze, best * 1000.0, terrain, entry, tri.kind); }
+                    if best > 0.005 && collecting() {
+                        note(Finding { z: ze, v: best * 1000.0, kind: tri.kind, mask: terrain as u32, ..Finding::at("LIP", p[0], p[1]) });
+                    }
                     lips.push(best * 1000.0);
                     if terrain { lips_terrain.push(best * 1000.0); }
                     if tri.kind == KIND_TUNNEL { lips_tunnel.push(best * 1000.0); }
