@@ -53,13 +53,18 @@ function M.fields(ctx)
     volume = c01(ctx.volume, 1), thunderVolume = c01(ctx.thunderVolume, 1),
     muted = ctx.muted == true, duck = c01(ctx.duck, 1), t = num(ctx.t, 0),
     thunderSet = (ctx.thunderSet == 'recorded') and 'recorded' or 'generated',
+    -- the Rain sound ('recorded': the synth's texture-bank rain) and the mod's own rain volume for its layers (RAIN_GAIN x
+    -- the rain share), so the synth plays at the files' level
+    rainSet = (ctx.rainSet == 'recorded') and 'recorded' or 'generated',
+    rainVol = c01(ctx.rainVol, 0.5),
   }
 end
 
 -- Pure: what decides a resend (rounded, so jitter does not send every frame).
 function M.signature(m, f)
-  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s', m, f.rainMmH, f.windMs, f.shelter,
-    tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet))
+  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s|%s|%.2f', m, f.rainMmH, f.windMs, f.shelter,
+    tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet),
+    tostring(f.rainSet), f.rainVol)
 end
 
 -- Pure: the id of strike s ({ t, seed }): its hint and its final one share it.
@@ -296,7 +301,8 @@ function M.tick(now, ctx)
   local ok, sent = pcall(function()
     return send({ type = 'weather_audio', mode = mode, rainMmH = f.rainMmH, windMs = f.windMs,
       shelter = f.shelter, tunnel = f.tunnel, cabin = f.cabin, volume = f.volume, thunderVolume = f.thunderVolume,
-      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, thunders = th })
+      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, rainSet = f.rainSet, rainVol = f.rainVol,
+      thunders = th })
   end)
   if ok and sent then
     lastSig, lastSendT, modeSent = sig, now, mode

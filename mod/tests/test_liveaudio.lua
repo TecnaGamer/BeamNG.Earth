@@ -44,6 +44,11 @@ la.onAudioState({ state = 'live', thunderSets = {} })
 check(not la.liveThunder(), 'a synth without the bank: the files again')
 la.reset()
 check(la.fields({ thunderSet = 'recorded' }).thunderSet == 'recorded' and la.fields({}).thunderSet == 'generated', 'fields: the set')
+check(la.fields({ rainSet = 'recorded' }).rainSet == 'recorded' and la.fields({}).rainSet == 'generated', 'fields: the rain set')
+check(la.fields({ rainVol = 0.3 }).rainVol == 0.3 and la.fields({}).rainVol == 0.5 and la.fields({ rainVol = 7 }).rainVol == 1,
+  'fields: the rain volume, clamped, 0.5 when absent')
+check(la.signature('live', la.fields({ rainVol = 0.3 })) ~= la.signature('live', la.fields({ rainVol = 0.4 })),
+  'a changed rain volume sends again')
 la.setThunderSet('generated')
 check(la.thunder({ t = 1000.5, seed = 77 }, 1700, { delay = 4.9, kind = 'close', gain = 0.6 }, true).id == th.id, 'thunder: same id')
 check(la.thunderId({ t = 1000.5, seed = 77 }) == th.id, 'thunderId')

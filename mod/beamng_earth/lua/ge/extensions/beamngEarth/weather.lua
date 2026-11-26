@@ -1098,6 +1098,8 @@ local function ownPrecip(e, dt)
   M.rainMmHNow = (not block and c and tonumber(c.rainMmH)) or 0   -- (the rain sound's layers)
   M.windMsNow = c and tonumber(c.windMs) or 0  -- (the live weather sounds' gusts: liveaudio.lua)
   M.snowNow = snow
+  -- (hail falls through the snow object: its share, for the hail sound, ambience.lua)
+  M.hailNow = (c and c.flake == 'hail' and not block) and snow or 0
   local falling = rain >= M.PRECIP_NONE or snow >= M.PRECIP_NONE
   local r, sn = S.precip[M.RAIN_NAME], S.precip[M.SNOW_NAME]
   if not falling and r.hidden == true and sn.hidden == true then        -- (dry and hidden: nothing to do)
@@ -1485,6 +1487,7 @@ local function hidePrecip()
   for name in pairs(S.precip) do pcall(drivePrecip, name, 0, 0) end
   M.rainNow = 0
   M.snowNow = 0
+  M.hailNow = 0
   S.shelter, M.shelter = 1, 1
   pcall(restoreSun)
   pcall(restoreExposure)
