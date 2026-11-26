@@ -256,6 +256,20 @@ def piece_system(cur_net, cur, nxt_net, found, cid):
 
 
 def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
+    """_grow, where a time limit it runs past (xproc.TimeLimit) carries .roads: the canonical ids of the roads of the
+    interchange the growth had found by then. The end of a growth is the same whichever piece it starts from, so a growth
+    from any of them is the same growth over again and goes past the same limit: interchange does not make it again for
+    each of them (a metropolis's one network, grown from each of its roads in turn: 48 growths of 60 s)."""
+    import xproc
+    seen = set()
+    try:
+        return _grow(planner, net, ix, cid, pt, adopt, hint, seen)
+    except xproc.TimeLimit as e:
+        e.roads = frozenset(seen)
+        raise
+
+
+def _grow(planner, net, ix, cid, pt, adopt, hint, seen):
     """(key, net, Interchange, the net's other systems) of the whole interchange the one found (ix, in net: a piece of it,
     as some region's box holds it) is part of: the members within SHAPES_PAD_M of its seeds (what a ramp reaches) found
     again as interchanges, the one the piece is part of (piece_system: of the systems with the road cid among their seeds,
@@ -270,6 +284,7 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
     import grading
     import xproc
     ids = _gsh.system_ids(net, ix.sysm)
+    seen |= ids
     cur_net, cur = net, ix
     byk, loaded = {}, set()
     read_s = find_s = 0.0
@@ -350,6 +365,7 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
         if more <= ids:
             break
         ids, cur_net, cur = more, nxt_net, nxt
+        seen |= ids
     # (what the finding cost is the first system's: the steps of each system carry the seconds of its own)
     parts = tuple(p._replace(paths_s=p.paths_s + (read_s if k == 0 else 0.0),
                              extent_s=p.extent_s + (find_s - nxt.paths_s if k == 0 else 0.0))
@@ -515,6 +531,8 @@ def interchange(planner, net, ix, hk, clock):
         got = dict(key="limit:%s" % cid, roads={}, failed=limits.reason(e.what, e.secs), pieces=0, crossings=0, relaxed=0,
                    owner="", pid=os.getpid(), secs=0.0, rank=rank_of(planner, net, sysm))
         LIMITED[("road", cid)] = got
+        for c in getattr(e, "roads", ()):       # (the roads of its interchange: the same growth from each)
+            LIMITED.setdefault(("road", c), got)
         return got
 
 

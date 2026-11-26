@@ -394,8 +394,11 @@ PAIRS_MAX_PAIRS = 200000       # ~350 B a pair (its relations with a neighbour):
 
 _LINE_ID = {}              # (repr(key), len(line)) -> a member's line id: a growth's rounds each make a new net, and
 _LINE_ID_MAX = 100000      # (62,000 members hashed a round was a second of each: Yokohama; ~35 MB at the cap)
-RAMP_MEMO_MAX = 4000       # ramps kept in a growth's memo (_Ramper.memo: their samples, ground and curve; ~11 KB a ramp,
-                           # 44 MB at most, freed with the growth; a giant interchange lays 1,200 a round)
+RAMP_MEMO_MAX = 4000       # ramps kept in the process's memo (_RAMPS, _Ramper.memo: their samples, ground and curve; ~11 KB a
+                           # ramp, 44 MB at most; a giant interchange lays 1,200 a round)
+_RAMPS = {}                # the ramps laid by every growth of the process, by what a ramp is made of (_Ramper.ramp_from's key):
+#                            the growths of the interchanges in one district lay the same ramps off the same decks, each from
+#                            the start (Yokohama: 44 growths in one region, 40 of its 57 s in the ramps' reaches)
 
 
 def _line_id(net, i):
@@ -475,7 +478,7 @@ class Scan:
     members' arc lengths and boxes (Net(geo=)) and `scanned`: the seeds each round scanned or asked (the count of them)."""
 
     def __init__(self):
-        self.ramps = {}         # (_ramp_reaches' memo across the rounds: _Ramper.memo)
+        self.ramps = _RAMPS     # (_ramp_reaches' memo across the rounds and growths: _Ramper.memo)
         self.geo = {}           # (the rounds' nets' members' arc lengths and boxes: Net(geo=))
         self.scanned = []
         self.ix = PAIRS
@@ -2061,8 +2064,11 @@ def _over_dips(net, pcs, smp, x):
 
 
 def _deck_paths(net, sysm):
-    """along(i, si, j, sj): m along the system's decks from member i's arc length si to member j's sj, through their
-    joints (inf: not joined)."""
+    """along(i, si, j, sj, limit): m along the system's decks from member i's arc length si to member j's sj, through their
+    joints (inf: not joined). Of the way there only what is nearer than limit is looked for (a shortest path over the joints
+    from i's side, stopped where it passes limit: a distance further than that is inf, one nearer is the shortest): the
+    asker wants to know whether two places are within a clearance's run of each other, not how far apart they are across a
+    system of hundreds of decks, which every joint to every joint (all pairs) of it cost."""
     at = {}                 # deck member -> [(s on it, joint)]
     n = 0
     for i, si, j, sj in sysm["joins"]:
@@ -2070,20 +2076,38 @@ def _deck_paths(net, sysm):
             at.setdefault(i, []).append((si, n))
             at.setdefault(j, []).append((sj, n))
             n += 1
-    D = np.full((n, n), np.inf)
-    np.fill_diagonal(D, 0.0)
+    nbr = [dict() for _ in range(n)]            # (joint -> {the joints on the same decks: the run between them})
     for lst in at.values():
         for sa, a in lst:
             for sb, b in lst:
-                D[a, b] = min(D[a, b], abs(sa - sb))
-    for k in range(n):
-        D = np.minimum(D, D[:, k:k + 1] + D[k:k + 1, :])
+                if a != b:
+                    w = abs(sa - sb)
+                    if w < nbr[a].get(b, np.inf):
+                        nbr[a][b] = w
 
-    def along(i, si, j, sj):
+    def along(i, si, j, sj, limit=np.inf):
         best = abs(si - sj) if i == j else np.inf
+        goal = at.get(j, ())
+        if not goal:
+            return best
+        dist, heap = {}, []
         for sa, a in at.get(i, ()):
-            for sb, b in at.get(j, ()):
-                best = min(best, abs(si - sa) + float(D[a, b]) + abs(sb - sj))
+            d = abs(si - sa)
+            if d < limit and d < dist.get(a, np.inf):
+                dist[a] = d
+                heapq.heappush(heap, (d, a))
+        while heap:
+            d, a = heapq.heappop(heap)
+            if d > dist[a]:
+                continue
+            for b, w in nbr[a].items():
+                nd = d + w
+                if nd < limit and nd < dist.get(b, np.inf):
+                    dist[b] = nd
+                    heapq.heappush(heap, (nd, b))
+        for sb, b in goal:
+            if b in dist:
+                best = min(best, dist[b] + abs(sb - sj))
         return best
     return along
 
@@ -2100,6 +2124,12 @@ def _stacked(net, sysm, pcs, smp):
     out = []
     along = None
     gone = sysm.get("order", {}).get("gone", ())    # (pairs whose order the order step gave up: ix/s3_order.py)
+    # (each deck's samples' box, to name for every upper deck the decks whose box meets its own: a deck with no sample in
+    # the upper's box has no sample near its carriageway, and a system's decks are hundreds, each against each)
+    with_box = [p for p in decks if len(smp[p]["xy"])]
+    dlo = np.array([np.asarray(smp[p]["xy"], np.float64).min(0) for p in with_box]).reshape(-1, 2)
+    dhi = np.array([np.asarray(smp[p]["xy"], np.float64).max(0) for p in with_box]).reshape(-1, 2)
+    dk = np.array(with_box, np.int64)
     for q in decks:                         # (the upper)
         mu = pcs[q]["main"]
         xu = np.asarray(smp[q]["xy"], np.float64)
@@ -2109,7 +2139,7 @@ def _stacked(net, sysm, pcs, smp):
         L2 = np.maximum((ab * ab).sum(1), 1e-12)
         half = float(net.m[mu].half)
         lo_u, hi_u = xu.min(0) - half, xu.max(0) + half
-        for p in decks:                     # (the lower)
+        for p in dk[((dhi >= lo_u) & (dlo <= hi_u)).all(1)].tolist():       # (the lower, in order)
             md = pcs[p]["main"]
             if p == q or _over(net.m[mu], net.m[md]) != "i" or frozenset((mu, md)) in gone:
                 continue
@@ -2129,7 +2159,7 @@ def _stacked(net, sysm, pcs, smp):
                 need = clearance_need(net, mu, md, xd[n_])
                 if along is None:
                     along = _deck_paths(net, sysm)
-                if along(md, float(smp[p]["ms"][n_]), mu, su) < need / g:
+                if along(md, float(smp[p]["ms"][n_]), mu, su, need / g) < need / g:
                     continue
                 out += [(q, kk, p, n_, need), (q, kk + 1, p, n_, need)]
     return out
@@ -2316,7 +2346,9 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     # move, each at what it costs: W_TRACK, the least of the laws' costs of a move that closes the conflict)
     pin = any(pc["kind"] == "track" for pc in pcs)
     while True:
-        chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, pin_tracks=pin)
+        # (with its trace: where the laws contradict, the relaxation below is made on this very problem, which is not made again)
+        trace = {}
+        chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace, pin_tracks=pin)
         info = {}
         xproc.check_cancel()
         _cw.PROBE.on = pin          # (the tracks held is a try: its miss is not the answer's, the tracks are freed next)
@@ -2336,8 +2368,6 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
         # the order the laws are given up (ix/relax.py), and said so: the answer's diagnostics name each. The first attempt's
         # miss is the answer's `first`, not a log line of its own: the line of the answer is the last solve's)
         import ix.relax as _relax
-        trace = {}
-        chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace, pin_tracks=pin)
         first = {k: info[k] for k in ("status", "grade_excess", "curve_excess", "lower_shortfall_m", "upper_excess_m",
                                       "junction_gap_m", "clearance_shortfall_m") if k in info}
         chains, cps, done, touched = _relax.relax(net, pcs, smp, chains, cps, trace)
@@ -2629,23 +2659,27 @@ class _Ramper:
         memo, key = self.memo, None
         if memo is not None:
             # (a growth's rounds lay the same ramps again from the same ends along the same roads: the samples, the
-            # ground under them and the ramp's curve are the same whenever every member it runs along is. The key names
-            # them all: a member added by a round where the ramp runs changes it. Yokohama's stacked viaducts: 1,200
+            # ground under them and the ramp's curve are the same whenever every member it runs along is, over the same
+            # stretch of each (another growth's walk through a joint can run another stretch of the same members), and the
+            # height and grade it leaves with are. The key names them all, to the last bit: a member added by a round where the ramp runs changes it. Yokohama's stacked viaducts: 1,200
             # ramps a round for 820 seeds, the last rounds adding 2 roads, each round the same 1,200 ground reads)
-            key = (_line_id(net, j), round(float(s0), 3), d_, tuple(_line_id(net, q) for q, _a, _b in segs),
-                   None if z0 is None else round(float(z0), 4), round(float(g_along), 6), None if sign is None else sign,
+            key = (_line_id(net, j), float(s0), d_, tuple((_line_id(net, q), float(a), float(b)) for q, a, b in segs),
+                   None if z0 is None else float(z0), float(g_along), None if sign is None else sign,
                    None if z0 is not None else float(over))
             got = memo.get(key)
             if got is not None and os.environ.get("BNE_IX_MEMO_CHECK"):
                 _memo_check(self, net, segs, j, z0, g_along, over, sign, key, got)
             if got is not None:
                 x, gr, z0, sign, g_max, rad, z, k = got
-                memo[key] = got           # (move to the end: the least recently used is the first to go)
+                memo.pop(key, None)       # (move to the end: the least recently used is the first to go)
+                memo[key] = got
                 # (the samples name their members by line id, the round's net's indices made now: a later round's net
                 # numbers them otherwise, and a stretch looked up by a stale index was another road's)
                 x = _x_by_index(net, x, segs)
                 _PROF.__dict__["memo_hits"] = _PROF.__dict__.get("memo_hits", 0) + 1
         if key is None or got is None:
+            import revisit
+            f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
             x = sample(net, [dict(segs=segs)])[0]
             mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
             gr = self.ground_of(x)
@@ -2655,10 +2689,11 @@ class _Ramper:
                 sign = 1.0 if z0 >= gr[0] else -1.0
             g_max, rad = max_grade(net.m[j]), curve_radius(net.m[j])
             z, k = ramp(z0, g_along, sign, g_max, rad, x["d"] - x["d"][0], gr)
-            if memo is not None:
+            if memo is not None and revisit.thread_faults() == f0 and revisit.thread_lidar_faults() == l0:
+                # (the ground read short of something (a tile not there yet) is this laying's alone, as a plan's)
                 if len(memo) >= RAMP_MEMO_MAX:
                     for old in list(memo)[:RAMP_MEMO_MAX // 4]:
-                        del memo[old]
+                        memo.pop(old, None)
                 memo[key] = (_x_by_id(net, x), gr, z0, sign, g_max, rad, z, k)
         else:
             mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])

@@ -205,6 +205,28 @@ class StepTest(Env):
         self.assertEqual(locks(cache_dir), [])
         self.assertEqual(solutions(cache_dir), [])
         self.assertEqual(owner.FLIGHTS, {})
+        self.assertTrue(owner.LIMITED and all(k[0] == "road" for k in owner.LIMITED), "the growth is not made again")
+
+    def test_a_growth_over_its_limit_carries_the_roads_it_had_found_and_each_of_them_is_limited_too(self):
+        def over(planner, net, ix, cid, pt, adopt, hint, seen):
+            seen |= {"a", "b"}
+            raise xproc.TimeLimit("extent", 1.0)
+        with unittest.mock.patch.object(owner, "_grow", over):
+            with self.assertRaises(xproc.TimeLimit) as ctx:
+                owner.grow(None, None, None, "a", None)
+        self.assertEqual(ctx.exception.roads, frozenset({"a", "b"}))
+
+        class Net:
+            m = [type("M", (), {"key": ("a",), "kind": "road", "feature": "a"})()]
+        sysm = dict(seeds=[0], crossings=[], ends=[])
+        ix = type("IX", (), {"sysm": sysm})()
+
+        def again(planner, net, ix, hk, clock):
+            raise ctx.exception
+        with unittest.mock.patch.object(owner, "_interchange", again),                 unittest.mock.patch.object(owner._gsh, "canonical_id", lambda m: "a"),                 unittest.mock.patch.object(owner, "rank_of", lambda *a: 0):
+            owner.interchange(None, Net, ix, "r", {})
+        self.assertEqual(set(owner.LIMITED), {("road", "a"), ("road", "b")})
+        self.assertIs(owner.LIMITED[("road", "b")], owner.LIMITED[("road", "a")])
 
     def test_the_step_leaves_a_record_and_ixcheck_reports_a_finding(self):
         from ixcheck import load, run

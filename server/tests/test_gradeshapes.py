@@ -1064,3 +1064,44 @@ def test_a_ramp_lands_on_a_line_the_road_can_drive_where_the_ground_rises_off_it
             assert (z[:k] <= np.maximum(ground[:k], z0) + 0.01).all(), (sign, z[:k], ground[:k])
         else:
             assert (z[:k] >= np.minimum(ground[:k], z0) - 0.01).all(), (sign, z[:k], ground[:k])
+
+
+def test_deck_paths_are_the_shortest_run_over_the_joints_where_it_is_within_the_limit_and_inf_where_it_is_not():
+    # (against every joint to every joint of the decks, all pairs: the answer the bounded search stands for)
+    rng = np.random.default_rng(7)
+    for trial in range(30):
+        n = int(rng.integers(3, 9))
+        net = type("N", (), {})()
+        net.m = [type("M", (), {"kind": "deck" if k < n - 1 else "ramp"})() for k in range(n)]
+        joins = []
+        for _ in range(int(rng.integers(2, 14))):
+            i, j = (int(v) for v in rng.integers(0, n, 2))
+            if i != j:
+                joins.append((i, float(rng.uniform(0, 300)), j, float(rng.uniform(0, 300))))
+        along = ix._deck_paths(net, dict(joins=joins))
+        at, k = {}, 0
+        for i, si, j, sj in joins:
+            if net.m[i].kind == net.m[j].kind == "deck":
+                at.setdefault(i, []).append((si, k))
+                at.setdefault(j, []).append((sj, k))
+                k += 1
+        w = np.full((k, k), np.inf)
+        np.fill_diagonal(w, 0.0)
+        for lst in at.values():
+            for sa, a in lst:
+                for sb, b in lst:
+                    w[a, b] = min(w[a, b], abs(sa - sb))
+        for m in range(k):
+            w = np.minimum(w, w[:, m:m + 1] + w[m:m + 1, :])
+        for _ in range(40):
+            i, j = (int(v) for v in rng.integers(0, n, 2))
+            si, sj, limit = (float(v) for v in rng.uniform(0, 300, 3))
+            best = abs(si - sj) if i == j else np.inf
+            for sa, a in at.get(i, ()):
+                for sb, b in at.get(j, ()):
+                    best = min(best, abs(si - sa) + w[a, b] + abs(sb - sj))
+            want = best if best < limit else np.inf
+            got = along(i, si, j, sj, limit)
+            assert got == want or abs(got - want) < 1e-9 or (got >= limit and want == np.inf), (trial, i, j, got, want)
+            full = along(i, si, j, sj)
+            assert full == best or abs(full - best) < 1e-9, (trial, i, j, full, best)
