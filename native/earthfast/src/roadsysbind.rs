@@ -301,6 +301,16 @@ impl RoadsysSquare {
         }
         Ok(out)
     }
+
+    /// (636, T1) per line of pins(), in its order: (the weight with the tunnel fade, the lows without the record's mouths:
+    /// the line as a tunnel left off the record has it; the nearest tunnel range on its stroke: its map feature ("" none),
+    /// the distance along to it, its nearest end (x, y)).
+    #[allow(clippy::type_complexity)]
+    fn tunnel_pins<'py>(&self, py: Python<'py>) -> Vec<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, String, f64, (f64, f64))> {
+        roadsys::square::pins(&self.sq).into_iter()
+            .map(|p| (PyArray1::from_vec(py, p.w_leg), PyArray1::from_vec(py, p.low_leg), p.tfeat, p.tdist, (p.tp[0], p.tp[1])))
+            .collect()
+    }
 }
 
 /// The square's window (its read box in the region frame) and the squares whose weight reaches a box.
@@ -519,6 +529,25 @@ impl RoadsysEnds {
     /// [(x, y)] of each end's point (tests, probes).
     fn points(&self) -> Vec<(f64, f64)> { self.ends.ends.iter().map(|e| (e.p[0], e.p[1])).collect() }
     fn boxes(&self, grow: f64) -> Vec<[f64; 4]> { self.ends.boxes(grow) }
+    /// (630) The under-deck ceiling of decks round these ends (RoadsysCeil).
+    fn ceil(&self, decks: Vec<(PyReadonlyArray2<'_, f64>, f64, f64)>, rails: Vec<PyReadonlyArray2<'_, f64>>) -> PyResult<RoadsysCeil> {
+        let mut ds = Vec::with_capacity(decks.len());
+        for (p, hw, depth) in &decks {
+            let a = p.as_array();
+            if a.ncols() != 3 { return Err(PyValueError::new_err("RoadsysEnds.ceil decks: points must be (n, 3)")); }
+            ds.push(roadsys::ceil::Deck { pts: (0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect(),
+                                          h: (0..a.nrows()).map(|i| a[[i, 2]]).collect(), hw: *hw, depth: *depth });
+        }
+        let mut rl = Vec::with_capacity(rails.len());
+        for p in &rails {
+            let a = p.as_array();
+            if a.ncols() != 2 { return Err(PyValueError::new_err("RoadsysEnds.ceil rails: points must be (n, 2)")); }
+            rl.push((0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect::<Vec<_>>());
+        }
+        let (b, g, t, sk) = &self.src;
+        let src = roadsys::ceil::encode_input(b, g, t, self.ends.s, sk.as_ref(), &ds, &rl);
+        Ok(RoadsysCeil { ceil: roadsys::ceil::Ceil::new(self.ends.clone(), &ds, &rl), src })
+    }
     fn drops<'py>(&self, py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyReadonlyArray1<'py, f64>) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let (x, y) = (x.as_slice()?.to_vec(), y.as_slice()?.to_vec());
         if x.len() != y.len() { return Err(PyValueError::new_err("RoadsysEnds.drops: x and y differ in length")); }
@@ -526,6 +555,28 @@ impl RoadsysEnds {
         let out = py.detach(move || x.iter().zip(y.iter()).map(|(&a, &b)| if a.is_finite() && b.is_finite() { e.drop_at(a, b) } else { 0.0 }).collect::<Vec<f64>>());
         Ok(PyArray1::from_vec(py, out))
     }
+}
+
+/// (630, M5, BNE_ROADSYS=surface) The ground under the decks round a place at most at their soffits less 0.3 m
+/// (native/roadsys ceil.rs), with these ends' drop: decks [(line (n, 3): x, y and the top's height per vertex, half
+/// width, the structure's drawn depth)], rails [line (n, 2)] (their beds keep their ground). ground(x, y, z): the
+/// physics ground from the ground z (the drop, then the ceiling); input(): the whole input's bytes (`roadsys ceil`).
+#[pyclass(frozen)]
+pub struct RoadsysCeil { ceil: roadsys::ceil::Ceil, src: Vec<u8> }
+
+#[pymethods]
+impl RoadsysCeil {
+    fn count(&self) -> usize { self.ceil.count() }
+    fn ground<'py>(&self, py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyReadonlyArray1<'py, f64>, z: PyReadonlyArray1<'py, f64>)
+                   -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let (x, y, z) = (x.as_slice()?.to_vec(), y.as_slice()?.to_vec(), z.as_slice()?.to_vec());
+        if x.len() != y.len() || x.len() != z.len() { return Err(PyValueError::new_err("RoadsysCeil.ground: x, y and z differ in length")); }
+        let c = &self.ceil;
+        let out = py.detach(move || x.iter().zip(y.iter()).zip(z.iter())
+            .map(|((&a, &b), &h)| if a.is_finite() && b.is_finite() && h.is_finite() { c.ground(a, b, h) } else { h }).collect::<Vec<f64>>());
+        Ok(PyArray1::from_vec(py, out))
+    }
+    fn input<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> { PyBytes::new(py, &self.src) }
 }
 
 fn zone_args(p: &PyReadonlyArray2<'_, f64>, uv: &PyReadonlyArray2<'_, f64>, t: &PyReadonlyArray2<'_, i64>, m: &PyReadonlyArray1<'_, i64>,
@@ -700,6 +751,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_clear, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_audit, m)?)?;
     m.add_class::<RoadsysEnds>()?;
+    m.add_class::<RoadsysCeil>()?;
     m.add_function(wrap_pyfunction!(roadsys_handover_zone, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_handover_input, m)?)?;
     Ok(())

@@ -157,6 +157,7 @@ class WatchTest(unittest.TestCase):
         road = _Pool([13])
         road.name = "road tile"
         mbs = {1: 900, 11: 600, 12: 700, 13: 1000}
+        memwatch._state["setting"] = 4.0            # (the player's own Max RAM: the room under it)
         self.assertEqual(self.w.step(mbs, 3200, 8000, [far, road]), "ok")
         self.assertEqual((budget.ROOM_MB, budget.POOL_MB), (800.0, {"far tile": 700, "road tile": 1000}))
         self.assertTrue(pools.burst_fits("far tile", 1))
@@ -165,6 +166,13 @@ class WatchTest(unittest.TestCase):
         line = memwatch.by_pool(mbs, [far, road])
         self.assertEqual(line, "far tile 2 x 700 max = 1300, road tile 1000, other 900")   # (pid 1: not this process)
         self.assertEqual(memwatch.by_pool({os.getpid(): 1500, 13: 1000}, [road]), "main 1500, road tile 1000")
+        memwatch._state["setting"] = 0.0            # (Auto: what the system has free counts too, wg1126)
+        self.w.step(mbs, 3200, 8000, [far, road])
+        reserve = budget.LOW_FREE_GB * 1e9 / 2 ** 20
+        self.assertAlmostEqual(budget.ROOM_MB, 8000 - reserve - 4096.0)
+        self.assertTrue(pools.burst_fits("far tile", 3))
+        self.w.step(mbs, 3200, 3000, [far, road])
+        self.assertEqual(budget.ROOM_MB, 800.0, "the system short: the limit's room")
         memwatch._state["limit"] = 0.0
         self.w.step(mbs, 3200, 8000, [far, road])
         self.assertIsNone(budget.ROOM_MB)
@@ -180,6 +188,7 @@ class WatchTest(unittest.TestCase):
         a, b, busy = _Pool([11]), _Pool([12, 13], workers=2), _Pool([14], inflight=5)
         mbs = {1: 1500, 11: 800, 12: 900, 13: 1200, 14: 2000}
         total = sum(mbs.values())
+        memwatch._state["setting"] = 4.0            # (Auto would let a burst use the system's free memory)
         self.assertEqual(self.w.step(mbs, total, 8000, [a, b, busy]), "shed")
         self.assertTrue(budget.OVER)
         self.assertAlmostEqual(self.asks[0], memwatch.SHED_SHARE * 4000 / 5)
@@ -242,3 +251,23 @@ class WatchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OlderModuleTest(unittest.TestCase):
+    """(Gemini on 01df0d0f) a module older than earthfast 637 loaded by a tool or test: the ceilings count swap whole,
+    and an off watchdog asks nothing of the module."""
+
+    def test_counted_whole_without_the_kernel(self):
+        import fast
+        with mock.patch.object(fast, "_ef", object()):
+            self.assertEqual(budget.counted_mb(1000.0, 500.0), 1500.0)
+            mb = budget.memory_mb()
+            if sys.platform.startswith("linux"):
+                self.assertGreater(mb, 1.0)
+
+    def test_off_watchdog_never_requires_the_kernel(self):
+        import fast
+        with mock.patch.object(memwatch, "ON", False), \
+                mock.patch.object(fast, "require", side_effect=AssertionError("required")):
+            self.assertFalse(memwatch.start(4096.0))
+            self.assertFalse(memwatch.start(0.0))

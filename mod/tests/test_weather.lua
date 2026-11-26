@@ -291,6 +291,7 @@ local function precip(name)
   return o
 end
 local rain, snow = precip(W.RAIN_NAME), precip(W.SNOW_NAME)
+rain:setField('doCollision', 0, '1')      -- (an old level file: the owner turns the drops' collision off)
 local sun = S.newObject('ScatterSky'); sun:registerObject('sunsky')
 sun:setField('brightness', 0, '1.2')
 function sun:postApply() self.applied = (self.applied or 0) + 1 end
@@ -370,9 +371,13 @@ check(env.calls.cover == before.cover and env.calls.fog == before.fog and env.ca
 W.onWeather({ cover = { low = 100, mid = 50, high = 0 }, rainMmH = 8, snowCmH = 0, visM = 5000, slTempC = 12,
   wind = { ms = 5, fromDeg = 180, gustMs = 9 }, baseAglM = 600, lat = 36.58, lon = -118.29 })
 run(W.LERP_S)
-check(rain.hidden == false and rain.fields.numDrops == tostring(W.poolFor(W.RAIN_POOL, W.RAIN_VISIBILITY)) and rain.applied == 1,
-  'rain pool set once (times the rain visibility)')
+check(rain.hidden == false and rain.fields.numDrops == tostring(W.poolFor(W.RAIN_POOL, W.RAIN_VISIBILITY)) and rain.applied == 1 + (W.NEAR_FADE and 1 or 0),
+  'rain pool set once (times the rain visibility; the near fade\'s own re-make once)')
+check(scenetree.findObject(W.NEAR_SHADER) ~= nil and scenetree.findObject(W.NEAR_SHADER).DXVertexShaderFile == 'shaders/beamngEarth/precipNearV.hlsl',
+  'the near-fade drop shader made at the first drops')
 check(rain.pct > 0.9 * W.precipPct(8), 'rain fraction approached its share: ' .. tostring(rain.pct))
+check(rain.fields.doCollision == '0', 'the drops do not collide (made again with the pool: still one postApply)')
+check(snow.fields.doCollision == nil, 'snow not shown: not touched')
 check(snow.hidden == true, 'no snow')
 -- the camera above the cloud base: no rain
 camZ = 5000
@@ -935,8 +940,8 @@ sun:setField('atmoMiePhaseG', 0, '0.8')
 W.setPresetChoice('storm')
 run(1)
 local ms = { tostring(sun:getField('atmoMieScattering')):match('^(%S+) (%S+) (%S+)$') }
-check(#ms == 3 and math.abs(ms[1] - 0.6) < 1e-6 and math.abs(tonumber(sun:getField('atmoMiePhaseG')) - 0.2) < 1e-6,
-  'storm: the atmosphere\'s Mie haze x150 (three components kept), a flatter phase: ' .. tostring(sun:getField('atmoMieScattering')))
+check(#ms == 3 and math.abs(ms[1] - 0.004 * W.FOG_TINT[1].k) < 1e-6 and math.abs(tonumber(sun:getField('atmoMiePhaseG')) - 0.2) < 1e-6,
+  'storm: the atmosphere\'s Mie haze up by FOG_TINT (three components kept), a flatter phase: ' .. tostring(sun:getField('atmoMieScattering')))
 beamngEarth_map3d = { isActive = function() return true end }
 run(1)
 check(sun:getField('atmoMieScattering') == '0.004 0.004 0.004', 'over the 3D map: the sky\'s own atmosphere')

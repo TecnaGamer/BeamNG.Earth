@@ -6,6 +6,7 @@
 // reason; `cargo clippy` fails on a new one.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 mod cliffcuts;
+mod mapcells;
 mod cliffsurface;
 mod cliffappearance;
 mod cliffphoto;
@@ -78,6 +79,7 @@ mod power;
 mod underpass;
 mod coarseease;
 mod junctionsnap;
+mod landings;
 mod tunnelcover;
 mod tunnelchain;
 mod tunnelrec;
@@ -113,6 +115,7 @@ mod fartex;
 mod photojpeg;
 mod leafon;
 mod snowlook;
+mod snowroad; // winter W3 (BNE_WINTER): snowy roads by plow class, sidewalks, snowbanks (server/snowroad.py)
 mod photomesh;
 mod deshadow;
 mod colormatch;
@@ -147,6 +150,7 @@ mod underdeck;
 mod deckground;
 mod railseam;
 mod stageshare;
+mod terrainpacks;
 mod classgrid;
 mod frontage;
 mod furnstations;
@@ -7163,6 +7167,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(membudget::ram_desktop_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_effective_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_watch, m)?)?;
+    // 637: the swapped pages at the RAM they hold (zram), a far burst's room by the system's memory under Auto
+    m.add_function(wrap_pyfunction!(membudget::ram_swap_weight, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_counted_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_burst_room_mb, m)?)?;
+    // 637: the map cells of arrays of points (mapcells.cells_of / cell_of)
+    m.add_function(wrap_pyfunction!(mapcells::mapcells_xy, m)?)?;
+    m.add_function(wrap_pyfunction!(mapcells::mapcells_cell, m)?)?;
         // 259: tunnel entrances (portal: portal_mesh, tunnel_cover_mesh, portal_style)
     m.add_function(wrap_pyfunction!(portal::portal_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(portal::tunnel_cover_mesh, m)?)?;
@@ -7606,6 +7617,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 500: enu_rings and enu_bounds (mapgeom.enu_rings / enu_bounds: many rings' frame conversion in one call, the
     // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like)
     m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_atlas_px, m)?)?;
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
     // where the ground bulges inside it: no dip under its lift). 495-498 are other branches'
@@ -7806,10 +7819,33 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
     // W2 snow on the ground photos, server/snowcover.py)
     snow::py::register(m)?;
+    // 640 (W3, see the end): snowroad.rs, server/snowroad.py
+    snowroad::py::register(m)?;
     // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
     // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
     // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
-    m.add("VERSION", 629)?;
+    // 629: the tunnel plan T1 (roadsys tunnel.rs, tunaudit.rs, tunnelrec.rs; BNE_ROADSYS_TUNNELS)
+    // 630 (628 kept for another branch): RoadsysEnds.ceil / RoadsysCeil (roadsys ceil.rs: the ground under a deck at
+    // most at its soffit less 0.3 m, BNE_ROADSYS=surface; every evaluator of the physics ground,
+    // roads.block_arch_raise), handover.rs End.junction
+    // 631: the tunnel plan T1 round 2 (tunnel records' portals and floors)
+    // 632: RoadsysCeil counts a ground road beside a deck within the deck's own need (ceil.rs allow), whatever other
+    // decks were read (roadsys.ceil_of_cell's box)
+    // 635 (633 and 634 kept for the tunnel and winter W3 branches): tpacks_* (terrainpacks.rs: the ledger, prune, cap
+    // and one-time wipe of our photo packs in the game's terrain texture cache, server/terrainpacks.py)
+    terrainpacks::register(m)?;
+    // 636 (the tunnel branch's 633 renumbered over dev's 635): tunnel plan T1 round 3, the tunnel record's lids under
+    // a road crossing over the tube kept (tunnel.rs StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as
+    // without the record: roadsys.pins_near legacy)
+    // 638: landing_ends / landing_chain (landings.rs: FAST_GAP's deck-end landings and their approaches, ported from
+    // grading._Planner._landings_in / _landing_chain)
+    m.add_function(wrap_pyfunction!(landings::landing_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(landings::landing_chain, m)?)?;
+    // 639: roadwear::puddle_plan (a tile's puddles: sags, gutters, ruts) and
+    // puddle_atlas_px (their masks)
+    // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
+    // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
+    m.add("VERSION", 640)?;
     Ok(())
 }

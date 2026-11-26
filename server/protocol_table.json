@@ -294,6 +294,25 @@
     "on": {"type": "bool"}
    }
   },
+  "weather_audio": {
+   "doc": "live weather sounds (liveaudio.lua -> server/liveaudio.py -> native/weathersynth live-serve; additive): the Weather page's Weather sounds ('live' / 'prerecorded') and, while live, what the live synth plays from, every 0.25 s and at once on a change (the server's synth fades out when they stop for 1 s: a hung or closed game). volume / thunderVolume: the game's master x Environment channel volume 0..1 for each (the channel the mod's own rain layers and thunder play on). thunders: [{id, at (UTC s the sound reaches the listener), d m, kind strike / close / mid / far, gain 0..1, seed, final}]: final = false a look-ahead hint the synth renders early (up to 30 s ahead, again when the listener moved its distance by 15 %), final = true the strike as it happened (only these play), play (on a final; absent: true) false when the game plays its file: the synth then only ducks its rain at `at`, the file's crack",
+   "fields": {
+    "mode": {"type": "str"},
+    "rainMmH": {"type": "num"},
+    "windMs": {"type": "num"},
+    "shelter": {"type": "num"},
+    "tunnel": {"type": "bool"},
+    "cabin": {"type": "bool"},
+    "volume": {"type": "num"},
+    "thunderVolume": {"type": "num"},
+    "muted": {"type": "bool"},
+    "duck": {"type": "num"},
+    "t": {"type": "num"},
+    "synthRain": {"type": "bool", "optional": true, "doc": "the synth plays the rain (liveaudio.lua LIVE_RAIN); false (the default since 2026-11-26): the game plays its own rain loops in Live too and the synth only the thunder and its ducks; absent: true"},
+    "thunderSet": {"type": "str", "optional": true, "doc": "the Weather page's Thunder sound: 'generated' (the game plays the method B files; the synth only ducks its rain at each strike's crack) or 'recorded' (the synth's grain-bank renderer)"},
+    "thunders": {"type": "list", "optional": true}
+   }
+  },
   "snow_mode": {
    "doc": "winter (BNE_WINTER, snowcover.py; additive): another snow state live, a debug preset or none / real (dev tools and tests; the server answers with 'snow' and textures what is shown again)",
    "fields": {
@@ -867,7 +886,8 @@
     "provisional": {"type": "bool", "optional": true, "doc": "2026-10-22: a teleport's ungraded first block"},
     "px": {"type": "num", "nullable": true, "optional": true},
     "py": {"type": "num", "nullable": true, "optional": true, "doc": "the prepare_anchor's spot, echoed"},
-    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"}
+    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"},
+    "koppen": {"type": "int", "optional": true, "doc": "2026-11-26: the anchor's Koppen-Geiger class (climate.koppen_at, Beck et al. 1-30, 0 the sea): the trees' leaf cycle (seasonlook.climateFactor); left out when it cannot be read"}
    }
   },
   "anchor_progress": {
@@ -1026,6 +1046,16 @@
     "snow": {"type": "dict"}
    }
   },
+  "audio_state": {
+   "doc": "live weather sounds (server/liveaudio.py; additive): the live synth's state for the Weather page and the mod's fallback, at least every 0.5 s while live: 'live' (latencyMs: the output's latency), 'off' (reason when the live path is missing: no weathersynth binary) or 'failed' (reason: the audio device or the synth stopped). The mod plays its own pre-recorded sounds whenever the last 'live' is over 1.5 s old",
+   "fields": {
+    "state": {"type": "str"},
+    "reason": {"type": "str", "optional": true},
+    "latencyMs": {"type": "num", "optional": true},
+    "thunderSets": {"type": "list", "optional": true, "doc": "the thunder sets the synth plays itself ('recorded': its grain bank, every thunder; 'generated': method B's strikes and closes it has ready, see readyThunders); for any other set the mod plays its own files"},
+    "readyThunders": {"type": "list", "optional": true, "doc": "[[id, d m], ...]: the thunders the synth has rendered and waiting (at most 24); the mod lets the synth play a generated strike / close only when its id is listed here with d within 15 % of the strike's (else it plays its file and sends the final with play = false)"}
+   }
+  },
   "snowstate": {
    "doc": "winter W1 (snow.py, BNE_WINTER only; additive, protocol 4): the snow kernel's state at the player for the UTC hour t; ground [depth mm, bin 0..6, cover 0..8, wet, crust, SWE mm, hours since snow]; roads / bridges per plow class P0..P4 [condition, lane depth mm, pavement degC, edge condition, edge depth mm, grit 0/1, wheel tracks 0..1]; bands [z m, depth mm facing the pole, facing the equator, forest floor, hours since snow]; lake [freezing degree-days, ice mm, days below 0 degC]; winter.lua applies it",
    "fields": {
@@ -1045,7 +1075,8 @@
     "bridges": {"type": "list"},
     "bands": {"type": "list"},
     "lake": {"type": "list"},
-    "credit": {"type": "str"}
+    "credit": {"type": "str"},
+    "look": {"type": "dict", "optional": true, "doc": "winter W3 (snowroad.py, BNE_WINTER; winterroad.lua): per plow class P0..P4 marking (paint shown 0..1), deck (a deck's snow 0..1), banks (bin 0..4), dirt (0..2); walks [state, cover 0..8] by sidewalk slot (main, residential cleared, residential left, unmaintained)"}
    }
   },
   "block_base": {

@@ -277,22 +277,48 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
 
 ## Weather sounds (bundled, weather phase B)
 
-Thunder and rain recordings from Freesound.org, each under **Creative Commons 0** (public domain dedication, checked
-on each sound's own page 2026-11-25; no credit required, given anyway). Shipped as trimmed, looped and normalised Ogg
-Vorbis files in `mod/beamng_earth/levels/beamng_earth/art/sound/weather/`; every file's source page, direct URL,
-original name, sha256 and processing are in `SOURCES.md` there.
+The sounds are in `mod/beamng_earth/levels/beamng_earth/art/sound/weather/`; how each was made, its seed and its
+loudness are in `SOURCES.md` there.
 
-- Thunder clap: "Thunder Clap" by DaniloSFX, https://freesound.org/s/672776/ (CC0)
-- Thunder clap: "Thunder Clap OWB KY 441x16.wav" by Dave Welsh, https://freesound.org/s/194364/ (CC0)
-- Thunder strike: "Heavy Thunder Strike - no Rain - QUADRO.wav" by BlueDelta, https://freesound.org/s/446753/ (CC0)
-- Distant thunder: "230405 Thunder DRY rolling distant low rumbles" and "230823 Thunder, dry distant rolling" by TRP,
-  https://freesound.org/s/717845/ and https://freesound.org/s/717890/ (CC0)
-- Rolling thunder: "thunder-rolling-170315_0057" by Gerent, https://freesound.org/s/558748/ (CC0)
-- Very close strikes: "Very close lightning strike." by Simon Spiers, https://freesound.org/s/437243/ (CC0), and "Zoom H4n -
-  Super Close Lightning Strike and Thunderstorm" by danielmcadams, https://freesound.org/s/483684/ (CC0)
-- Rain: "Rain light 1 (rural)" and "Rain heavy 1 (rural)" by jmbphilmes, https://freesound.org/s/200271/ and
-  https://freesound.org/s/200270/ (CC0); the muffled rain under roofs is derived from the latter
-- Rain in a car: "Ambiance_Rain_Inside_Car_Close_Roof_Loop_Stereo.wav" by Nox_Sound, https://freesound.org/s/535870/ (CC0)
+- **The rain and the Generated thunder (`bne_rain_*`, `bne_thunder_<class>N`, the default):** generated, no
+  third-party audio. BeamNG.Earth's own synthesiser, `native/weathersynth` (Rust, MIT, like the rest of the
+  repository), renders the thunder from a physical model of a lightning channel and the rain from drop impacts and
+  bubbles. Its only outside code is the `libm` crate (MIT / Apache-2.0) and ffmpeg's libvorbis encoder for the Ogg
+  files.
+- **The Recorded thunder (`bne_thunder_rec_<class>N`, the Weather page's Thunder sound: Recorded), and the live
+  Recorded thunder:** short pieces ("grains") of the field recordings below, released under Creative Commons Zero
+  (CC0 1.0, public domain dedication) on Freesound. CC0 needs no attribution; we credit the recordists anyway, with
+  thanks. Each recording was cut into grains, its background (rain, wind, hiss) subtracted, and levelled
+  (`native/weathersynth/assets/grains/`); weathersynth layers and spaces them. Licences were checked on each sound
+  page on the date shown.
+
+| Freesound sound | title | recordist | licence | checked | grains |
+|---|---|---|---|---|---|
+| [719552](https://freesound.org/s/719552/) | Thunder -  (Rumble) | betostado99 | CC0 1.0 | 2026-11-25 | 3 (mid_body, mid_roll) |
+| [347854](https://freesound.org/s/347854/) | thunder crack 2.wav | cognito perceptu | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [536902](https://freesound.org/s/536902/) | thunder sharp crack approaching.wav | cognito perceptu | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [486253](https://freesound.org/s/486253/) | R22-13-Classic Thunder Strike.wav | craigsmith | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [414064](https://freesound.org/s/414064/) | Distant Thunder isolated.wav | dr19 | CC0 1.0 | 2026-11-25 | 3 (far_roll) |
+| [523905](https://freesound.org/s/523905/) | Lightning Strike.mp3 | fattirewhitey | CC0 1.0 | 2026-11-25 | 2 (body, crack) |
+| [534023](https://freesound.org/s/534023/) | Thunderclap | Fission9 | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [242735](https://freesound.org/s/242735/) | thunder | hifijohn | CC0 1.0 | 2026-11-25 | 3 (mid_body, mid_roll) |
+| [338088](https://freesound.org/s/338088/) | Thunder Clap 4 | jzielke011 | CC0 1.0 | 2026-11-25 | 7 (body, clap, crack, roll) |
+| [760214](https://freesound.org/s/760214/) | Thunder Clap And Rumble #7 | Kinoton | CC0 1.0 | 2026-11-25 | 7 (body, clap, crack, roll) |
+| [760216](https://freesound.org/s/760216/) | Thunder Clap And Rumble #9 | Kinoton | CC0 1.0 | 2026-11-25 | 7 (body, clap, crack, roll) |
+| [439550](https://freesound.org/s/439550/) | Single huge clap of thunder | richwise | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [458015](https://freesound.org/s/458015/) | big thunder clap | seth-m | CC0 1.0 | 2026-11-25 | 6 (body, clap, crack, roll) |
+| [336314](https://freesound.org/s/336314/) | 06/10/2014 close lightning strike | supercell10 | CC0 1.0 | 2026-11-25 | 2 (body, crack) |
+| [653664](https://freesound.org/s/653664/) | STE-050-quiet rumble thunder.wav | tams_kp | CC0 1.0 | 2026-11-25 | 1 (mid_body) |
+| [240230](https://freesound.org/s/240230/) | Thunder clap # 1.wav | the_yura | CC0 1.0 | 2026-11-25 | 2 (body, crack) |
+| [240664](https://freesound.org/s/240664/) | MS_Thunderclap Davos Laret.wav | Thomas Bruderer | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [717907](https://freesound.org/s/717907/) | 230713 Thunder, close crack crash big, mixpre6 AT875r EM272s, Stratford ON 2am | TRP | CC0 1.0 | 2026-11-25 | 6 (body, clap, crack, roll) |
+| [717909](https://freesound.org/s/717909/) | 230724 Thunder, close crack light rain, mixpreroof, Toronto 5pm | TRP | CC0 1.0 | 2026-11-25 | 2 (body, crack) |
+| [574387](https://freesound.org/s/574387/) | Rolling thunder closer ms 77mel 190903.flac | TRP | CC0 1.0 | 2026-11-25 | 3 (mid_body, mid_roll) |
+| [616980](https://freesound.org/s/616980/) | 210724 Thunder, single rolling, rain, STRATFORD 10pm.wav | TRP | CC0 1.0 | 2026-11-25 | 3 (mid_body, mid_roll) |
+| [253953](https://freesound.org/s/253953/) | Thunder 1 | Yoyodaman234 | CC0 1.0 | 2026-11-25 | 7 (body, clap, crack, roll) |
+| [267550](https://freesound.org/s/267550/) | Thunder3 | Yoyodaman234 | CC0 1.0 | 2026-11-25 | 3 (far_roll) |
+
+23 recordings, 97 grains, 173.1 s. Source files: the Freesound originals (downloaded 2026-11-25, aligned to the screened previews, every grain checked: normalised correlation >= 0.999, lag 0); each grain's source sha256 is in manifest.json.
 
 The lightning bolts, the cloud glow and the rain streak textures and meshes are original (tools/make_weather_assets.py,
 MIT).

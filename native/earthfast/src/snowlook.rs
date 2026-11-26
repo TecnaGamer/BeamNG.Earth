@@ -24,8 +24,16 @@ use pyo3::prelude::*;
 use crate::dm::Dm;
 
 pub const ROWS: usize = 8;          // band rows per table at most
-pub const ROAD_CLASSES: usize = 5;  // plow classes P0..P4 (W3): the share of the ground's cover a road keeps, 0..8
-const RD: usize = ROAD_CLASSES + 1; // ... and then the share of still water frozen and snow-covered (lake ice), 0..8
+pub const ROAD_CLASSES: usize = 5;  // plow classes P0..P4: the share of the ground's cover a road keeps, 0..8 ...
+pub const ROAD_ZONES: usize = 3;    // ... per zone (W3, snowroad.rs: lanes, wheel tracks, edge)
+pub const ROAD_SLOTS: usize = ROAD_CLASSES * ROAD_ZONES; // a road mask texel 1 + zone * 5 + class
+const ICE_SLOT: usize = ROAD_SLOTS; // ... and then the share of still water frozen and snow-covered (lake ice), 0..8
+const RD: usize = ROAD_SLOTS + 1;
+/// A road's snow by zone (lanes, wheel tracks, edge): older than the ground's (age classes added: traffic's grime;
+/// packed grey lanes, brown-grey tracks, the edge's thrown snow a little grey) and the tracks a touch darker still
+/// (W3; Minneapolis / Montreal winter street photos: packed residential streets grey-white, their tracks brown)
+const ROAD_AGE: [f64; ROAD_ZONES] = [1.5, 3.0, 0.8];
+const ROAD_DIM: [f64; ROAD_ZONES] = [1.0, 0.88, 1.0];
 pub const N_PARAMS: usize = 88;
 const NO_ELA: f64 = 1.0e9;
 
@@ -151,7 +159,7 @@ impl SnowField {
         let n = tables.shape()[0];
         if !(res > 0.0) || tables.shape()[1] != ROWS || tables.shape()[2] != 4 || nrows.shape() != [n, 1 + RD]
             || idx.is_empty() {
-            return Err(PyValueError::new_err("snow field: res > 0, tables (n, 8, 4), counts (n, 7), a cell raster"));
+            return Err(PyValueError::new_err("snow field: res > 0, tables (n, 8, 4), counts (n, 17), a cell raster"));
         }
         let mut tabs = Vec::with_capacity(n);
         let mut counts = Vec::with_capacity(n);
@@ -712,8 +720,8 @@ impl SnowLook {
     }
 
     /// The photo with its snow (rgb (px, px, 3), row 0 north, covering the square), or None: no snow on it.
-    /// road: an optional (px, px) plow class per texel (0 not a road, 1..5 = P0..P4): the cover there times the
-    /// table's share for that class (W3's hook; None: the roads take the ground's cover).
+    /// road: an optional (px, px) road slot per texel (0 not a road, 1 + zone * 5 + class: P0..P4 by lanes, tracks, edge;
+    /// snowroad.rs): the cover there times the table's share for that slot (None: the roads take the ground's cover).
     pub fn apply_core<'a>(&'a self, img: ArrayView3<u8>, road: Option<ArrayView2<'a, u8>>) -> Option<Array3<u8>> {
         let px = img.shape()[0];
         if px < 2 || img.shape()[1] != px || img.shape()[2] != 3 {
@@ -838,14 +846,17 @@ impl SnowLook {
                 // (a smooth fade of the cover by the height grid's slope left soft brown smudges a grid cell wide)
                 let rock = 1.0 - smooth(v / vml, p.rock_rel.0, p.rock_rel.1);
                 let mut c = hl(0) * (1.0 - (1.0 - hl(1)) * rock);
+                let mut road_zone: Option<usize> = None;
                 if let Some(rm) = road_s {
                     let k = rm[i * px + j] as usize;
-                    if (1..=ROAD_CLASSES).contains(&k) {
+                    if (1..=ROAD_SLOTS).contains(&k) {
                         c *= hr(k - 1);
+                        road_zone = Some((k - 1) / ROAD_CLASSES);
                     }
                 }
-                // partial cover: world-anchored patches where the texel can show them, else an even share
-                let a = if wn <= 0.0 {
+                // partial cover: world-anchored patches where the texel can show them, else an even share (a road's
+                // share is the traffic's, even across it: no grass-tip patches)
+                let a = if wn <= 0.0 || road_zone.is_some() {
                     ((c * p.gain - p.bias) * lin_k).clamp(0.0, 1.0)
                 } else if c >= full && wn >= 1.0 {
                     1.0
@@ -884,7 +895,7 @@ impl SnowLook {
                     // the map's water: authoritative where it is known
                     match wm[i * px + j] {
                         WATER_MOVING | WATER_SEA => { keep_mul = 0.0; is_water = 1.0; open_w = 1.0; }
-                        WATER_STILL => { keep_mul *= hr(ROAD_CLASSES); is_water = 1.0; }
+                        WATER_STILL => { keep_mul *= hr(ICE_SLOT); is_water = 1.0; }
                         _ => {}
                     }
                 } else if self.wsh.is_some() && hl(13) >= 0.0 {
@@ -907,7 +918,7 @@ impl SnowLook {
                         // reservoir whose level moves are still water; a river 200 m wide is not)
                         let lake = smooth(hl(15), 0.3, 0.5);
                         let sea = hl(14).max(1.0 - smooth(hl(8), p.sea_h.0, p.sea_h.1));
-                        let frozen = lake * hr(ROAD_CLASSES) * (1.0 - sea);
+                        let frozen = lake * hr(ICE_SLOT) * (1.0 - sea);
                         keep_mul *= 1.0 - water * (1.0 - frozen);
                         is_water = water;
                         ice_w = water * frozen;
@@ -926,7 +937,7 @@ impl SnowLook {
                         // ice share; W6 makes it drivable)
                         let lake = smooth(hl(7), p.lake_frac.0, p.lake_frac.1);
                         let sea = 1.0 - smooth(hl(8), p.sea_h.0, p.sea_h.1);
-                        let frozen = lake * hr(ROAD_CLASSES) * (1.0 - sea);
+                        let frozen = lake * hr(ICE_SLOT) * (1.0 - sea);
                         keep_mul *= 1.0 - water * (1.0 - frozen);
                         is_water = water;
                         open_w = water * (1.0 - frozen);
@@ -989,12 +1000,13 @@ impl SnowLook {
                     continue;
                 }
                 let lum = (lw.0 * r + lw.1 * g + lw.2 * b) * inv255;
-                let age = hl(3).clamp(0.0, 3.0);
+                let age = (hl(3) + road_zone.map_or(0.0, |z| ROAD_AGE[z])).clamp(0.0, 3.0);
                 let ka = (age.floor() as usize).min(2);
                 let wa = age - ka as f64;
                 let sh = (p.shade.0 + p.shade.1 * lum).min(p.shade.2);
                 let sh = sh + (p.shade.2 - sh) * ice_w;
                 let dim = (1.0 - p.ever_dark * crown_k * c.min(1.0)) * water_dim;
+                let sh = sh * road_zone.map_or(1.0, |z| ROAD_DIM[z]);
                 let amt = amt.max(0.0);
                 let bt = bare_t * c.min(1.0);
                 // (a bare stand keeps its texture: crowns and gaps, lighter and darker than the stand's mean)
@@ -1189,8 +1201,9 @@ impl SnowLook {
     /// area (x0, y0, size): the texture's square (frame m); origin (lat0, lon0): the frame's; u: the height grid
     /// (frame z, [j north, i east]) at uarea (ux0, uy0, spacing); geo (lat, lon, zoff, ela): G x G grids over the
     /// square (row 0 north, corner to corner); field: None or (res, ci0, cj0, idx (nj, ni) int32, tables (n, 8, 4)
-    /// int32, counts (n, 6) int32: rows, then the road shares P0..P4 in eighths); params: snowcover.PARAMS; road: the
-    /// texture's plow class per texel (px x px uint8: 0 none, 1..5 P0..P4), or None.
+    /// int32, counts (n, 17) int32: rows, then the road shares of the 15 (zone, class) slots in eighths, then lake
+    /// ice); params: snowcover.PARAMS; road: the texture's road slot per texel (px x px uint8: 0 none, 1 + zone * 5 +
+    /// class), or None.
     #[new]
     #[pyo3(signature = (area, origin, u, uarea, geo, field, params, road=None, water=None, leaf=None, wsh=None,
                         trees=None))]
