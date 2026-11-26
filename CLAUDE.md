@@ -7,5 +7,6 @@
   - Its last line is the summary. It exits 1 when a site failed, crashed, timed out or got worse.
   - The baseline (`server/tests/fixtures/drivability_baseline.json`) is main's measurement, and `_measured_on` names the commit. Compare a branch against it directly; don't re-measure main.
   - When main moves, rewrite the baseline in its own PR with `--update`, after checking each site that got worse.
+- **Junction evals.** `server/evals/` is run by hand only, never by CI or `tools/run_tests.py`: `earth_eval.py --before-from <upstream capture> --out <dir>` draws each junction of `junctions.json` against upstream (source `eval_lock.sh` first: one build at a time), `junction_page.py` makes its page, and `python -m pytest server/evals/tests` tests the tools.
 - **No ad-hoc copies.** Don't keep a copy of a test runner pinned to one worktree's path. Run the repository's own scripts from the worktree you are testing.
 - **Clean up.** Kill your own background loops and processes before you stop.

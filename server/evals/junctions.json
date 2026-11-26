@@ -1,0 +1,33 @@
+{
+  "_about": "Complex junctions tools/earth_eval.py draws before and after an Earth change (no regressions). A junction: name, what (why it is here), at (lat, lon) or xy (m in the anchor's frame), anchor (lat, lon; default: the point rounded to 0.01 deg), aid (default 9), q (the anchor's height quantum; default 1/32), radius (m; default 40), size (the Earth build's seconds there as tools/earth_eval.py measured them, d89b408e; the junction tour drives them by it, light first: tour.lua), geometry (EarthRally stage lines drawn over it, repo paths).",
+  "junctions": [
+    {"name": "popoli_sr17_aldo_moro", "what": "Popoli: the SR17 (SS1 stage) on a short bridge over Via Aldo Moro, mapped in a tunnel under it; it stood on 5 m and 8 m fills (two hills)",
+     "anchor": [42.17, 13.83], "aid": 2, "q": 0.015625, "xy": [-446, 880], "geometry": ["geometry/ss1.json"], "size": 45},
+    {"name": "popoli_sr17_rail_underpass", "what": "Popoli: the SR17 (road1 stage) in a cutting and a short tunnel under the Rome-Pescara railway, the railway at grade",
+     "anchor": [42.17, 13.83], "aid": 2, "q": 0.015625, "xy": [-423, 105], "geometry": ["geometry/road1.json"], "size": 45},
+    {"name": "popoli_a25_ss17", "what": "Popoli: the SS17 junction under the A25 viaduct, near the SS1 start",
+     "anchor": [42.17, 13.83], "aid": 2, "q": 0.015625, "at": [42.1743502, 13.8243183], "radius": 60, "size": 37},
+    {"name": "yokohama", "what": "Yokohama: a stacked urban junction", "at": [35.463744, 139.6787762], "radius": 60, "size": 1624},
+    {"name": "paris_porte_maillot", "what": "Paris: Avenue de Neuilly over the Peripherique at Porte Maillot (Earth drivability site)", "at": [48.8783, 2.28088], "radius": 60, "size": 272},
+    {"name": "compiegne_roundabout", "what": "Compiegne: a roundabout the railway crosses twice on bridges (Earth drivability site)", "at": [49.422213, 2.806541], "radius": 60, "size": 57},
+    {"name": "vienna_suedtiroler", "what": "Vienna: Suedtiroler Platz over the trench of its lid (Earth drivability site)", "at": [48.18609, 16.37368], "radius": 60, "size": 245},
+    {"name": "boston_bowker", "what": "Boston: the Bowker Overpass over Storrow Drive (Earth drivability site)", "at": [42.3512, -71.0923], "radius": 60, "size": 288},
+    {"name": "a5_underpass", "what": "A5 near Heidelberg: the autobahn over an underpass (Earth drivability site)", "at": [49.35458, 8.63166], "radius": 60, "size": 45},
+    {"name": "perth_interchange", "what": "Perth: a freeway interchange (Earth interchange site)", "at": [-31.889125, 115.91902], "radius": 80, "size": 67},
+    {"name": "dallas_high_five", "what": "Dallas: the High Five, I-635 and US 75 on five levels, 37 m up (complex interchanges' list)", "at": [32.9238888, -96.7631401], "radius": 120, "size": 190},
+    {"name": "la_pregerson", "what": "Los Angeles: the Judge Harry Pregerson Interchange, I-105 and I-110, with HOV and transit levels (complex interchanges' list)", "at": [33.9287457, -118.2809393], "radius": 120, "size": 169},
+    {"name": "birmingham_gravelly_hill", "what": "Birmingham: Gravelly Hill (Spaghetti Junction), the M6 and A38(M) over a canal and a railway (complex interchanges' list)", "at": [52.513, -1.8665], "radius": 120, "size": 161},
+    {"name": "shanghai_yanan_puxi", "what": "Shanghai: the Yan'an Elevated Road over the North-South Elevated Road in Puxi, stacked city viaducts (complex interchanges' list)", "at": [31.2264545, 121.4648755], "radius": 120, "size": 1800},
+    {"name": "kawazu_nanadaru_loop", "what": "Kawazu: the Nanadaru Loop Bridge, a double spiral climbing a valley over itself (complex interchanges' list)", "at": [34.7915774, 138.93866], "radius": 100, "size": 17},
+    {"name": "barcelona_trench", "what": "Barcelona: a main road in a trench under perforated canopy covers, street-level side roads and parking right beside it (the user's in-game report)", "at": [41.411868, 2.198433], "radius": 80, "size": 182},
+    {"name": "fuji_bridge_gap", "what": "Mt Fuji, Subaru Line: a 23 m bridge on a 24 km road (dropped as a sliver of it: a hole in the road; the user's in-game report)", "at": [35.392761, 138.723402], "radius": 60, "size": 16},
+    {"name": "fuji_snow_shed", "what": "Mt Fuji, Subaru Line: a 90 m snow shed (tunnel=avalanche_protector) under a hill, the route's arrows on its roof (the user's in-game report)", "at": [35.393581, 138.72825], "radius": 60, "size": 13},
+    {"name": "fuji_lot_junction", "what": "Mt Fuji, Subaru Line's 5th station: the secondary road ending on the middle of the lot's service loop, a 0.7 m ridge (the user's in-game report)", "at": [35.394873, 138.731791], "radius": 60, "size": 12},
+    {"name": "popoli_a25_tubes", "what": "Popoli: the stage road over the A25's twin tubes, the ground over a covered tunnel (a drive-before-merging site)",
+     "anchor": [42.17, 13.83], "aid": 2, "q": 0.015625, "at": [42.1777, 13.8268], "radius": 60, "size": 61},
+    {"name": "vienna_a23", "what": "Vienna: the A23 over Erzherzog-Karl-Strasse, its tube (a drive-before-merging site)", "at": [48.22963, 16.45307], "radius": 60, "size": 118},
+    {"name": "casagranda_bridge", "what": "Galleria Casagranda: a bridge between two tunnels, a large incline (Earth drivability site)", "at": [45.86134, 10.83268], "radius": 60, "size": 32},
+    {"name": "casagranda_portal", "what": "Galleria Casagranda: a tunnel's portal (Earth drivability site)", "at": [45.85964, 10.83267], "radius": 60, "size": 21},
+    {"name": "shanghai_nanpu_spiral", "what": "Shanghai: the Nanpu Bridge's Puxi approach, a spiral that passes over itself (OSM layers 1-3) into the Inner Ring elevated (the user: 'not even the craziest one nampu bridge')", "at": [31.2098, 121.4965], "radius": 150, "size": 1800}
+  ]
+}
