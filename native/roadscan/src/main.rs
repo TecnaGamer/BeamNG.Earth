@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Raised whenever a finding's meaning or a threshold changes; compare refuses two versions.
-pub const SCAN_VERSION: u32 = 1;
+pub const SCAN_VERSION: u32 = 2;
 
 fn die(msg: String) -> ! { eprintln!("roadscan: {}", msg); std::process::exit(2) }
 
@@ -46,6 +46,7 @@ fn scan_tile(packs: &mut scene::Packs, ti: usize) -> Result<(String, String), St
     let b = scene::build(packs, ti, scene::GROW)?;
     let (metrics, found) = audit_findings(&b.scene);
     let mut mine: Vec<Finding> = found.iter().filter(|f| f.code != "SA" && b.owned(f.x, f.y)).copied().collect();
+    checks::mark_kerbs(&b, &found, &mut mine);
     checks::run(&b, &found, &mut mine);
     let mut s = String::new();
     for f in &mine {

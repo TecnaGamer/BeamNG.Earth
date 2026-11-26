@@ -34,7 +34,7 @@ RADIUS_M = 150.0
 # audit metric -> the scanner's issue kinds (the same check, located)
 CLASSES = {
     "double_owner_m2": ("double_surface",),
-    "envelope_intrusion_m2": ("obstruction", "sidewalk_in_lane", "rail_in_lane"),
+    "envelope_intrusion_m2": ("obstruction", "sidewalk_in_lane", "rail_in_lane", "kerb_at_lane_edge"),
     "opening_blocked_m2": ("blocked_opening",),
     "clearance_short_cells": ("low_clearance", "blocked_opening"),
     "handover_lip_over_20mm": ("lip",),

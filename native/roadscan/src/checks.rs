@@ -154,6 +154,25 @@ fn median(v: &mut [f64]) -> f64 {
     if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
 }
 
+/// Mask bits on the audit's lane cells: EDGE, the cell lies in the outer metre of the mapped lanes (a kerb the
+/// map's width reaches over, not one a car meets in its lane); KERB, the cell or one beside it is driven on a kerb or
+/// sidewalk (the step is that kerb's face).
+pub const EDGE: u32 = 1 << 16;
+pub const KERB: u32 = 1 << 17;
+
+pub fn mark_kerbs(b: &Built, found: &[Finding], mine: &mut [Finding]) {
+    let walk = |k: u8| k == 1 + KIND_WALK || k == 1 + KIND_WALKCOL;
+    let on: BTreeMap<(u32, i64, i64), u8> = found.iter().filter(|f| f.code == "SA").map(|f| ((f.line, f.station, f.across), f.kind)).collect();
+    for f in mine.iter_mut() {
+        if !matches!(f.code, "STEP" | "EN" | "DO") || f.line == u32::MAX { continue; }
+        let Some(l) = b.lines.get(f.line as usize) else { continue };
+        if (f.across as f64 * 0.5).abs() > l.width / 2.0 - 1.5 { f.mask |= EDGE; }
+        let near = [(0i64, 0i64), (1, 0), (-1, 0), (0, 1), (0, -1)].iter()
+            .any(|&(ds, da)| on.get(&(f.line, f.station + ds, f.across + da)).map_or(false, |&k| walk(k)));
+        if near { f.mask |= KERB; }
+    }
+}
+
 pub fn run(b: &Built, found: &[Finding], out: &mut Vec<Finding>) {
     let tris = &b.scene.tris;
     let lines = &b.lines;

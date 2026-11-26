@@ -47,7 +47,9 @@ pub fn describe(kind: &str) -> (&'static str, &'static str) {
         "deck_end_step" => ("a step where a deck meets the ground or another deck", "m"),
         "tunnel_mouth_step" => ("a step at a tunnel floor's end", "m"),
         "tunnel_mouth_hole" => ("nothing to drive on out of a tunnel's end", "cells"),
-        "kerb_step" => ("a lane's centre runs onto a kerb or sidewalk (a step onto it)", "m"),
+        "kerb_step" => ("a lane runs onto a kerb or sidewalk (a step onto it)", "m"),
+        "kerb_at_lane_edge" => ("a kerb or sidewalk collider in the outer metre of the mapped lanes (the map's width a little over the built road)", "cells"),
+        "kerb_face_at_lane_edge" => ("a kerb's face (a step) in the outer metre of the mapped lanes", "m"),
         "lip" => ("a lip at a colliding surface's free edge (hand-over to the terrain or the next piece)", "mm"),
         "open_terrain_hole" => ("a terrain hole nothing covers (sky or void through the ground)", "squares"),
         "open_hole_edge" => ("an open edge of a terrain hole (no floor, roof or wall closing it)", "edges"),
@@ -76,6 +78,8 @@ pub fn kind_of(r: &Rec) -> Option<(&'static str, f64)> {
         "DO" => ("double_surface", 1.0),
         "EN" => {
             let m = r.mask;
+            let walk_only = m & 0x3FF & !(1 << 1 | 1 << 2) == 0;
+            if walk_only && m & (1 << 16) != 0 { return Some(("kerb_at_lane_edge", 1.0)); }
             let hard = m & (1 << 3 | 1 << 4 | 1 << 5 | 1 << 6 | 1 << 9) != 0;
             let rail = m & (1 << 7 | 1 << 8) != 0;
             (if hard { "obstruction" } else if rail { "rail_in_lane" } else { "sidewalk_in_lane" }, 1.0)
@@ -87,7 +91,11 @@ pub fn kind_of(r: &Rec) -> Option<(&'static str, f64)> {
         "PI" => ("pier_in_lane", 1.0),
         // (the audit's second difference on every lane cell: under 10 cm it is mostly a steep crossfall or banking on
         // the 1 m terrain lattice; the drive's own rows judge the smaller steps along the lanes)
-        "STEP" => { if r.v.abs() < 0.10 { return None; } (if r.kind == 2 { "crossfall_step" } else { "step" }, r.v.abs()) }
+        "STEP" => {
+            if r.v.abs() < 0.10 { return None; }
+            if r.mask & (1 << 17) != 0 { return Some((if r.mask & (1 << 16) != 0 { "kerb_face_at_lane_edge" } else { "kerb_step" }, r.v.abs())); }
+            (if r.kind == 2 { "crossfall_step" } else { "step" }, r.v.abs())
+        }
         "BSTEP" | "ENDSTEP" => (if r.mask & 8 != 0 { "kerb_step" } else { deck_or_tunnel(r.mask, r.level) }, r.v),
         "LIP" => ("lip", r.v),
         "HO" => ("open_terrain_hole", 1.0),
@@ -125,6 +133,8 @@ pub fn severity(kind: &str, m: f64, n: usize) -> u8 {
             if a > 0.15 { 3 } else if a > 0.05 { 2 } else if a > 0.03 { 1 } else { 0 },
         "tunnel_mouth_hole" => 3,
         "kerb_step" => if a > 0.10 && n >= 2 { 2 } else { 1 },
+        "kerb_at_lane_edge" => 1,
+        "kerb_face_at_lane_edge" => if n >= 2 { 1 } else { 0 },
         "lip" => if a > 60.0 { 3 } else if a > 25.0 { 2 } else if a > 10.0 { 1 } else { 0 },
         "open_terrain_hole" => if n >= 4 { 2 } else { 1 },
         "open_hole_edge" => 1,
@@ -134,16 +144,19 @@ pub fn severity(kind: &str, m: f64, n: usize) -> u8 {
         "road_floating" => if n < 3 { 0 } else if a > 0.3 { 2 } else { 1 },
         "missing_road" => if n >= 20 { 2 } else if n >= 6 { 1 } else { 0 },
         "bridge_on_ground" => if n >= 8 { 1 } else { 0 },
-        "marking_off_road" => if n >= 6 { 1 } else { 0 },
-        "width_mismatch" => 1,
+        // (painted bays of parking lots the map has no aisles in, on known-good roads: every one seen; kept as a
+        // finding, not listed, until markings are tied to their own road)
+        "marking_off_road" => 0,
+        // (one station is 10 m of road: three in a row before it counts)
+        "width_mismatch" => if n >= 3 { 1 } else { 0 },
         _ => 0,
     }
 }
 
 fn radius(kind: &str) -> f64 {
     match kind {
-        "crest" | "dip" | "steep_grade" | "width_mismatch" | "marking_off_road" | "missing_road" | "terrain_over_road"
-        | "road_floating" => 8.0,
+        "width_mismatch" => 12.0,
+        "crest" | "dip" | "steep_grade" | "marking_off_road" | "missing_road" | "terrain_over_road" | "road_floating" => 8.0,
         _ => 3.0,
     }
 }
