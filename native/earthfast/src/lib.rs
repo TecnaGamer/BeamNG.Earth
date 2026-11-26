@@ -7814,6 +7814,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 630 (628 kept for another branch): RoadsysEnds.ceil / RoadsysCeil (roadsys ceil.rs: the ground under a deck at
     // most at its soffit less 0.3 m, BNE_ROADSYS=surface; every evaluator of the physics ground,
     // roads.block_arch_raise), handover.rs End.junction
-    m.add("VERSION", 630)?;
+    // 631: the tunnel plan T1 round 2 (tunnel records' portals and floors)
+    // 632: RoadsysCeil counts a ground road beside a deck within the deck's own need (ceil.rs allow), whatever other
+    // decks were read (roadsys.ceil_of_cell's box)
+    m.add("VERSION", 632)?;
     Ok(())
 }

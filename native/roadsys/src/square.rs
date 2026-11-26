@@ -623,9 +623,13 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
         ss.hand_m = clampf(0.5 * reach, HAND_MIN_M, HAND_MAX_M);
         if opts.tunnels && st.sup.iter().any(|u| u.kind == SUP_TUNNEL) {
             let (runs, snaps) = tunnel_record(&net, si, &pr, &ends, g_of);
-            // (the portals are where the profile owns the ground: the approach meets the floor there, pins)
-            for r in &runs { if r.mouth0 { ss.hand.push(r.s0); } if r.mouth1 { ss.hand.push(r.s1); } }
-            ss.hand.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            // (the portals are where the profile owns the ground: the approach meets the floor there, dug down to it
+            // where the profile lies under the plans' own (a lows entry: pins_near's dig, faded over hand_m). As hand
+            // entries they kept the plans' ground at the mouth, the tunnel's floor was then lifted onto it (tunnelrec's
+            // hand-over) and the streets over it lost their floors: Moscow's Garden Ring under Taganskaya Square
+            // 2.4 m under the streets, its tube through them)
+            for r in &runs { if r.mouth0 { ss.lows.push(r.s0); } if r.mouth1 { ss.lows.push(r.s1); } }
+            ss.lows.sort_by(|a, b| a.partial_cmp(b).unwrap());
             ss.tun = runs;
             ss.tsnap = snaps;
         }
@@ -932,5 +936,43 @@ mod tests {
         m.insert((0, 0), &b);
         let z = blend(&m, [-100.0, 0.0], Some([0.0, 1.0]), "m", true).unwrap();
         assert!(absf(z - za) < 0.01);
+    }
+
+    /// (T1, 631) With the tunnel record a street on the ground over a tunnel holds a floor; a deck over it does not (a
+    /// covered roadway, T4: its floor moved Seal Beach's connector decks onto each other).
+    #[test]
+    fn with_the_record_a_street_over_a_tunnel_holds_a_floor_and_a_deck_does_not() {
+        let floors = |deck: bool| {
+            let up = seg("m|0", &[[-300.0, 0.0], [300.0, 0.0]], 1, 1, 100.0, &[], if deck { Some((1.0 / 3.0, 2.0 / 3.0)) } else { None });
+            let mut lo = seg("s|0", &[[0.0, -300.0], [0.0, 300.0]], 4, 0, 50.0, &[], None);
+            lo.tunnel = vec![(0.4, 0.6)];
+            lo.level = vec![(0.4, 0.6, -1.0)];
+            let p = Place { segs: vec![up, lo], ..Default::default() };
+            let order: Vec<usize> = (0..p.segs.len()).collect();
+            net::build_opts(&p, &order, Opts { tunnels: true, ..Default::default() }).crossings.iter().filter(|c| !c.along).count()
+        };
+        assert_eq!(floors(false), 1);
+        assert_eq!(floors(true), 0);
+    }
+
+    /// (T1, 631) The record's portals are where the profile digs the approach to its floor (lows: pins_near lowers the
+    /// plans' ground there), not where the plans' own ground is kept (hand): kept, the hand-over lifted the tunnel onto
+    /// the plans' approach and the streets over it lost their floors (Moscow's Garden Ring).
+    #[test]
+    fn a_tunnels_portals_dig_the_approach() {
+        let mut t = seg("t|0", &[[100.0, 1000.0], [1900.0, 1000.0]], 4, 0, 60.0, &[], None);
+        t.tunnel = vec![(0.4, 0.6)];
+        t.level = vec![(0.4, 0.6, -1.0)];
+        let p = Place { segs: vec![t], ..Default::default() };
+        let hill = |pts: &[P2]| -> Vec<f64> { pts.iter().map(|q| 10.0 + (40.0 - 0.2 * absf(q[0] - 1000.0)).max(0.0)).collect() };
+        prof::store_clear();
+        let sq = solve(&p, (0, 0), &hill, Opts { tunnels: true, ..Default::default() });
+        let st = sq.strokes.iter().find(|s| !s.tun.is_empty()).expect("a tunnel record");
+        let mouths: Vec<f64> = st.tun.iter().flat_map(|r| [(r.mouth0, r.s0), (r.mouth1, r.s1)]).filter(|m| m.0).map(|m| m.1).collect();
+        assert!(!mouths.is_empty(), "{:?}", st.tun);
+        for m in mouths {
+            assert!(st.lows.iter().any(|&x| absf(x - m) < 1e-9), "{} not in lows {:?}", m, st.lows);
+            assert!(!st.hand.iter().any(|&x| absf(x - m) < 1e-9), "{} in hand {:?}", m, st.hand);
+        }
     }
 }

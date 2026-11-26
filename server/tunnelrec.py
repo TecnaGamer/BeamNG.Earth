@@ -22,7 +22,7 @@ import roadsys
 
 log = logging.getLogger("earthd.tunnelrec")
 
-KERNEL = 629                # earthfast roadsys_square(tunnels=), roadsys_tunnel_kinds / _mouths, tunnel_record_holes
+KERNEL = 631                # earthfast roadsys_square(tunnels=), roadsys_tunnel_kinds / _mouths, tunnel_record_holes (631: mouths dig the approach)
 JOIN_M = 2.0                # m: two parts' ends this close are one joint of the network (no portal there)
 MOUTH_NEAR_M = 6.0          # m a record portal may lie from a section's end vertex to be that end's
 HOLE_MARGIN_M = 0.5         # m round the tube's footprint the holes reach (tunnel plan 4.4)
@@ -35,6 +35,17 @@ _lock = threading.Lock()
 def _count(k, n=1):
     with _lock:
         STATS[k] = STATS.get(k, 0) + n
+
+
+def portal_ground(plans, floor):
+    """The height a portal end is brought onto (the hand-over, 4.5): the plans' first-stage approach ground there, never
+    over the record's own floor. Where the plans lie over the profile's portal the profile owns the approach: its
+    terrain targets dig it down to the floor (square.rs lows at the record's mouths, pins_near); a lift of the floor onto
+    the plans took the cover the streets over the tube hold (Moscow's Garden Ring 2.4 m under Taganskaya Square,
+    2026-11-25). NaN: no ground there (the end left as the record has it)."""
+    if not np.isfinite(plans):
+        return float("nan")
+    return float(min(plans, floor)) if np.isfinite(floor) else float(plans)
 
 
 def _runs(kinds):
@@ -126,7 +137,7 @@ def solve(store, comp, pool, ground=None):
             nn = float(dnp.hypot(dv[0], dv[1]))
             q = a + (dv / nn if nn > 1e-9 else 0.0) * END_PAST_M
             gq = float(np.asarray(store._ends_ground(q[None, :]), np.float64).reshape(-1)[0])
-            pair.append(gq if np.isfinite(gq) else float("nan"))
+            pair.append(portal_ground(gq, float(pre[i][1][-1 if at_end else 0])))
         ends_g.append(tuple(pair))
     lifts = fast._ef.roadsys_end_lifts(plist, ends_g, float("inf"), float("inf"))
     for i in range(len(keys)):

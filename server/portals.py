@@ -332,16 +332,17 @@ def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), lo
                                 np.ascontiguousarray(fg, np.float64), ws, wl, wr, np.asarray(fitd["rz"], np.float64))
 
 
-def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None):
+def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None, rec=True):
     """The tube's outside over its bare rows for roadmesh.tunnel (earthfast.tunnel_cover_mesh); sec: the tube's section
-    (roadmesh._tunnel_section), the opening its end caps inside the hill leave clear."""
+    (roadmesh._tunnel_section), the opening its end caps inside the hill leave clear; rec: a tube of the road system's
+    record (its top follows the ground only then: a network on the legacy solve keeps its cover as before)."""
     fast.require(VERSION, "tunnel_cover_mesh")
     return fast._ef.tunnel_cover_mesh(np.ascontiguousarray(mid, np.float64), np.ascontiguousarray(left, np.float64),
                                       np.ascontiguousarray(z, np.float64), np.ascontiguousarray(ground, np.float64),
                                       float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED, COVER_FOOT,
                                       bool(caps[0]), bool(caps[1]), float(uv_m), float(soil_uv_m),
                                       np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64),
-                                      *((True,) if _follow() else ()))
+                                      *((True,) if rec and _follow() else ()))
 
 
 def _follow():

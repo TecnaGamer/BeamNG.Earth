@@ -17,6 +17,13 @@ class TunnelRecordTest(unittest.TestCase):
         self.assertEqual(tunnelrec._runs([1, 1, 2, 2, 2, 0, 0, 2]), [(0, 1, 1), (1, 4, 2), (4, 6, 0), (6, 7, 2)])
         self.assertEqual(tunnelrec._runs([2, 2, 2]), [(0, 2, 2)])
 
+    def test_a_portal_is_never_lifted_onto_the_plans_approach(self):
+        # (631: the plans' first stage 5.5 m over the record's portal (Moscow): the floor stays, the approach is dug)
+        self.assertEqual(tunnelrec.portal_ground(143.4, 138.0), 138.0)
+        self.assertEqual(tunnelrec.portal_ground(137.0, 138.0), 137.0)     # (a drop onto the approach stays)
+        self.assertTrue(np.isnan(tunnelrec.portal_ground(float("nan"), 138.0)))
+        self.assertEqual(tunnelrec.portal_ground(137.0, float("nan")), 137.0)
+
     def test_holes_only_at_a_portal_and_never_under_deep_ground(self):
         # a 100 m tube along +x from its portal at x = 0 into a hill rising 1 m per metre; a 1 m lattice from -20 m
         n = 141

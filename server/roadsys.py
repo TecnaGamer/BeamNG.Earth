@@ -116,10 +116,11 @@ SURFACE_KERNEL = 626        # earthfast.roadsys_decks
 # bridge inventory's skew first) says so: the hand-over's ends (RoadsysEnds' crossed / nbi) and the deck faces' end rows
 SKEW = SURFACE
 SKEW_KERNEL = 627
-# (630, M5 round 4) BNE_ROADSYS=surface: the ground under a deck at most at its soffit less 0.3 m (bridgerewrite/DESIGN.md
-# G5; native/roadsys ceil.rs), every evaluator of the physics ground (ground_cut through roads.block_arch_raise)
+# (630, M5 round 4; 632, round 5: a ground road counted within each deck's own need) BNE_ROADSYS=surface: the ground
+# under a deck at most at its soffit less 0.3 m (bridgerewrite/DESIGN.md G5; native/roadsys ceil.rs), every evaluator of
+# the physics ground (ground_cut through roads.block_arch_raise)
 CEIL = SURFACE
-CEIL_KERNEL = 630
+CEIL_KERNEL = 632
 DECKS_FN = None             # (frame) -> the road bridges' ChainView in frame (blockworker: its bridge chain store), or None
 WATER_FN = None             # water_fn(cell key) -> the water Features (set_water_fn: mapdata.MapData), None: none read
 
@@ -132,7 +133,7 @@ def set_water_fn(fn):
 # server/tunnelrec.py): the profile squares make it with their profiles; roads.TunnelProfiles hands it on to every
 # consumer (floors, sections, portals, holes), its own solve left to the networks under water (T3)
 TUNNELS = SURFACE and os.environ.get("BNE_ROADSYS_TUNNELS", "off").strip().lower() == "on"
-TUNNELS_KERNEL = 629
+TUNNELS_KERNEL = 631
 XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
 XSEC_KERNEL = 617           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs (617: with areas=, fit= in one binary; trunk 616 has no xsec)
 

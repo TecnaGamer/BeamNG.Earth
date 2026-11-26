@@ -895,7 +895,7 @@ class CeilTest(unittest.TestCase):
 
     def test_keyed_and_wired(self):
         self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 7)
-        self.assertGreaterEqual(fast.MIN_VERSION, 630)
+        self.assertGreaterEqual(fast.MIN_VERSION, 632)
         bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
         self.assertIn("_roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1)", bw)
 
