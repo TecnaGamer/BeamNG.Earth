@@ -41,6 +41,11 @@ What changed in each release of BeamNG.Earth, newest first.
 - **Puddles**: in rain, water collects in the low points of roads, along the kerbs and in the wheel ruts of worn
   roads: mirror-like water that reflects the sky and the street. They grow as it keeps raining and shrink as the road
   dries.
+- **Wet roads**: roads lose grip in the rain you see, also with the winter road conditions off: a little when damp,
+  more when wet (stopping from 50 mph takes about 129 ft instead of 108 ft), and they stay slippery while they dry.
+  At speed, deep water in the puddles and the water on the road in heavy rain can make the tyres aquaplane (in deep
+  water from about 60 mph with typical tyre pressures, earlier with soft tyres). Traffic drives a little more
+  carefully on wet roads. A "Wet roads" switch on the Weather page turns it off.
 - **Rain sounds**: light, steady and heavy rain by the rain's strength, muffled under roofs and bridges and in tunnels,
   and rain drumming on the roof in the driver's view. The Generated rain (the Weather page's Rain sound) is made drop
   by drop by our own physical model of rain: light rain is a sparse patter, heavy rain a dense roar, and the car's

@@ -115,6 +115,9 @@ M.SCHEMA = {
   weatherLightning = { kind = 'bool', default = true, label = 'Lightning and thunder' },
   weatherStreaks = { kind = 'bool', default = false, label = 'Rain streaks' },
   weatherWetLook = { kind = 'bool', default = true, label = 'Wet look' },
+  -- the grip follows the weather shown (wet, damp roads) and aquaplaning in its puddles and heavy rain (the user,
+  -- 2026-11-26: "yes, plus deep-water aquaplaning")
+  weatherWetGrip = { kind = 'bool', default = true, label = 'Wet roads' },
   -- the weather sounds: the mod's pre-recorded files, or played live by the world server (native/weathersynth;
   -- liveaudio.lua), which falls back to the files by itself when the live sound fails (the user, 2026-11-25)
   weatherSoundSource = { kind = 'enum', default = 'prerecorded', values = { 'prerecorded', 'live' }, label = 'Weather sounds' },
@@ -266,7 +269,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'weatherStormLight',
-  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'weatherWindSound', 'realClouds',
+  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherWetGrip', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'weatherWindSound', 'realClouds',
   'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
@@ -670,6 +673,7 @@ M.APPLY = {
   weatherLightning = function(v) local w = ext('beamngEarth_weather') if w and w.setLightning then w.setLightning(v) end end,
   weatherStreaks = function(v) local w = ext('beamngEarth_weather') if w and w.setStreaks then w.setStreaks(v) end end,
   weatherWetLook = function(v) local w = ext('beamngEarth_weather') if w and w.setWetLook then w.setWetLook(v) end end,
+  weatherWetGrip = function(v) local w = ext('beamngEarth_weather') if w and w.setWetGrip then w.setWetGrip(v) end end,
   weatherSoundSource = function(v) require('beamngEarth/liveaudio').setMode(v) end,
   weatherThunderSound = function(v)
     require('beamngEarth/liveaudio').setThunderSet(v)

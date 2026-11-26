@@ -1108,6 +1108,93 @@ pub fn puddle_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: P
     Ok((pts_arr.into_pyarray(py), out.off.into_pyarray(py), at_arr.into_pyarray(py)))
 }
 
+// ---- the puddles as spots for the mod's aquaplaning ---------------------------------------------------------------
+
+const SPOT_GRID_M: f64 = 4.0;       // the vertex bins
+const SPOT_MARGIN_M: f64 = 0.05;    // a vertex this far outside a quad still counts for its height
+
+fn round_to(x: f64, q: f64) -> f64 { (x / q).round() * q }
+
+/// A skin's puddle quads as spots (the mod's aquaplaning looks each tyre up in them: ge aquaplane.lua, vehicle
+/// aquaplane.lua). Per quad (corners front left, front right, back right, back left: emit_quad's order; poly (4N)
+/// absolute, its atlas uv (4N): roadwear.py PUDDLE_CELLS, row 0 at the top) its centre, along axis, half sizes and
+/// atlas cell, its height the mean of the draped puddle mesh's vertices inside it (verts relative to origin: the
+/// surface the tyre meets, not the centre line's height); a quad with none (cut off by the tile's clip: the
+/// neighbour's skin has it) is left out. Rows: x, y, z (relative to origin, mm), ux, uy (1e-4), a, b (half along /
+/// across, mm), cell. The vertices are summed in a fixed order (bins row by row, each in vertex order): the same
+/// bits on every machine.
+pub fn spots(poly: &[[f64; 2]], uv: &[[f64; 2]], verts: &[[f64; 3]], origin: [f64; 3]) -> Vec<[f64; 8]> {
+    let mut bins: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (k, v) in verts.iter().enumerate() {
+        if v.iter().all(|c| c.is_finite()) {
+            bins.entry(((v[0] / SPOT_GRID_M).floor() as i64, (v[1] / SPOT_GRID_M).floor() as i64)).or_default().push(k);
+        }
+    }
+    let mut out = Vec::new();
+    for q in 0..poly.len().min(uv.len()) / 4 {
+        let c: Vec<[f64; 2]> = (0..4).map(|k| [poly[4 * q + k][0] - origin[0], poly[4 * q + k][1] - origin[1]]).collect();
+        let (cx, cy) = ((c[0][0] + c[1][0] + c[2][0] + c[3][0]) / 4.0, (c[0][1] + c[1][1] + c[2][1] + c[3][1]) / 4.0);
+        // along: back to front (the front edge's middle less the back edge's); across: right to left
+        let (fx, fy) = ((c[0][0] + c[1][0] - c[2][0] - c[3][0]) / 2.0, (c[0][1] + c[1][1] - c[2][1] - c[3][1]) / 2.0);
+        let (lx, ly) = ((c[0][0] + c[3][0] - c[1][0] - c[2][0]) / 2.0, (c[0][1] + c[3][1] - c[1][1] - c[2][1]) / 2.0);
+        let (len_a, len_b) = ((fx * fx + fy * fy).sqrt(), (lx * lx + ly * ly).sqrt());
+        if !(len_a > 1e-6 && len_b > 1e-6 && cx.is_finite() && cy.is_finite()) { continue; }
+        let (ux, uy) = (fx / len_a, fy / len_a);
+        let (a, b) = (len_a / 2.0, len_b / 2.0);
+        // its atlas cell from the uv: the lowest u, the highest v (row 0 at the top)
+        let u0 = (0..4).map(|k| uv[4 * q + k][0]).fold(f64::INFINITY, f64::min);
+        let v1 = (0..4).map(|k| uv[4 * q + k][1]).fold(f64::NEG_INFINITY, f64::max);
+        if !(u0.is_finite() && v1.is_finite()) { continue; }
+        let col = ((u0 * 4.0).round() as i64).clamp(0, 3);
+        let row = (((1.0 - v1) * 4.0).round() as i64).clamp(0, 3);
+        // its height: the mesh vertices inside it
+        let reach = a.max(b) + SPOT_MARGIN_M;
+        let (i0, i1) = (((cx - reach) / SPOT_GRID_M).floor() as i64, ((cx + reach) / SPOT_GRID_M).floor() as i64);
+        let (j0, j1) = (((cy - reach) / SPOT_GRID_M).floor() as i64, ((cy + reach) / SPOT_GRID_M).floor() as i64);
+        let (mut zs, mut n) = (0.0f64, 0usize);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                if let Some(ks) = bins.get(&(i, j)) {
+                    for &k in ks {
+                        let (dx, dy) = (verts[k][0] - cx, verts[k][1] - cy);
+                        if (dx * ux + dy * uy).abs() <= a + SPOT_MARGIN_M && (dy * ux - dx * uy).abs() <= b + SPOT_MARGIN_M {
+                            zs += verts[k][2];
+                            n += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if n == 0 { continue; }
+        out.push([round_to(cx, 1e-3), round_to(cy, 1e-3), round_to(zs / n as f64, 1e-3), round_to(ux, 1e-4),
+                  round_to(uy, 1e-4), round_to(a, 1e-3), round_to(b, 1e-3), (row * 4 + col) as f64]);
+    }
+    out
+}
+
+/// roadwear.puddle_spots: spots() of poly (4N, 2+) absolute, uvq (4N, 2), verts (V, 3) relative to origin (3):
+/// (S, 8).
+#[pyfunction]
+pub fn puddle_spots<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, uvq: PyReadonlyArray2<'py, f64>,
+                         verts: PyReadonlyArray2<'py, f64>, origin: PyReadonlyArray1<'py, f64>)
+                         -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (p, u, v, o) = (poly.as_array(), uvq.as_array(), verts.as_array(), origin.as_array());
+    if p.ncols() < 2 || u.ncols() < 2 || p.nrows() != u.nrows() || p.nrows() % 4 != 0
+        || (v.nrows() > 0 && v.ncols() < 3) || o.len() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "puddle_spots: poly (4N, 2+), uvq (4N, 2), verts (V, 3), origin (3)"));
+    }
+    let pp: Vec<[f64; 2]> = (0..p.nrows()).map(|i| [p[[i, 0]], p[[i, 1]]]).collect();
+    let uu: Vec<[f64; 2]> = (0..u.nrows()).map(|i| [u[[i, 0]], u[[i, 1]]]).collect();
+    let vv: Vec<[f64; 3]> = (0..v.nrows()).map(|i| [v[[i, 0]], v[[i, 1]], v[[i, 2]]]).collect();
+    let rows = spots(&pp, &uu, &vv, [o[0], o[1], o[2]]);
+    let n = rows.len();
+    let flat: Vec<f64> = rows.into_iter().flatten().collect();
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 8), flat)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
 // ---- the puddle atlas's masks (tools/make_puddle_atlas.py writes them as the mod's texture source) -----------------
 
 /// The puddle atlas's alpha (size x size, row 0 at the top; 4 x 4 cells of size / 4): cell (row, col) a puddle of
@@ -1353,6 +1440,28 @@ mod tests {
         assert_eq!(px[0], 0);
         assert_eq!(px[cs - 1], 0);
         assert_eq!(puddle_atlas(n), px);
+    }
+
+    #[test]
+    fn puddle_spots_from_quads_and_mesh() {
+        // a 6 x 1 m quad along +y at (110, 205) in the frame (corners front left, front right, back right, back
+        // left), an atlas cell in row 2, column 1; the mesh (relative to the origin (100, 200, 0)) inside it at
+        // 3.0-3.2 m, one vertex beside it and one past its end
+        let (cx, cy) = (110.0, 205.0);
+        let poly = vec![[cx - 0.5, cy + 3.0], [cx + 0.5, cy + 3.0], [cx + 0.5, cy - 3.0], [cx - 0.5, cy - 3.0]];
+        let (u0, v0, u1, v1) = (0.25, 0.25, 0.5, 0.5);        // roadwear.py _grid(4, 4) cell 9: row 2, column 1
+        let uv = vec![[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
+        let verts = vec![[10.0, 4.0, 3.0], [10.2, 6.0, 3.2], [10.0, 5.0, 3.1], [19.0, 5.0, 9.0], [10.0, 9.5, 7.0]];
+        let s = spots(&poly, &uv, &verts, [100.0, 200.0, 0.0]);
+        assert_eq!(s.len(), 1);
+        let r = s[0];
+        assert_eq!((r[0], r[1]), (10.0, 5.0));
+        assert!((r[2] - 3.1).abs() < 1e-9, "the mean of the three vertices inside: {}", r[2]);
+        assert_eq!((r[3], r[4]), (0.0, 1.0));
+        assert_eq!((r[5], r[6], r[7]), (3.0, 0.5, 9.0));
+        // no vertex inside (the neighbour tile's part): none; the same bits every time
+        assert!(spots(&poly, &uv, &verts[3..], [100.0, 200.0, 0.0]).is_empty());
+        assert_eq!(spots(&poly, &uv, &verts, [100.0, 200.0, 0.0]), s);
     }
 
     #[test]
