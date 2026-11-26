@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import blockworker  # noqa: E402
 import borderfixtures  # noqa: E402
+import fast  # noqa: E402
 import roadmesh  # noqa: E402
 import roads  # noqa: E402
 from test_roads import FRAME, LAT, LON, features  # noqa: E402
@@ -743,6 +744,121 @@ class FirstCellsTest(unittest.TestCase):
                 self.assertFalse(earthd.sharing_machine(), "off by default (2026-11-13) until the share fixes are in")
             with mock.patch.object(os, "cpu_count", return_value=16), mock.patch.object(budget, "small", return_value=True):
                 self.assertFalse(earthd.sharing_machine())
+
+
+class SlopeDem:
+    """A tilted DEM (the profile squares' solve sees a grade), any zoom."""
+
+    def sample(self, lat, lon, zoom, progress=None):
+        e, n, _ = FRAME.geodetic_to_enu(np.asarray(lat, np.float64), np.asarray(lon, np.float64), 0.0)
+        return 40.0 + 0.03 * np.asarray(e) - 0.02 * np.asarray(n)
+
+
+class MainProcessPinsTest(unittest.TestCase):
+    """BNE_ROADSYS=heights and up (the player's surface): the server's own process grades a block itself (an anchor's
+    first block while driving: earthd.Server._make_heightmap_here) through the hooks blockworker installs at import in
+    every process (grading.PROFILE_PINS = _profile_pins, roadsys.GROUND = plan_elev, roadsys.DISK_FN), which read the
+    worker state only the pools' initializer sets (blockworker._s, None there). A player's log, 2026-11-26: from
+    Whitehorse on every anchor request failed "during terrain" (_roads_cell: 'NoneType' object has no attribute 'md'),
+    asked again every 6 s, and the world stopped loading. The server's process reads its own state (attach_main), and
+    grades the points exactly as a worker does."""
+
+    def setUp(self):
+        import shutil
+        from unittest import mock
+        import grading
+        import roadshape
+        import roadsys
+        for obj, name, val in ((roadsys, "HEIGHTS", True), (roadshape, "PROFILE_BUILT", False),
+                               (grading, "PROFILE_PINS", blockworker._profile_pins),
+                               (roadsys, "GROUND", blockworker.plan_elev), (roadsys, "DISK_FN", blockworker._square_disk),
+                               (roadsys, "DISK", None), (blockworker, "_s", None), (blockworker, "_main", None)):
+            # (as blockworker's import sets them under BNE_ROADSYS=heights; the server's own state none yet)
+            p = mock.patch.object(obj, name, val, create=name == "_main")
+            p.start()
+            self.addCleanup(p.stop)
+        for clear in (roadsys.clear_memory, blockworker._geo_graders.clear, getattr(grading, "_PIN_FAILED", set()).clear):
+            clear()
+            self.addCleanup(clear)
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        # (a street under a motorway bridge, and a second street: every map cell holds them, as test_grading's FakeMD)
+        from test_grading import FakeMD
+        self.md = FakeMD(features(
+            [[(-500, 0), (500, 0)], [(0, -500), (0, 500)], [(-400, 250), (400, 250)]],
+            ["residential", "motorway", "secondary"], levels=[(1, 1.0, 0.42, 0.58)], flags=[(1, "is_bridge", 0.42, 0.58)]))
+        xs = np.linspace(-180.0, 180.0, 37)
+        X, Y = np.meshgrid(xs, xs)
+        la, lo, _ = FRAME.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+        self.la, self.lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        self.base = SlopeDem().sample(self.la, self.lo, 15)
+
+    def main_heights(self):
+        """The heights the server's own process grades (Server.grader_for's grader, as _make_heightmap_here's elev)."""
+        import earthd
+        import grading
+        s = earthd.Server(self.dir, os.path.join(self.dir, "main"), imagery=None, mapdata=self.md, grading=True)
+        s.dem = SlopeDem()
+        g = s.grader_for(SimpleNamespace(id=1, lat=LAT, lon=LON, frame=FRAME, grader=None))
+        return s, g.apply(self.la, self.lo, self.base, grading.ROAD_LIFT)
+
+    @unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 626,
+                         "earthfast 626 (roadsys squares, M2) required")
+    def test_server_process_grades_as_a_worker(self):
+        import grading
+        import roadsys
+        before = dict(roadsys.STATS)
+        calls = grading.PIN_STATS["calls"]
+        with self.assertNoLogs("earthd.grading", "WARNING"):
+            s, main = self.main_heights()       # (AttributeError: 'NoneType' object has no attribute 'md' before)
+        self.assertGreater(grading.PIN_STATS["calls"], calls, "the plans' second stage asked for its pins")
+        self.assertGreater(roadsys.STATS["squares"], before["squares"], "the profile squares solved from its map data")
+        g = s.grader_for(SimpleNamespace(id=2, lat=LAT, lon=LON, frame=FRAME, grader=None))
+        first = g.apply(self.la, self.lo, self.base, grading.ROAD_LIFT, pinned=False)
+        self.assertGreater(float(np.abs(main - first).max()), 1.0, "the street under the bridge pinned (dug under it)")
+        # (a worker: its own state, plans, squares and stage-1 grader, nothing shared with the server's above)
+        roadsys.clear_memory()
+        blockworker._geo_graders.clear()
+        blockworker._main = None
+        blockworker._s = SimpleNamespace(md=self.md, dem=SlopeDem(), grading=True, widths=None, surface=None,
+                                         airports=None, sea=None, lids=None, cache_dir=os.path.join(self.dir, "worker"),
+                                         lock=threading.Lock())
+        worker = blockworker._frame_grader(FRAME).apply(self.la, self.lo, self.base, grading.ROAD_LIFT)
+        self.assertEqual(main.tobytes(), worker.tobytes(), "the same heights whichever process grades the block")
+        self.assertGreater(float(np.abs(main - self.base).max()), 0.1, "graded under the roads")
+        del s
+
+    def test_server_process_profile_mode(self):
+        """BNE_ROADSHAPE=profile (P3b): the same hook's bridge chain stores and parts (_chain_store, _cell_bridge_parts,
+        _bridge_setup) in the server's own process too."""
+        from unittest import mock
+        import roadshape
+        import roadsys
+        with mock.patch.object(roadsys, "HEIGHTS", False), mock.patch.object(roadshape, "PROFILE_BUILT", True), \
+                self.assertNoLogs("earthd.grading", "WARNING"):
+            _s, got = self.main_heights()       # (AttributeError: 'NoneType' object has no attribute 'lock' before)
+        self.assertTrue(np.isfinite(got).all())
+
+    def test_pins_failing_grade_on_the_first_stage_not_kept(self):
+        """A PROFILE_PINS that throws (any bug in it) no longer fails the block, nor an anchor's first block for
+        ever: the points graded on the plans' first stage, the build faulted (not kept), logged once."""
+        from unittest import mock
+        import grading
+        import revisit
+
+        def boom(*a):
+            raise AttributeError("'NoneType' object has no attribute 'md'")
+        with mock.patch.object(grading, "PROFILE_PINS", boom):
+            with self.assertLogs("earthd.grading", "WARNING") as logs, revisit.scope() as b:
+                s, got = self.main_heights()
+            self.assertFalse(b.complete, "graded without its pins: never kept")
+            self.assertEqual(len([r for r in logs.records if "profile pins failed" in r.getMessage()]), 1, "once")
+            g = s.grader_for(SimpleNamespace(id=1, lat=LAT, lon=LON, frame=FRAME, grader=None))
+            want = g.apply(self.la, self.lo, self.base, grading.ROAD_LIFT, pinned=False)
+            self.assertEqual(got.tobytes(), want.tobytes(), "the first stage's heights")
+            with mock.patch.object(grading, "PROFILE_PINS", mock.Mock(side_effect=revisit.StaleMiss("block"))):
+                with self.assertRaises(revisit.StaleMiss):      # (a build's own control flow passes through)
+                    g.apply(self.la, self.lo, self.base, grading.ROAD_LIFT)
 
 
 if __name__ == "__main__":
