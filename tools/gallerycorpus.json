@@ -2668,5 +2668,30 @@
     ]
    }
   }
+ },
+ {
+  "name": "freiburg_schuetzenallee",
+  "lat": 47.98541,
+  "lon": 7.87672,
+  "r": 400.0,
+  "issue": null,
+  "kind": "gallery",
+  "note": "B31 Schuetzenallee, the inbound (westbound) carriageway w1481396355 tunnel=avalanche_protector, avalanche_protector:left=open (274 m, mapped 2026-02-21), gallery -> tunnel w25774611 at 47.98568, 7.87492; its open side faces the outbound carriageway, open road there (w146451509 leaves its tube at 47.98559, 7.87489). Tachy's in-game report 2026-11-26 (dev 76935292, BNE_ROADSYS_TUNNELS=on), seen from the outbound carriageway just past its tube's exit at 47.985615, 7.874906: built as a tunnel, the ground raised over and beside it lies on the outbound road",
+  "galleries": {
+   "w1481396355": {
+    "side": "left",
+    "highway": "trunk",
+    "line": [
+     [
+      47.985141,
+      7.878523
+     ],
+     [
+      47.985679,
+      7.874924
+     ]
+    ]
+   }
+  }
  }
 ]
