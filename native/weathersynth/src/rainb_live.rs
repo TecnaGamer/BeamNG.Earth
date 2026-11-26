@@ -68,12 +68,131 @@ const N_SURF: usize = 7;
 /// rate, for the open air, the cabin path and the shelter (shelter weight 1); and the cabin parts' gains.
 const LEVEL_RATES: [f64; 11] = [0.05, 0.1, 0.3, 0.7, 1.0, 2.0, 5.0, 10.0, 20.0, 35.0, 60.0];
 const LEVEL_OPEN: [f64; 11] = [-37.50, -34.45, -26.34, -23.24, -18.20, -13.50, -5.78, 1.48, 6.80, 10.48, 14.21];
-const LEVEL_CABIN: [f64; 11] = [-44.90, -37.66, -33.31, -25.68, -23.14, -19.52, -14.27, -5.02, 0.31, 4.76, 7.00];
+const LEVEL_CABIN: [f64; 11] = [-37.00, -31.00, -24.94, -20.87, -17.36, -12.66, -7.13, -3.11, 1.82, 4.60, 9.72];
 const LEVEL_SHELTER: [f64; 11] = [-40.23, -38.35, -30.54, -22.56, -22.55, -16.78, -8.40, -1.60, 5.65, 9.32, 11.08];
 const GLASS_G: f64 = 1.027607e0;
 const BODY_G: f64 = 2.486389e1;
 /// the muffled loop plays 3.1 dB under the open rain (ambience.lua RAIN_UNDER_ROOF 0.7)
 const SHELTER_DB: f64 = -3.1;
+
+/// A bank of MB two-pole resonators driven by one input, as arrays (the per-sample loop over the modes
+/// vectorises); the output summed in 4 lanes, then the lanes in order (a fixed summation order: deterministic).
+#[derive(Clone)]
+struct ModeBank<const MB: usize> {
+    g: [f64; MB],
+    c1: [f64; MB],
+    c2: [f64; MB],
+    y1: [f64; MB],
+    y2: [f64; MB],
+}
+
+impl<const MB: usize> ModeBank<MB> {
+    /// From (gain, c1, c2) triples (unused slots silent).
+    fn new(modes: &[(f64, f64, f64)]) -> ModeBank<MB> {
+        let mut b = ModeBank { g: [0.0; MB], c1: [0.0; MB], c2: [0.0; MB], y1: [0.0; MB], y2: [0.0; MB] };
+        for (k, &(g, c1, c2)) in modes.iter().take(MB).enumerate() {
+            b.g[k] = g;
+            b.c1[k] = c1;
+            b.c2[k] = c2;
+        }
+        b
+    }
+    fn run(&mut self, input: &[f64; CH], out: &mut [f64; CH], gain: f64) {
+        for j in 0..CH {
+            let x = input[j];
+            let mut lane = [0.0f64; 4];
+            for k in 0..MB {
+                let y = self.c1[k] * self.y1[k] - self.c2[k] * self.y2[k] + x;
+                self.y2[k] = self.y1[k];
+                self.y1[k] = y;
+                lane[k & 3] += self.g[k] * y;
+            }
+            out[j] += gain * ((lane[0] + lane[1]) + (lane[2] + lane[3]));
+        }
+    }
+}
+
+/// RBJ peaking EQ (gain_db at f0, quality q).
+fn peaking(f0: f64, q: f64, gain_db: f64) -> Biquad {
+    let a = m::pow(10.0, gain_db / 40.0);
+    let w = m::TAU * f0 / FS;
+    let (sn, cs) = (m::sin(w), m::cos(w));
+    let al = sn / (2.0 * q);
+    let a0 = 1.0 + al / a;
+    Biquad::new((1.0 + al * a) / a0, -2.0 * cs / a0, (1.0 - al * a) / a0, -2.0 * cs / a0, (1.0 - al / a) / a0)
+}
+
+/// The cabin's sound (2026-11-26, the user: "try to improve the inside car sounds. Use filters or effects"):
+/// - roof: a dense floor (the small drops' impulse power as noise, raised by `floor_db`) and the big drops' impulses
+///   through the roof's 16 modes, plus drum-like thumps (the big drops through 4 damped low panel modes);
+/// - the cabin's transfer: the headliner's low-pass, the closed cabin's low end, body / panel resonances at ~110 and
+///   ~190 Hz;
+/// - the windscreen's ticks brighter (3.5 kHz) and quieter;
+/// - a compressor on the cabin mix (fast envelope against a slow level: the ticks and thumps do not jump out of the
+///   floor), then a small-room reverb (early reflections at 3-9 ms and two damped combs, RT ~0.15 s).
+struct CabinFx {
+    thump: ModeBank<4>,
+    pk1: Biquad,
+    pk2: Biquad,
+    glass_hp: Biquad,
+    env: f64,
+    slow: f64,
+    att: f64,
+    rel: f64,
+    slow_a: f64,
+    thr: f64,
+    ratio: f64,
+    line: Vec<f32>,
+    at: usize,
+    comb_s: [f32; 2],
+    er_lp: f32,
+    rev_mix: f32,
+    floor_g: f64,
+    thump_g: f64,
+    thump_d: f64,
+    glass_g: f64,
+    /// the patter floor on the glass and the roof's skin (the wash noise high-passed), relative to the roof floor
+    hf_bp: Biquad,
+    hf_g: f64,
+    tick_pre: f64,
+}
+
+const CAB_LINE: usize = 2048;
+
+impl CabinFx {
+    fn new() -> CabinFx {
+        let mk = |f: f64, q: f64, g: f64| {
+            let w = m::TAU * f / FS;
+            let rr = m::exp(-m::PI * f / q / FS);
+            (g * m::sin(w), 2.0 * rr * m::cos(w), rr * rr)
+        };
+        CabinFx {
+            thump: ModeBank::new(&[mk(85.0, 5.0, 1.0), mk(132.0, 6.0, 0.8), mk(205.0, 6.0, 0.6), mk(320.0, 7.0, 0.35)]),
+            pk1: peaking(110.0, 2.0, env_f("pk1_db", 2.0)),
+            pk2: peaking(190.0, 2.5, env_f("pk2_db", 2.0)),
+            glass_hp: Biquad::bandpass(FS, env_f("glass_hz", 3500.0), 0.7),
+            env: 0.0,
+            slow: 0.0,
+            att: dsp::onepole_coef(FS, 1.0 / (m::TAU * 0.001)),
+            rel: 1.0 - m::exp(-1.0 / (0.08 * FS)),
+            slow_a: 1.0 - m::exp(-1.0 / (0.4 * FS)),
+            thr: m::undb(env_f("comp_thr_db", 6.0)),
+            ratio: env_f("comp_ratio", 2.0),
+            line: vec![0.0; CAB_LINE],
+            at: 0,
+            comb_s: [0.0; 2],
+            er_lp: 0.0,
+            rev_mix: env_f("rev_mix", 0.3) as f32,
+            floor_g: m::undb(env_f("floor_db", 10.0)),
+            thump_g: m::undb(env_f("thump_db", 0.0)),
+            thump_d: env_f("thump_d", 2.2),
+            glass_g: m::undb(env_f("glass_db", 3.0)),
+            hf_bp: Biquad::highpass(FS, env_f("hf_hz", 2500.0), 0.7071),
+            hf_g: m::undb(env_f("hf_db", 0.0)),
+            tick_pre: env_f("tick_pre", 0.0),
+        }
+    }
+}
 
 /// The wash's octave band-passes, sharing one input (RBJ band-pass coefficients, b1 = 0, b2 = -b0).
 struct WashBank {
@@ -218,13 +337,16 @@ pub struct LiveRainB {
     bin_s: [f32; NB],
     used: [bool; NB],
     // cabin
-    roof: Vec<(f64, f64, f64, f64, f64)>,
+    roof: ModeBank<16>,
     force: [f64; CH],
-    glass_bp: Biquad,
     liner: Biquad,
+    cfx: CabinFx,
+    wash_u: [f32; CH],
+    floor_std: f64,
+    cfx_fg: f64,
+    thump_force: [f64; CH],
     lf: Biquad,
     body1: Biquad,
-    body2: Biquad,
     // shelter reflection
     refl: Vec<f32>,
     refl_at: usize,
@@ -474,9 +596,10 @@ impl LiveRainB {
             .map(|&(f, q, rad)| {
                 let w = m::TAU * f / FS;
                 let rr = m::exp(-m::PI * f / q / FS);
-                (rad * m::sin(w), 2.0 * rr * m::cos(w), rr * rr, 0.0, 0.0)
+                (rad * m::sin(w), 2.0 * rr * m::cos(w), rr * rr)
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let roof = ModeBank::new(&roof);
         let c = Controls { rain_mm_h: 0.0, shelter: 1.0, cabin: 0.0, volume: 1.0, muted: false };
         LiveRainB {
             tn,
@@ -529,11 +652,15 @@ impl LiveRainB {
             used: [false; NB],
             roof,
             force: [0.0; CH],
-            glass_bp: Biquad::bandpass(FS, 2500.0, 0.6),
             liner: Biquad::lowpass(FS, rainb::Tune::get().liner_hz, 0.6),
+            cfx: CabinFx::new(),
+            wash_u: [0.0; CH],
+            floor_std: 0.0,
+            cfx_fg: 0.0,
+            thump_force: [0.0; CH],
             lf: Biquad::lowshelf(FS, 150.0, rainb::Tune::get().cabin_lf_db),
-            body1: Biquad::lowpass(FS, 350.0, 0.7071),
-            body2: Biquad::lowpass(FS, 700.0, 0.7071),
+            // the outside through the body: one 2nd-order low-pass (~mass law above 400 Hz)
+            body1: Biquad::lowpass(FS, 400.0, 0.6),
             refl: vec![0.0; 1024],
             refl_at: 0,
             refl_s: 0.0,
@@ -672,6 +799,20 @@ impl LiveRainB {
         for (bi, &(d0, d1)) in rainb::BANDS.iter().enumerate() {
             self.roof_rate[bi] = dsd.flux(d0, d1) * 1.3 * 1.45;
         }
+        // the roof's small drops (under thump_d) as a noise floor of the same power: E[(D^3 V 1e-3)^2] per hit
+        let mut pw = 0.0;
+        for (bi, &(d0, d1)) in rainb::BANDS.iter().enumerate() {
+            let k = 16;
+            for j in 0..k {
+                let d = d0 + (d1 - d0) * (j as f64 + 0.5) / k as f64;
+                if d >= self.cfx.thump_d {
+                    continue;
+                }
+                let imp = d * d * d * rainb::terminal_v(d) * 1e-3;
+                pw += self.roof_rate[bi] / k as f64 * imp * imp;
+            }
+        }
+        self.floor_std = m::sqrt(pw / FS);
         self.wash_near = wn;
         self.wash_far = wf;
         self.wash_near_sh = wns;
@@ -753,9 +894,14 @@ impl LiveRainB {
             }
         }
         self.force = [0.0; CH];
+        self.thump_force = [0.0; CH];
         let nb = rainb::BANDS.len();
         let sh = self.sh;
         if !dry {
+            // fully inside the car the outside is only heard through the body (a 400 Hz low-pass): its drops are left
+            // out there (the wash carries it; the cabin's level is calibrated so): the cabin's CPU budget
+            let inside = self.cab >= 1.0 && self.tap != Tap::OpenRaw;
+            if !inside {
             // distinct drops
             for ri in 0..rainb::RINGS.len() {
                 let g_fl = if rainb::RINGS[ri].0 < 4.0 { gn } else { gf };
@@ -848,6 +994,7 @@ impl LiveRainB {
                 let lv = self.rng.lognormal(0.0, 0.6);
                 self.start(grain, 0.0, g.gi * lv, g.bin, off);
             }
+            }
             // the car's roof and windscreen
             if self.cab > 0.0 {
                 for bi in 0..nb {
@@ -857,7 +1004,10 @@ impl LiveRainB {
                         let d = self.rng.uniform(d0, d1);
                         let v = rainb::terminal_v(d);
                         let at = self.rng.integers(0, CH as i64) as usize;
-                        self.force[at] += d * d * d * v * 1e-3;
+                        if d >= self.cfx.thump_d {
+                            self.force[at] += d * d * d * v * 1e-3;
+                            self.thump_force[at] += d * d * d * v * 1e-3;
+                        }
                         // the hit's own click from the panel round it (the near field the 16 modes leave out; offline roofhf):
                         // into the windscreen's bin, a dense floor under the ticks
                         let gi = bi * VARIANTS + self.rng.integers(0, VARIANTS as i64) as usize;
@@ -966,6 +1116,7 @@ impl LiveRainB {
             let w = &mut self.wash;
             for j in 0..CH {
                 let u = (self.rng.random() * 2.0 - 1.0) * 1.7320508075688772;
+                self.wash_u[j] = u as f32;
                 let d = u - w.x2;
                 w.x2 = w.x1;
                 w.x1 = u;
@@ -1003,18 +1154,15 @@ impl LiveRainB {
         // the roof's modes over the chunk, one mode at a time (each a short recursion; no per-sample loop over modes)
         let mut roof_raw = [0.0f64; CH];
         if self.cab > 0.0 || self.tap != Tap::Mix {
-            for md in self.roof.iter_mut() {
-                let (g, c1, c2) = (md.0, md.1, md.2);
-                let (mut y1, mut y2) = (md.3, md.4);
-                for j in 0..CH {
-                    let y = c1 * y1 - c2 * y2 + self.force[j];
-                    y2 = y1;
-                    y1 = y;
-                    roof_raw[j] += g * y;
-                }
-                md.3 = y1;
-                md.4 = y2;
+            let fg = self.floor_std * self.cfx.floor_g * gcab.sqrt();
+            self.cfx_fg = fg;
+            let mut drive = [0.0f64; CH];
+            for j in 0..CH {
+                drive[j] = self.force[j] + fg * self.wash_u[j] as f64;
             }
+            let tg = self.cfx.thump_g;
+            self.cfx.thump.run(&self.thump_force, &mut roof_raw, tg);
+            self.roof.run(&drive, &mut roof_raw, 1.0);
         }
         let (go0, gc0) = self.level_prev;
         let c = self.cab;
@@ -1030,9 +1178,41 @@ impl LiveRainB {
             let (mut roof_v, mut glass_v, mut body_v) = (0.0, 0.0, 0.0);
             if c > 0.0 || self.tap != Tap::Mix {
                 roof_v = self.lf.tick(self.liner.tick(roof_raw[j]));
-                glass_v = self.glass_bp.tick(self.bins[GLASS_BIN][j] as f64);
-                body_v = self.body2.tick(self.body1.tick(o));
-                cabin = (roof_v + self.tab.glass_g * glass_v + self.tab.body_g * body_v) * gc;
+                glass_v = self.cfx.glass_hp.tick(self.bins[GLASS_BIN][j] as f64);
+                body_v = self.body1.tick(o);
+                // the cabin's transfer: body / panel resonances on the roof and the outside
+                let hf = self.cfx.hf_bp.tick(self.wash_u[j] as f64) * self.cfx_fg * self.cfx.hf_g;
+                // the roof and the outside through the cabin's resonances; the ticks and the patter floor join after the
+                // compressor (it evens the thumps; the ticks stay ticks, at their own lower level)
+                let ticks = self.cfx.glass_g * self.tab.glass_g * glass_v + hf;
+                // (tick_pre: the share of the ticks that goes through the compressor too)
+                let x = self.cfx.pk2.tick(self.cfx.pk1.tick(roof_v + self.tab.body_g * body_v)) + self.cfx.tick_pre * ticks;
+                // compressor: a fast envelope against the slow level (the floor): peaks over thr x slow are cut
+                let cf = &mut self.cfx;
+                let ax = x.abs();
+                cf.env += (if ax > cf.env { cf.att } else { cf.rel }) * (ax - cf.env);
+                cf.slow += cf.slow_a * (ax - cf.slow);
+                let lim = cf.thr * cf.slow;
+                // (2:1, the default, is a square root; other ratios pay for a pow)
+                let gcmp = if cf.env > lim && lim > 0.0 {
+                    if cf.ratio == 2.0 { m::sqrt(lim / cf.env) } else { m::pow(lim / cf.env, 1.0 - 1.0 / cf.ratio) }
+                } else {
+                    1.0
+                };
+                let xd = x * gcmp + (1.0 - cf.tick_pre) * ticks;
+                // small-room reverb: early reflections (3.1 / 4.7 / 6.3 / 8.9 ms) and two damped combs (RT ~0.15 s)
+                let tap = |k: usize| cf.line[(cf.at + CAB_LINE - k) & (CAB_LINE - 1)];
+                let er = 0.5 * tap(136) + 0.4 * tap(207) + 0.32 * tap(278) + 0.25 * tap(392);
+                cf.er_lp += 0.35 * (er - cf.er_lp);
+                let c0 = tap(498);
+                let c1 = tap(604);
+                cf.comb_s[0] += 0.4 * (c0 - cf.comb_s[0]);
+                cf.comb_s[1] += 0.4 * (c1 - cf.comb_s[1]);
+                // (one shared line: the two feedbacks sum to 0.68 < 1, RT ~0.2 s at the low end, less above)
+                cf.line[cf.at] = xd as f32 + 0.37 * cf.comb_s[0] + 0.31 * cf.comb_s[1];
+                cf.at = (cf.at + 1) & (CAB_LINE - 1);
+                let wet = cf.er_lp + 0.5 * (cf.comb_s[0] + cf.comb_s[1]);
+                cabin = (xd + cf.rev_mix as f64 * wet as f64) * gc;
             }
             let y = match self.tap {
                 Tap::Mix => (o * wo + cabin * wc) * (v0 + (v1 - v0) * t),
@@ -1048,7 +1228,9 @@ impl LiveRainB {
         }
         self.level_prev = (g_open, g_cab);
         self.vol = v1;
-        self.idle = dry && !any && !ringing && !wash_on && c == 0.0;
+        // (in the car too, once the roof and the cabin's reverb have died away)
+        let quiet = self.chunk.iter().all(|v| v.abs() < 1e-7);
+        self.idle = dry && !any && !ringing && !wash_on && (c == 0.0 || quiet);
     }
 }
 
@@ -1167,10 +1349,15 @@ pub fn calibrate() -> String {
         e.cab = 1.0;
         rms_of(&mut e, ctl(5.0, 1.0, 1.0), 4.0, 20.0)
     };
-    let (rr, rg, rb) = (part(Tap::RoofRaw), part(Tap::GlassRaw), part(Tap::BodyRaw));
-    let tn = rainb::Tune::get();
-    let glass_g = m::undb(tn.glass_db + env_f("glass", 0.0)) * rr / rg.max(1e-30);
-    let body_g = m::undb(tn.body_db) * rr / rb.max(1e-30);
+    // (kept since the cabin effects were tuned on them, 2026-11-26: the windscreen and body balance is now CabinFx's;
+    // WEATHERSYNTH_RBL="cabparts=1" measures them afresh as offline's -12 / -6 dB under the roof)
+    let (glass_g, body_g) = if env_f("cabparts", 0.0) > 0.0 {
+        let (rr, rg, rb) = (part(Tap::RoofRaw), part(Tap::GlassRaw), part(Tap::BodyRaw));
+        let tn = rainb::Tune::get();
+        (m::undb(tn.glass_db) * rr / rg.max(1e-30), m::undb(tn.body_db) * rr / rb.max(1e-30))
+    } else {
+        (GLASS_G, BODY_G)
+    };
     // 4. the cabin's loudness by rate
     let mut cabin = [0.0; 11];
     for (i, &r) in LEVEL_RATES.iter().enumerate() {
@@ -1189,11 +1376,11 @@ pub fn calibrate() -> String {
 
 /// The scripted sweep, timed, written; the caller's blocks split at the phase changes (so any block size gives the
 /// same control timeline). `secs_per`: each phase's length (s); `block`: the caller's block.
-pub fn bench(secs_per: f64, block: usize, wav: Option<&str>) -> String {
+pub fn bench(secs_per: f64, block: usize, wav: Option<&str>, cabin_sweep: bool) -> String {
     let t_build = std::time::Instant::now();
     let mut e = LiveRainB::new(1);
     let build_s = t_build.elapsed().as_secs_f64();
-    let phases: [(&str, f64, f64, f64); 8] = [
+    let all: [(&str, f64, f64, f64); 8] = [
         ("dry", 0.0, 1.0, 0.0),
         ("light 0.7", 0.7, 1.0, 0.0),
         ("medium 5", 5.0, 1.0, 0.0),
@@ -1203,6 +1390,18 @@ pub fn bench(secs_per: f64, block: usize, wav: Option<&str>) -> String {
         ("shelter 5", 5.0, 0.0, 0.0),
         ("dry again", 0.0, 1.0, 0.0),
     ];
+    // the cabin's own sweep: in the car through light, medium, heavy; out into the heavy rain; back in; dry
+    let cab: [(&str, f64, f64, f64); 8] = [
+        ("dry", 0.0, 1.0, 1.0),
+        ("cabin light 0.7", 0.7, 1.0, 1.0),
+        ("cabin medium 5", 5.0, 1.0, 1.0),
+        ("cabin heavy 35", 35.0, 1.0, 1.0),
+        ("outside heavy 35", 35.0, 1.0, 0.0),
+        ("cabin heavy again", 35.0, 1.0, 1.0),
+        ("cabin medium 5", 5.0, 1.0, 1.0),
+        ("dry again", 0.0, 1.0, 1.0),
+    ];
+    let phases = if cabin_sweep { cab } else { all };
     let per = ((secs_per * FS) as usize / CH) * CH;
     let total = per * phases.len();
     let mut out = vec![0.0f32; block];

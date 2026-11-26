@@ -531,7 +531,7 @@ fn run() -> Result<(), String> {
         "rainb-live-bench" => {
             let per: f64 = arg(&args, "--per").unwrap_or("10".into()).parse().map_err(|_| "bad --per")?;
             let block: usize = arg(&args, "--block").unwrap_or("512".into()).parse().map_err(|_| "bad --block")?;
-            print!("{}", rainb_live::bench(per, block, arg(&args, "--wav").as_deref()));
+            print!("{}", rainb_live::bench(per, block, arg(&args, "--wav").as_deref(), args.iter().any(|a| a == "--cabin")));
         }
         "rainb-live-calibrate" => print!("{}", rainb_live::calibrate()),
         "rainb-live-tap" => {
