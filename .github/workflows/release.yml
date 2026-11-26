@@ -67,8 +67,57 @@ jobs:
           echo "publish=$pub" >> "$GITHUB_OUTPUT"
           echo "VERSION $v, release exists: $exists, publish: $pub"
 
-  linux:
+  # The thunder grain bank (native/weathersynth/assets/grains -> thunder_grains.bin, bank v3: 15.3 MB of raw i16): packed ONCE
+  # here and handed to both platform jobs, so the AppImage and the .exe bundle byte-identical files. The pack decodes
+  # the committed Ogg grains with ffmpeg's own Vorbis decoder (-c:a vorbis, float output; the i16 rounding is
+  # weathersynth's); the decoder is Ubuntu 22.04's ffmpeg package, its version logged, and a sha256 other than the
+  # committed one (packed with ffmpeg n9.0.2) is a warning: the sound is the same within a few LSB, but say so.
+  grains:
     needs: [check, quality]
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: ffmpeg (the pack's Vorbis decoder)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ffmpeg
+          ffmpeg -hide_banner -version | head -1
+      - name: Pack the grain bank
+        working-directory: native/weathersynth
+        run: |
+          cargo fetch --locked --target x86_64-unknown-linux-gnu
+          cargo build --release --locked
+          target/release/weathersynth grainbank-pack --out thunder_grains.bin
+          want=$(cut -d' ' -f1 assets/grains/thunder_grains.bin.sha256)
+          got=$(sha256sum thunder_grains.bin | cut -d' ' -f1)
+          echo "thunder_grains.bin sha256 $got"
+          if [ "$got" != "$want" ]; then
+            echo "::warning::thunder_grains.bin sha256 $got differs from the committed $want (another ffmpeg Vorbis decoder build: samples move by a few LSB; both platforms still get this one file)"
+          fi
+      # the live recorded rain / wind (assets/tex: CC0 blocks as Ogg -> tex_bank.bin, ~33 MB of raw i16), packed the
+      # same way and handed on with the grains
+      - name: Pack the texture bank
+        working-directory: native/weathersynth
+        run: |
+          target/release/weathersynth texbank-pack --out tex_bank.bin
+          want=$(cut -d' ' -f1 assets/tex/tex_bank.bin.sha256)
+          got=$(sha256sum tex_bank.bin | cut -d' ' -f1)
+          echo "tex_bank.bin sha256 $got"
+          if [ "$got" != "$want" ]; then
+            echo "::warning::tex_bank.bin sha256 $got differs from the committed $want (another ffmpeg Vorbis decoder build: samples move by a few LSB; both platforms still get this one file)"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: thunder-grains
+          path: |
+            native/weathersynth/thunder_grains.bin
+            native/weathersynth/tex_bank.bin
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    needs: [check, quality, grains]
     if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-22.04          # an older glibc: the AppImage runs on more distributions
     steps:
@@ -83,6 +132,14 @@ jobs:
         run: python tools/build_native.py
       - name: Grass patch (tools/gcpatch)
         run: sh tools/gcpatch/build.sh
+      # the live weather sounds' synth (native/weathersynth, cpal output only; its crates fetched at Cargo.lock's
+      # checksums for this target only); this runner's glibc is 2.35, the AppImage's limit; --check: GLIBC_2.35 at
+      # most and libasound.so.2 linked dynamically (the player's own ALSA and its PipeWire / Pulse plugins)
+      - name: Live weather sounds' synth (native/weathersynth)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libasound2-dev
+          python tools/build_weathersynth.py --check
       - name: Python packages
         run: python -m pip install pyinstaller==6.22.3 -r server/requirements.txt
       - name: appimagetool
@@ -97,14 +154,28 @@ jobs:
           [ "$(head -c 4 appimagetool | od -An -tx1 | tr -d ' ')" = 7f454c46 ]
           chmod +x appimagetool
           mv appimagetool appimagetool.AppImage
+      - name: The thunder grain bank (the grains job's one pack)
+        uses: actions/download-artifact@v8
+        with:
+          name: thunder-grains
+          path: build/weathersynth
       - name: Build the AppImage
-        run: python tools/build_app.py --appimagetool "$PWD/appimagetool.AppImage"
+        run: python tools/build_app.py --appimagetool "$PWD/appimagetool.AppImage" --require-weathersynth
       - name: Smoke test (the packaged server starts and answers --help)
         run: |
           f=$(ls dist/*.AppImage)
           "$f" --appimage-extract-and-run --server --help > help.txt
           grep -q -- "--near-visual" help.txt
           head -3 help.txt
+          # the bundled synth where server/liveaudio.py looks, and it runs (its libasound.so.2 resolves to the system's)
+          "$f" --appimage-extract > /dev/null
+          ws=squashfs-root/usr/lib/BeamNG.Earth/_internal/weathersynth
+          test -x "$ws"
+          "$ws" storm-dump | head -2
+          # the grain bank next to it, the grains job's file unchanged
+          cmp squashfs-root/usr/lib/BeamNG.Earth/_internal/thunder_grains.bin build/weathersynth/thunder_grains.bin
+          cmp squashfs-root/usr/lib/BeamNG.Earth/_internal/tex_bank.bin build/weathersynth/tex_bank.bin
+          rm -rf squashfs-root
       - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
         run: |
           f=$(ls dist/*.AppImage)
@@ -116,7 +187,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: [check, quality]
+    needs: [check, quality, grains]
     if: needs.check.outputs.build == 'true'
     runs-on: windows-latest
     # Azure Artifact Signing (the user, 2026-11-25): the GitHub environment "signing" (main and dev only) holds the
@@ -139,18 +210,16 @@ jobs:
           python-version: "3.12"
       - name: Rust kernels
         run: python tools/build_native.py
+      - name: Live weather sounds' synth (native/weathersynth)
+        run: python tools/build_weathersynth.py
       - name: Python packages
         run: python -m pip install pyinstaller==6.22.3 -r server/requirements.txt
       # PyInstaller's bootloader compiled here (MSVC) instead of the wheel's prebuilt one that antivirus heuristics
       # know (VirusTotal 2026-10-17: 2/60 on 1.4.35); build_app.py stops without it
       - name: Bootloader from source
         run: python tools/build_bootloader.py
-      - name: Build the .exe
-        run: python tools/build_app.py --require-own-bootloader
-      # Signed through Azure Artifact Signing: a Public Trust certificate from a CA in Microsoft's trusted roots (the
-      # publisher is the verified individual), so SmartScreen / Smart App Control build reputation on it (GitHub #823;
-      # replaces the self-signed CN=BeamNG.Earth certificate). Timestamped by the service. Before the smoke tests, so
-      # they run the signed file. Actions pinned to commits.
+      # The synth is signed before it is bundled: the one-file app extracts it and starts it as a process of its own,
+      # which Smart App Control and antivirus judge by its own signature
       - name: Azure sign-in (OIDC, no secret)
         if: env.AZURE_SIGN == 'true'
         uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906   # v3.1.0
@@ -158,6 +227,40 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign the synth (Azure Artifact Signing)
+        if: env.AZURE_SIGN == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82   # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\build\weathersynth
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-digest: SHA256
+          description: BeamNG.Earth weather sounds
+          description-url: https://github.com/TecnaGamer/BeamNG.Earth
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: The thunder grain bank (the grains job's one pack)
+        uses: actions/download-artifact@v8
+        with:
+          name: thunder-grains
+          path: build/weathersynth
+      - name: Build the .exe
+        run: python tools/build_app.py --require-own-bootloader --require-weathersynth
+      # Signed through Azure Artifact Signing: a Public Trust certificate from a CA in Microsoft's trusted roots (the
+      # publisher is the verified individual), so SmartScreen / Smart App Control build reputation on it (GitHub #823;
+      # replaces the self-signed CN=BeamNG.Earth certificate). Timestamped by the service. Before the smoke tests, so
+      # they run the signed file. Actions pinned to commits. (Signed in above, for the synth.)
       - name: Sign the .exe (Azure Artifact Signing)
         if: env.AZURE_SIGN == 'true'
         uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82   # v2.0.0
@@ -185,7 +288,7 @@ jobs:
         if: env.AZURE_SIGN == 'true'
         shell: pwsh
         run: |
-          foreach ($f in Get-ChildItem dist\*.exe) {
+          foreach ($f in @(Get-ChildItem dist\*.exe) + @(Get-Item build\weathersynth\weathersynth.exe)) {
             $s = Get-AuthenticodeSignature $f.FullName
             if ($s.Status -ne 'Valid') { throw "$($f.Name): signature $($s.Status): $($s.StatusMessage)" }
             if (-not $s.TimeStamperCertificate) { throw "$($f.Name): no timestamp" }
@@ -197,6 +300,9 @@ jobs:
           f=$(ls dist/*.exe)
           "$f" --server --help > help.txt
           grep -q -- "--near-visual" help.txt
+          build/weathersynth/weathersynth.exe storm-dump | head -2   # (the signed file the .exe bundles runs)
+          sha256sum build/weathersynth/thunder_grains.bin            # (the same as the grains job's: one file for both)
+          sha256sum build/weathersynth/tex_bank.bin
           head -3 help.txt
       - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
         shell: bash

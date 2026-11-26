@@ -55,6 +55,8 @@ FEATURES = (
                        # surface faces with the deck ends' hand-over (M4), the mapped road areas (area:highway) as the
                        # carriageway edges and the OSM street tags' cross-sections (lanes, cycle, bus, parking strips)
                        "BNE_ROADSYS": "surface", "BNE_ROADSYS_AREAS": "on", "BNE_ROADSYS_XSEC": "on"}, None),
+                       # (BNE_ROADSYS_TUNNELS, tunnel plan T1, stays out of this setting until its corpus gate passes:
+                       # 2026-11-25 it made 24 of 51 tunnel mouths and 15 of 66 road places worse on drivability)
     ("expSurfaceOverlay", {"BNE_SURFACE_V2": "on"}, None),                # roadsurf: the second surface layer (P1c)
     ("expNewSidewalks", {"BNE_SIDEWALK_V2": "on"}, None),                 # sidewalks_v2: town sidewalks (P1d, S5)
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),

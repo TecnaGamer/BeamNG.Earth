@@ -47,6 +47,9 @@ COVER_NEED = 1.0            # m of ground over the crown that covers a tube (les
 COVER_OVER = 0.3            # m the cover's top lies over the crown
 COVER_SIDE = 1.5            # m the cover's sides stand outside the tube's wall (past the terrain hole's edge)
 COVER_FOOT = 1.0            # m its sides reach under the floor
+COVER_EDGE_M = 0.5          # (T1) m past a record's cover's sides the ground its top follows is read (fit)
+FOLLOW_DIP = 0.2           # (T1) m a record's cover's top lies under the ground it follows (cover(); over 15 cm: no
+                            # second surface under the terrain or a road on it, no hand-over lip against it)
 COVER_REACH = 1.0           # the ground over the tube: the lowest of its axis and this far beyond its walls either side
                             # (the terrain's holes reach TUNNEL_HOLE_MARGIN and a square past the wall)
 TWIN_GAP = 0.5              # m a headwall keeps from another tube's wall (a twin bore's collar)
@@ -139,7 +142,10 @@ def fit(roads, tunnels, cells, chunks, parts):
         d = np.gradient(xy, axis=0)
         d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
         left = np.c_[-d[:, 1], d[:, 0]]
-        pts = [xy, xy + left * (hw + COVER_REACH), xy - left * (hw + COVER_REACH)]
+        # (T1: a record's tube, whose cover's top follows this ground (cover()), reads it past the cover's own sides: read
+        # at COVER_REACH the top stood over the ground falling away beside it, a hand-over lip at its edge (Malta))
+        cr = COVER_SIDE + COVER_EDGE_M if c.get("rec") and _follow() else COVER_REACH
+        pts = [xy, xy + left * (hw + cr), xy - left * (hw + cr)]
         ends = []
         for e, at in enumerate((0, len(xy) - 1)):
             if not (c.get("portal") or (False, False))[e]:
@@ -298,6 +304,17 @@ def setback(fitd, low=False):
     return 0.0 if low or fitd is None else float(fitd.get("sb") or 0.0)
 
 
+def inset(fitd, low=False):
+    """(BNE_ROADSYS_TUNNELS, tunnel plan T1) m the whole structure stands back so that nothing of it reaches out past
+    the mouth (the record's portal: the map's tag end, nothing moved inward or outward): a hood's collar and its raked
+    feet ended at the mouth, not over the approach's lanes. 0 otherwise (the structure as before)."""
+    import roadsys
+    if not roadsys.TUNNELS or fitd is None:
+        return 0.0
+    lk = LOOKS[_look(fitd, low)]
+    return float(lk[0] + lk[1])
+
+
 def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), low=False):
     """The mouth's structure for roadmesh.tunnel: (positions (n, 3), triangles (m, 3), uvs (n, 2), codes (m,): 0 the
     structure, 1 soil). p: the mouth's floor centre in the mesh's coordinates; walls_near: (left, right) a cutting's
@@ -307,8 +324,9 @@ def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), lo
     none = np.zeros(0)
     # a hood: its headwall back at the hill's face, the hood reaching out from there to the mouth
     sb = setback(fitd, low)
-    p = np.asarray(p, np.float64) - np.r_[np.asarray(out, np.float64) * sb, 0.0]
-    ws = np.asarray(fitd["ws"], np.float64) + sb
+    ins = inset(fitd, low)
+    p = np.asarray(p, np.float64) - np.r_[np.asarray(out, np.float64) * (sb + ins), 0.0]
+    ws = np.asarray(fitd["ws"], np.float64) + sb + ins
     wl = np.asarray(fitd["wl"], np.float64) if fitd.get("wl") is not None and not walls_near[0] else none
     wr = np.asarray(fitd["wr"], np.float64) if fitd.get("wr") is not None and not walls_near[1] else none
     pr = prm(st, th, hw, float(fitd["sl"]), float(fitd["sr"]), uv_m)
@@ -320,12 +338,28 @@ def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), lo
                                 np.ascontiguousarray(fg, np.float64), ws, wl, wr, np.asarray(fitd["rz"], np.float64))
 
 
-def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None):
+def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None, rec=True):
     """The tube's outside over its bare rows for roadmesh.tunnel (earthfast.tunnel_cover_mesh); sec: the tube's section
-    (roadmesh._tunnel_section), the opening its end caps inside the hill leave clear."""
+    (roadmesh._tunnel_section), the opening its end caps inside the hill leave clear; rec: a tube of the road system's
+    record (its top follows the ground only then: a network on the legacy solve keeps its cover as before)."""
     fast.require(VERSION, "tunnel_cover_mesh")
+    follow = rec and _follow()
+    # (T1: a followed top lies FOLLOW_DIP under the ground, the need lowered with it so the same rows are bare: at the
+    # ground it was a second surface under the terrain where that is kept, two owners under a road crossing over the
+    # tube (Seal Beach's I-405 over its connector, 2026-11-25); a hole's edge stands FOLLOW_DIP over it, within the
+    # seam rule's tolerance)
+    dip = FOLLOW_DIP if follow else 0.0
     return fast._ef.tunnel_cover_mesh(np.ascontiguousarray(mid, np.float64), np.ascontiguousarray(left, np.float64),
-                                      np.ascontiguousarray(z, np.float64), np.ascontiguousarray(ground, np.float64),
-                                      float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED, COVER_FOOT,
+                                      np.ascontiguousarray(z, np.float64),
+                                      np.ascontiguousarray(np.asarray(ground, np.float64) - dip),
+                                      float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED - dip, COVER_FOOT,
                                       bool(caps[0]), bool(caps[1]), float(uv_m), float(soil_uv_m),
-                                      np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64))
+                                      np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64),
+                                      *((True,) if follow else ()))
+
+
+def _follow():
+    """(BNE_ROADSYS_TUNNELS, 629) the tube's cover's top rises to the ground over its rows (earthfast cover_follow): the
+    record's holes' edges meet it (the seam rule)."""
+    import roadsys
+    return roadsys.TUNNELS

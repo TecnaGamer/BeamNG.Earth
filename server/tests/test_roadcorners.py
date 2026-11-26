@@ -81,7 +81,7 @@ class PavementCornerTest(unittest.TestCase):
                 chunks = roads.build_tile(FRAME, 0, 0, [f], flat, walks=walks)
             self.assertFalse(walks)
             self.assertFalse(any(c["m"] == "crossing_white" for c in chunks))
-            self.assertEqual(sum(bool(c.get("poly")) for c in chunks), 0 if in_ground else 4)
+            self.assertEqual(sum(bool(c.get("poly")) and not c.get("puddle") for c in chunks), 0 if in_ground else 4)
             self.assertEqual(len(curved(chunks)), 4)            # edge lines along the four arcs (US: secondary)
             self.assertEqual(len(curved(chunks, DECAL)), 4)     # and the gravel edge along them
 
@@ -249,10 +249,10 @@ class RuralTeeTest(unittest.TestCase):
 
     def test_one_fill_per_corner_and_lines_along_each_arc(self):
         chunks = self.build("DE")
-        self.assertEqual(sum(bool(c.get("poly")) for c in chunks), 2)
+        self.assertEqual(sum(bool(c.get("poly")) and not c.get("puddle") for c in chunks), 2)
         self.assertEqual(len(curved(chunks)), 2)
         self.assertEqual(len(curved(chunks, DECAL)), 2)
-        self.assertEqual(sum(bool(c.get("poly")) for c in self.build("DE", True)), 0)     # (painted in the ground)
+        self.assertEqual(sum(bool(c.get("poly")) and not c.get("puddle") for c in self.build("DE", True)), 0)     # (painted in the ground)
         # the US paints no edge lines on tertiary roads (markings._US.edge_classes): the gravel edge only
         us = self.build("US")
         self.assertEqual(len(curved(us)), 0)
