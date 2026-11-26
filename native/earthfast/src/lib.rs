@@ -7881,6 +7881,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // are added, the pairs' geometry gradeshapes._pair_relations' to the bit)
     m.add_class::<linenet::LineNet>()?;
     // 642: LineNet shared by the process's threads (a lock inside: lines only ever added), arclens / boxes / points
-    m.add("VERSION", 642)?;
+    // 643: carriageway_profiles' soft laws: parameters (chains, 9), a comfortable grade and curve each paid for past it
+    m.add("VERSION", 643)?;
     Ok(())
 }

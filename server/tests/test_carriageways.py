@@ -42,6 +42,44 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(cw.chains(P), [[(0, False), (1, False), (2, True)], [(3, False)], [(4, False)]])
 
 
+class SoftLawTest(unittest.TestCase):
+    """The kernel's soft laws (earthfast 643): a comfortable grade and curve paid for past them, and soft clearances: a
+    problem whose laws contradict is answered once, with the least excess, instead of an infeasible certificate."""
+
+    def setUp(self):
+        self.t = np.r_[np.zeros(30), np.full(30, 6.0)]          # (a 6 m step in the ground)
+        self.w = np.ones(60)
+
+    def test_a_soft_grade_spreads_a_climb_the_hard_one_cannot_make(self):
+        hard, info = {}, {}
+        lo = np.full(60, -np.inf)
+        lo[-1] = 6.0
+        hi = np.full(60, np.inf)
+        hi[0] = 0.0
+        cw.solve([dict(t=self.t, w=self.w, lo=lo, hi=hi, grade=0.01, K=30)], diagnostics=hard)
+        self.assertFalse(hard["converged"])
+        z = cw.solve([dict(t=self.t, w=self.w, lo=lo, hi=hi, grade=0.5, K=30, soft_grade=0.01, w_grade=1e4)],
+                     diagnostics=info)[0]
+        self.assertTrue(info["converged"] and info["feasible"], info)
+        self.assertGreater(info["soft_grade_excess"], 0.0)
+        self.assertGreater(info["slack_vars"], 0)
+        self.assertAlmostEqual(float(z[-1]), 6.0, delta=1e-3)
+
+    def test_a_soft_clearance_gives_way_to_a_join(self):
+        a = dict(t=np.zeros(20), w=np.ones(20), grade=0.05, K=30)
+        b = dict(t=np.zeros(20), w=np.ones(20), grade=0.05, K=30)
+        cps = [(0, 0, 1, 0, "eq", 0.0), (0, 1, 1, 1, "ge", 7.0)]
+        info = {}
+        za, zb = cw.solve([a, b], cps, diagnostics=info, soft=[0.0, 1e5])
+        self.assertTrue(info["converged"], info)
+        self.assertAlmostEqual(float(za[0] - zb[0]), 0.0, delta=1e-6)
+        self.assertGreater(info["soft_clearance_shortfall_m"], 6.0)
+
+    def test_no_soft_law_is_the_hard_answer(self):
+        a = dict(t=self.t, w=self.w, grade=0.2, K=30)
+        self.assertTrue(np.array_equal(cw.solve([a])[0], cw.solve([dict(a, w_grade=5.0)])[0]))
+
+
 if __name__ == "__main__":
     unittest.main()
 

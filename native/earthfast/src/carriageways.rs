@@ -8,9 +8,11 @@ use pyo3::types::PyDict;
 /// coupling_rows: (n, 5) [chain a, sample, chain b, sample, kind] or (n, 7) with [chain c, sample] after them (chain
 /// c -1: none); kind 0: z_a - z_b = 0, 1: >= value, 2: <= value. With c the coupled quantity is
 /// z_a - (1 - alpha) z_b - alpha z_c (coupling_alpha, 0 without it): b's height moved alpha of the way to c.
+/// parameters: (chains, 5) [grade, K, smoothness, step, length weight], the hard laws; or (chains, 9) with the soft
+/// laws after them [comfortable grade, its cost, comfortable K, its cost] (carriageway_solver::Parameters).
 #[pyfunction]
 #[pyo3(signature = (target, weight, lower, upper, offsets, parameters, coupling_rows, coupling_values, rounds, budget_s,
-                    coupling_alpha = None, spacing = None))]
+                    coupling_alpha = None, spacing = None, coupling_soft = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn carriageway_profiles<'py>(
     py: Python<'py>,
@@ -26,6 +28,7 @@ pub fn carriageway_profiles<'py>(
     budget_s: f64,
     coupling_alpha: Option<PyReadonlyArray1<'py, f64>>,
     spacing: Option<PyReadonlyArray1<'py, f64>>,
+    coupling_soft: Option<PyReadonlyArray1<'py, f64>>,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyDict>)> {
     let bad = |message: &str| PyValueError::new_err(message.to_owned());
     if rounds == 0 || budget_s.is_nan() || budget_s < 0. {
@@ -45,6 +48,14 @@ pub fn carriageway_profiles<'py>(
         Some(a) => a.as_slice()?.to_vec(),
         None => vec![0.; values.len()],
     };
+    // (an inequality coupling's softness: 0 hard, > 0 what a metre of its shortfall squared costs, halved)
+    let soft = match &coupling_soft {
+        Some(a) => a.as_slice()?.to_vec(),
+        None => vec![0.; values.len()],
+    };
+    if soft.len() != values.len() || soft.iter().any(|v| !v.is_finite() || *v < 0.) {
+        return Err(bad("carriageway coupling softness must be one finite nonnegative weight per coupling"));
+    }
     let n = target.len();
     // (the distance of each sample to the next, per sample: a chain's last one unused; none: each chain's own step)
     let spacing = match &spacing {
@@ -61,7 +72,7 @@ pub fn carriageway_profiles<'py>(
         || offsets.last().copied() != Some(n as i64)
         || offsets.windows(2).any(|w| w[1] < w[0])
         || offsets.iter().any(|&v| v < 0 || v > n as i64)
-        || params.ncols() != 5
+        || (params.ncols() != 5 && params.ncols() != 9)
         || params.nrows() + 1 != offsets.len()
         || (rows.ncols() != 5 && rows.ncols() != 7)
         || rows.nrows() != values.len()
@@ -96,13 +107,18 @@ pub fn carriageway_profiles<'py>(
                 "invalid carriageway grade, K, smoothness, step or length weight",
             ));
         }
-        parameters.push(Parameters {
-            grade: row[0],
-            k: row[1],
-            lam: row[2],
-            step: row[3],
-            length: row[4],
-        });
+        let mut p = Parameters::hard(row[0], row[1], row[2], row[3], row[4]);
+        if row.len() == 9 {
+            // (the soft laws: a comfortable grade and its cost, a comfortable curve's K and its cost; 0: none)
+            if row[5] < 0. || row[6] < 0. || row[7] < 0. || row[8] < 0. {
+                return Err(bad("invalid carriageway soft grade, grade cost, soft K or curve cost"));
+            }
+            p.soft_grade = row[5];
+            p.w_grade = row[6];
+            p.soft_k = row[7];
+            p.w_curve = row[8];
+        }
+        parameters.push(p);
     }
     let sample = |chain: i64, index: i64| -> PyResult<usize> {
         if chain < 0 || chain as usize >= parameters.len() {
@@ -131,6 +147,7 @@ pub fn carriageway_profiles<'py>(
             c,
             alpha: if c == b { 0. } else { alpha[i] },
             upper: row[4] == 2,
+            soft: if row[4] != 0 { soft[i] } else { 0. },
         });
     }
     let problem = Problem {
@@ -164,6 +181,11 @@ pub fn carriageway_profiles<'py>(
     diagnostics.set_item("upper_excess_m", d.upper_excess)?;
     diagnostics.set_item("junction_gap_m", d.junction_gap)?;
     diagnostics.set_item("clearance_shortfall_m", d.clearance_shortfall)?;
+    diagnostics.set_item("soft_grade_excess", d.soft_grade_excess)?;
+    diagnostics.set_item("soft_curve_excess", d.soft_curve_excess)?;
+    diagnostics.set_item("soft_cost", d.soft_cost)?;
+    diagnostics.set_item("soft_clearance_shortfall_m", d.soft_clearance_shortfall)?;
+    diagnostics.set_item("slack_vars", d.slack_vars)?;
     diagnostics.set_item("elapsed_s", d.elapsed_s)?;
     Ok((z.into_pyarray(py), diagnostics))
 }
