@@ -252,9 +252,20 @@ This is the rain counterpart of thunder method B. It renders drop by drop:
 Commands:
 - `rainb` / `rainb-set` render 30 s seamless loops at the current loops' loudness.
 - `rainb-stats` prints the drop statistics by rate.
-- `rainb-live-bench` times the live engine (rainb_live.rs). That engine uses a grain bank of the same drop events,
-  1/3-octave distance bins and RainCap, and does nothing when dry. It is not wired into live-serve: the user decides
-  by ear first.
+- `rainb-live-bench [--per S]` runs the live engine (rainb_live.rs, v2) through a sweep and times it.
+  `rainb-live-calibrate` measures its level tables. `click-check` measures sample jumps, HF spikes and block level
+  steps.
+- **Live engine:** not wired into live-serve: the user decides by ear first.
+  - **v1 was broken:** its cabin path was about 40 dB hot and clipped. Every drop in a block started on the block's
+    first sample. Heavily thinned, loud grains made crackle.
+  - **Chunks:** v2 runs in fixed 256-sample chunks, so the output is identical at any block size (a test checks it).
+  - **Drops:** distinct drops are capped per stream at their true level (sqrt(k) up to k 8), each at its own sample.
+    The dense rest is a Gaussian wash: 9 octave band-passes on one noise, their gains from the grains' measured
+    octave energies.
+  - **Levels:** static, from the calibration table, so nothing pumps.
+  - **Scenes:** equal-power crossfades over 1.5 s; the rate glides over 1 s.
+  - **Dry:** nothing runs.
+  - **Cost:** 0.19-0.37 % of one PC core outdoors and 0.56-0.61 % in the cabin, measured as thread CPU time.
 
 ## Audio rules (src/audio.rs)
 

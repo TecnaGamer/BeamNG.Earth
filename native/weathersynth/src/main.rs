@@ -26,7 +26,9 @@
 //!   weathersynth rainb --kind K --seed N [--secs S] --out F.wav   method B rain: the physical drop model (rainb.rs)
 //!   weathersynth rainb-set --out DIR [--seed N] [--ogg] [--only a,b]   its reference loops (bne_rainb_<kind>)
 //!   weathersynth rainb-stats | rainb-phys            drop statistics per rain rate; unlevelled loudness by rate
-//!   weathersynth rainb-live-bench [--seconds S] [--block N] [--wav F]   method B live engine timed (rainb_live.rs)
+//!   weathersynth rainb-live-bench [--per S] [--block N] [--wav F]   method B live engine: the sweep, S s a state, timed
+//!   weathersynth rainb-live-calibrate                 its level tables (printed as Rust, pasted into rainb_live.rs)
+//!   weathersynth click-check [--segments S] [--skip S] FILE.wav ...   jumps, HF spikes, block level steps (clickcheck.rs)
 
 mod analyze;
 #[cfg(feature = "audio")]
@@ -58,6 +60,7 @@ mod proto;
 mod rain;
 mod rainb;
 mod rainb_live;
+mod clickcheck;
 mod rng;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod serve;
@@ -524,10 +527,23 @@ fn run() -> Result<(), String> {
         "rainb" => rainb::run_one(&args)?,
         "rainb-set" => rainb::run_set(&args)?,
         "rainb-stats" => print!("{}", rainb::stats()),
+        "click-check" => clickcheck::run(&args)?,
         "rainb-live-bench" => {
-            let secs: f64 = arg(&args, "--seconds").unwrap_or("70".into()).parse().map_err(|_| "bad --seconds")?;
+            let per: f64 = arg(&args, "--per").unwrap_or("10".into()).parse().map_err(|_| "bad --per")?;
             let block: usize = arg(&args, "--block").unwrap_or("512".into()).parse().map_err(|_| "bad --block")?;
-            print!("{}", rainb_live::bench(secs, block, arg(&args, "--wav").as_deref()));
+            print!("{}", rainb_live::bench(per, block, arg(&args, "--wav").as_deref()));
+        }
+        "rainb-live-calibrate" => print!("{}", rainb_live::calibrate()),
+        "rainb-live-tap" => {
+            let f = |k: &str, d: f64| arg(&args, k).and_then(|v| v.parse().ok()).unwrap_or(d);
+            rainb_live::tap_render(
+                &arg(&args, "--tap").unwrap_or("mix".into()),
+                f("--rate", 5.0),
+                f("--shelter", 1.0),
+                f("--cabin", 0.0),
+                f("--secs", 20.0),
+                &arg(&args, "--out").ok_or("--out F.wav")?,
+            )?;
         }
         "rainb-phys" => {
             for r in [0.7, 5.0, 35.0] {

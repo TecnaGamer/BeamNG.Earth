@@ -137,11 +137,6 @@ pub struct Tune {
 }
 
 impl Tune {
-    /// Tune::get() read once (the live engine's per-block use).
-    pub fn get_cached() -> Tune {
-        static T: std::sync::OnceLock<Tune> = std::sync::OnceLock::new();
-        *T.get_or_init(Tune::get)
-    }
     pub fn get() -> Tune {
         let mut t = Tune {
             crown_db: -18.0,
@@ -403,7 +398,7 @@ fn burst(r: &mut NpRng, out: &mut Vec<f64>, off: usize, att: f64, tau: f64, fc: 
 
 /// A Minnaert bubble of radius a (m): f = 3.26 / a, damping d = 0.043 f + 0.0014 f^1.5 per s and a pitch rise
 /// sigma = 0.1 d (van den Doel 2005), starting at zero phase (no click).
-fn bubble(out: &mut Vec<f64>, off: usize, a: f64, amp: f64) {
+pub(crate) fn bubble(out: &mut Vec<f64>, off: usize, a: f64, amp: f64) {
     let f0 = 3.26 / a;
     if f0 > 0.45 * FS {
         return;
