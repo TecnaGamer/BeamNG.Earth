@@ -9162,9 +9162,10 @@ class BridgeProfiles:
                         # first part's region), or None: this one
     region_of = None    # region_of(self, comp, pool) -> owner_of's region, with no side effect (ChainStore._region_of)
 
-    def parts_todo(self, todo, solved_only=False, part_ids=False):
+    def parts_todo(self, todo, solved_only=False, part_ids=False, retry=True):
         """[(fid, spec, xy, z, lon)] of the parts todo [((fid, j), feats, i)], each solved with its chain (once);
-        solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
+        solved_only: only those solved already; part_ids: return (fid, j) rather than fid; retry=False: a part published
+        short is taken as it is (its note: the reader is short too), never solved again for this reader (_retry_due)."""
         out = []
         for key, feats, i in todo:
             ring = None
@@ -9177,7 +9178,7 @@ class BridgeProfiles:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 if not self._held_in(key, ring):
                     continue
-            if not solved_only and self.__dict__.get("profile_retry"):
+            if not solved_only and retry and self.__dict__.get("profile_retry"):
                 self._retry_due(key)    # (P3c: a short profile's chain asked again when due; Codex review of P3c)
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
@@ -10959,6 +10960,12 @@ class ChainView:
     def parts_with_ids(self, cells_feats, box):
         """Bridge parts with their stable (fid, part index), including when tiles ask for different spans."""
         return self._parts(cells_feats, box, part_ids=True)
+
+    def parts_published(self, cells_feats, box):
+        """parts_with_ids, a part published short taken as it is (BridgeProfiles.parts_todo retry=False: its reader is
+        short, never kept; the chain solved again only for the readers that keep what they build: the under-deck
+        ceiling's boxes asked a short chain again every PROFILE_RETRY_S, M5 r5)."""
+        return self._parts(cells_feats, box, part_ids=True, retry=False)
 
     def parts_shaped(self, cells_feats, box):
         """parts() with each part's shape (roadshape, BNE_ROADSHAPE=decks; None without one) as a sixth field, from

@@ -1519,7 +1519,7 @@ def _ceil_inputs(frame, cell_fn, keys, reg, view):
             for f, e in _xsec_extents(cell_fn, k).items():
                 xs[f] = max(xs.get(f, 0.0), e)
     decks = []
-    for key, spec, xy, z, _lon in view.parts_with_ids(cells, reg):
+    for key, spec, xy, z, _lon in view.parts_published(cells, reg):
         xy, z = np.asarray(xy, np.float64), np.asarray(z, np.float64)
         if len(xy) < 2 or len(z) != len(xy) or not np.isfinite(z).all() or spec is None:
             continue

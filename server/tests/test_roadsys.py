@@ -893,6 +893,29 @@ class CeilTest(unittest.TestCase):
             got = roadsys.ceil_reach(lambda k: cells[k], ["a", "b", "c"])
         self.assertAlmostEqual(got, roadsys.CEIL_EASE_M + 3.74 * 9.0 + roadsys.CEIL_XY_TOL_M - roads.NEAR_M)
 
+    def test_the_ceiling_takes_a_short_chain_as_published(self):
+        """(M5 r5) the ceiling's read (ChainView.parts_published: parts_todo retry=False) takes a part published short
+        as it is, its note making the reader short; it never asks the chain to be solved again (every ceiling box
+        asked a short chain again each PROFILE_RETRY_S: railramp's corpus visit solved 11 chains more)."""
+        import threading
+        import roads
+        st = roads.BridgeProfiles.__new__(roads.BridgeProfiles)
+        st.lock = threading.Lock()
+        st.done = {("w1", 0): ("spec", np.zeros((2, 2)), np.zeros(2), 0.0)}
+        st.__dict__["short"] = {("w1", 0): (1, 0)}
+        st.__dict__["profile_retry"] = {("w1", 0): ("c", 0.0)}
+        asked = []
+        st._retry_due = lambda k: asked.append(k)
+        st._part_id = lambda k: k[0]
+        with mock.patch.object(roads.BridgeProfiles, "CANON_LOAD", False):
+            with revisit.scope() as b:
+                got = st.parts_todo([(("w1", 0), None, 0)], part_ids=True, retry=False)
+            self.assertEqual([g[0] for g in got], [("w1", 0)])
+            self.assertFalse(b.complete, "its reader is short")
+            self.assertEqual(asked, [])
+            st.parts_todo([(("w1", 0), None, 0)], part_ids=True)
+            self.assertEqual(asked, [("w1", 0)], "the other readers ask it again as before")
+
     def test_keyed_and_wired(self):
         self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 7)
         self.assertGreaterEqual(fast.MIN_VERSION, 632)
