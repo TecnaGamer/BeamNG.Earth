@@ -339,8 +339,6 @@ pub fn costly(spec: &Spec) -> bool {
 /// it is not ready and plays the file). With the render thread at low priority this keeps one core's worth of method B
 /// off a loaded Deck at most.
 pub const MAX_COSTLY_PENDING: usize = 1;
-/// The machine is busy (the 1-minute load per cpu above this, Linux): a costly render is not started (the file plays).
-pub const BUSY_RENDER_LOAD: f64 = 1.0;
 
 fn costly_pending(st: &State) -> usize {
     st.entries.values().filter(|e| costly(&e.spec) && e.samples.is_none() && !e.started).count()

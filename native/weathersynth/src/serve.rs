@@ -77,10 +77,13 @@ pub fn hw_threads() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
 
-/// Is the machine busy for a costly thunder render (thunderlive::BUSY_RENDER_LOAD; Linux's load average; elsewhere
-/// never: the render thread's below-normal priority is the guard there)?
+/// Is the machine busy for a costly thunder render? Never: the guards are the render thread's low priority (nice 19 /
+/// below normal) and thunderlive::MAX_COSTLY_PENDING (one costly render at a time). The old load rule (1-minute load
+/// per cpu > 1.0) held on a Deck running the game all the time, so ~93 % of closes and strikes played the files; at a
+/// real storm's rate (0-0.15 costly renders a minute) rendering costs nothing measurable (Deck broker runs r2-r4,
+/// 2026-11-26: frames in matched windows within the runs' own noise).
 pub fn render_busy() -> bool {
-    load_per_cpu().is_some_and(|l| l > crate::thunderlive::BUSY_RENDER_LOAD)
+    false
 }
 
 /// Pure: the buffer to step back down to after a quiet SHRINK_AFTER_S, or None (at the first size already).
