@@ -163,7 +163,8 @@ def ours_size(px):
     """The file size of our pack of a px x px photo: the header and every mip's BC7 blocks."""
     total, w = 0, px
     while True:
-        total += max(1, (w + 3) // 4) ** 2 * 16
+        n = max(1, (w + 3) // 4)            # (BC7 blocks per side; integers only)
+        total += n * n * 16
         if w == 1:
             break
         w //= 2
