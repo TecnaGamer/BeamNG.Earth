@@ -133,7 +133,7 @@ def set_water_fn(fn):
 # server/tunnelrec.py): the profile squares make it with their profiles; roads.TunnelProfiles hands it on to every
 # consumer (floors, sections, portals, holes), its own solve left to the networks under water (T3)
 TUNNELS = SURFACE and os.environ.get("BNE_ROADSYS_TUNNELS", "off").strip().lower() == "on"
-TUNNELS_KERNEL = 633
+TUNNELS_KERNEL = 636
 XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
 XSEC_KERNEL = 617           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs (617: with areas=, fit= in one binary; trunk 616 has no xsec)
 
@@ -663,7 +663,7 @@ _STYLE = ("white", "", 0.12, 0.15, 0.15, 0.2, (3.0, 9.0), (3.0, 9.0), (3.0, 9.0)
 SQUARE_M = 2000.0           # native/roadsys square.rs SQUARE_M
 FIELD_REACH_M = 300.0       # m round a shadow tile its knots take the squares' heights (product.rs FIELD_REACH_M)
 CLIP_PAD_M = 5.0            # m past a query's reach its targets' lines are kept (pins_near)
-LEGACY_REACH_M = 250.0      # (633, T1) m along its stroke a line's nearest tunnel decides its legacy weights (pins_near:
+LEGACY_REACH_M = 250.0      # (636, T1) m along its stroke a line's nearest tunnel decides its legacy weights (pins_near:
                             # past HAND_MAX_M and TUNNEL_FADE_M, the reach of a mouth's dig and of the old fade)
 
 
@@ -1066,7 +1066,7 @@ def _square_pins_in(fid, frame, sq, cell_fn, ground_ll):
         return None, None
     out = []
     cache = {tuple(sq): me}
-    # (633, T1) each line as a tunnel left off the record has it (pins_near's legacy), only with the record
+    # (636, T1) each line as a tunnel left off the record has it (pins_near's legacy), only with the record
     legacy = me.tunnel_pins() if TUNNELS else None
     for li, (feat, pts, tans, w, share, half, hand, low) in enumerate(me.pins()):
         box = [float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())]
@@ -1115,7 +1115,7 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None, lega
     each line cut to the box grown by pad_m + CLIP_PAD_M (one point past each cut: every segment within pad_m of a
     point in the box is whole, so a point's change is the same whichever query asks), each point's from its own
     region's squares, sorted by content (roadshape.pins_near). today_ll is read only at those points.
-    legacy(feature, lat, lon) -> bool (633, T1, BNE_ROADSYS_TUNNELS): a line whose nearest tunnel (within LEGACY_REACH_M
+    legacy(feature, lat, lon) -> bool (636, T1, BNE_ROADSYS_TUNNELS): a line whose nearest tunnel (within LEGACY_REACH_M
     along its stroke) is one the record does not build (under water: TunnelProfiles.feature_drowned) takes the weights and
     lows it had without the record (the tunnel fade, no digs at the record's mouths): its floor is the old solve's."""
     import math
@@ -1556,15 +1556,32 @@ def _ceil_inputs(frame, cell_fn, keys, reg, view):
     return decks, rails
 
 
+def _ceil_rails(feats):
+    """[lon / lat (n, 2)] the railways whose ground a ceiling keeps: the floors' (_rails) and every railway the rail
+    tiles draw on the ground (railways.drawn's lines, their "ground" pieces: a short tunnel mapped under a road
+    bridge too, which railways draws on the ground with its collider while tag_level_ranges calls it a tunnel: the
+    ceiling cut the ground under 0bff's rail colliders, 19 lips up to 14 cm; M5 r5)."""
+    import railways
+    import roads
+    out = [ll for _fid, ll, _clear in _rails(feats)]
+    for i in range(len(feats)):
+        if not roads._rail_drawn(feats, i):
+            continue
+        for kind, rings in railways._pieces(feats, i):
+            if kind == "ground":
+                out += [np.asarray(r, np.float64)[:, :2] for r in rings if len(r) >= 2]
+    return out
+
+
 def _rails_in(feats, frame):
-    """[(n, 2)] a cell's railways at ground level (_rails) in frame, memoised on the cell's features per frame (each
-    ceiling's box reads its 3 x 3 cells again)."""
+    """[(n, 2)] a cell's railways at ground level (_ceil_rails) in frame, memoised on the cell's features per frame
+    (each ceiling's box reads its 3 x 3 cells again)."""
     memo = feats.__dict__.setdefault("_roadsys_rails_xy", {})
     fk = _frame_key(frame)
     got = memo.get(fk)
     if got is None:
         got = []
-        for _fid, ll, _clear in _rails(feats):
+        for ll in _ceil_rails(feats):
             e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
             xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
             if len(xy) >= 2:

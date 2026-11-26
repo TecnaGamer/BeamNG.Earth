@@ -49,7 +49,7 @@ pub struct Snap { pub mapped: f64, pub built: f64, pub cut: f64 }
 /// The inputs of one stroke: knot stations s (h apart from 0, the last at the stroke's length), the profile z, the
 /// ground over the axis g, the side ground (left / right, one per SIDE_OFFS, NaN where not read), its mapped tunnel
 /// ranges (stations), whether each range end at the stroke's start / end goes on into another stroke's tunnel, and its
-/// design speed. held (633): the station intervals under a road crossing over it on the ground (net.rs crossings' floors):
+/// design speed. held (636): the station intervals under a road crossing over it on the ground (net.rs crossings' floors):
 /// a lid there stays a lid however short (MIN_RUN_M never joins it to a full tube).
 pub struct StrokeIn<'a> {
     pub s: &'a [f64],
@@ -135,7 +135,7 @@ pub fn stroke_record(inp: &StrokeIn) -> (Vec<Run>, Vec<Snap>) {
         // the knots inside [a, b] (both ends as stations of their own)
         let mut st: Vec<f64> = vec![a];
         for &x in inp.s.iter() { if x > a + 1e-6 && x < b - 1e-6 { st.push(x); } }
-        // (633: and the held intervals' ends, so a road over the tube between two knots has stations of its own)
+        // (636: and the held intervals' ends, so a road over the tube between two knots has stations of its own)
         for &(h0, h1) in inp.held.iter() { for x in [h0, h1] { if x > a + 1e-6 && x < b - 1e-6 { st.push(x); } } }
         st.sort_by(|p, q| p.total_cmp(q));
         st.dedup_by(|p, q| (*p - *q).abs() <= 1e-6);
@@ -181,7 +181,7 @@ pub fn stroke_record(inp: &StrokeIn) -> (Vec<Run>, Vec<Snap>) {
             rr.push((j, e, kind[j]));
             j = e + 1;
         }
-        // (633: a lid under a road crossing over the tube (held) is never joined to a full tube: a full tube's 6.8 m
+        // (636: a lid under a road crossing over the tube (held) is never joined to a full tube: a full tube's 6.8 m
         // through the 6.6 m under the I-405 at Seal Beach's connector mouth stood in its lanes)
         let held = |r: &(usize, usize, u8)| -> bool {
             r.2 == 1 && (r.0..=r.1).any(|j| inp.held.iter().any(|&(h0, h1)| st[j] >= h0 - 1e-6 && st[j] <= h1 + 1e-6))

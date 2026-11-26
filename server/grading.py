@@ -6717,12 +6717,19 @@ class _Planner:
             # (a layer made short stays short until the map data decodes it again: a new layer, its ranges and every
             # input they are made of (the cell's grade separation hooks, its lidar answers, its raw and rule ranges)
             # made afresh. Its ranges are never made again in place: those inputs, kept on it, may be short too)
-            for _i, lay in sorted(layers.items(), key=lambda kv: kv[0]):
+            # (BNE_ROADSYS=surface, roads.MAPPED_RANGES: the pieces are the map's own tags, tag_level_ranges, read from
+            # the layer alone: no layer's made ranges are read, so none is waited for. A layer another thread was making
+            # its ranges for made this read short and empty: the fast roads' landings, the pins planned with them and
+            # the plans of the cell differed by which thread had touched the layer first, and the bridge chains' end
+            # heights on those plans by ~0.2 mm, railramp and Seal Beach, M5 round 6)
+            mapped = roadsmod.MAPPED_RANGES()
+            for _i, lay in ([] if mapped else sorted(layers.items(), key=lambda kv: kv[0])):
                 roadsmod._cell_ranges(lay)
             with roadsmod._FACTS_LOCK:
-                short = any(lay.__dict__.get("_ranges_state") != "done"
-                            or lay.__dict__.get("_ranges_short_until") is not None for lay in layers.values())
-            if any(lay.__dict__.get("_lidar_rule") for lay in layers.values()):
+                short = not mapped and any(lay.__dict__.get("_ranges_state") != "done"
+                                           or lay.__dict__.get("_ranges_short_until") is not None
+                                           for lay in layers.values())
+            if not mapped and any(lay.__dict__.get("_lidar_rule") for lay in layers.values()):
                 import revisit          # (the rule for want of the lidar, as level_ranges says: nothing on it kept)
                 revisit.fault(lidar=True)
                 short = True

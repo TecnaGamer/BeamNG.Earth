@@ -35,7 +35,7 @@ const MATCH_M: f64 = 3.0;               // m a deck vertex may lie off its struc
 const ROAD_MATCH_M: f64 = 1.0;          // m a point of a road may lie off the same road's knots in another square
 const MATCH_COS: f64 = 0.7071067811865476;
 const SUP_TOL_M: f64 = 3.0;
-const HELD_SIN: f64 = 0.3;              // (633, T1) a road over a tunnel: its crossing's sine at least this ...
+const HELD_SIN: f64 = 0.3;              // (636, T1) a road over a tunnel: its crossing's sine at least this ...
 const HELD_PAD_M: f64 = 2.0;            // ... and this past its half width either side: the stretch the tube stays a lid ...
 // ... where the cover there takes the road's lowest lid (roads.MAJOR_LOW_H on the classes of roads.CONCRETE_WALL_CLASSES,
 // else net::TUNNEL_LID_MIN_M = roads.TUNNEL_LOW_H)
@@ -509,7 +509,7 @@ fn tunnel_record(net: &Net, si: usize, pr: &prof::Profiles, ends: &[Vec<usize>],
             so.sup.iter().any(|u| u.kind == SUP_TUNNEL && e >= u.s0 - SUP_TOL_M && e <= u.s1 + SUP_TOL_M)
         })
     };
-    // (633) the roads crossing over its tunnels on the ground (the floors net.rs holds): each one's footprint along this
+    // (636) the roads crossing over its tunnels on the ground (the floors net.rs holds): each one's footprint along this
     // stroke, its half width over the crossing's sine (at least HELD_SIN) + HELD_PAD_M either side
     let mut held: Vec<(f64, f64)> = Vec::new();
     for c in net.crossings.iter() {
@@ -750,7 +750,7 @@ pub fn blend(squares: &BTreeMap<(i64, i64), &Square>, q: P2, t: Option<P2>, feat
 
 pub struct PinRaw { pub feat: String, pub pts: Vec<P2>, pub tan: Vec<P2>, pub w: Vec<f64>, pub share: Vec<f64>, pub half: f64,
                    pub hand: Vec<f64>, pub low: Vec<f64>,
-                   // (633, T1) the same line as a tunnel left off the record would have it (TunnelProfiles under water, T3): the
+                   // (636, T1) the same line as a tunnel left off the record would have it (TunnelProfiles under water, T3): the
                    // weight with the tunnel fade, the lows without the record's mouths; the nearest tunnel range on its stroke (its
                    // feature, the distance along to it, its nearest end), "" none
                    pub w_leg: Vec<f64>, pub low_leg: Vec<f64>, pub tfeat: String, pub tdist: f64, pub tp: P2 }
@@ -769,7 +769,7 @@ pub fn pins(sqr: &Square) -> Vec<PinRaw> {
         let near = |s: f64| -> f64 { st.anchors.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))) };
         let hand_w = |s: f64| -> f64 { let d = st.hand.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))); if d.is_finite() { smooth(1.0 - d / st.hand_m.max(1.0)) } else { 0.0 } };
         let low_w = |s: f64| -> f64 { let d = st.lows.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))); if d.is_finite() { smooth(1.0 - d / st.hand_m.max(1.0)) } else { 0.0 } };
-        // (633) the record's mouths among the lows, and the lows without them (a tunnel left off the record: low_leg)
+        // (636) the record's mouths among the lows, and the lows without them (a tunnel left off the record: low_leg)
         let mouths: Vec<f64> = st.tun.iter().flat_map(|r| [(r.mouth0, r.s0), (r.mouth1, r.s1)]).filter(|m| m.0).map(|m| m.1).collect();
         let low_leg_w = |s: f64| -> f64 {
             let d = st.lows.iter().filter(|&&x| !mouths.iter().any(|&m| absf(x - m) < 1e-9)).fold(f64::INFINITY, |m, &x| m.min(absf(s - x)));

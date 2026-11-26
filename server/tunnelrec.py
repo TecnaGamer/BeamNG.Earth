@@ -22,13 +22,13 @@ import roadsys
 
 log = logging.getLogger("earthd.tunnelrec")
 
-KERNEL = 633                # earthfast roadsys_square(tunnels=), roadsys_tunnel_kinds / _mouths, tunnel_record_holes (631: mouths dig the approach; 633: lids under a road over the tube kept)
+KERNEL = 636                # earthfast roadsys_square(tunnels=), roadsys_tunnel_kinds / _mouths, tunnel_record_holes (631: mouths dig the approach; 636: lids under a road over the tube kept, tunnel_pins)
 JOIN_M = 2.0                # m: two parts' ends this close are one joint of the network (no portal there)
 MOUTH_NEAR_M = 6.0          # m a record portal may lie from a section's end vertex to be that end's
 HOLE_MARGIN_M = 0.5         # m round the tube's footprint the holes reach (tunnel plan 4.4)
 HOLE_OVER_M = 1.0           # m: a square is kept where the vault top + this is under all its corners' ground
 END_PAST_M = 0.5            # m past a portal end the approach's graded ground is read (the hand-over)
-STUB_M = 5.0                # (633) m: a lone mapped tunnel shorter than this is drawn open (solve)
+STUB_M = 5.0                # (636) m: a lone mapped tunnel shorter than this is drawn open (solve)
 STATS = {"networks": 0, "parts": 0, "fallback": 0, "no_square": 0, "unmatched": 0, "wet": 0}
 _lock = threading.Lock()
 
@@ -120,7 +120,7 @@ def solve(store, comp, pool, ground=None):
         for j in range(len(kinds)):
             if kinds[j] == 255:
                 kinds[j] = kinds[j - 1] if j > 0 and kinds[j - 1] != 255 else 2
-        # (633) a stub (a mapped tunnel shorter than STUB_M that no other part of the network goes on from: a garage
+        # (636) a stub (a mapped tunnel shorter than STUB_M that no other part of the network goes on from: a garage
         # ramp's mouth in a building's wall, Milchbuck's) is drawn open, as the old solve drew it: a lid's box stood
         # 3.3 m over the service roads round it (T5's building passages and access rule draw these)
         if not joined(i, False) and not joined(i, True) and float(dnp.hypot(*np.diff(d, axis=0).T).sum()) < STUB_M:

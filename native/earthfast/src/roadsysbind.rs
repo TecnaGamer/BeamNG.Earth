@@ -302,7 +302,7 @@ impl RoadsysSquare {
         Ok(out)
     }
 
-    /// (633, T1) per line of pins(), in its order: (the weight with the tunnel fade, the lows without the record's mouths:
+    /// (636, T1) per line of pins(), in its order: (the weight with the tunnel fade, the lows without the record's mouths:
     /// the line as a tunnel left off the record has it; the nearest tunnel range on its stroke: its map feature ("" none),
     /// the distance along to it, its nearest end (x, y)).
     #[allow(clippy::type_complexity)]

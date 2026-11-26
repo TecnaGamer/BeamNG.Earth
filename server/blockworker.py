@@ -1118,7 +1118,7 @@ def _roads_cell(key):
 
 
 def _pins_legacy(planner):
-    """(633, T1, BNE_ROADSYS_TUNNELS) roadsys.pins_near's legacy(feature, lat, lon): round a tunnel the record does not
+    """(636, T1, BNE_ROADSYS_TUNNELS) roadsys.pins_near's legacy(feature, lat, lon): round a tunnel the record does not
     build (under water: T3) the squares' targets as without the record; the planner's own tunnel networks say which, as
     its tunnel sections do (TunnelProfiles.feature_drowned). None without the record."""
     import roadsys

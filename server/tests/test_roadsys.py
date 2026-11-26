@@ -252,6 +252,70 @@ class SquareTest(unittest.TestCase):
         roadsys._squares.clear()
 
 
+    def test_same_chain_heights_whatever_the_order_chains_are_solved(self):
+        """(M5 round 6) Two bridge chains solved one order in a fresh process state, then the other: each chain's deck
+        heights and depths the same bytes, its digest the same (its squares, end lifts and floors its own inputs'
+        alone, whichever chain solved the squares they share first)."""
+        import roadsys
+        import geotiles
+        import mapcells
+        lat0, lon0 = 40.0, -75.0
+        _fid, frame = roadsys.region(lat0, lon0)
+        rows = bridge_network() + [
+            seg("n|0", [[300, -900], [300, 900]], cls=1, lanes=2, oneway=1, kmh=100.0, bridge=(0.48, 0.52))]
+        ids, texts, nums, ints, lls, cons, rng = [], [], [], [], [], [], []
+        for fid_, _cell, t, n, i, p, c, r in rows:
+            la, lo, _ = frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.0)
+            ids.append(fid_); texts.append(t); nums.append(n); ints.append(i)
+            lls.append(np.column_stack((np.asarray(lo), np.asarray(la)))); cons.append(list(c)); rng.append(list(r))
+        tab = dict(ids=ids, texts=texts, nums=nums, ints=ints, ll=lls, cons=cons, rng=rng,
+                   cell=str(mapcells.cell_of(lat0, lon0)))
+
+        def fake_table(key):
+            return dict(tab, cell=str(key))
+        cc = roadsys._Cells(cell_fn=lambda k: None)
+        cc.table = fake_table
+        store = type("S", (), {})()
+        store.frame = geotiles.WorldFrame(lat0, lon0)
+        store.cell_fn = fake_table
+
+        def elev(la, lo):           # (the abutments' ground: sloping, so the end lifts take a part)
+            e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return ground(e, n) - 1.5
+        store.elev = elev
+
+        def g_ll(la, lo):
+            e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return ground(e, n)
+
+        def deck(x):
+            la, lo, _ = frame.enu_to_geodetic(np.full(5, x), np.linspace(-36.0, 36.0, 5), 0.0)
+            e, n, _ = store.frame.geodetic_to_enu(la, lo, 0.0)
+            return np.column_stack((e, n))
+        chains = {"m": ([("m", 0)], {("m", 0): (None, deck(-300.0), np.zeros(5), None)}),
+                  "n": ([("n", 0)], {("n", 0): (None, deck(300.0), np.zeros(5), None)})}
+
+        def solve(order):
+            roadsys._squares.clear()
+            roadsys._short_sq.clear()
+            roadsys._cells_of[id(fake_table)] = (fake_table, cc)
+            out = {}
+            for c in order:
+                got = roadsys.chain_heights(store, chains[c][0], chains[c][1], g_ll)
+                self.assertIsNotNone(got, c)
+                out[c] = (b"".join(str(k).encode() + np.ascontiguousarray(v, np.float64).tobytes()
+                                   for k, v in sorted(got["deck_z"].items(), key=str))
+                          + repr(sorted(got["depth"].items(), key=str)).encode(), got["digest"])
+            return out
+        try:
+            a, b = solve(["m", "n"]), solve(["n", "m"])
+        finally:
+            roadsys._cells_of.pop(id(fake_table), None)
+            roadsys._squares.clear()
+            roadsys._short_sq.clear()
+        self.assertEqual(a, b)
+
+
 class ChainEndsTest(unittest.TestCase):
     def test_an_end_on_another_deck_of_the_chain_is_no_abutment(self):
         """(M5) roadsys._ends_on_decks: a viaduct's two parts 1.8 m apart (past endmatch's JOIN_M): each end's
@@ -916,8 +980,26 @@ class CeilTest(unittest.TestCase):
             st.parts_todo([(("w1", 0), None, 0)], part_ids=True)
             self.assertEqual(asked, [("w1", 0)], "the other readers ask it again as before")
 
+    def test_the_ceiling_keeps_every_drawn_railways_ground(self):
+        """(M5 r5) _ceil_rails: the floors' railways and every line railways draws on the ground (its "ground"
+        pieces: a short tunnel mapped under a road bridge is drawn there with its collider; 0bff's 19 lips)."""
+        import railways
+        import roads
+        import roadsys
+
+        class Fe(list):
+            pass
+        f = Fe([1, 2, 3])
+        floor = np.array([[0.0, 0.0], [1.0, 0.0]])
+        short = [np.array([[0.0, 1.0], [0.0, 2.0]])]
+        with mock.patch.object(roadsys, "_rails", lambda feats: [("r0", floor, 5.0)]), \
+                mock.patch.object(roads, "_rail_drawn", lambda feats, i: i != 1), \
+                mock.patch.object(railways, "_pieces", lambda feats, i: [("ground", short), ("bridge", [floor + i])]):
+            got = roadsys._ceil_rails(f)
+        self.assertEqual([g.tolist() for g in got], [floor.tolist(), short[0].tolist(), short[0].tolist()])
+
     def test_keyed_and_wired(self):
-        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 7)
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 8)
         self.assertGreaterEqual(fast.MIN_VERSION, 632)
         bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
         self.assertIn("_roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1)", bw)

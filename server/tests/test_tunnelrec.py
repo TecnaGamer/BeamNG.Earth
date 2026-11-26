@@ -45,7 +45,7 @@ class TunnelRecordTest(unittest.TestCase):
 
 class TwinFloors(unittest.TestCase):
     def test_twin_record_floors_at_one_height_end_on_one_seam(self):
-        # (633) two bores' floors 7 m apart, 9 m wide, at one height (the record holds twins at one floor: the Caldecott
+        # (636) two bores' floors 7 m apart, 9 m wide, at one height (the record holds twins at one floor: the Caldecott
         # Tunnel): a record's floors are cut on the seam between them (one owner per lane point); legacy tunnel floors
         # are left as they were
         import roadmesh
@@ -73,7 +73,7 @@ class TwinFloors(unittest.TestCase):
 
 class LegacyPins(unittest.TestCase):
     def test_round_a_tunnel_the_record_does_not_build_the_targets_are_the_old_ones(self):
-        # (633) a line with the record's dig at a mouth (low 1) and its legacy variant (the tunnel fade, no mouth low):
+        # (636) a line with the record's dig at a mouth (low 1) and its legacy variant (the tunnel fade, no mouth low):
         # pins_near takes the legacy one only when legacy() says its nearest tunnel is left off the record (under water)
         import roadsys
         old = roadsys._square_pins
