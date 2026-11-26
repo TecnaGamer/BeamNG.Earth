@@ -7617,6 +7617,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 500: enu_rings and enu_bounds (mapgeom.enu_rings / enu_bounds: many rings' frame conversion in one call, the
     // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like)
     m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_atlas_px, m)?)?;
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
     // where the ground bulges inside it: no dip under its lift). 495-498 are other branches'
@@ -7870,8 +7872,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // grading._Planner._landings_in / _landing_chain)
     m.add_function(wrap_pyfunction!(landings::landing_ends, m)?)?;
     m.add_function(wrap_pyfunction!(landings::landing_chain, m)?)?;
-    // 639: upstream dev (638) merged with the fork's grading kernels (581-583, 630 above: gradebins fill / cutting walls,
-    // rail_crossing_roads' grade callback), both sets of changes in this build, the version past both
-    m.add("VERSION", 639)?;
+    // 639: roadwear::puddle_plan (a tile's puddles: sags, gutters, ruts) and
+    // puddle_atlas_px (their masks)
+    // 640: dev (639: the puddle kernels) merged with the fork's grading kernels (581-583, 630 above: gradebins fill / cutting
+    // walls, rail_crossing_roads' grade callback) and dev's 638 landings: both sets of changes in this build, past both
+    m.add("VERSION", 640)?;
     Ok(())
 }

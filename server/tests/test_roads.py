@@ -785,7 +785,7 @@ class BuildTileTest(unittest.TestCase):
         for c in stops:                         # on the approach half, beyond the crosswalk
             a, b = np.array(c["n"][0][:2]), np.array(c["n"][-1][:2])
             self.assertLess(np.hypot(*(b - a)), w)
-        fills = [c for c in chunks if c.get("poly")]
+        fills = [c for c in chunks if c.get("poly") and not c.get("puddle")]     # (not the puddles: roadwear)
         self.assertEqual(len(fills), 4, "the corner asphalt")
         for c in corners:                       # the arc keeps RADIUS from its centre, between the curbs
             arc = c["arc"]
