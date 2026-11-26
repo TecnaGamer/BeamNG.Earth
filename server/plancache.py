@@ -118,6 +118,8 @@ def plans_format():
     rs = f".rsh{revisit.SWITCH_VERSIONS['BNE_ROADSYS']}" if roadsys.HEIGHTS else ""
     if roadsys.SURFACE:         # (the mapped ranges, roads.MAPPED_RANGES: other plans than heights' and structures')
         rs += ".rsm"
+    if roadsys.TUNNELS:         # (T1: the tunnels' floors and mouths from the road system's record, tunnelrec.py)
+        rs += f".rst{revisit.SWITCH_VERSIONS['BNE_ROADSYS_TUNNELS']}"
     return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + profile + (".gg1" if grading.GUARD_ON else "") + ds \
         + (".bv3" if grading.BATTER_ON else "") + rs
 

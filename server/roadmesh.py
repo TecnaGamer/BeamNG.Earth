@@ -40,7 +40,9 @@ LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage":
         # 6-7 mm, the spots 4 mm (each wear layer's lift its own: the strips are told apart by it)
         # then (the user: "they still float. i want to make them virtualy the same height of the road"): paint 2 mm, the
         # wear 2.2-2.6 mm, spots 1.8 mm (FOLLOW_TOL stays 2 cm: the ground steps by 1/32 m)
-        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026}
+        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026,
+        # puddles (roadwear.puddle_chunks): a mesh of their own over everything here, the water over the paint
+        "puddle": 0.006}
 # The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
 # as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
@@ -839,7 +841,11 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
         # "noslab", drawn as one already) against anything)
         # (deck ribbons alone: never a marking's or a sidewalk's ribbon, which a tile draws in its window only;
         # Codex review of P3d)
-        ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("tunnel") or c.get("surface_ref"))
+        # (T1, BNE_ROADSYS_TUNNELS: a record's tunnel floor ("rec") is a face of the one profile too, and the record
+        # holds twin carriageways at one floor: two parallel bores 7 m apart (the Caldecott Tunnel) were two slabs over
+        # each other at one height, 500 m2 of lanes with two owners; a legacy tunnel floor stays out as before)
+        ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("surface_ref")
+                                                    or (c.get("tunnel") and not c.get("rec")))
                        for (r, c) in list(rb) + list(context) if r[5] is not None], bool)
         if ok.any():
             pick = np.flatnonzero(ok)
@@ -1459,7 +1465,7 @@ def _ground_runs(rs, ab):
 
 @profile_step('Road mesh generation')
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
-          clip_poly=None):
+          clip_poly=None, puddles=False):
     """The road mesh of a tile (render only; on bridges it lies DECK_SKIN over deck()'s slab): (positions
     relative to origin, tris, uvs, materials, tri material index), or None; with a dirt or gravel strip in it (a
     FADE_PREFIX material) a sixth element, the fade uv (n, 2) (_fade_uv; write, plazas.merge), and those materials
@@ -1475,7 +1481,14 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     ground raised over low arches): a ribbon straight across the road stood under the ground's bumps (up to 30 cm on hills), so it was drawn
     5 cm over it and the tyres sank into it (the user, 2026-10-20). clip_poly (k, 2): a convex polygon the mesh is cut
     to instead of the box (a geotile's quad in the anchor's world: earthfast.clip_tris_convex, the neighbours' cuts
-    along the very same lines); clip then only says where the ribbons reach past the tile (_reach_past)."""
+    along the very same lines); clip then only says where the ribbons reach past the tile (_reach_past). puddles: the
+    mesh of the chunks marked "puddle" alone (roadwear.puddle_chunks: the skin's puddle part), else the road mesh
+    without them."""
+    if puddles:
+        chunks, context = [c for c in chunks if c.get("puddle")], ()
+    else:
+        chunks = [c for c in chunks if not c.get("puddle")]
+        context = [c for c in context if not c.get("puddle")]
     chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
     if any(c.get("rs_hide") or c.get("rs_slab") for c in chunks):
         # (BNE_ROADSYS=surface: today's deck chunks the road system's faces stand in for, the parapets' base strips)
@@ -3028,6 +3041,7 @@ def _pier(p, origin, P, T, UV, M, mat):
 TUNNEL_SHOULDER = 1.2      # m of concrete floor between the road's edge and the wall
 TUNNEL_WALL_H = 4.6        # m of upright wall before the vault
 TUNNEL_H = 6.8             # m from the floor to the vault's top
+TUBE_KERB_M = 0.2          # (T1) m a record's tube's shoulders stand over its floor (tunnel(): the chunk's "rec")
 PORTAL_FRAME = 6.0         # m of portal face around the opening (hides the terrain hole's 2 m steps)
 TUNNEL_SIDE = DECK_SIDE    # the tube's concrete (portal faces) ...
 TUNNEL_INNER = "bne_tunnel_inner"   # ... and inside a full tube darker (tunnel.materials.json): lit by the sky as the
@@ -3231,6 +3245,11 @@ def tunnel(chunks, origin, walls=()):
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
         sec = _tunnel_section(hw, th, low, box=low and not stone and portals.ON)    # (a major road's low tube: a box)
+        if c.get("rec"):
+            # (T1: a tube of the road system's record has a kerb TUBE_KERB_M high along each wall: its shoulders were one
+            # with the floor's slab, two coplanar colliding faces over each lane cell (z-fighting; the Caldecott Tunnel))
+            sec = sec.copy()
+            sec[[0, 1, -2, -1], 1] = TUBE_KERB_M
         k, m = len(mid), len(sec)
         rows = np.empty((m, k, 3))
         for j, (off, h) in enumerate(sec):
@@ -3278,10 +3297,11 @@ def tunnel(chunks, origin, walls=()):
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
                 if f_ is not None and (c.get("portal") or (False, False))[e_]:
                     d_ = sm if e_ == 0 else sm[-1] - sm
-                    gr = np.where(d_ <= portals.setback(f_) + 0.5 if portals.setback(f_) > 0 else False, np.inf, gr)
+                    sb_ = portals.setback(f_) + portals.inset(f_)
+                    gr = np.where(d_ <= sb_ + 0.5 if sb_ > 0 else False, np.inf, gr)
             nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
                                                              gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
-                                                             SOIL_UV_M, sec), 0)
+                                                             SOIL_UV_M, sec, rec=bool(c.get("rec"))), 0)
         pups = c.get("portal_up") or (None, None)
         caps = c.get("cap_m") or (None, None)       # (a road over the mouth: its stone top shorter, TunnelProfiles.caps)
         for end, at, pup, cap_m in zip(c.get("portal") or (False, False), (0, k - 1), pups, caps):

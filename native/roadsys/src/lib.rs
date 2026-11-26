@@ -10,6 +10,7 @@
 //! Pure Rust, no dependencies: IEEE + - * / and sqrt only (no FMA, no libm), integer-mm topology, BTreeMap only.
 pub mod areas;
 pub mod audit;
+pub mod ceil;
 pub mod check;
 pub mod deck;
 pub mod derive;
@@ -25,6 +26,8 @@ pub mod product;
 pub mod skew;
 pub mod square;
 pub mod tile;
+pub mod tunnel;
+pub mod tunaudit;
 pub mod xsec;
 
 /// Thread CPU seconds (timings only: nothing built reads them).

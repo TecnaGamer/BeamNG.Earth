@@ -165,17 +165,23 @@ fn main() {
         let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
         let t = io::read_tile(&b).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
         // (the recorded ground heights, then the measured deck heights run by run)
+        // (T1: the ground is asked more than once (the railway lines' ground, the tunnel record's side ground), each call
+        // recorded after the last in the dump, the measured decks after them all: read in turn, the decks from the end)
         let ng = std::cell::Cell::new(0usize);
         let g = |pts: &[geom::P2]| -> Vec<f64> {
-            if pts.len() > t.ground.len() { eprintln!("ground: {} points asked, {} recorded", pts.len(), t.ground.len()); std::process::exit(1); }
-            ng.set(pts.len());
-            t.ground[..pts.len()].to_vec()
+            let k = ng.get();
+            if k + pts.len() > t.ground.len() { eprintln!("ground: {} points asked at {}, {} recorded", pts.len(), k, t.ground.len()); std::process::exit(1); }
+            ng.set(k + pts.len());
+            t.ground[k..k + pts.len()].to_vec()
         };
         let o = |runs: &[prof::ObsRun]| -> Vec<Vec<f64>> {
-            let mut k = ng.get();
+            let total: usize = runs.iter().map(|r| r.pts.len()).sum();
+            let mut k = t.ground.len().saturating_sub(total);
             runs.iter().map(|r| { let n = r.pts.len(); let v = if k + n <= t.ground.len() { t.ground[k..k + n].to_vec() } else { vec![f64::NAN; n] }; k += n; v }).collect()
         };
-        let out = square::solve_obs(&t.place, (t.id.0 as i64, t.id.1 as i64), &g, Some(&o), net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, ..Default::default() });
+        // (ROADSYS_TUNNELS=1: a square dumped with the tunnel record, BNE_ROADSYS_TUNNELS: replayed with it)
+        let tunnels = std::env::var("ROADSYS_TUNNELS").map(|v| v == "1").unwrap_or(false);
+        let out = square::solve_obs(&t.place, (t.id.0 as i64, t.id.1 as i64), &g, Some(&o), net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, tunnels, ..Default::default() });
         std::fs::create_dir_all(&args[3]).ok();
         let name = format!("{}_{}", t.id.0, t.id.1);
         let bytes = out.to_bytes();
@@ -194,6 +200,15 @@ fn main() {
                 println!("handover {:016x} {} {} {}", roadsys::geom::fnv(&bytes), out.t.len(), st.squares_h, st.squares_z);
                 return;
             }
+            Err(e) => { eprintln!("{}", e); std::process::exit(1) }
+        }
+    }
+    if args.len() == 3 && args[1] == "ceil" {
+        // (M5) an under-deck ceiling's input file (ROADSYS_CEIL_DUMP's .rsce): the FNV-1a 64 of its ceiling and drop on
+        // a 0.5 m grid over its decks, the points and those with a ceiling
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(2) });
+        match roadsys::ceil::run_input(&b) {
+            Ok((bytes, n, hit)) => { println!("ceil {:016x} {} {}", roadsys::geom::fnv(&bytes), n, hit); return; }
             Err(e) => { eprintln!("{}", e); std::process::exit(1) }
         }
     }
