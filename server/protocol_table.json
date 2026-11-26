@@ -1067,7 +1067,8 @@
     "bridges": {"type": "list"},
     "bands": {"type": "list"},
     "lake": {"type": "list"},
-    "credit": {"type": "str"}
+    "credit": {"type": "str"},
+    "look": {"type": "dict", "optional": true, "doc": "winter W3 (snowroad.py, BNE_WINTER; winterroad.lua): per plow class P0..P4 marking (paint shown 0..1), deck (a deck's snow 0..1), banks (bin 0..4), dirt (0..2); walks [state, cover 0..8] by sidewalk slot (main, residential cleared, residential left, unmaintained)"}
    }
   },
   "block_base": {

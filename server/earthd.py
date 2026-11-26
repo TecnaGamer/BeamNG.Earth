@@ -3736,7 +3736,13 @@ class Server:
         """The road tiles' wear argument (roadwear.py): the tier and the season mode of the imagery (the fallen leaves:
         roadwear.fall_of). Called as Server.wear_arg(self)."""
         im = getattr(self, "imagery", None)
-        return {"tier": Server.wear_tier(self), "season": getattr(im, "season_mode", None) or "off"}
+        out = {"tier": Server.wear_tier(self), "season": getattr(im, "season_mode", None) or "off"}
+        # (winter W3: the road skins' winter part, snowroad.skin_key; roadwear.wear_key never reads it)
+        svc = getattr(self, "snow", None)
+        rs = getattr(svc, "road_snow", None) if svc is not None else None
+        if rs:
+            out["snow"] = dict(rs)
+        return out
 
     def set_road_wear(self, value):
         """The settings page's Road detail (message road_wear {value: 'off' / 'basic' / 'full'}): True when the tier
@@ -4975,6 +4981,19 @@ class Server:
         self.snow_changes = getattr(self, "snow_changes", 0) + 1
         log.info("snow state changed (%s): %d far tiles to texture again, %d block photos", snowcovermod.MODE, n,
                  len(self.base_stale))
+        return n
+
+    def snow_roads_changed(self):
+        """(event loop) Winter W3: the road skins' winter part changed (snow.Service._commit_roads: a first snowy state,
+        a bank bin moving): every connection's road tiles sent again (their skins rebuilt under the new key)."""
+        n = 0
+        for c in list(getattr(self, "connections", ()) or ()):
+            if getattr(c, "roads", None) is None:
+                continue
+            c.roads.close()
+            c.roads = road_tracker(c)
+            n += 1
+        log.info("snowy roads changed: road tiles again for %d connections", n)
         return n
 
     def snow_masks(self, anchor, tile, px, snow):

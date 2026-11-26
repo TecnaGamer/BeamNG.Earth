@@ -115,6 +115,7 @@ mod fartex;
 mod photojpeg;
 mod leafon;
 mod snowlook;
+mod snowroad; // winter W3 (BNE_WINTER): snowy roads by plow class, sidewalks, snowbanks (server/snowroad.py)
 mod photomesh;
 mod deshadow;
 mod colormatch;
@@ -7818,6 +7819,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
     // W2 snow on the ground photos, server/snowcover.py)
     snow::py::register(m)?;
+    // 640 (W3, see the end): snowroad.rs, server/snowroad.py
+    snowroad::py::register(m)?;
     // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
     // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
@@ -7841,6 +7844,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(landings::landing_chain, m)?)?;
     // 639: roadwear::puddle_plan (a tile's puddles: sags, gutters, ruts) and
     // puddle_atlas_px (their masks)
-    m.add("VERSION", 639)?;
+    // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
+    // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
+    m.add("VERSION", 640)?;
     Ok(())
 }

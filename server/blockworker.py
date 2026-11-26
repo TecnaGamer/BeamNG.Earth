@@ -2327,7 +2327,7 @@ def _frame_grader(frame):
 
 def geo_names(key, aid=None):
     """The session files of geotile key: {"json", "skin", what -> shape} of its content (aid None) or of anchor aid's
-    skin ("json", "road", "walk", "walkcol")."""
+    skin ("json", "road", "walk", "walkcol"; "bank" with winter's roads)."""
     import roads as roadsmod
     if aid is None:
         out = {"json": f"rg_{key}.json", "inputs": f"rg_{key}.skin.pkl"}
@@ -2337,6 +2337,9 @@ def geo_names(key, aid=None):
         return out
     out = {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
            "walkcol": f"rs_{aid}_{key}_walkcol.cdae", "puddle": f"rs_{aid}_{key}_puddle.cdae"}
+    import snowroad
+    if snowroad.ON:                         # (winter W3's snowbanks: only with winter's roads on)
+        out["bank"] = f"rs_{aid}_{key}_bank.cdae"
     import cliffsettings
     if cliffsettings.SETTINGS.enabled:      # (the cliffs' contact strips: only with BNE_CLIFFS on)
         import cliffscene
@@ -2552,13 +2555,15 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     return k if revisit.has(_s.cache_dir, "roadsg", k) else None
 
 
-def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q):
-    """The revisit key of an anchor's skin of the geotile whose content has key ckey (_geo_skin)."""
+def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q, wear=None):
+    """The revisit key of an anchor's skin of the geotile whose content has key ckey (_geo_skin); winter's roads
+    (snowroad.skin_key of the wear's "snow": nothing without it) last."""
     import revisit
     import heightmap as heightmapmod
+    import snowroad
     return revisit.key("rskin", ckey, *revisit.frame_parts(lat, lon), int(zoom), bool(sidewalks),
                        float(lift), None if q is None else float(q), ("rules", _ground_rules()),
-                       float(heightmapmod.SQUARE))
+                       float(heightmapmod.SQUARE), *snowroad.skin_key(wear))
 
 
 def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings, left_hand,
@@ -2576,7 +2581,7 @@ def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, 
         ck = _geo_content_key(tile_key, gzoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                               pole_profile=pole_profile, models_dir=os.path.dirname(scratch),
                               de_junctions=de_junctions, towns_on=towns_on, wear=wear)
-        return ck, _skin_key(ck, lat, lon, zoom, sidewalks, lift, q)
+        return ck, _skin_key(ck, lat, lon, zoom, sidewalks, lift, q, wear)
     with revisit.stale(()):             # (this version's alone, whatever scope the caller is in)
         ck, sk = keys()
         if not (revisit.has(_s.cache_dir, "roadsg", ck) and revisit.has(_s.cache_dir, "rskin", sk)):
@@ -2851,7 +2856,7 @@ def _clip_mesh(mesh, origin, quad):
     return P2[used], remap[T2], UV2[used], mats, np.asarray(M)[src]
 
 
-def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, ckey=None):
+def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, ckey=None, wear=None):
     """_geo_skin_build, kept in the revisit cache (kind "rskin", since 2026-11-13: keyed by its content's key ckey, the
     anchor and the skin's own settings; teleport anchors are snapped, so a place visited again asks for the same
     skins): a revisit no longer drapes every tile again, and an older generation's skin is shown with the content and
@@ -2862,11 +2867,11 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     import geotiles
     import revisit
     if ckey is None or not revisit.ON or getattr(_s, "cache_dir", None) is None:
-        return _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content)
+        return _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, wear)
     tile = geotiles.geobox(gx, gy)
     names = geo_names(tile.key, aid)
     mine = [(f"{vfs_dir}/", "@V@/"), (f"rs_{aid}_", "rs_@A@_")]
-    k = _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q)
+    k = _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q, wear)
     got = revisit.load(_s.cache_dir, "rskin", k)
     if got is not None:
         blobs, extra = got
@@ -2880,7 +2885,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
         _geo_stats["skin_hits"] += 1
         return f"{vfs_dir}/{names['json']}", {"lift": float(lift), "h": (extra or {}).get("h")}
     with revisit.scope() as f0:
-        res = _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content)
+        res = _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, wear)
     if res is None:
         return None
     try:
@@ -2904,7 +2909,34 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     return res
 
 
-def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content):
+def _snow_lines(frame, bbox, ground_only=False, bridges=False):
+    """Winter W3's lane sheet round a skin's box (snowroad.road_lines of the roads layer's cells within
+    snowroad.LINE_MARGIN_M, in the anchor's frame): every part (ground_only: the ground parts, the banks'; bridges: the
+    bridge parts, the banks' cut lines)."""
+    import mapcells
+    import snowroad
+    m = snowroad.LINE_MARGIN_M
+    x0, y0, x1, y1 = bbox
+    gx = np.array([x0 - m, x1 + m, x0 - m, x1 + m])
+    gy = np.array([y0 - m, y0 - m, y1 + m, y1 + m])
+    la, lo, _ = frame.enu_to_geodetic(gx, gy, np.zeros(4))
+    la, lo = np.asarray(la), np.asarray(lo)
+    feats = []
+    for key in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max())):
+        try:
+            f = _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        except Exception:
+            import revisit
+            revisit.fault()
+            continue
+        if f is not None:
+            feats.append(f)
+    surf = getattr(_s, "surface", None)
+    return snowroad.road_lines(feats, frame, getattr(surf, "urban", None), getattr(_s, "widths", None), ground_only,
+                               (x0 - m, y0 - m, x1 + m, y1 + m), bridges)
+
+
+def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, wear=None):
     """Anchor aid's skin of geotile (gx, gy): the draped road surfaces (the road mesh and plazas: roadmesh.build on the
     anchor's lattice and height quantum q, follow) and the sidewalks (curbs on the drawn ground, their lean collision
     mesh), from the content's skin inputs mapped into the anchor's world, cut exactly at the tile's quad there (its
@@ -2942,6 +2974,13 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
     chunks = _map_chunks(tile.frame, frame, inputs.get("chunks") or [])
     ctx = _map_chunks(tile.frame, frame, inputs.get("ctx") or [])
     mark("map")
+    import snowroad
+    snow = snowroad.snow_of(wear)       # (winter W3: the paint, decks and sidewalks on their winter copies, the banks)
+    snow_lines = None
+    if snow is not None:
+        snow_lines = _snow_lines(frame, bbox)
+        chunks = snowroad.remap_chunks(chunks, snow_lines)
+        mark("snow")
     mesh = roadmeshmod.build(frame, chunks, elev, origin, lift, clip=bbox, follow=True, q=q, drawn=drawn,
                              context=ctx, clip_poly=quad)
     mark("mesh")
@@ -2953,6 +2992,16 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
     names = geo_names(tile.key, aid)
     data = {"v": roadsmod.VERSION, "key": tile.key, "anchorId": aid, "lift": round(float(lift), 3),
             "q": float(q) if q else 0.0}
+    if snow is not None:
+        bm = snowroad.bank_mesh(snow, _snow_lines(frame, bbox, True), snowroad.crossing_cuts(chunks), bbox,
+                                lambda xy: roadmeshmod.drawn_ground(frame, drawn, xy, q), origin,
+                                _snow_lines(frame, bbox, bridges=True))
+        bm = _clip_mesh(bm, origin, quad) if bm is not None else None
+        if bm is not None:
+            cdae.write(os.path.join(out_dir, names["bank"]), bm[0], bm[1], uvs=bm[2], material=bm[3],
+                       tri_materials=bm[4], object_name="bank")
+            data["bank"] = {"shape": f"{vfs_dir}/{names['bank']}", "pos": list(origin)}
+        mark("banks")
     # its pivot: the quad's centre at the median height of its road mesh (the mod moves a kept skin there at a rebase)
     pz = float(np.median(np.asarray(mesh[0], np.float64)[:, 2])) if mesh is not None and len(mesh[0]) else 0.0
     data["pivot"] = [round(float(quad[:, 0].mean()), 3), round(float(quad[:, 1].mean()), 3), round(pz, 3)]
@@ -2984,6 +3033,8 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
         if not b.empty():
             P_, T_, UV_, M_ = b.arrays()
             wm = _clip_mesh((P_, T_, UV_, list(b.materials), M_), origin, quad)
+            if wm is not None and snow is not None:
+                wm = snowroad.remap_walks(wm, snow_lines, origin)
             if wm is not None:
                 cdae.write(os.path.join(out_dir, names["walk"]), wm[0], wm[1], uvs=wm[2], material=wm[3],
                            tri_materials=wm[4], object_name="walk")
@@ -3252,7 +3303,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
                                     models_dir=os.path.dirname(out_dir), de_junctions=de_junctions, towns_on=towns_on,
                                     wear=wear)
             out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content,
-                                    ckey)
+                                    ckey, wear)
             out["stages"]["skin"] = last_tile_stages()
         t2, c2 = time.perf_counter(), time.process_time()
         if exact == "auto":             # (a fresh content: the parts its anchor needs exact, roads.geo_exact_auto)

@@ -422,6 +422,12 @@ function M.onState(msg)
   hook(true)
   M.apply()
   refreshReadout()
+  -- winter W3 (the server's snowroad.py): the road skins' winter materials, loaded with the first look
+  if type(msg.look) == 'table' then
+    M._road = M._road or require('beamngEarth/winterroad')
+    local ok, err = pcall(M._road.onState, msg)
+    if not ok and log then log('E', 'beamngEarth.winter', 'winterroad: ' .. tostring(err)) end
+  end
 end
 
 -- core.lua: a new server hello. Its snowstate follows the first pose; none within STALE_S (a server without winter):
@@ -481,9 +487,11 @@ function M.update(dt)
     M.apply()
     refreshReadout()
   end
+  if M._road then pcall(M._road.check) end     -- (winter W3: the road materials' values still ours)
 end
 
 function M.reset()
+  if M._road then M._road.reset() end
   M.restore()
   hook(false)
   state, forced, pendingSince, readoutText = nil, nil, nil, ''
