@@ -616,12 +616,13 @@ local function playThunders(now, muffled)
           played = true
         end
       end
-      if played and t.kind == 'strike' then
+      local amb = played and package.loaded['beamngEarth/ambience']
+      if amb and amb.scheduleDuck and (amb.ducksFor and amb.ducksFor(t.kind) or t.kind == 'strike') then
         -- the bed (and the music) ducked under the crack, scheduled from its known arrival: a file's crack comes
-        -- FILE_ONSET_S into it, the synth's at once (the synth ducks its own rain the same way)
-        local amb = package.loaded['beamngEarth/ambience']
+        -- FILE_ONSET_S into it, the synth's at once (the synth ducks its own rain the same way); a strike always, a
+        -- close one with ambience's mix option (CLOSE_DUCK)
         local c = os.clockhp and os.clockhp() or os.clock()
-        if amb and amb.scheduleDuck then pcall(amb.scheduleDuck, c, c + (synth and 0 or M.FILE_ONSET_S), t.d) end
+        pcall(amb.scheduleDuck, c, c + (synth and 0 or M.FILE_ONSET_S), t.d, t.kind)
       end
     else
       keep[#keep + 1] = t

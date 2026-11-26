@@ -135,7 +135,7 @@ fn derive(r: f64) -> Derived {
 // rising in CAP_UP_S; never above 1 (quieter rain stays as it is). server/tests/test_liveaudio.py checks these
 // numbers against the Lua.
 
-/// ambience.lua RAIN_GAIN
+/// ambience.lua RAIN_GAIN (the rainGain of its M.MIX option: change both together; test_liveaudio.py checks)
 pub const RAIN_BED_GAIN: f64 = 0.5;
 /// the loops: (ambience.lua RAIN_LAYERS rate mm/h, SOURCES.md integrated loudness LUFS)
 pub const RAIN_LOOPS: [(f64, f64); 3] = [(0.7, -30.2), (5.0, -24.2), (35.0, -17.2)];

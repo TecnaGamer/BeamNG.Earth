@@ -330,7 +330,8 @@ class LiveAudioTest(unittest.TestCase):
         def pairs(text):
             return [(float(a), float(b)) for a, b in re.findall(r"\(\s*" + num + r"\s*,\s*" + num + r"\s*\)", text)]
         self.assertEqual(float(re.search(r"pub const RAIN_BED_GAIN: f64 = " + num, rs).group(1)),
-                         float(re.search(r"M\.RAIN_GAIN = " + num, amb).group(1)))
+                         float(re.search(r"\b" + re.search(r"M\.MIX = '(\w+)'", amb).group(1) + r" = \{ rainGain = " + num, amb).group(1)),
+                         "live.rs RAIN_BED_GAIN = the rainGain of ambience.lua's M.MIX option")
         layers = re.findall(r"\{ '(\w+)', '(bne_rain_\w+\.ogg)', " + num + r" \}", amb.split("M.RAIN_LAYERS =")[1][:300])
         lufs = {f: float(v) for f, v in re.findall(r"\| (bne_rain_\w+\.ogg) \|[^\n]*\| " + num + r" LUFS \|", src)}
         loops = pairs(re.search(r"pub const RAIN_LOOPS[^=]*= \[(.*?)\];", rs).group(1))
