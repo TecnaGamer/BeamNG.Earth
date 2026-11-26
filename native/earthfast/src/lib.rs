@@ -185,6 +185,7 @@ mod stationzone;
 mod seawater;
 mod subpoly;
 mod railunder;
+mod linenet;
 mod railcrossings;
 mod railspans;
 mod osmml;
@@ -7876,6 +7877,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // puddle_atlas_px (their masks)
     // 640: dev (639: the puddle kernels) merged with the fork's grading kernels (581-583, 630 above: gradebins fill / cutting
     // walls, rail_crossing_roads' grade callback) and dev's 638 landings: both sets of changes in this build, past both
-    m.add("VERSION", 640)?;
+    // 641: LineNet (linenet.rs: one index of every line the interchange solve reads, its near pairs found once as lines
+    // are added, the pairs' geometry gradeshapes._pair_relations' to the bit)
+    m.add_class::<linenet::LineNet>()?;
+    m.add("VERSION", 641)?;
     Ok(())
 }
