@@ -360,6 +360,47 @@ class RotateTest(unittest.TestCase):
         self.assertIsNone(self.budget.process_mb(2 ** 22 + 12345))   # (no such process)
 
 
+class LocalSlotsTest(unittest.TestCase):
+    """pools.SlotPool without the v2 scheduler (the road tiles' pool, earthd.ROAD_SLOTS): one process a slot, the jobs
+    in order with submit_low's after the others, results and exceptions to their futures, a queued job cancelled;
+    the memory watchdog may replace one slot's process while the others' jobs and the queue go on."""
+
+    def test_jobs_in_order_one_slot_replaced_alone(self):
+        import time
+        p = pools.SlotPool(None, "test", 2, mp_context=SPAWN)
+        try:
+            self.assertEqual([f.result(timeout=60) for f in [p.submit(abs, -i) for i in range(4)]], [0, 1, 2, 3])
+            with self.assertRaises(ZeroDivisionError):
+                p.submit(divmod, 1, 0).result(timeout=60)
+            blockers = [p.submit(time.sleep, 0.8) for _ in range(2)]
+            time.sleep(0.3)
+            low = p.submit_low(abs, -9)
+            gone = p.submit(abs, -7)
+            self.assertTrue(gone.cancel(), "queued: cancelled")
+            normal = p.submit(abs, -5)
+            got = []
+            normal.add_done_callback(lambda f: got.append("normal"))
+            low.add_done_callback(lambda f: got.append("low"))
+            self.assertEqual((normal.result(timeout=60), low.result(timeout=60)), (5, 9))
+            self.assertEqual(got[0], "normal", "the low job after the normal one")
+            for b in blockers:
+                b.result(timeout=60)
+            pools_ = pools.members(p)
+            self.assertEqual(len(pools_), 2)
+            before = [set(s.worker_mb()) for s in pools_]
+            running = p.submit(time.sleep, 1.0)
+            time.sleep(0.3)
+            self.assertTrue(pools_[0].rotate("test"))
+            self.assertIsNone(running.result(timeout=60), "a job running when its slot was replaced finished")
+            self.assertEqual([f.result(timeout=60) for f in [p.submit(abs, -i) for i in range(6)]], list(range(6)))
+            after = [set(s.worker_mb()) for s in pools_]
+            self.assertTrue(after[0].isdisjoint(before[0]), "the replaced slot: a new process")
+            self.assertEqual(after[1], before[1], "the other slot: its own process still")
+            self.assertEqual(p.inflight, 0)
+        finally:
+            p.shutdown()
+
+
 class TasksPerChildTest(unittest.TestCase):
     """The lean memory tiers' road process replaced after so many jobs (pools.tasks_per_child_kw): every job still
     answered, by fresh processes, the queue kept. The pool's own queue on every Python, never the executor's
