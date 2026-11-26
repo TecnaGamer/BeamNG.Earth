@@ -174,7 +174,7 @@ do
   if leafyRank then T.check(B.map(stock, leafyRank) == stock, 'a leafy tree: the stock shape') end
   T.check(B.map(ECA .. 'trees_douglasfir/tree_douglasfir_large_a', 0.01) == ECA .. 'trees_douglasfir/tree_douglasfir_large_a',
     'a conifer: itself')
-  T.check(B.reportLine():find('^bare trees: amount 0%.%d%d at lat 39%.29, %d+ bare') ~= nil, 'the log line: ' .. B.reportLine())
+  T.check(B.reportLine():find('^bare trees: amount 0%.%d%d at lat 39%.29 %(climate nil%), %d+ bare') ~= nil, 'the log line: ' .. B.reportLine())
   local a0 = B.status().amount
   seasonlook.update(true, 39.30)
   T.check(B.status().amount == a0, 'a rebase nearby: the amount kept')
@@ -199,6 +199,108 @@ do
   seasonlook.setSnow({ mode = 'real' })
   T.check(trees.bareMap == nil and not B.status().active, 'no twig textures: the trees stay leafy')
   seasonlook.setSnow(nil)
+  package.loaded['beamngEarth/trees'] = nil
+end
+
+-- one season look per tree at every distance (the 2026-11-26 playtest near Phoenix): tinted copies, the climate
+do
+  -- the tinted clones' names: as long as the stock ones, unique over species, steps and kinds
+  local seen, ok = {}, true
+  for _, sp in ipairs({ 'oak', 'beech', 'birch', 'poplar' }) do
+    for _, old in ipairs(B.leafNames(sp)) do
+      for step = 1, B.TINT_STEPS do
+        for _, kind in ipairs({ 'f', 'w', 's' }) do
+          local n = B.tintName(old, step, kind)
+          ok = ok and #n == #old and not seen[n:lower()] and B.RENAME[n] == nil
+          seen[n:lower()] = true
+        end
+      end
+    end
+  end
+  T.check(ok, 'tinted names keep their length and are unique (case-blind)')
+  T.check(table.concat(B.leafNames('oak'), ' ') == 'm_oak_leaves_distant oak_leaves_01 oak_leaves_02 oak_leaves_03'
+    and #B.leafNames('beech') == 3 and #B.leafNames('birch') == 2, 'the leaf materials per species')
+  -- the climate: Phoenix (BWh) a quarter of the cycle, the tropics none, elsewhere all
+  T.check(seasonlook.climateFactor(4) == 0.25 and seasonlook.climateFactor(6) == 0.25 and seasonlook.climateFactor(2) == 0
+    and seasonlook.climateFactor(15) == 1 and seasonlook.climateFactor(nil) == 1 and seasonlook.climateFactor(0) == 1,
+    'the climate factors')
+  local jan15, nov30 = 15, 334
+  T.check(B.amountFor('auto', jan15, 33.51, nil, nil, seasonlook.climateFactor(4)) == 0.25,
+    'Phoenix in January: a quarter of its broadleaves bare')
+  T.check(B.amountFor('auto', jan15, 39.29, nil, nil, 1) == 1, 'Baltimore: all')
+  T.check(B.amountFor('auto', jan15, 33.51, { mode = 'heavy' }, nil, 0.25) == 1, 'a snow preset: full winter anyway')
+  -- the tints: quantised steps, by kind; the climate scales them
+  local t1 = B.tintsFor('auto', 318, 33.51, 1)
+  T.check(t1.oak and t1.oak.kind == 'f' and t1.oak.step >= 2, 'Phoenix mid November, full cycle: oaks turned (fall)')
+  local t4 = B.tintsFor('auto', 318, 33.51, 0.25)
+  T.check((t4.oak == nil or t4.oak.step <= 1) and t4.birch == nil, 'with its desert climate: barely or not at all')
+  local tw = B.tintsFor('auto', jan15, 39.29, 1)
+  T.check(tw.oak and tw.oak.kind == 'w' and tw.oak.step == B.TINT_STEPS, 'January in Baltimore: the winter look')
+  T.check(next(B.tintsFor('auto', 182, 39.29, 1)) == nil and next(B.tintsFor(nil, jan15, 39.29, 1)) == nil,
+    'July / season off: no tints')
+  -- the clones: the stock fields, renamed, the factor blended by the step, no persistent id
+  local stock = { oak = { oak_leaves_01 = { name = 'oak_leaves_01', mapTo = 'oak_leaves_01', persistentId = 'x',
+    class = 'Material', alphaRef = 90, Stages = { { baseColorMap = '/a/b.color.png' }, {}, {}, {} } } } }
+  local mats = B.tintMaterials({ oak = { tint = { 2, 0.5, 0.5 }, step = 2, kind = 'f' } }, stock)
+  local m = mats['bf2_leaves_01']
+  T.check(m and m.name == 'bf2_leaves_01' and m.mapTo == m.name and m.persistentId == nil and m.alphaRef == 90
+    and m.Stages[1].baseColorMap == '/a/b.color.png', 'a clone: renamed, the stock fields kept')
+  T.check(m and m.Stages[1].baseColorFactor[1] == 1.5 and m.Stages[1].baseColorFactor[2] == 0.75
+    and m.Stages[1].baseColorFactor[4] == 1, 'its factor halfway to the tint (step 2 of 4)')
+  T.check(stock.oak.oak_leaves_01.name == 'oak_leaves_01' and stock.oak.oak_leaves_01.Stages[1].baseColorFactor == nil,
+    'the stock table untouched')
+  T.check(next(B.tintMaterials({}, stock)) == nil, 'no tints: no clones')
+
+  -- in the game: a leafy oak in a turned season draws its tinted copy (its imposter baked from it), and seasonlook
+  -- leaves the stock leaf materials alone meanwhile
+  B._reset()
+  local files = {}
+  local shape = ECA .. 'trees_oak/tree_oak_large_a'
+  files[shape .. '.cdae'] = 'HEAD' .. fix('oak_leaves_01') .. fix('m_oak_leaves_distant') .. 'TAIL'
+  files[B.TEX .. 'bne_twig_oak_b.color.dds'] = 'dds'
+  FS = { fileExists = function(_, p) return files[p] ~= nil end, directoryCreate = function() end }
+  readFile = function(p) return files[p] end
+  writeFile = function(p, d) files[p] = d; return true end
+  jsonEncode = function(t) local k = {} for n in pairs(t) do k[#k + 1] = n end table.sort(k) return table.concat(k, ',') end
+  local loaded = {}
+  loadJsonMaterialsFile = function(p) loaded[#loaded + 1] = p end
+  jsonReadFile = function(p) return p == ECA .. 'trees_oak/main.materials.json' and stock.oak or nil end
+  local trees = { applySeason = function() end }
+  package.loaded['beamngEarth/trees'] = trees
+  local leaf = scenetree.findObject('oak_leaves_01') or createObject('Material')
+  if not scenetree.findObject('oak_leaves_01') then leaf:registerObject('oak_leaves_01') end
+  leaf:setField('baseColorFactor', 0, '1 1 1 1')
+  seasonlook.setMode('winter')            -- (every tree's amount 1: the KEEP share stays leafy, in its winter tint)
+  seasonlook.setSnow({ mode = 'real' })
+  seasonlook.update(true, 39.29, 15)
+  local leafy
+  for i = 1, 400 do
+    local r = (i * 0.6180339887) % 1
+    if not B.isBare('oak', false, r, 1) then leafy = r; break end
+  end
+  local c = leafy and B.map(shape, leafy)
+  local st = B.status()
+  T.check(c and st.tintRoot and c == st.tintRoot .. 'tree_oak_large_a.cdae' and st.tintRoot:find('^/temp/beamngEarth/shapes/tint_v1_') ~= nil,
+    'a leafy oak in winter: its tinted copy ' .. tostring(c))
+  local w = st.tints and st.tints.oak
+  T.check(c and files[c] and files[c]:find(fix(B.tintName('oak_leaves_01', w.step, w.kind)), 1, true)
+    and #files[c] == #files[shape .. '.cdae'], 'the copy names the tinted clone, its size kept')
+  T.check(#loaded >= 2 and loaded[#loaded]:find('tints%.materials%.json$') ~= nil, 'the clones loaded before the copy')
+  T.check(B.map(shape, leafy) == c, 'made once')
+  T.check(B.status().tinted >= 2, 'counted')
+  -- seasonlook: no live tint of the stock leaves while the copies carry the season
+  lastCheckReset = true
+  seasonlook.restore()
+  seasonlook.setSnow({ mode = 'real' })
+  seasonlook.update(true, 39.29, 15)
+  T.check(leaf:getField('baseColorFactor', 0) == '1 1 1 1', 'the stock leaf material not tinted')
+  seasonlook.setSnow(nil)
+  seasonlook.restore()
+  seasonlook.setMode('winter')
+  seasonlook.update(true, 39.29, 15)
+  T.check(leaf:getField('baseColorFactor', 0) ~= '1 1 1 1', 'winter off: the live tint as before')
+  seasonlook.restore()
+  T.check(leaf:getField('baseColorFactor', 0) == '1.000 1.000 1.000 1.000', '... and back at the end')
   package.loaded['beamngEarth/trees'] = nil
 end
 

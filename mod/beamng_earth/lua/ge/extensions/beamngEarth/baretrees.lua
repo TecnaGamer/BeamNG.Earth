@@ -55,6 +55,19 @@ M.KEEP = { oak = 0.08, beech = 0.08, beech_young = 0.35, birch = 0, poplar = 0 }
 -- a snow state at the latch that takes the turning trees' leaves: air this cold (degC) or snow this deep (bin D3+)
 M.FROST = { airC = -8, depthBin = 3, amount = 0.75 }
 
+-- One season look per tree at every distance (the 2026-11-26 playtest near Phoenix: "trees loose their leaves as i get
+-- closer"). seasonlook.lua tinted the stock leaf materials live, but a tree's far picture (the imposter the engine baked
+-- once from the untinted leaves) stayed summer green while the 3D trees in front of it were rust brown, and the far
+-- clumps likewise. So while winter is on each deciduous tree takes one look for all its distances: bare (its twig copy),
+-- tinted (a copy whose leaf materials are tinted clones of the stock ones, at the season's tint quantised to
+-- TINT_STEPS: the engine bakes its far imposter from them, once, as for the bare copies; no material is ever reloaded),
+-- or the stock tree (no tint at all: seasonlook leaves these species alone meanwhile, M.tinting).
+M.TINT_STEPS = 4
+M.TINT_SPECIES = { oak = 1, beech = 2, birch = 3 }       -- (seasonlook.SPECIES; the poplars have no season tint)
+M.TINT_VERSION = 1      -- the tinted copies' folder: bump with any change of the copy
+-- (the climate's share of the leaf cycle: seasonlook.climateFactor, the anchor's Koppen-Geiger class)
+function M.climateFactor(k) return require('beamngEarth/seasonlook').climateFactor(k) end
+
 -- Pure: the folder's species of a stock shape path (no extension), or nil.
 function M.speciesOf(shape)
   if type(shape) ~= 'string' then return nil end
@@ -122,6 +135,17 @@ function M.materials()
   return out
 end
 
+-- Pure: FNV-1a (32 bits) of a string, as 8 hex digits.
+function M.fnv(s)
+  local h = 2166136261
+  for c in tostring(s):gmatch('.') do
+    h = bit.bxor(h, c:byte()) % 4294967296
+    local lo, hi = h % 65536, math.floor(h / 65536)        -- (exact 32-bit product: each part under 2^53)
+    h = ((hi * 16777619) % 65536 * 65536 + lo * 16777619) % 4294967296
+  end
+  return string.format('%08x', h % 4294967296)
+end
+
 -- Pure: the materials' signature (8 hex digits, FNV-1a over their fields in a fixed order): a change of a factor, the
 -- alphaRef or a texture name gives the copies a new folder, so their far imposters are baked again with it.
 function M.signature()
@@ -132,13 +156,70 @@ function M.signature()
       table.concat(st.baseColorFactor or {}, ','), tostring(m.alphaRef), tostring(m.doubleSided) }, '|')
   end
   table.sort(parts)
-  local h = 2166136261
-  for c in table.concat(parts, ';'):gmatch('.') do
-    h = bit.bxor(h, c:byte()) % 4294967296
-    local lo, hi = h % 65536, math.floor(h / 65536)        -- (exact 32-bit product: each part under 2^53)
-    h = ((hi * 16777619) % 65536 * 65536 + lo * 16777619) % 4294967296
+  return M.fnv(table.concat(parts, ';'))
+end
+
+-- Pure: a stock leaf material's tinted clone's name at a tint step: as long as the stock one (the compiled shape is
+-- patched in place), 'b' .. the tint's kind (f fall, w winter, s spring) .. step .. its name from the fourth character on
+function M.tintName(old, step, kind) return 'b' .. (kind or 'f') .. tostring(step) .. old:sub(4) end
+
+-- Pure: the stock leaf materials (RENAME's names) of a species (the folder's), sorted.
+function M.leafNames(sp)
+  local out = {}
+  for old, v in pairs(M.RENAME) do
+    if v[2]:match('^[a-z]+') == sp then out[#out + 1] = old end
   end
-  return string.format('%08x', h % 4294967296)
+  table.sort(out)
+  return out
+end
+
+-- Pure: per species the season's tint of its leaves (seasonlook.speciesTint at doy / lat in mode, times the climate's
+-- factor) quantised to TINT_STEPS: { [species] = { tint = {r, g, b}, step = 1..TINT_STEPS, kind = 'f' fall / 'w' winter
+-- / 's' spring } }; none at step 0.
+function M.tintsFor(mode, doy, lat, factor)
+  local S = require('beamngEarth/seasonlook')
+  local out = {}
+  for sp, i in pairs(M.TINT_SPECIES) do
+    local spec = S.SPECIES[i]
+    local tint, t = S.speciesTint(spec, mode, doy, lat)
+    local q = math.min(M.TINT_STEPS, math.floor((t or 0) * (factor or 1) * M.TINT_STEPS + 0.5))
+    if q > 0 then
+      out[sp] = { tint = tint, step = q, kind = (tint == spec.winter and 'w') or (tint == S.SPRING and 's') or 'f' }
+    end
+  end
+  return out
+end
+
+-- Pure: the tinted clones (loadJsonMaterialsFile's table) of the stock leaf materials of each tinted species, from
+-- the stock folders' material files (stock[species] = that folder's decoded main.materials.json): the same textures and
+-- fields, the base colour factor blended towards the tint by its step (seasonlook.blend).
+function M.tintMaterials(tints, stock)
+  local S = require('beamngEarth/seasonlook')
+  local out = {}
+  for sp, tn in pairs(tints or {}) do
+    local file = stock and stock[sp]
+    for _, old in ipairs(M.leafNames(sp)) do
+      local src = type(file) == 'table' and file[old]
+      if type(src) == 'table' and type(src.Stages) == 'table' and type(src.Stages[1]) == 'table' then
+        local function copy(v)
+          if type(v) ~= 'table' then return v end
+          local c = {}
+          for k, x in pairs(v) do c[k] = copy(x) end
+          return c
+        end
+        local m = copy(src)
+        do
+          local name = M.tintName(old, tn.step, tn.kind)
+          m.name, m.mapTo, m.persistentId = name, name, nil
+          local f = S.blend(m.Stages[1].baseColorFactor or { 1, 1, 1, 1 }, tn.tint, tn.step / M.TINT_STEPS)
+          for k = 1, 4 do f[k] = math.floor((f[k] or 1) * 10000 + 0.5) / 10000 end
+          m.Stages[1].baseColorFactor = f
+          out[name] = m
+        end
+      end
+    end
+  end
+  return out
 end
 
 -- Pure: the exact low 32 bits of a * b (a, b < 2^32: each partial product under 2^53).
@@ -168,12 +249,13 @@ function M.isBare(species, young, rank, amount)
 end
 
 -- Pure: the bare amount (0..1) for the season mode (hello.season), day of year, latitude and the snow (hello.snow /
--- the latest snowstate): the season's winter amount; a debug preset's snow shows the full winter; FROST.
-function M.amountFor(mode, doy, lat, snow, state)
+-- the latest snowstate): the season's winter amount (times the climate's factor, M.climateFactor); a debug preset's snow
+-- shows the full winter; FROST.
+function M.amountFor(mode, doy, lat, snow, state, factor)
   local S = require('beamngEarth/seasonlook')
   local a
   if mode == 'winter' then a = 1
-  elseif mode == 'auto' and lat then a = S.winterAmount(doy, lat)
+  elseif mode == 'auto' and lat then a = S.winterAmount(doy, lat) * (tonumber(factor) or 1)
   else a = 0 end
   if type(snow) == 'table' and snow.mode and snow.mode ~= 'real' and snow.mode ~= 'none' then a = 1 end
   if type(state) == 'table' and state.winter ~= false and mode == 'auto' and lat
@@ -191,9 +273,12 @@ M.ROOT = nil            -- the copies' folder (set with the game's build: a game
 local active = false    -- winter on and the textures there
 local latched = nil     -- the amount taken at the first tree
 local latchedAt, reported = nil, false      -- when (os.clock), and its log line sent
-local inputs = {}       -- mode, lat, snow, state: the latch's
+local inputs = {}       -- mode, lat, snow, state, koppen: the latch's
 local copies = {}       -- stock shape -> its copy's path, or false (none possible)
-M.stats = { copied = 0, bare = 0, kept = 0, failed = 0, stock = {} }      -- (stock: shapes with no copy possible)
+local tints = nil       -- the latch's tints (M.tintsFor), nil before it
+local tintRoot = nil    -- the tinted copies' folder for them (its materials loaded), false: none possible
+local tcopies = {}      -- stock shape -> its tinted copy's path, or false
+M.stats = { copied = 0, bare = 0, kept = 0, failed = 0, stock = {}, tinted = 0 }  -- (stock: shapes with no copy possible)
 
 local function root()
   if not M.ROOT then
@@ -255,17 +340,81 @@ function M.map(shape, rank)
   local sp, young = k[1], k[2]
   if latched == nil then
     if inputs.mode == 'auto' and not inputs.lat then return shape end      -- (no anchor yet: none placed anyway)
-    latched = M.amountFor(inputs.mode, tonumber(os.date('*t').yday), inputs.lat, inputs.snow, inputs.state)
-    log('I', 'beamngEarth.baretrees', string.format('bare amount %.2f (season %s, lat %s)', latched,
-      tostring(inputs.mode), tostring(inputs.lat)))
+    local doy, f = tonumber(os.date('*t').yday), M.climateFactor(inputs.koppen)
+    latched = M.amountFor(inputs.mode, doy, inputs.lat, inputs.snow, inputs.state, f)
+    tints, tintRoot, tcopies = M.tintsFor(inputs.mode, doy, inputs.lat, f), nil, {}
+    local tl = {}
+    for s, tn in pairs(tints) do tl[#tl + 1] = s .. ' ' .. tn.step end
+    table.sort(tl)
+    log('I', 'beamngEarth.baretrees', string.format('bare amount %.2f (season %s, lat %s, climate %s x%.2f), tints %s',
+      latched, tostring(inputs.mode), tostring(inputs.lat), tostring(inputs.koppen), f,
+      #tl > 0 and table.concat(tl, ', ') or 'none'))
     latchedAt, reported = os.clock(), false
   end
-  if not M.isBare(sp, young, rank, latched) then M.stats.kept = M.stats.kept + 1; return shape end
+  if not M.isBare(sp, young, rank, latched) then
+    M.stats.kept = M.stats.kept + 1
+    local t = tints and tints[sp] and M._tintCopyOf(shape, sp)
+    if t then M.stats.tinted = M.stats.tinted + 1; return t end
+    return shape
+  end
   local c = copyOf(shape)
   if not c then return shape end
   M.stats.bare = M.stats.bare + 1
   return c
 end
+
+-- The tinted copies' folder for the latch's tints, its materials written and loaded (once per latch, before any copy
+-- in it loads: a shape whose materials do not resolve bakes a no-texture imposter, kept for good); false: none possible.
+local function tintFolder()
+  if tintRoot ~= nil then return tintRoot end
+  tintRoot = false
+  local stock = {}
+  for sp in pairs(tints or {}) do
+    for _, f in ipairs(M.FOLDERS) do
+      if f[2] == sp and jsonReadFile then
+        local ok, t = pcall(jsonReadFile, f[1] .. 'main.materials.json')
+        if ok and type(t) == 'table' then stock[sp] = t end
+      end
+    end
+  end
+  local mats = M.tintMaterials(tints, stock)
+  if next(mats) == nil then return false end
+  local text = jsonEncode(mats)
+  local b = tostring(rawget(_G, 'beamng_versionb') or rawget(_G, 'beamng_version') or 'x'):gsub('[^%w%.]', '_')
+  local dir = '/temp/beamngEarth/shapes/tint_v' .. M.TINT_VERSION .. '_' .. M.fnv(text) .. '_' .. b .. '/'
+  FS:directoryCreate(dir)
+  local mat = dir .. 'tints.materials.json'
+  if readFile(mat) ~= text then writeFile(mat, text) end
+  loadJsonMaterialsFile(mat)
+  tintRoot = dir
+  return dir
+end
+
+-- The tinted copy of a stock shape of a tinted species (made once per tint: kept in the user folder), or nil.
+function M._tintCopyOf(shape, sp)
+  local c = tcopies[shape]
+  if c ~= nil then return c or nil end
+  tcopies[shape] = false
+  local tn = tints and tints[sp]
+  local dir = tn and tintFolder()
+  if not dir then return nil end
+  local renames = {}
+  for _, old in ipairs(M.leafNames(sp)) do renames[old] = { M.tintName(old, tn.step, tn.kind) } end
+  local out = dir .. shape:match('[^/]+$') .. '.cdae'
+  if not FS:fileExists(out) then
+    local bytes = M.patchCdae(readBin(shape .. '.cdae'), renames)
+    if not bytes then return nil end        -- (no leaf cards: the stock shape, untinted as its far picture)
+    writeBin(out, bytes)
+    if not FS:fileExists(out) then M.stats.failed = M.stats.failed + 1; return nil end
+    M.stats.copied = M.stats.copied + 1
+  end
+  tcopies[shape] = out
+  return out
+end
+
+-- seasonlook.lua: while this is on (winter, the twig textures there) every deciduous tree's season look is its shape's
+-- (bare, tinted or stock): no live tint of the stock leaf materials, which the far pictures never had.
+function M.tinting() return active end
 
 -- seasonlook.lua: winter's snow on (hello.snow) and the season's mode as they come; nil snow: winter off.
 local function activate()
@@ -296,18 +445,25 @@ function M.set(snow, mode)
   return activate()
 end
 -- One line for the server's log (its perf_log: the file players send) REPORT_S after the amount was taken: what the
--- level's trees became and the far pictures the engine baked for the copies so far.
+-- level's trees became and the far pictures the engine baked for the copies so far (the engine writes them under
+-- /temp + the copy's own path).
 M.REPORT_S = 60
 function M.reportLine()
   local imp = 0
   if FS and FS.findFiles and M.ROOT then
-    local ok, files = pcall(FS.findFiles, FS, M.ROOT, '*imposter*', -1, true, false)
-    imp = ok and type(files) == 'table' and #files or -1
+    for _, dir in ipairs({ M.ROOT, '/temp' .. M.ROOT }) do
+      local ok, files = pcall(FS.findFiles, FS, dir, '*imposter*', -1, true, false)
+      if ok and type(files) == 'table' then imp = imp + #files end
+    end
   end
-  return string.format('bare trees: amount %s at lat %s, %d bare, %d kept leafy, %d copies made, %d failed, %d imposter '
-    .. 'files, no copy: %s', latched and string.format('%.2f', latched) or 'none',
-    inputs.lat and string.format('%.2f', inputs.lat) or '-', M.stats.bare, M.stats.kept, M.stats.copied,
-    M.stats.failed, imp, #M.stats.stock > 0 and table.concat(M.stats.stock, ' ', 1, math.min(#M.stats.stock, 6)) or '-')
+  local tl = {}
+  for s, tn in pairs(tints or {}) do tl[#tl + 1] = s .. ' ' .. tn.kind .. tn.step end
+  table.sort(tl)
+  return string.format('bare trees: amount %s at lat %s (climate %s), %d bare, %d kept leafy (%d tinted: %s), %d copies '
+    .. 'made, %d failed, %d imposter files, no copy: %s', latched and string.format('%.2f', latched) or 'none',
+    inputs.lat and string.format('%.2f', inputs.lat) or '-', tostring(inputs.koppen), M.stats.bare, M.stats.kept,
+    M.stats.tinted, #tl > 0 and table.concat(tl, ', ') or 'none', M.stats.copied, M.stats.failed, imp,
+    #M.stats.stock > 0 and table.concat(M.stats.stock, ' ', 1, math.min(#M.stats.stock, 6)) or '-')
 end
 
 -- seasonlook.lua's check (in our level): the season's mode, and winter back on in a level started again.
@@ -333,6 +489,8 @@ function M.setLat(lat)
     inputs.lat, latched, latchedAt, reported = lat, nil, nil, false
   end
 end
+-- The anchor's climate class (seasonlook.lua, with the latitude): taken at the next latch.
+function M.setClimate(k) inputs.koppen = tonumber(k) end
 function M.setState(state) if type(state) == 'table' then inputs.state = state end end
 
 -- The level ended or winter went off: the trees placed after this are the stock ones (those placed stay until made
@@ -346,13 +504,18 @@ function M.restore()
     end
   end
   active, latched, inputs.lat, inputs.state, latchedAt = false, nil, nil, nil, nil
+  tints, tintRoot, tcopies = nil, nil, {}
 end
 
 function M.status()
   return { active = active, amount = latched, root = M.ROOT, copied = M.stats.copied, bare = M.stats.bare,
-    kept = M.stats.kept, failed = M.stats.failed }
+    kept = M.stats.kept, failed = M.stats.failed, tinted = M.stats.tinted, tints = tints, tintRoot = tintRoot }
 end
 
-function M._reset() active, latched, inputs, copies = false, nil, {}, {}; M.ROOT = nil end     -- (tests)
+function M._reset()      -- (tests)
+  active, latched, inputs, copies = false, nil, {}, {}
+  tints, tintRoot, tcopies = nil, nil, {}
+  M.ROOT = nil
+end
 
 return M

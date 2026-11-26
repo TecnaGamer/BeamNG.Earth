@@ -675,6 +675,7 @@ local function commitTeleport(msg)
 
   local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
+  st.koppen = tonumber(msg.koppen)  -- (the place's climate class, server climate.py: the trees' leaf cycle, seasonlook.lua)
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
   require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)
@@ -738,6 +739,7 @@ local function finishRebase()
 
   local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
+  st.koppen = tonumber(msg.koppen) or st.koppen    -- (a rebase nearby: the same climate when not sent)
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(st.anchor.lat, st.anchor.lon)
   M._apiRebased(oldAnchor, rb.purpose)
@@ -3082,7 +3084,7 @@ local function onUpdate(dtReal, dtSim)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
-  seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
+  seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat, st.koppen)
   if terrain.wetDirty then pcall(M._rewetBlock) end        -- (the wet streets' step: a flag test otherwise)
   t = mark('ui', t)
   local frameMs = frameMs0
