@@ -28,6 +28,8 @@ import subprocess
 import sys
 
 import modtextures
+import launchui          # (the launch screen: colours, banner, timed steps; stdlib only)
+import statcache
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 MOD_SRC = os.path.join(ROOT, "mod", "beamng_earth")
@@ -230,17 +232,22 @@ GENERATED = ("lua/ge/extensions/beamngEarth/skypatch_flag.lua",)
 
 
 def tree_hash(path, skip=()):
+    """The folder's content digest: every file's name and SHA-256 (with modtextures's GENERATED and
+    skip left out), the walk sorted so the same tree always hashes the same. Each file's digest
+    comes from the stat cache (statcache.py) when the file's size, mtime and inode are as the last
+    launch saw them: the up-to-date check does not read every file again (~240 MB of mod on disk).
+    A file that changed is read, and the cache learns its new digest."""
     h = hashlib.sha256()
-    for dirpath, dirnames, filenames in os.walk(path):
-        dirnames.sort()
-        for name in sorted(filenames):
-            full = os.path.join(dirpath, name)
-            rel = os.path.relpath(full, path).replace(os.sep, "/")
-            if rel in GENERATED or rel in skip:
-                continue
-            h.update(rel.encode())
-            with open(full, "rb") as f:
-                h.update(hashlib.sha256(f.read()).digest())
+    with statcache.Cache() as cache:
+        for dirpath, dirnames, filenames in os.walk(path):
+            dirnames.sort()
+            for name in sorted(filenames):
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, path).replace(os.sep, "/")
+                if rel in GENERATED or rel in skip:
+                    continue
+                h.update(rel.encode())
+                h.update(cache.digest(full))
     return h.hexdigest()
 
 
@@ -621,29 +628,37 @@ def main():
     if sys.version_info < MIN_PY:
         fail(f"Python {MIN_PY[0]}.{MIN_PY[1]} or newer is needed (this is {sys.version.split()[0]}). "
              "Get it from https://www.python.org/downloads/")
-    say(f"BeamNG.Earth {version()} installer")
-    say("")
-    user_dir = choose_user_dir(args)
+    ui = launchui.Screen()
+    ui.banner(f"BeamNG.Earth {version()}", "installer",
+              tips=["It only changes what is out of date; run it again at any time."])
+    with ui.step("Finding the game folder"):
+        user_dir = choose_user_dir(args)
     try:
-        install_mod(user_dir, args.yes, args.dry_run)
+        with ui.step("Preparing the mod"):
+            install_mod(user_dir, args.yes, args.dry_run)
         if not args.dry_run:
-            import cliffstock
-            cliffstock.prepare_enabled(args.game_dir, user_dir, diagnostic=say)
+            with ui.step("The cliffs' contact textures"):
+                import cliffstock
+                cliffstock.prepare_enabled(args.game_dir, user_dir, diagnostic=say)
     except OSError as e:
         fail(f"could not copy the mod: {e}\n  Close BeamNG.drive if it is running and try again.")
     if args.no_venv:
-        say("Python packages: skipped (--no-venv)")
+        with ui.step("The server's Python packages") as st:
+            st.skip("left out (--no-venv)")
     else:
-        setup_venv(args.dry_run)
-    save_config(user_dir, args.dry_run)
+        with ui.step("The server's Python packages"):
+            setup_venv(args.dry_run)
+    with ui.step("Saving the configuration"):
+        save_config(user_dir, args.dry_run)
+    ui.summary("installed")
 
     launcher = "run_server.bat (double-click it)" if IS_WIN else "./run_server.sh"
-    say("")
-    say("Done. Next:")
-    say(f"  1. Start the world server: {launcher}   (or: python start.py)")
-    say("     Leave its window open while you play.")
-    say("  2. Start BeamNG.drive, open Freeroam and pick the 'BeamNG.Earth' level.")
-    say("  More help: docs/QUICKSTART.md")
+    ui.note("")
+    ui.note("Done. Next:")
+    ui.hint(f"1. Start the world server: {launcher}   (or: python start.py)")
+    ui.hint("   Leave its window open while you play.")
+    ui.hint("2. Start BeamNG.drive, open Freeroam and pick the 'BeamNG.Earth' level.")
+    ui.hint("More help: docs/QUICKSTART.md")
 
 
 if __name__ == "__main__":

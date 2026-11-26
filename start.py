@@ -10,12 +10,18 @@ It uses the Python in .venv (made by install.py) and the BeamNG.drive user folde
 """
 
 import argparse
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 
 import install
+import launchui          # (the launch screen: colours, banner, timed steps; stdlib only)
+import modtextures       # (--status reads the installed textures' stamp)
+import statcache         # (the files' cached digests: the launch's up-to-date checks do not re-read them)
 
 ROOT = install.ROOT
 EARTHD = os.path.join(ROOT, "server", "earthd.py")
@@ -33,11 +39,95 @@ RECOMMENDED = [
 
 
 def server_flags(py):
+    """earthd --help's text, which has_flag only looks flags up in. Running the server's modules to
+    print it takes over a second of every launch, and the text changes only with server/earthd.py:
+    the flagcache keeps it against that file's stat (its size, mtime and inode; an update reads it
+    again). No cache (a data folder that cannot be made): run and return, as before."""
+    import apppaths
+    key = statcache._stat_key(os.stat(EARTHD))
+    path = os.path.join(apppaths.data_dir(), "flagcache.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            kept = json.load(f)
+        if kept.get("key") == key:
+            return kept.get("text", "")
+    except (OSError, ValueError):
+        pass
     r = subprocess.run([py, EARTHD, "--help"], capture_output=True, text=True, errors="replace", cwd=ROOT)
     if r.returncode != 0:
         install.fail("the server does not start:\n" + (r.stderr or r.stdout).strip() +
                      "\n  Run the installer again: python install.py")
+    try:
+        os.makedirs(apppaths.data_dir(), exist_ok=True)
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"key": key, "text": r.stdout}, f)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass                                # (no cache: read again next launch, as before)
     return r.stdout
+
+
+def status():
+    """--status: what this machine's BeamNG.Earth is, without starting anything: the versions, the
+    mod's state in the game, the download cache's size, the disk room left and the last logs. Read
+    only: a launch question ("is it installed? why is the cache so big?") answered from the files."""
+    import apppaths
+    cfg = install.load_config()
+    rows = [("Version", install.version()), ("Folder", ROOT)]
+    user_dir = cfg.get("user_dir")
+    if user_dir:
+        rows.append(("Game folder", user_dir))
+        mod = os.path.join(user_dir, "mods", "unpacked", install.MOD_NAME)
+        if os.path.isdir(mod):
+            stamp = modtextures_stamp(mod)
+            rows.append(("Mod", f"installed{f' ({stamp})' if stamp else ''}"))
+        else:
+            rows.append(("Mod", launchui.paint("not installed (run install.py)", launchui.Color.warn)))
+    else:
+        rows.append(("Mod", launchui.paint("no game folder known (run install.py)", launchui.Color.warn)))
+    cache = apppaths.saved_cache_dir() or apppaths.default_cache_dir()
+    if os.path.isdir(cache):
+        size, files = folder_size(cache)
+        rows.append(("Cache", f"{cache}  ({size / 1e9:.1f} GB, {files} files)"))
+    else:
+        rows.append(("Cache", f"{cache}  (empty: nothing downloaded yet)"))
+    try:
+        free = shutil.disk_usage(cache or os.path.expanduser("~")).free
+        rows.append(("Disk free", f"{free / 1e9:.1f} GB"))
+    except OSError:
+        pass
+    logs = os.path.join(apppaths.data_dir(), "logs")
+    if os.path.isdir(logs):
+        for name in ("server.log", "server.log.1"):
+            path = os.path.join(logs, name)
+            if os.path.isfile(path):
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
+                rows.append((f"Log {name}", f"{os.path.getsize(path) / 1e6:.1f} MB, last written {when}"))
+    ui = launchui.Screen()
+    ui.banner(f"BeamNG.Earth {install.version()}", "status", rows=rows,
+              tips=["python start.py starts the world server (python install.py sets it up).",
+                    "More help: docs/QUICKSTART.md and docs/DEVTOOLS.md"])
+
+
+def folder_size(path):
+    """A folder's bytes and file count, walked once (the cache's size: what --status is asked)."""
+    size = files = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                size += os.path.getsize(os.path.join(dirpath, name))
+            except OSError:
+                pass
+            files += 1
+    return size, files
+
+
+def modtextures_stamp(mod):
+    """The installed textures' count, one line (the stamp the encoder wrote; "" without one)."""
+    try:
+        return f"{len(modtextures.read_stamp(mod))} textures" if modtextures.read_stamp(mod) else ""
+    except OSError:
+        return ""
 
 
 def has_flag(help_text, flag):
@@ -50,8 +140,15 @@ def main():
     ap.add_argument("--keep-mod", action="store_true", help="leave the game's copy of the mod as it is")
     ap.add_argument("--user-dir", help="BeamNG.drive user folder (default: the one install.py found)")
     ap.add_argument("--yes", "-y", action="store_true", help="with --update-mod: replace the installed mod without asking")
+    ap.add_argument("--status", action="store_true", help="what this machine's BeamNG.Earth is, without starting anything")
     ap.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more options for server/earthd.py")
     args = ap.parse_args()
+
+    ui = launchui.Screen()          # colours on for the console this window owns; plain text without one
+
+    if args.status:
+        status()
+        return
 
     cfg = install.load_config()
     user_dir = args.user_dir or cfg.get("user_dir")
@@ -64,7 +161,8 @@ def main():
     # a new version unzipped over (or next to) the old one: the game gets this folder's mod, the server this
     # folder's packages, without running the installer again (2026-10-15: easy setup)
     if not args.keep_mod:
-        install.install_mod(user_dir, True, dry_run=False)
+        with ui.step("Preparing the mod"):
+            install.install_mod(user_dir, True, dry_run=False)
 
     py = install.venv_python()
     if not os.path.isfile(py):
@@ -75,10 +173,11 @@ def main():
     except OSError:
         stamped = None
     if stamped != install.requirements_hash():
-        install.say("Python packages: checking the server's packages ...")
-        install.setup_venv(dry_run=False)
+        with ui.step("Checking the Python packages"):
+            install.setup_venv(dry_run=False)
 
-    help_text = server_flags(py)
+    with ui.step("Reading the server's options"):
+        help_text = server_flags(py)
     cmd = [py, EARTHD, "--user-dir", user_dir]
     skipped = []
     for flag, value in RECOMMENDED:
@@ -98,20 +197,20 @@ def main():
     pick = overture_pick(extra)     # (the map data's release: decided once, while the start goes on)
     experimental = experimental_env(user_dir, dict(base_env))   # (for the lines below; run_restarting applies them)
 
-    install.say(f"BeamNG.Earth {install.version()}: starting the world server")
-    install.say(f"  BeamNG.drive user folder: {user_dir}")
-    if experimental:
-        install.say("  Experimental features on (the settings page): " + ", ".join(experimental))
-    install.say("  Telemetry: " + ("on: anonymous player count and data-source load, no location "
-                                    "(BNE_TELEMETRY=off turns it off)" if "--telemetry" in cmd else "off"))
-    if skipped:
-        install.say(f"  (this server version has no {', '.join(skipped)}; left out)")
-    install.say("  Leave this window open while you play; close it (or press Ctrl+C) to stop the server.")
-    install.say("  Now start BeamNG.drive and pick the 'BeamNG.Earth' level in Freeroam.")
+    # the launch screen: what was checked, the settings that matter, how to get into the world
     log_path = server_log_path(rotate=False)
-    if log_path:
-        install.say(f"  Server log: {log_path}")
-    install.say("")
+    ui.banner(f"BeamNG.Earth {install.version()}", "world server", rows=[
+        ("Game folder", user_dir),
+        ("Map data", None),             # (the Pick's release, said when the server starts below)
+        ("Experimental", ", ".join(experimental) if experimental else None),
+        ("Telemetry", "on (anonymous player count; BNE_TELEMETRY=off turns it off)"
+         if telemetry and "--telemetry" in cmd else "off"),
+        ("Log", log_path),
+    ] + ([("Server options", "this server version has no " + ", ".join(skipped) + "; left out")] if skipped else []),
+    tips=["Leave this window open while you play; close it (or press Ctrl+C) to stop the server.",
+             "Now start BeamNG.drive and pick the 'BeamNG.Earth' level in Freeroam."])
+    ui.summary("starting the server")
+    ui.note("")
     try:
         sys.exit(run_restarting(cmd, user_dir, base_env, pick=pick))
     except KeyboardInterrupt:
@@ -134,7 +233,8 @@ def run_restarting(cmd, user_dir, base_env, run=None, limiter=None, pick=None):
     while True:
         env, ids = server_env(user_dir, base_env, limiter.times, pick.release() if pick is not None else None)
         if first and pick is not None:
-            install.say(f"  Map data: Overture {pick.release()} ({pick.why})")
+            install.say("  Map data: Overture " + launchui.paint(pick.release(), launchui.Color.title)
+                        + f" ({pick.why})")
         # Use the same lazy game lookup and private cache as the app launcher.
         # Complete conversion before the child starts, also on --keep-mod/restart.
         if pick is not None and env.get("BNE_CLIFFS", "off").strip().lower() in {"1", "on", "true"}:
@@ -147,8 +247,9 @@ def run_restarting(cmd, user_dir, base_env, run=None, limiter=None, pick=None):
         if not sr.wants_restart(code):
             return code
         if not limiter.allow(time.time()):
-            install.say(f"The world server exited asking to restart more than {sr.MAX_RESTARTS} times in "
-                        f"{sr.WINDOW_S / 60:g} minutes; it stays stopped. Start it again with this script.")
+            install.say(launchui.paint(f"The world server exited asking to restart more than {sr.MAX_RESTARTS} times in "
+                                       f"{sr.WINDOW_S / 60:g} minutes; it stays stopped. Start it again with this script.",
+                                       launchui.Color.bad))
             return code
         install.say("")
         install.say("Restarting the world server (asked from the game's settings page): the settings are read again")

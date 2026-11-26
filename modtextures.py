@@ -21,6 +21,8 @@ import os
 import sys
 import time
 
+import statcache
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SOURCES = os.path.join(ROOT, "mod", "texture_sources")
 MANIFEST = os.path.join(SOURCES, "textures.json")
@@ -90,21 +92,22 @@ def plan(sources=SOURCES, entries=None, *, env=None):
         overrides = clifftextures.source_overrides(entries, env)
     hashes = {}
     out = {}
-    for rel, e in sorted(entries.items()):
-        src = overrides.get(e["source"]) or os.path.join(sources, *e["source"].split("/"))
-        if src not in hashes:
-            try:
-                hashes[src] = _sha256_file(src)
-            except OSError as err:
-                raise TexturesError(f"texture source missing: {err}") from None
-        key = hashlib.sha256("\0".join((texdds, e["format"], e["role"], e.get("derive", ""), hashes[src]))
-                             .encode()).hexdigest()
-        out[rel] = dict(e, path=src, key=key)
-        if e["source"] in overrides:
-            fallback = os.path.join(sources, *e["source"].split("/"))
-            fallback_key = hashlib.sha256("\0".join((texdds, e["format"], e["role"], e.get("derive", ""),
-                                                    _sha256_file(fallback))).encode()).hexdigest()
-            out[rel]["fallback"] = dict(path=fallback, key=fallback_key)
+    with statcache.Cache() as cache:
+        for rel, e in sorted(entries.items()):
+            src = overrides.get(e["source"]) or os.path.join(sources, *e["source"].split("/"))
+            if src not in hashes:
+                try:
+                    hashes[src] = cache.digest(src).hex()
+                except OSError as err:
+                    raise TexturesError(f"texture source missing: {err}") from None
+            key = hashlib.sha256("\0".join((texdds, e["format"], e["role"], e.get("derive", ""), hashes[src]))
+                                 .encode()).hexdigest()
+            out[rel] = dict(e, path=src, key=key)
+            if e["source"] in overrides:
+                fallback = os.path.join(sources, *e["source"].split("/"))
+                fallback_key = hashlib.sha256("\0".join((texdds, e["format"], e["role"], e.get("derive", ""),
+                                                        cache.digest(fallback).hex())).encode()).hexdigest()
+                out[rel]["fallback"] = dict(path=fallback, key=fallback_key)
     return out
 
 
@@ -119,19 +122,20 @@ def read_stamp(mod_dir):
 
 def reusable(mod_dir, todo):
     """The DDS of `todo` already in mod_dir as they would be made now: the stamp's key the same and the file's own
-    SHA-256 as the stamp recorded it."""
+    SHA-256 as the stamp recorded it (each digest from the stat cache: an up-to-date copy is not read again)."""
     stamp = read_stamp(mod_dir)
     keep = set()
-    for rel, e in todo.items():
-        s = stamp.get(rel)
-        path = os.path.join(mod_dir, *rel.split("/"))
-        if not isinstance(s, dict) or s.get("key") != e["key"] or not os.path.isfile(path):
-            continue
-        try:
-            if os.path.getsize(path) == s.get("size") and _sha256_file(path) == s.get("sha256"):
-                keep.add(rel)
-        except OSError:
-            pass
+    with statcache.Cache() as cache:
+        for rel, e in todo.items():
+            s = stamp.get(rel)
+            path = os.path.join(mod_dir, *rel.split("/"))
+            if not isinstance(s, dict) or s.get("key") != e["key"] or not os.path.isfile(path):
+                continue
+            try:
+                if os.path.getsize(path) == s.get("size") and cache.digest(path).hex() == s.get("sha256"):
+                    keep.add(rel)
+            except OSError:
+                pass
     return keep
 
 
