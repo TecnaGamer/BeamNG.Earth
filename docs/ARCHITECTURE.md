@@ -726,7 +726,11 @@ in 2026-10-10-weather-probe-results.md.
   - `liveaudio.lua` sends `weather_audio` (protocol_table.json) every 0.25 s while Live, building its context only
     then. The context is the rain rate, wind, shelter / tunnel / cabin, the game's master x Environment volume
     (the rain layers and the thunder play on the Environment slider: 'AudioEnvironment' / AudioChannelEnvironment),
-    pause and unfocused mute, the duck, and storm.lua's thunders: a 3 s look-ahead hint and the final one at the strike.
+    pause and unfocused mute, the duck, and storm.lua's thunders: a look-ahead hint (up to 30 s ahead, again when the listener moved the
+    strike's distance by 15 %) and the final one at the strike. Generated (method B) strikes and closes are rendered
+    ahead by the synth on its fast path; the synth lists what it has ready (`readyThunders`), and a final plays
+    through the synth only when it was listed (else the mod plays its file and sends `play = false`: the synth only
+    ducks its rain at the file's crack). Mid and far always play from the files.
   - `server/liveaudio.py` feeds those lines to a `weathersynth live-serve` child through a bounded queue drained by a
     writer thread (the event loop never blocks), and forwards its state lines as `audio_state`.
   - The child plays through cpal (output streams only) with a small device buffer that grows on xruns.

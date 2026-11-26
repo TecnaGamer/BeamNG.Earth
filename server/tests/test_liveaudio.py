@@ -235,6 +235,8 @@ class LiveAudioTest(unittest.TestCase):
                          {"type": "audio_state", "state": "failed", "reason": "r"})
         self.assertEqual(liveaudio.state_message('{"state": "live", "thunderSets": ["recorded", "junk", 3]}'),
                          {"type": "audio_state", "state": "live", "thunderSets": ["recorded"]})
+        self.assertEqual(liveaudio.state_message('{"state": "live", "readyThunders": [["7@1.000", 915.2], ["x"], [3, 1], ["y", true]]}'),
+                         {"type": "audio_state", "state": "live", "readyThunders": [["7@1.000", 915.2]]})
         many = {"mode": "live", "thunders": [{"id": str(i)} for i in range(100)] + ["junk"]}
         self.assertEqual(len(liveaudio.clean(many)["thunders"]), liveaudio.MAX_THUNDERS)
         self.assertEqual(set(liveaudio.FIELDS), set(TABLE["mod_to_server"]["weather_audio"]["fields"]))

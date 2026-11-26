@@ -31,8 +31,9 @@ What changed in each release of BeamNG.Earth, newest first.
   and rain drumming on the roof in the driver's view.
 - **Weather sounds: Live** (experimental, on the Weather page; Pre-recorded stays the default): the BeamNG.Earth app
   makes the rain and thunder as you hear them and plays them through your default audio device at the game's volume.
-  The rain follows the real rate and every strike sounds different. If the live sound can't start or stops, the
-  pre-recorded sounds come back by themselves, and the page says why.
+  The rain follows the real rate, and nearby strikes are made fresh for each strike (with the Recorded thunder,
+  every strike); distant thunder, and any strike the app couldn't make in time, plays from the pre-recorded set. If
+  the live sound can't start or stops, the pre-recorded sounds come back by themselves, and the page says why.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed

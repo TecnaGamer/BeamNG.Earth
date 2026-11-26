@@ -14,11 +14,16 @@ M.SEND_S = 0.25          -- weather_audio while live (and at once on a change or
 M.STALE_S = 1.5          -- a live audio_state older than this: the pre-recorded sounds come back
 M.FADE_S = 0.3           -- the handover fade (the mod's sounds out / back in)
 M.MAX_PENDING = 32       -- thunders kept for the next message
--- Who plays the thunder while Live, per thunder set: true the synth (its ThunderRenderer for the set), false the game
--- (the mod's files, as in Pre-recorded; the synth then only ducks its rain at each strike's crack). Generated (method
--- B): the game, the approved files exactly (a Rust port of the B renderer is not done: ~0.5-2 s a strike on the PC).
--- Recorded (the grain bank): the synth, a new layering per strike.
-M.LIVE_THUNDER = { generated = false, recorded = true }
+-- Who plays the thunder while Live, per thunder set (and only when the synth lists the set in thunderSets): true the
+-- synth, a new render per strike (Recorded: the grain bank, tens of ms); 'ready' the synth for LIVE_KINDS when it
+-- rendered the strike in time (Generated: method B's strikes and closes take seconds, so storm.lua hints them
+-- LIVE_LOOKAHEAD_S ahead and the synth lists them in readyThunders), the game's files otherwise; false the game (the
+-- mod's files, as in Pre-recorded; the synth then only ducks its rain at each strike's crack).
+M.LIVE_THUNDER = { generated = 'ready', recorded = true }
+M.LIVE_KINDS = { strike = true, close = true }
+-- a ready render serves a final whose distance is within this much of the one it was rendered for (the synth's
+-- READY_REL_D: a hint moved further renders again)
+M.READY_REL_D = 0.15
 -- the crack's place in the thunder files (storm.FILE_ONSET_S): a thunder the game plays arrives this late in its file
 M.FILE_ONSET_S = 0.5
 
@@ -57,15 +62,23 @@ function M.signature(m, f)
     tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet))
 end
 
+-- Pure: the id of strike s ({ t, seed }): its hint and its final one share it.
+function M.thunderId(s)
+  return string.format('%d@%.3f', tonumber(s.seed) or 0, tonumber(s.t) or 0)
+end
+
 -- Pure: a thunder for the synth from storm.lua's strike s ({ t, seed }), its distance d m and storm.thunderFor(d) th:
--- id (the seed and time: a hint and the final one share it), at (UTC s the sound arrives), d, kind, gain, seed, final
--- (false: a look-ahead hint to render early; true: it struck, play it).
-function M.thunder(s, d, th, final)
+-- id, at (UTC s its crack arrives), d, kind, gain, seed, final (false: a look-ahead hint to render early; true: it
+-- struck) and, on a final, play (synth: who plays it, M.synthPlays; nil: as liveThunder says).
+function M.thunder(s, d, th, final, synth)
   local t, seed = tonumber(s.t) or 0, tonumber(s.seed) or 0
+  if synth == nil then synth = M.liveThunder() end
   -- (a thunder the game plays from a file: its crack comes FILE_ONSET_S into it, which is when the synth's rain ducks)
-  local lead = M.liveThunder() and 0 or M.FILE_ONSET_S
-  return { id = string.format('%d@%.3f', seed, t), at = t + (tonumber(th.delay) or 0) + lead, d = tonumber(d) or 0,
+  local lead = synth and 0 or M.FILE_ONSET_S
+  local m = { id = M.thunderId(s), at = t + (tonumber(th.delay) or 0) + lead, d = tonumber(d) or 0,
     kind = th.kind, gain = tonumber(th.gain) or 0, seed = seed, final = final == true }
+  if final == true then m.play = synth == true end
+  return m
 end
 
 function M.setThunderSet(v)
@@ -80,6 +93,23 @@ function M.thunderSet() return thunderSet end
 -- (and only when the synth says it plays that set: a synth without its grain bank leaves the thunder to the files)
 function M.liveThunder()
   return M.LIVE_THUNDER[thunderSet] == true and type(state.sets) == 'table' and state.sets[thunderSet] == true
+end
+
+-- Whether the synth has thunder id rendered for about distance d (its last readyThunders).
+function M.readyFor(id, d)
+  local r = type(state.ready) == 'table' and state.ready[id] or nil
+  return r ~= nil and math.abs(r - (tonumber(d) or 0)) <= M.READY_REL_D * math.max(r, 1)
+end
+
+-- Whether the synth plays a thunder of kind (final) or should render it (a hint, final false): the set offered by
+-- the synth, and for a 'ready' set a strike or close it listed ready (a hint: always, so it renders).
+function M.synthPlays(kind, id, d, final)
+  if type(state.sets) ~= 'table' or state.sets[thunderSet] ~= true then return false end
+  local lt = M.LIVE_THUNDER[thunderSet]
+  if lt == true then return true end
+  if lt ~= 'ready' or not M.LIVE_KINDS[kind] then return false end
+  if not final then return true end
+  return M.readyFor(id, d)
 end
 
 -- Pure: send now? (a changed signature or a waiting thunder at once; while live also every SEND_S, the heartbeat the
@@ -155,8 +185,16 @@ function M.onAudioState(msg)
   if type(msg.thunderSets) == 'table' then
     for _, v in ipairs(msg.thunderSets) do sets[tostring(v)] = true end
   end
+  -- readyThunders: [[id, d], ...], the strikes the synth has rendered and waiting
+  local ready = {}
+  if type(msg.readyThunders) == 'table' then
+    for i, v in ipairs(msg.readyThunders) do
+      if i > 32 then break end
+      if type(v) == 'table' and v[1] ~= nil and tonumber(v[2]) then ready[tostring(v[1])] = tonumber(v[2]) end
+    end
+  end
   state = { state = tostring(msg.state or 'off'), reason = msg.reason, latencyMs = tonumber(msg.latencyMs), t = clockhp(),
-    sets = sets }
+    sets = sets, ready = ready }
 end
 
 -- A new connection, its end or a level change: the server's word is gone, the pre-recorded sounds come back, and the

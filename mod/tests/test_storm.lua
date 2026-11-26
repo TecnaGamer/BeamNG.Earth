@@ -188,4 +188,48 @@ check(storm.update(0.016, 0, {}) == false, 'class 0 and nothing queued: done')
 storm.reset()
 check(#S.liveOf('TSStatic') == 0 and #S.liveOf('PointLight') == 0, 'reset: the objects deleted')
 
+-- live, the generated set: a strike or close within 1400 m is hinted LIVE_LOOKAHEAD_S ahead (its crack at once); the
+-- synth plays the final when it listed it ready, else the game plays the file (play = false, at its file's crack)
+local la = require('beamngEarth/liveaudio')
+local near
+for _, s in ipairs(strikes) do
+  local g = beamngEarth_api.game(s.lat, s.lon)
+  local d = math.sqrt(g.x * g.x + g.y * g.y)
+  if d < 1400 and s.t > first.t + 60 then near = { s = s, d = d } break end
+end
+check(near ~= nil, 'a strike within 1400 m later in the hour')
+local sent = {}
+la.onThunder = function(t) sent[#sent + 1] = t end
+la.isLive = function() return true end
+la.setMode('live')
+la.setThunderSet('generated')
+local function liveRun(readyD)
+  sent, played = {}, {}
+  storm.reset()
+  la.onAudioState({ state = 'live', thunderSets = { 'generated', 'recorded' } })
+  clock = near.s.t - storm.LIVE_LOOKAHEAD_S - 0.5
+  run(1.0)
+  local id = la.thunderId(near.s)
+  local hint
+  for _, t in ipairs(sent) do if t.id == id and not t.final then hint = t end end
+  if readyD then la.onAudioState({ state = 'live', thunderSets = { 'generated', 'recorded' }, readyThunders = { { id, readyD } } }) end
+  clock = near.s.t - 0.1
+  run(0.2 + storm.thunderFor(near.d).delay + 0.6)
+  local fin, nfin, nhint = nil, 0, 0
+  for _, t in ipairs(sent) do
+    if t.id == id and t.final then fin = t; nfin = nfin + 1 end
+    if t.id == id and not t.final then nhint = nhint + 1 end
+  end
+  check(nfin == 1 and nhint == 1, 'one hint and one final per strike (the 30 s window is not looked up again each check)')
+  return hint, fin
+end
+local hint, fin = liveRun(near.d)
+check(hint and hint.at == near.s.t + storm.thunderFor(near.d).delay, 'hinted ' .. storm.LIVE_LOOKAHEAD_S .. ' s ahead, its crack at once')
+check(fin and fin.play == true and #played == 0, 'ready: the synth plays the final, no file')
+hint, fin = liveRun(nil)
+check(fin and fin.play == false and fin.at == near.s.t + storm.thunderFor(near.d).delay + la.FILE_ONSET_S and #played == 1,
+  'not ready: the file plays (play = false, at its file\'s crack)')
+la.setMode('prerecorded')
+storm.reset()
+
 T.done('test_storm')

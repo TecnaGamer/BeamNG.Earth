@@ -47,7 +47,9 @@ M.LPI_MIN, M.LPI_STRONG = 0.5, 5    -- J/kg (ICON-D2's lightning potential index
 M.CAPE_MIN, M.CAPE_RAIN_MMH = 800, 0.5
 M.CHECK_S = 0.25          -- the strike walk while a storm is on ...
 M.LOOKAHEAD_S = 1.0       -- ... looking this far ahead
-M.LIVE_LOOKAHEAD_S = 3.0  -- ... or this far with the live weather sounds (their synth renders a thunder ahead)
+M.LIVE_LOOKAHEAD_S = 30.0 -- ... or this far with the live weather sounds (their synth renders a thunder ahead: method
+                          -- B's strikes take seconds, more on a loaded Deck)
+M.REHINT_REL_D = 0.15     -- a hinted strike whose distance moved this much (the listener drove) is hinted again
 
 ------------------------------------------------------------------------------------------
 -- pure
@@ -372,11 +374,18 @@ local function strike(s, now, ctx)
   local th = M.thunderFor(d)
   if th then
     local la = package.loaded['beamngEarth/liveaudio']
-    if la and la.mode() == 'live' then la.onThunder(la.thunder(s, d, th, true)) end
+    -- who plays it: the synth when it offers the set and (method B) has this strike rendered for about d, else the file
+    local synth = false
+    if la and la.mode() == 'live' then
+      synth = la.isLive() and la.synthPlays(th.kind, la.thunderId(s), d, true) or false
+      la.onThunder(la.thunder(s, d, th, true, synth))
+    end
+    if st.hinted then st.hinted[la and la.thunderId(s) or ''] = nil end
     local files = M.thunderFiles(th.kind, M.THUNDER_SET, function(p) return FS and FS.fileExists and FS:fileExists(p) or false end)
     local file = M.pickFile(files, s.seed, lastPick[th.kind])
     lastPick[th.kind] = file
-    st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = file, gain = th.gain, kind = th.kind, d = d }
+    st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = file, gain = th.gain, kind = th.kind, d = d,
+      synth = synth }
   end
   local gain = M.flashGain(d)
   if gain <= 0.002 then return end
@@ -469,7 +478,7 @@ local function playThunders(now, muffled)
   for _, t in ipairs(st.thunders) do
     if now >= t.at then
       local la = package.loaded['beamngEarth/liveaudio']
-      local synth = la and la.isLive() and la.liveThunder()
+      local synth = t.synth and la and la.isLive()      -- (decided at the strike: the synth had it ready)
       local played = false
       if synth then
         M.thunders = M.thunders + 1   -- (the live synth plays it: liveaudio sent it at the strike)
@@ -546,23 +555,55 @@ function M.update(dt, c, ctx)
     if a and a.toGeo and p then lat, lon = a.toGeo(p.x, p.y, p.z) end
     local geo = tonumber(lat) and tonumber(lon) and { lat = lat, lon = lon }
     if geo then
-      local t0 = st.lastT or now
-      if t0 < now - 1 or t0 > now + 5 then t0 = now end    -- (back from a pause, a load: no burst of old strikes)
       local la = package.loaded['beamngEarth/liveaudio']
       local live = la and la.mode() == 'live'
-      local t1 = now + (live and M.LIVE_LOOKAHEAD_S or M.LOOKAHEAD_S)
+      local ahead = live and M.LIVE_LOOKAHEAD_S or M.LOOKAHEAD_S
+      local t0 = st.lastT or now
+      -- (back from a pause, a load: no burst of old strikes; a clock that jumped: looked up again from now)
+      if t0 < now - 1 or t0 > now + ahead + 5 then t0 = now end
+      local t1 = now + ahead
+      st.queued = st.queued or {}
+      for id, t in pairs(st.queued) do if t < now - 2 then st.queued[id] = nil end end
       for _, s in ipairs(M.strikesNear(geo.lat, geo.lon, t0, t1, c)) do
+        -- (each strike once: a window looked up again, or Live switched off with its longer look-ahead queued)
+        local qk = string.format('%d@%.3f', tonumber(s.seed) or 0, tonumber(s.t) or 0)
+        if st.queued[qk] then goto continue end
+        st.queued[qk] = s.t
         st.upcoming[#st.upcoming + 1] = s
         if live and a.toGame then           -- (a hint: the distance now; the final one at the strike has the real one)
           local gx, gy = a.toGame(s.lat, s.lon, 0)
           if tonumber(gx) and tonumber(gy) then
             local d = math.sqrt((gx - p.x) ^ 2 + (gy - p.y) ^ 2)
             local th = M.thunderFor(d)
-            if th then la.onThunder(la.thunder(s, d, th, false)) end
+            local id = la.thunderId(s)
+            if th and la.synthPlays(th.kind, id, d, false) then
+              la.onThunder(la.thunder(s, d, th, false, true))
+              st.hinted = st.hinted or {}
+              st.hinted[id] = { s = s, d = d }
+            end
+          end
+        end
+        ::continue::
+      end
+      st.lastT = math.max(t0, t1)
+      -- the hinted strikes whose distance moved (the listener drove): hinted again, so the synth renders the new one
+      if live and st.hinted and a.toGame then
+        for id, h in pairs(st.hinted) do
+          if h.s.t <= now then
+            st.hinted[id] = nil
+          else
+            local gx, gy = a.toGame(h.s.lat, h.s.lon, 0)
+            if tonumber(gx) and tonumber(gy) then
+              local d = math.sqrt((gx - p.x) ^ 2 + (gy - p.y) ^ 2)
+              if math.abs(d - h.d) > M.REHINT_REL_D * math.max(h.d, 1) then
+                local th = M.thunderFor(d)
+                if th and la.synthPlays(th.kind, id, d, false) then la.onThunder(la.thunder(h.s, d, th, false, true)) end
+                h.d = d
+              end
+            end
           end
         end
       end
-      st.lastT = math.max(t0, t1)
     end
   end
   if #st.upcoming > 0 then
@@ -583,7 +624,7 @@ function M.update(dt, c, ctx)
   elseif #st.flashes > 0 and st.flashes[1].held then st.flashes = {} end
   if #st.flashes > 0 or (st.shown and next(st.shown)) then drawFlashes(now, ctx) end
   playThunders(now, ctx.sheltered)
-  if c < 1 then st.upcoming = {} end
+  if c < 1 then st.upcoming = {}; st.hinted = nil end
   if c < 1 and #st.flashes == 0 and #st.thunders == 0 and not (st.shown and next(st.shown)) then
     st.lastT = nil
     return false
