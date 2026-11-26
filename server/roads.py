@@ -15950,6 +15950,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             roadwear.tier_of(wear), aisles=lot_aisles, skip=jinternal, leaves=leaves,
             exclude=lambda a, b: ((a, b) in straight or rampmerges.related(a, b, merge_layouts)
                                   or rampmerges.continuation(a, spec_of[a], b, spec_of[b], paint_joins))))
+    if roads:                                   # puddles (roadwear.puddle_chunks): a mesh of the skin's own, drawn wet
+        import roadwear
+        spec_of = {f: sp for f, sp, _, _ in roads}
+        chunks.extend(roadwear.puddle_chunks(
+            roads, seen, (min(box[0], wexact[0]), min(box[1], wexact[1]), max(box[2], wexact[2]), max(box[3], wexact[3])),
+            has_sidewalks, skip=jinternal,
+            exclude=lambda a, b: ((a, b) in straight or rampmerges.related(a, b, merge_layouts)
+                                  or rampmerges.continuation(a, spec_of[a], b, spec_of[b], paint_joins))))
     if walks is not None:
         runs_near = join_walk_ends(runs_near, [(p2[:, :2], s2.width / 2) for _, s2, p2, _ in roads]
                                    + list(walk_cuts) + rail_cuts    # (a cut's gap stays open: a driveway, a railway)

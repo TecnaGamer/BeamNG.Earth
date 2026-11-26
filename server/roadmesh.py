@@ -40,7 +40,9 @@ LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage":
         # 6-7 mm, the spots 4 mm (each wear layer's lift its own: the strips are told apart by it)
         # then (the user: "they still float. i want to make them virtualy the same height of the road"): paint 2 mm, the
         # wear 2.2-2.6 mm, spots 1.8 mm (FOLLOW_TOL stays 2 cm: the ground steps by 1/32 m)
-        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026}
+        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026,
+        # puddles (roadwear.puddle_chunks): a mesh of their own over everything here, the water over the paint
+        "puddle": 0.006}
 # The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
 # as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
@@ -1655,7 +1657,7 @@ def _ground_runs(rs, ab):
 
 @profile_step('Road mesh generation')
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
-          clip_poly=None):
+          clip_poly=None, puddles=False):
     """The road mesh of a tile (render only; on bridges it lies DECK_SKIN over deck()'s slab): (positions
     relative to origin, tris, uvs, materials, tri material index), or None; with a dirt or gravel strip in it (a
     FADE_PREFIX material) a sixth element, the fade uv (n, 2) (_fade_uv; write, plazas.merge), and those materials
@@ -1671,7 +1673,14 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     ground raised over low arches): a ribbon straight across the road stood under the ground's bumps (up to 30 cm on hills), so it was drawn
     5 cm over it and the tyres sank into it (the user, 2026-10-20). clip_poly (k, 2): a convex polygon the mesh is cut
     to instead of the box (a geotile's quad in the anchor's world: earthfast.clip_tris_convex, the neighbours' cuts
-    along the very same lines); clip then only says where the ribbons reach past the tile (_reach_past)."""
+    along the very same lines); clip then only says where the ribbons reach past the tile (_reach_past). puddles: the
+    mesh of the chunks marked "puddle" alone (roadwear.puddle_chunks: the skin's puddle part), else the road mesh
+    without them."""
+    if puddles:
+        chunks, context = [c for c in chunks if c.get("puddle")], ()
+    else:
+        chunks = [c for c in chunks if not c.get("puddle")]
+        context = [c for c in context if not c.get("puddle")]
     chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
     if any(c.get("rs_hide") or c.get("rs_slab") for c in chunks):
         # (BNE_ROADSYS=surface: today's deck chunks the road system's faces stand in for, the parapets' base strips)

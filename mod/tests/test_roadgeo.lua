@@ -96,11 +96,12 @@ local skin = [[{ key = "]] .. key .. [[", anchorId = %d, q = 0.03125, pivot = { 
   road = { shape = "/s/rs_%d_road.cdae", pos = { %f, %f, 0 } },
   walk = { shape = "/s/rs_%d_walk.cdae", pos = { %f, %f, 0 } },
   walkcol = { shape = "/s/rs_%d_walkcol.cdae", pos = { %f, %f, 0 } },
+  puddle = { shape = "/s/rs_%d_puddle.cdae", pos = { %f, %f, 0 } },
   colliders = { walk = { { 0, 0, 0, 1, 1, 1 } }, walkcol = { { 0, 0, 0, 1, 1, 1 } } } }]]
 local function skinOf(aid, a)
   local x, y = a:geodeticToWorld(clat, clon, 0)
   files['/s/rs_' .. aid .. '.json'] = string.format(skin, aid, x, y, aid, x - 118, y - 118, aid, x - 118, y - 118,
-    aid, x - 118, y - 118)
+    aid, x - 118, y - 118, aid, x - 118, y - 118)
   return { type = 'roads_skin', anchorId = aid, key = key, path = '/s/rs_' .. aid .. '.json' }
 end
 local function objsWith(pat)
@@ -178,6 +179,14 @@ end
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
 run(1, A)
 T.check(#objsWith('rs_1_road') == 1 and #objsWith('rs_1_walk.') == 1, 'skin made')
+do  -- the puddles: made hidden while dry, shown and hidden again as the ground gets wet and dries (wetlook.lua)
+  local pz = objsWith('rs_1_puddle')
+  T.check(#pz == 1 and pz[1].hidden == true and pz[1].fields.collisionType == 'None', 'the puddles made, hidden, render only')
+  T.check(roads.setPuddles(true) == 1 and pz[1].hidden == false, 'wet: shown')
+  T.check(roads.setPuddles(true) == 0, 'the same state: nothing touched')
+  roads.setPuddles(false)
+  T.check(pz[1].hidden == true, 'dry: hidden again')
+end
 roads.collisionRebuilt()
 T.check(roads.settledFor(1, car.x, car.y), 'settled: the geotile under the car made with its skin')
 T.check(roads.readyAround(1, car.x, car.y, 50) == false or true, 'readyAround runs')

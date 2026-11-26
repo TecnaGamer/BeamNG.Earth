@@ -10221,6 +10221,11 @@ class Connection:
                  "groundZ": gz, "floorZ": floor_z, "terrain": self.terrain_msg(key, info), "provisional": provisional}
         if place is not None:           # (the player's spot off the origin, echoed: core places the car there)
             ready["px"], ready["py"] = place
+        try:                            # the place's Koppen-Geiger class: the trees' leaf cycle (seasonlook.lua)
+            import climate
+            ready["koppen"] = int(climate.koppen_at(lat, lon))
+        except Exception as e:          # (no class: the mod keeps the full cycle)
+            log.warning("koppen at the anchor: %s", e)
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
         progress["done"] = True

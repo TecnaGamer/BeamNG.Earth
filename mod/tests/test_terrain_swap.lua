@@ -168,4 +168,26 @@ terrain.swap('/t/w6.ter', 2, 512, 0, 0, 0, { materials = mats2 }, nil)
 T.check(asph.fields.roughnessBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_r.png'
   and cob.fields.aoDetailStrength == '1 0.3' and asph.fields.aoDetailStrength == '0.8 0.2', 'dry: all back')
 terrain.WET_FIELDS[2] = saved
+
+-- the re-wet swap (core.lua _rewetBlock: the block in use under a second name, the car standing in the rain): a step
+-- change marks the terrain dirty; the paved layers wait for it until a swap; reswap sets them, then the file, with no
+-- updateMaterial; the same file again is no swap
+terrain.wetDirty = false
+terrain.setWet(0)
+terrain.wetDirty = false
+terrain.setWet(0)
+T.check(terrain.wetDirty == false and terrain.wetPending() == false, 'the same step: not dirty, nothing pending')
+terrain.setWet(2)
+T.check(terrain.wetDirty == true and terrain.wetPending() == true, 'a new step: dirty, the asphalt waits for it')
+local upd1, wetAt = calls.updateMaterial or 0, nil
+function tb:setField(k, i, v)
+  if k == 'terrainFile' and v == '/t/w6_wet.ter' then wetAt = asph.fields.roughnessBaseTex end
+  return setField(self, k, i, v)
+end
+T.check(terrain.reswap('/t/w6_wet.ter') == true and terrain.lastSwap.rewet == true, 'the block swapped in again')
+T.check(wetAt and wetAt:find('bngEarth_base_nm') ~= nil and (calls.updateMaterial or 0) == upd1,
+  'wet before the file is set, no updateMaterial')
+T.check(terrain.wetPending() == false, 'on step after the re-wet')
+T.check(terrain.reswap('/t/w6_wet.ter') == false, 'the same file: no swap')
+T.check(terrain.reswap(nil) == false, 'no path: nothing')
 T.done('test_terrain_swap')
