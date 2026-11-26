@@ -126,7 +126,7 @@ function tb:setField(k, i, v)
   return setField(self, k, i, v)
 end
 T.check(terrain.swap('/t/w.ter', 2, 512, 0, 0, 0, { materials = mats }, nil) == true, 'a swap while wet')
-T.check(wetAtFile and wetAtFile:find('bngEarth_base_nm') ~= nil
+T.check(wetAtFile and wetAtFile:find('flat_1024') ~= nil
   and asph.fields.aoBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_ao.png',
   'the asphalt layer wet before the file is set, its AO base map its own: ' .. tostring(wetAtFile))
 -- never the base maps packed with the block's photo (the game's cache key is the photo + the AO map: another AO map is
@@ -185,7 +185,7 @@ function tb:setField(k, i, v)
   return setField(self, k, i, v)
 end
 T.check(terrain.reswap('/t/w6_wet.ter') == true and terrain.lastSwap.rewet == true, 'the block swapped in again')
-T.check(wetAt and wetAt:find('bngEarth_base_nm') ~= nil and (calls.updateMaterial or 0) == upd1,
+T.check(wetAt and wetAt:find('flat_1024') ~= nil and (calls.updateMaterial or 0) == upd1,
   'wet before the file is set, no updateMaterial')
 T.check(terrain.wetPending() == false, 'on step after the re-wet')
 T.check(terrain.reswap('/t/w6_wet.ter') == false, 'the same file: no swap')
