@@ -71,7 +71,13 @@ the Weather page's "Weather sounds" is Live.
   `failed` line before a non-zero exit. The server forwards these as `audio_state`.
 - **Fallback:** the mod plays its pre-recorded files whenever the state lines stop.
 - **Quiet:** when muted, when the input stops for 1 s, or on Pre-recorded.
-- **Exit:** fades out and exits on EOF.
+- **Exit:** fades out and exits on EOF, or by itself (code 0) after `LINGER_S` (60 s) without a Live line. The
+  server forwards Pre-recorded rather than closing the pipe, so a switch back to Live within a minute keeps the same
+  process (the 2026-11-26 playtest's three starts in two minutes were such switches).
+- **Rain:** off while the mod says `synthRain: false` (the default since 2026-11-26: Live plays the game's own rain
+  loops and the synth only the thunder and its ducks). When it plays, the open-air mix is capped at the loudness the
+  game plays its loops at for the rate (live.rs `RainCap`: SOURCES.md's loop loudness x RAIN_GAIN x the rain share;
+  uncapped the drops ran 20-30 dB hotter: 35 mm/h +6.5 LUFS against the loops' -23.2).
 
 Thunder (src/thunderlive.rs):
 - **Two messages per strike.** The mod sends a look-ahead hint up to 3 s early, rendered at once on its own thread,
@@ -81,9 +87,15 @@ Thunder (src/thunderlive.rs):
   `bne_thunder_<kind><n>.wav` picked by the seed. Another method only needs a new impl and a `--thunder` name.
 
 Output latency (src/audio.rs, serve.rs):
-- **Device buffer:** cpal is asked for a fixed buffer (`--buffer`; 512 frames on Linux, 256 elsewhere), clamped to the
-  device's range. WASAPI shared mode ignores the request and calls back with its own ~22 ms buffer.
-- **Fill target:** one callback plus max(one callback, 512 frames), and half a callback more per ring underrun.
+- **Device buffer:** cpal is asked for a fixed buffer (`--buffer`; 1024 frames on Linux since 2026-11-26, 256
+  elsewhere; twice that when the machine is busy at the start), clamped to the device's range. WASAPI shared mode
+  ignores the request and calls back with its own ~22 ms buffer.
+- **Fill target:** one callback plus max(one callback, 2048 frames), and half a callback more per ring underrun (at
+  most 0.25 s). About 0.1 s in all: the thunders are scheduled on the UTC clock with the latency taken off.
+- **Priority** (prio.rs, best effort): the worker thread (and on Linux the device's callback thread) asks for nice -11,
+  -6 or -2, whichever the system allows (RLIMIT_NICE); on Windows the worker runs at THREAD_PRIORITY_HIGHEST. Never a
+  realtime policy. The device line in the server log says what it got.
+- **The callback allocates nothing** (`audio::tests::the_callback_path_never_allocates`, a counting allocator).
 - **Trouble:** a stream error (ALSA POLLERR after an unrecovered xrun, a device lost), or 3 xruns within 60 s, reopens
   the default device with twice the buffer, up to 2048 frames. After 5 quiet minutes the buffer halves again, never
   below the first size. Only failures at 2048 frames count toward `failed` (3 a minute).

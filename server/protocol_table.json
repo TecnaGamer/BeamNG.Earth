@@ -301,6 +301,7 @@
     "muted": {"type": "bool"},
     "duck": {"type": "num"},
     "t": {"type": "num"},
+    "synthRain": {"type": "bool", "optional": true, "doc": "the synth plays the rain (liveaudio.lua LIVE_RAIN); false (the default since 2026-11-26): the game plays its own rain loops in Live too and the synth only the thunder and its ducks; absent: true"},
     "thunderSet": {"type": "str", "optional": true, "doc": "the Weather page's Thunder sound: 'generated' (the game plays the method B files; the synth only ducks its rain at each strike's crack) or 'recorded' (the synth's grain-bank renderer)"},
     "rainSet": {"type": "str", "optional": true, "doc": "the Weather page's Rain sound: 'generated' (the synth's physical rain) or 'recorded' (its texture bank of CC0 rain recordings; the physical rain when the synth has no bank)"},
     "rainVol": {"type": "num", "optional": true, "doc": "the mod's own rain volume for its layers (RAIN_GAIN x the rain share, 0..1): the synth's rain plays at the files' level times this (absent: 0.5)"},

@@ -464,7 +464,23 @@ M.RAIN_CABIN = 0.35      -- the outside layers in the driver's camera
 M.RAIN_ROOF = 0.9        -- the roof drumming there
 M.RAIN_CABIN_CAMS = { driver = true, onboard = true }
 M.RAIN_TRACK = 'amb_rain_medium'
-M.RAIN_GAIN = 0.5       -- the loop's volume at full rain ...
+-- The thunder-over-rain balance (the user, 2026-11-26, on "thunder sounds can be increased in volume by alot": "Try
+-- ducking or simply turning the default rain volume down"). One name picks the option (listening mixes:
+-- ~/bnge-tests/weather/thunder_mix/<name>.ogg):
+-- - current: the rain at RAIN_GAIN 0.5, only strikes (within storm.STRIKE_M) duck it;
+-- - duck: close strikes duck it too (CLOSE_DUCK_DB: -6 dB at 300 m to -3 dB at 1500 m, the strike duck's envelope);
+-- - rainlow: the rain 3 dB down (0.35; the muffled, roof and cabin layers with it: they all scale with RAIN_GAIN);
+-- - both: the close duck and the rain 2 dB down (0.4).
+M.MIX_OPTIONS = {
+  current = { rainGain = 0.5, closeDuck = false },
+  duck = { rainGain = 0.5, closeDuck = true },
+  rainlow = { rainGain = 0.35, closeDuck = false },
+  both = { rainGain = 0.4, closeDuck = true },
+}
+M.MIX = 'rainlow'      -- (the user, 2026-11-26: "Let's just lower the rain sound")
+M.CLOSE_DUCK_DB = { -6, -3 }   -- (dB at storm.STRIKE_M, at storm.CLOSE_M; linear in distance between)
+M.RAIN_GAIN = M.MIX_OPTIONS[M.MIX].rainGain   -- the loop's volume at full rain ...
+M.CLOSE_DUCK = M.MIX_OPTIONS[M.MIX].closeDuck
 M.RAIN_FADE_S = 2       -- ... reached (or left) over this long
 local rainEm, rainVol, rainAt = nil, 0, nil
 local layerEm, layerVol = {}, {}      -- name -> the emitter / its volume now
@@ -480,6 +496,7 @@ M.REC_PREFIX = 'bne_rain_rec_'
 local recOk = nil                     -- the recorded files are there (checked once)
 function M.setRainSet(v)
   local s = (v == 'recorded') and 'recorded' or 'generated'
+  liveaudio.setRainSet(s)
   if s == M.RAIN_SET then return end
   M.RAIN_SET = s
   -- the playing layers go; the next frame makes them again from the other files, at the volume they had
@@ -651,9 +668,24 @@ function M.duckEnvelope(ev, now)
   return e, false
 end
 
--- storm.lua: a strike's duck (the clock now is its flash; t0 when its crack arrives; d m away).
-function M.scheduleDuck(flash, t0, d)
-  ducks[#ducks + 1] = { flash = tonumber(flash) or os.clockhp(), t0 = tonumber(t0) or os.clockhp(), depth = M.duckDepthDb(d) }
+-- Pure: the depth for a close strike (storm's 'close', STRIKE_M .. CLOSE_M) d m away: CLOSE_DUCK_DB's -6 dB at 300 m to
+-- -3 dB at 1500 m, linear, clamped.
+function M.closeDuckDepthDb(d)
+  d = tonumber(d) or 1500
+  local t = math.max(0, math.min(1, (d - 300) / (1500 - 300)))
+  return M.CLOSE_DUCK_DB[1] + (M.CLOSE_DUCK_DB[2] - M.CLOSE_DUCK_DB[1]) * t
+end
+
+-- Pure: does a thunder of kind duck the rain (strikes always; closes with the mix option's CLOSE_DUCK)?
+function M.ducksFor(kind)
+  return kind == 'strike' or (kind == 'close' and M.CLOSE_DUCK == true)
+end
+
+-- storm.lua: a strike's duck (the clock now is its flash; t0 when its crack arrives; d m away; kind storm's,
+-- 'strike' when not given).
+function M.scheduleDuck(flash, t0, d, kind)
+  local depth = kind == 'close' and M.closeDuckDepthDb(d) or M.duckDepthDb(d)
+  ducks[#ducks + 1] = { flash = tonumber(flash) or os.clockhp(), t0 = tonumber(t0) or os.clockhp(), depth = depth }
 end
 
 -- The rain bed's factor at time now: the deepest duck running (and the old timed duck, M.duck).

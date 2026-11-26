@@ -21,6 +21,12 @@ M.MAX_PENDING = 32       -- thunders kept for the next message
 -- mod's files, as in Pre-recorded; the synth then only ducks its rain at each strike's crack).
 M.LIVE_THUNDER = { generated = 'ready', recorded = true }
 M.LIVE_KINDS = { strike = true, close = true }
+-- Whose rain plays while Live, per Rain sound: false the game's own rain loops, exactly as in Pre-recorded (the synth's
+-- rain is off: synthRain = false; the user, 2026-11-26, of the procedural live drops: "the rain drops with Live sounds
+-- sound terrible and are super lound"); true the synth's, the game's fading out while the synth answers, and only when
+-- the synth lists the set in rainSets (the recorded rain needs its texture bank: without it the game plays the
+-- recorded FILES, not the synth's procedural rain). The synth keeps the thunder and its ducks either way.
+M.LIVE_RAIN = { generated = false, recorded = true }
 -- a ready render serves a final whose distance is within this much of the one it was rendered for (the synth's
 -- READY_REL_D: a hint moved further renders again)
 M.READY_REL_D = 0.15
@@ -35,6 +41,17 @@ local fadeAt = nil
 local pending = {}           -- thunders for the next message
 local sender = nil           -- core.lua's: send(msg) -> true when sent (connected, a session)
 local thunderSet = 'generated' -- the Weather page's Thunder sound: 'generated' | 'recorded'
+local rainSet = 'generated'    -- the Weather page's Rain sound (ambience.setRainSet tells it)
+
+function M.setRainSet(v)
+  local s = (v == 'recorded') and 'recorded' or 'generated'
+  rainSet = s   -- (in the signature: the next tick sends it)
+end
+function M.rainSet() return rainSet end
+-- Whether the synth plays the rain now: the set's LIVE_RAIN, and the synth offers that set (rainSets).
+function M.synthRain()
+  return M.LIVE_RAIN[rainSet] == true and type(state.rainSets) == 'table' and state.rainSets[rainSet] == true
+end
 
 local function clockhp() return os.clockhp and os.clockhp() or os.clock() end
 
@@ -62,9 +79,9 @@ end
 
 -- Pure: what decides a resend (rounded, so jitter does not send every frame).
 function M.signature(m, f)
-  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s|%s|%.2f', m, f.rainMmH, f.windMs, f.shelter,
+  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s|%s|%s|%.2f', m, f.rainMmH, f.windMs, f.shelter,
     tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet),
-    tostring(f.rainSet), f.rainVol)
+    tostring(M.synthRain()), tostring(f.rainSet), f.rainVol)
 end
 
 -- Pure: the id of strike s ({ t, seed }): its hint and its final one share it.
@@ -198,8 +215,12 @@ function M.onAudioState(msg)
       if type(v) == 'table' and v[1] ~= nil and tonumber(v[2]) then ready[tostring(v[1])] = tonumber(v[2]) end
     end
   end
+  local rainSets = {}
+  if type(msg.rainSets) == 'table' then
+    for _, v in ipairs(msg.rainSets) do rainSets[tostring(v)] = true end
+  end
   state = { state = tostring(msg.state or 'off'), reason = msg.reason, latencyMs = tonumber(msg.latencyMs), t = clockhp(),
-    sets = sets, ready = ready }
+    sets = sets, ready = ready, rainSets = rainSets }
 end
 
 -- A new connection, its end or a level change: the server's word is gone, the pre-recorded sounds come back, and the
@@ -224,10 +245,11 @@ function M.due(now)
   return #pending > 0 or lastSig == nil or lastSendT == nil or now - lastSendT >= M.SEND_S
 end
 
--- The mod's own weather sounds' factor (1 full .. 0 silent), faded over FADE_S between the two.
+-- The mod's own rain's factor (1 full .. 0 silent), faded over FADE_S between the two: silent only while the synth
+-- plays the rain (LIVE_RAIN) and answers.
 function M.ownFactor(now)
   now = now or clockhp()
-  local target = M.isLive(now) and 1 or 0
+  local target = (M.synthRain() and M.isLive(now)) and 1 or 0
   local dt = fadeAt and math.max(0, math.min(now - fadeAt, 0.1)) or 0   -- (not called while inactive: no jump back)
   fadeAt = now
   local step = dt / M.FADE_S
@@ -301,7 +323,8 @@ function M.tick(now, ctx)
   local ok, sent = pcall(function()
     return send({ type = 'weather_audio', mode = mode, rainMmH = f.rainMmH, windMs = f.windMs,
       shelter = f.shelter, tunnel = f.tunnel, cabin = f.cabin, volume = f.volume, thunderVolume = f.thunderVolume,
-      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, rainSet = f.rainSet, rainVol = f.rainVol,
+      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, synthRain = M.synthRain(),
+      rainSet = f.rainSet, rainVol = f.rainVol,
       thunders = th })
   end)
   if ok and sent then

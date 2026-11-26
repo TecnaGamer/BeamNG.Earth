@@ -14,7 +14,7 @@
 use crate::live::{Controls, LiveRain, FS as ENGINE_FS};
 use crate::thunderlive::{utc_now, Bus};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A single-producer / single-consumer ring of f32 samples (one interleaved frame per `channels` samples).
@@ -87,17 +87,24 @@ pub struct Mix {
     pub thunder: f64,
     /// the rain from the recorded texture bank (livetex.rs) instead of the procedural engine, when the bank loaded
     pub rain_rec: bool,
+    /// the mod's rain volume for its layers (proto rainVol; None: RAIN_BED_GAIN x the share)
+    pub rain_vol: Option<f64>,
 }
 
 /// The ring's fill target: fill_target's (about one callback and a margin), more after each underrun (from GROW_AFTER_S in), at
 /// most MAX_QUEUE_S. The latency is the fill plus the device's own buffering.
-pub const MARGIN_FRAMES: u64 = 512;
+/// (2026-11-26: 512 frames of margin, ~12 ms, was all a starved worker had on a PC busy rebuilding the world; 2048,
+/// ~46 ms, rides out a scheduler stall that long. Nothing live needs less latency: the thunders are scheduled on the
+/// UTC clock ahead of time and the latency is taken off; a strike's crack, known only at its flash, lands up to the
+/// latency late, ~0.1 s, which reads as at once.)
+pub const MARGIN_FRAMES: u64 = 2048;
 pub const GROW_AFTER_S: f64 = 1.0;
-pub const MAX_QUEUE_S: f64 = 0.1;
+pub const MAX_QUEUE_S: f64 = 0.25;
 /// the device buffer asked for (frames) when the caller gives none: cpal BufferSize::Fixed, clamped to the device's range
-/// (Linux 512: at 256 the Deck's ALSA thread at nice 19 under a game's load took xruns; WASAPI shared mode ignores the
+/// (Linux 1024 since 2026-11-26: at 256 the Deck's ALSA thread at nice 19 under a game's load took xruns, and 512 was
+/// the first size on the PC that started at 512 and had to restart at 1024 while busy; WASAPI shared mode ignores the
 /// request and calls back with its own ~22 ms buffer anyway)
-pub const DEFAULT_BUFFER_FRAMES: u32 = if cfg!(target_os = "linux") { 512 } else { 256 };
+pub const DEFAULT_BUFFER_FRAMES: u32 = if cfg!(target_os = "linux") { 1024 } else { 256 };
 
 pub struct Output {
     _stream: cpal::Stream,
@@ -123,6 +130,9 @@ pub struct Output {
     pub error: Arc<AtomicBool>,
     /// the device's own xruns (cpal BufferUnderrun: recovered by cpal, an audible gap)
     pub xruns: Arc<AtomicU64>,
+    /// the priorities the worker and the callback thread got (prio.rs; NOT_RAISED: none)
+    pub worker_prio: Arc<AtomicI32>,
+    pub callback_prio: Arc<AtomicI32>,
 }
 
 impl Output {
@@ -151,10 +161,17 @@ struct Cb {
     error: Arc<AtomicBool>,
     xruns: Arc<AtomicU64>,
     channels: usize,
+    /// the callback thread's priority (raised once, on its first call: Linux; cpal's WASAPI thread is TIME_CRITICAL)
+    prio: Arc<AtomicI32>,
+    prio_tried: Arc<AtomicBool>,
 }
 
 impl Cb {
     fn note(&self, info: &cpal::OutputCallbackInfo, samples: usize) {
+        if cfg!(target_os = "linux") && !self.prio_tried.swap(true, Ordering::Relaxed) {
+            // (one syscall, no allocation: prio.rs)
+            self.prio.store(crate::prio::raise_current_thread(), Ordering::Relaxed);
+        }
         let ts = info.timestamp();
         if let Some(d) = ts.playback.duration_since(&ts.callback) {
             self.lat.store(d.as_micros().min(u32::MAX as u128) as u32, Ordering::Relaxed);
@@ -259,6 +276,8 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
         error: Arc::new(AtomicBool::new(false)),
         xruns: Arc::new(AtomicU64::new(0)),
         channels: channels as usize,
+        prio: Arc::new(AtomicI32::new(crate::prio::NOT_RAISED)),
+        prio_tried: Arc::new(AtomicBool::new(false)),
     };
     config.buffer_size = cpal::BufferSize::Fixed(fixed);
     let (stream, fixed_frames) = match build(&device, &config, fmt, &cb) {
@@ -274,6 +293,7 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
     let first_target = fill_target(fixed, 0, (sample_rate as f64 * MAX_QUEUE_S) as u32);
     let target = Arc::new(AtomicU32::new(first_target));
     let limited = Arc::new(AtomicU64::new(0));
+    let worker_prio = Arc::new(AtomicI32::new(crate::prio::NOT_RAISED));
     let w = Worker {
         seed,
         ring: ring.clone(),
@@ -287,6 +307,7 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
         ch: channels,
         guess_frames: fixed,
         limited: limited.clone(),
+        prio: worker_prio.clone(),
     };
     let worker = std::thread::Builder::new().name("weather-synth".into()).spawn(move || w.run()).map_err(|e| e.to_string())?;
     // the ring filled to its first target before the device starts pulling, at most 0.5 s
@@ -318,6 +339,8 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
         limited,
         error: cb.error,
         xruns: cb.xruns,
+        worker_prio,
+        callback_prio: cb.prio,
     })
 }
 
@@ -358,6 +381,7 @@ struct Worker {
     ch: u16,
     guess_frames: u32,
     limited: Arc<AtomicU64>,
+    prio: Arc<AtomicI32>,
 }
 
 impl Worker {
@@ -367,6 +391,8 @@ impl Worker {
     /// every channel and keeps the ring at its target in callback-sized pieces, sleeping about half a callback between.
     fn run(self) {
         use crate::outbus::{Limiter, Resampler, SoftClip};
+        // above the game's threads where the system allows it (prio.rs): a starved worker is an underrun
+        self.prio.store(crate::prio::raise_current_thread(), Ordering::Relaxed);
         let (sr, ch) = (self.sr, self.ch as usize);
         let mut lr = LiveRain::new(self.seed);
         // the recorded rain (texture bank next to the program; none: the procedural rain plays whatever is asked)
@@ -411,9 +437,8 @@ impl Worker {
             let m = self.mix.lock().map(|m| *m).ok();
             if let Some(m) = m {
                 let rec = m.rain_rec && tex.is_some();
-                // the procedural rain at the files' level (live::file_match_db), silent while the recorded one plays
+                // the procedural rain (its own level cap, live.rs), silent while the recorded one plays
                 let mut c = m.rain;
-                c.volume *= crate::m::undb(crate::live::file_match_db(c.rain_mm_h));
                 c.muted |= rec;
                 lr.set(c);
                 if let Some(t) = tex.as_mut() {
@@ -424,7 +449,9 @@ impl Worker {
                         wind_ms: 0.0,
                         shelter: r.shelter,
                         cabin: r.cabin,
-                        rain_volume: r.volume,
+                        // the loops' loudness x the mod's rain volume (as the game plays its files)
+                        rain_volume: r.volume
+                            * m.rain_vol.unwrap_or_else(|| crate::live::RAIN_BED_GAIN * crate::live::rain_share(r.rain_mm_h)),
                         wind_volume: 0.0,
                         muted: r.muted || !rec,
                     });
@@ -497,12 +524,52 @@ mod tests {
 
     #[test]
     fn fill_target_grows_and_caps() {
-        assert_eq!(super::fill_target(256, 0, 4410), 768, "ALSA 256: three callbacks");
-        assert_eq!(super::fill_target(1056, 0, 4800), 2112, "WASAPI's 1056: two");
-        assert_eq!(super::fill_target(256, 2, 4410), 1024, "128 frames more per underrun");
-        assert_eq!(super::fill_target(256, 100, 4410), 4410, "capped");
-        assert_eq!(super::fill_target(0, 0, 4410), 544, "an unknown callback: the floor plus the margin");
-        assert_eq!(super::fill_target(1056, 1, 4800), 2640, "WASAPI: half a callback more per underrun");
+        assert_eq!(super::fill_target(1024, 0, 11025), 3072, "ALSA 1024: the callback and the 2048-frame margin");
+        assert_eq!(super::fill_target(256, 0, 11025), 2304, "a small callback: the margin still");
+        assert_eq!(super::fill_target(1056, 0, 12000), 3104, "WASAPI's 1056");
+        assert_eq!(super::fill_target(256, 2, 11025), 2560, "128 frames more per underrun");
+        assert_eq!(super::fill_target(256, 100, 11025), 11025, "capped");
+        assert_eq!(super::fill_target(0, 0, 11025), 2080, "an unknown callback: the floor plus the margin");
+        assert_eq!(super::fill_target(1056, 1, 12000), 3632, "WASAPI: half a callback more per underrun");
+        assert_eq!(super::fill_target(4096, 0, 11025), 8192, "a 4096-frame device: a whole callback of margin");
+    }
+
+    // the callback's path allocates nothing: a counting allocator (this test binary's), per thread
+    struct Counting;
+    thread_local! {
+        static ALLOCS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    unsafe impl std::alloc::GlobalAlloc for Counting {
+        unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+            let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            std::alloc::System.alloc(l)
+        }
+        unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+            std::alloc::System.dealloc(p, l)
+        }
+        unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
+            let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            std::alloc::System.realloc(p, l, n)
+        }
+    }
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    #[test]
+    fn the_callback_path_never_allocates() {
+        let r = super::Ring::new(8192);
+        let mut out = vec![0.0f32; 2048];
+        let mut tmp = vec![0.0f32; 4096];
+        let mut i16s = vec![0i16; 2048];
+        r.push(&vec![0.25f32; 3000]);
+        let before = ALLOCS.with(|c| c.get());
+        for _ in 0..50 {
+            r.pop_into(&mut out); // (an underrun on the way: zeros, a counter)
+            super::copy_converted(&r, &mut tmp, &mut i16s, |v| (v.clamp(-1.0, 1.0) * 32767.0) as i16, 0);
+            let _ = crate::prio::raise_current_thread();
+        }
+        assert_eq!(ALLOCS.with(|c| c.get()), before, "pop_into / copy_converted / the priority raise allocated");
+        assert!(r.underruns.load(std::sync::atomic::Ordering::Relaxed) > 0);
     }
 
     #[test]
