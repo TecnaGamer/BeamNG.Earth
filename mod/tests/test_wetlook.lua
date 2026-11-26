@@ -1,7 +1,7 @@
 -- luajit mod/tests/test_wetlook.lua
 -- beamngEarth/wetlook.lua (weather phase B): the material classes, the wetness steps and the own wetting / drying model,
 -- the wet values; then the runtime against stub materials: a level change writes each material once, in batches, then
--- nothing per frame; drying puts the own values back (only where ours still hold); W1's road state wins over the rain.
+-- nothing per frame; drying puts the own values back (only where ours still hold); the wetter of W1's road state and the rain model.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
@@ -60,6 +60,16 @@ package.loaded['beamngEarth/winter'] = { _state = function() return { roads = { 
 W.reset()
 W.update(W.CHECK_S, 0, true)
 check(W.source == 'road state' and W.level() == W.levelOf(0.8), 'W1 says wet: wet without rain')
+-- ... but a dry real road under a storm shown (a preset; the 2026-11-26 playtest: 'wet lvl=0 own=0.97 src=road state'):
+-- the wetter of the two
+package.loaded['beamngEarth/winter'] = { _state = function() return { roads = { {}, {}, { 'dry' } } }, 2 end }
+W.reset()
+W._setOwn(0.97)
+W.update(W.CHECK_S, 8, true)
+check(W.source == 'rain' and W.level() == W.LEVELS, 'the real road dry, the storm shown: wet by the rain model ('
+  .. W.debugLine() .. ')')
+check(select(1, W.wetOf(true, 0.8, 0.2)) == 0.8 and select(2, W.wetOf(true, 0.8, 0.2)) == 'road state'
+  and select(1, W.wetOf(true, nil, 0.3)) == 0.3 and select(1, W.wetOf(false, 1, 1)) == 0, 'wetOf: the wetter one; off: dry')
 package.loaded['beamngEarth/winter'] = nil
 
 T.done('test_wetlook')

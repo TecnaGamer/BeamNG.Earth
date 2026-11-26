@@ -3,9 +3,10 @@
 -- surfaces: a porous surface darkens as water fills its pores, every surface's roughness falls as a water film forms;
 -- screen-space reflections, where the player has them, then show the lamps and the sky in it).
 --
--- How wet: winter W1's road surface state when the server sends one (beamngEarth/winter's snowstate: the road class
--- under the car, its condition dry / damp / wet / salt_wet / slush ...; BNE_WET_ROADS), else this module's own model
--- from the rain the weather shows (wetness rises within minutes in rain and dries over DRY_S after it). The level is
+-- How wet: the wetter of winter W1's road surface state when the server sends one (beamngEarth/winter's snowstate: the
+-- road class under the car, its condition dry / damp / wet / salt_wet / slush ...; BNE_WET_ROADS: the REAL road) and this
+-- module's own model from the rain the weather shows (wetness rises within minutes in rain and dries over DRY_S after
+-- it; a preset storm over a dry real road is wet: M.wetOf). The level is
 -- quantised to LEVELS steps, and only a step change writes materials: one batch, at most BATCH per frame (setField and
 -- reload each), never per frame otherwise (SkyCycle's stutters came from refreshing materials all the time, the plan's
 -- research note 2). Dry or the weather Off: every material back to its own values (only those still holding ours).
@@ -135,6 +136,18 @@ function M.wetFromCondition(cond)
   return cond and M.CONDITION_WET[cond] or nil
 end
 
+-- Pure: the wetness shown (0..1) and its source from the setting (on), W1's road state (road: 0..1 or nil) and the own
+-- rain model (own): the wetter of the two. W1's state is the REAL road at the place (Phoenix dry) while the weather shown
+-- may be a preset storm: the road state alone kept the streets dry under it (the 2026-11-26 playtest: 'wet lvl=0
+-- own=0.97 src=road state'); a real wet road with the sky shown clear stays wet.
+function M.wetOf(on, road, own_)
+  if not on then return 0, 'off' end
+  own_ = tonumber(own_) or 0
+  road = tonumber(road)
+  if road and road >= own_ then return road, 'road state' end
+  return own_, 'rain'
+end
+
 ------------------------------------------------------------------------------------------
 -- runtime
 
@@ -238,9 +251,8 @@ function M.update(dt, rainMmH, on)
   if timer < M.CHECK_S then return level > 0 or own > 0 end
   own = on and M.wetStep(own, rainMmH, timer) or 0      -- (off: no memory of the rain kept)
   timer = 0
-  local w = on and winterWet() or nil
-  M.source = w and 'road state' or (on and 'rain' or 'off')
-  w = on and (w or own) or 0
+  local w, src = M.wetOf(on, winterWet(), own)
+  M.source = src
   local k = M.levelOf(w)
   if k ~= level then
     startLevel(k)
