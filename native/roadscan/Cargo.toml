@@ -1,0 +1,17 @@
+[package]
+name = "roadscan"
+version = "0.1.0"
+edition = "2021"
+description = "The corridor road scanner (tools/roadscan): built road geotiles along hundreds of miles checked lane by lane (the M0 audit of native/roadsys with each tile's neighbours, a virtual drive along every lane, the drawn surface against the ground), the located findings clustered into ranked issues, two code states compared, plan views."
+
+[[bin]]
+name = "roadscan"
+path = "src/main.rs"
+
+[dependencies]
+roadsys = { path = "../roadsys" }
+
+[profile.release]
+opt-level = 3
+debug = false
+codegen-units = 1

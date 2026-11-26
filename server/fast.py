@@ -16,7 +16,35 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 305 # the newest kernel signature the server calls (earthd checks it at start)
+
+# --- the exit: no thread on top of the kernels' Rust frames while the interpreter finalizes -------------------------
+# CPython before 3.14 (the packaged app's 3.12) ends every other thread that takes the GIL during finalization with
+# pthread_exit(), on Linux a forced unwind through all the thread's frames. A background thread in a kernel then (the
+# de-shadow worker's horizon march, an imagery fetch thread's decode, a paced analysis sleeping in pacer.pace under
+# sun_scores, a DEM fetch called back from dem.sample) was unwound through Rust frames: undefined behaviour that crashed
+# (SIGSEGV in the final garbage collection) or hung the process at exit (2026-11-24, test_deshadow under 3.12; earthd
+# and its pool processes exit the same way). The vendored PyO3's exit_guard (earthfast 622, begin_exit) parks those
+# threads instead, as 3.14 does itself. Registered at the module's first import: atexit runs its hooks last-in
+# first-out, so every hook registered after this one (protocol's host shutdown, the caches' closes) runs before it,
+# with the threads still free to finish what they wait for.
+EXIT_WAIT_S = 3.0       # at most this long for the threads still running Python on top of a kernel (a fetch callback)
+
+
+def _exit_hook():
+    import pacer
+    pacer.exiting(EXIT_WAIT_S)          # (its sleepers woken: back into their kernels, which then park)
+    if getattr(_ef, "VERSION", 0) >= 622:
+        _ef.begin_exit(EXIT_WAIT_S)
+
+
+if _ef is not None and sys.version_info < (3, 14):
+    import atexit
+    atexit.register(_exit_hook)
+MIN_VERSION = 642 # (642: LineNet, the interchange solve's one line network: gradeshapes._relations, Net; 640: dev's 639 roadwear puddle_plan with the fork's grading kernels) the newest kernel signature the server calls (earthd checks it at start) ...
+if os.environ.get("BNE_BATTER", "off") == "vanilla":
+    # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
+    # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)
+    MIN_VERSION = max(MIN_VERSION, 531)     # (522: batter.rs cap_loosen; 531: its explicit continuation links)
 
 
 class NativeMissing(RuntimeError):
@@ -69,12 +97,12 @@ def segments(lines_hw):
     return np.ascontiguousarray(np.vstack(segs)), np.ascontiguousarray(np.concatenate(hws))
 
 
-def island_ring_rays(poly, lines_hw, c, rays, step, rmax):
+def island_ring_rays(poly, lines_hw, c, rays, step, rmax, refine=False):
     """(rays, 2): the island's curb ring by rays from c, stopped by the polygon and the roads."""
-    require(1, "island_ring_rays")
+    require(570, "island_ring_rays")
     segs, hw = segments(lines_hw)
     return _ef.island_ring_rays(np.ascontiguousarray(poly[:, :2], np.float64), segs, hw, float(c[0]), float(c[1]),
-                                int(rays), float(step), float(rmax))
+                                int(rays), float(step), float(rmax), bool(refine))
 
 
 class Others:
@@ -317,3 +345,9 @@ def deck_capped(pts, z, la, box, test_box, flat, max_m, side_m, min_cross):
     return _ef.deck_capped(pts, np.ascontiguousarray(z, np.float64), np.ascontiguousarray(la, np.float64),
                            np.ascontiguousarray(box, np.float64), bool(test_box), off, q, sv,
                            np.ascontiguousarray(lb, np.float64), half, float(max_m), float(side_m), float(min_cross))
+
+
+def photo_jpeg(rgb, quality, full_chroma):
+    """RGB JPEG bytes for stored photos and previews."""
+    require(563, "photo_jpeg")
+    return _ef.photo_jpeg(np.asarray(rgb, np.uint8), quality, full_chroma)

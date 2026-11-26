@@ -25,7 +25,9 @@ import struct
 import numpy as np
 import staging
 
+import fast
 import bc7
+import fast
 
 M64 = 0xFFFFFFFFFFFFFFFF
 P1, P2, P3, P4, P5 = (11400714785074694791, 14029467366897019727, 1609587929392839161, 9650029242287828579,
@@ -121,25 +123,23 @@ def stored_photo(rgb):
     """The base photo's file bytes (PHOTO_EXT): a JPEG, or stored_png with BNGE_PHOTO_PNG=1."""
     if PHOTO_PNG:
         return stored_png(rgb)
-    import io
-    from PIL import Image
-    b = io.BytesIO()
-    Image.fromarray(np.ascontiguousarray(rgb, np.uint8), "RGB").save(b, "JPEG", quality=PHOTO_QUALITY, subsampling=0)
-    return b.getvalue()
+    return fast.photo_jpeg(rgb, PHOTO_QUALITY, True)
 
 
-def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
+def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade=None):
     """Write the packed base texture (RGB = the photo, A = the flat AO value) into the game's cache, atomically.
-    Call after the photo file itself is written (the cache must be the newer one)."""
+    Call after the photo file itself is written (the cache must be the newer one). fade (canopy rgb, texel m): the
+    generated ground's forest floor faded out through the mips (bc7.dds fade; None: as before)."""
     if NO_PACK:
         return None
     d = cache_dir(user_dir)
     os.makedirs(d, exist_ok=True)
     rgb = np.asarray(rgb, np.uint8)
-    rgba = np.concatenate([rgb, np.full(rgb.shape[:2] + (1,), ao_value, np.uint8)], 2)
+    fast.require(564, "terrain base channels")
+    rgba = fast._ef.block_rgba(rgb, ao_value)
     path = os.path.join(d, base_key(base_vfs, ao_vfs) + ".dds")
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
-        f.write(bc7.dds(rgba))
+        f.write(bc7.dds(rgba, fade) if fade is not None else bc7.dds(rgba))
     staging.replace(tmp, path)
     return path

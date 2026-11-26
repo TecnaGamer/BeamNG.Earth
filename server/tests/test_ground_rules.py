@@ -31,9 +31,9 @@ def _keys(**change):
     tile = geotiles.geobox(38600, 49258).key
     with mock.patch.object(blockworker, "_s", types.SimpleNamespace(**dict(BASE, **change))):
         ck = blockworker._geo_content_key(tile, 15, True, False, True, True, 0.0, None, "US")
-        skin = getattr(blockworker, "_skin_key", None)
-        return (ck, skin(ck, 40.758, -73.9855, 15, True, 0.04, 1 / 512) if skin else None,
-                skin("c" * 40, 40.758, -73.9855, 15, True, 0.04, 1 / 512) if skin else None,
+        skin = blockworker._skin_key
+        return (ck, skin(ck, 40.758, -73.9855, 15, True, 0.04, 1 / 512),
+                skin("c" * 40, 40.758, -73.9855, 15, True, 0.04, 1 / 512),
                 blockworker._ground_rules())
 
 
@@ -48,10 +48,8 @@ class GroundRulesTest(unittest.TestCase):
             got = _keys(**change)
             self.assertNotEqual(got[3], base[3], f"{name}: other ground rules")
             self.assertNotEqual(got[0], base[0], f"{name}: the road geotile's content must miss")
-            if base[1] is not None:     # (the skins kept in the revisit cache: their keys hold the rules too, and
-                # not only through their content's key)
-                self.assertNotEqual(got[1], base[1], f"{name}: its skin must miss")
-                self.assertNotEqual(got[2], base[2], f"{name}: a skin of the same content must miss")
+            self.assertNotEqual(got[1], base[1], f"{name}: its skin must miss")
+            self.assertNotEqual(got[2], base[2], f"{name}: a skin of the same content must miss")
             self.assertNotIn(got[3], seen, f"{name}: its own fingerprint")
             seen.add(got[3])
 
@@ -85,14 +83,36 @@ class GroundRulesTest(unittest.TestCase):
         self.assertEqual(blockcache.ground_rules(True, None, object(), None, object(), None, object()), s[:9])
 
     def test_the_other_kept_kinds_hold_the_rules(self):
-        # (their keys are made inline: the rules are a part of each, as the source says)
-        import inspect
-        self.assertIn("Server.ground_rules(self)", inspect.getsource(__import__("earthd").Server.base_revisit_key))
-        for name in ("veg_geo", "signs_tile"):      # (kept in the revisit cache only with the stale revisit work)
-            fn = getattr(blockworker, name)
-            src = inspect.getsource(getattr(fn, "__wrapped__", fn))
-            if "revisit.key(" in src:
-                self.assertIn('("rules", _ground_rules())', src, name)
+        import earthd
+        import revisit
+        source = types.SimpleNamespace(version=lambda: "1")
+        md = types.SimpleNamespace(highway_signs=source, versions=lambda: {})
+        anchor = types.SimpleNamespace(lat=0., lon=0., zooms=[15])
+        photo = types.SimpleNamespace(chain=[], leaf_on=True, season_mode="fixed")
+        server = types.SimpleNamespace(imagery=photo, layout=types.SimpleNamespace(block=512), base_px=512,
+                                       tex_modes={}, tone=0, buildings=False, mapdata=md, surface=None,
+                                       sea=None, airports=None, lids=None, road_widths=None)
+        class CacheRead(Exception):
+            pass
+        args = (1, 0., 0., 15, 0, 0, "", "")
+        keys = []
+        with mock.patch.object(revisit, "ON", True):
+            for grading in (False, True):
+                state = types.SimpleNamespace(**dict(BASE, md=md, cache_dir="fixture", grading=grading))
+                server.grading = grading
+                base = earthd.Server.base_revisit_key(server, anchor, 0., 0.)
+                self.assertIsNotNone(base)
+                stored = [base]
+                with mock.patch.object(blockworker, "_s", state), mock.patch.object(revisit, "load", side_effect=CacheRead) as load:
+                    for fn, kind in ((blockworker.veg_geo, "vegg"), (blockworker.signs_tile, "signs")):
+                        with self.assertRaises(CacheRead):
+                            fn(*args)
+                        directory, actual_kind, key = load.call_args.args
+                        self.assertEqual((directory, actual_kind), ("fixture", kind))
+                        stored.append(key)
+                keys.append(stored)
+        for kind, a, b in zip(("photo", "vegetation", "signs"), *keys):
+            self.assertNotEqual(a, b, kind)
 
 
 if __name__ == "__main__":

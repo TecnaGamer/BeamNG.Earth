@@ -1,6 +1,7 @@
 """fast: the Rust kernels (earthfast) against independent references (Pillow, the JSON encoder, plain sums), and
 fast.require. The Python twins they replaced are gone (the user, 2026-10-21: "we dont need 2 versions of the same
 thing"); each module's own tests check its results."""
+import ast
 import os
 import sys
 import types
@@ -15,6 +16,34 @@ import fast  # noqa: E402
 
 
 class RequireTest(unittest.TestCase):
+    def test_shipped_kernel_meets_server_calls(self):
+        server = Path(fast.__file__).parent
+        fast.require(fast.MIN_VERSION, "server startup")
+        for path in sorted(server.glob("*.py")):
+            src = path.read_text(encoding="utf-8")
+            if "fast" not in src:
+                continue
+            tree = ast.parse(src)
+            modules = {"fast"}
+            functions = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules.update(alias.asname or alias.name for alias in node.names if alias.name == "fast")
+                if isinstance(node, ast.ImportFrom) and node.module == "fast":
+                    functions.update(alias.asname or alias.name for alias in node.names if alias.name in ("require", "native"))
+            for call in ast.walk(tree):
+                if not isinstance(call, ast.Call) or not call.args:
+                    continue
+                fn = call.func
+                direct = isinstance(fn, ast.Name) and fn.id in functions
+                qualified = (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name)
+                             and fn.value.id in modules and fn.attr in ("require", "native"))
+                if (direct or qualified) and isinstance(call.args[0], ast.Constant) and type(call.args[0].value) is int:
+                    required = call.args[0].value
+                    if required > min(fast.MIN_VERSION, fast._ef.VERSION):
+                        with self.subTest(file=path.name, line=call.lineno):
+                            self.fail(f"call requires {required}, startup minimum {fast.MIN_VERSION}, loaded {fast._ef.VERSION}")
+
     def test_require(self):
         saved = fast._ef
         try:
@@ -89,7 +118,7 @@ class FastTest(unittest.TestCase):
         self.assertEqual({k: v for k, v in json.loads(flat_got).items() if k not in ("audio", "biome")},
                          json.loads(flat_want))
         doc = json.loads(flat_got)
-        self.assertEqual((doc["groups"], doc["stride"]), (list(veg.GROUPS), veg.FLAT_STRIDE))
+        self.assertEqual((doc["groups"], doc["stride"]), (veg.groups_list(), veg.FLAT_STRIDE))
         self.assertEqual(doc["flat"], [v for r in json.loads(got)["items"] for v in r])
 
 

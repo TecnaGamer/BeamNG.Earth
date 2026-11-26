@@ -35,10 +35,10 @@ const CACHE_BANDS: usize = 96;
 
 struct Run { ring: u32, pts: Vec<(i32, i32)> }
 
-struct Map {
+pub(crate) struct Map {
     path: String,
     bpd: u32,
-    codes: Vec<String>,
+    pub(crate) codes: Vec<String>,
     ring_part: Vec<u32>,
     ring_hole: Vec<bool>,
     ring_centre: Vec<f64>,
@@ -135,7 +135,7 @@ impl Map {
     }
 
     /// The code index (1-based into codes; 0 = unknown) at (lat, lon) in degrees.
-    fn at(&self, lat: f64, lon: f64) -> Result<u16, String> {
+    pub(crate) fn at(&self, lat: f64, lon: f64) -> Result<u16, String> {
         if !(lat.is_finite() && lon.is_finite()) || !(-90.0..90.0).contains(&lat) { return Ok(0); }
         let k = ((lat + 90.0) * self.bpd as f64).floor() as u32;
         let runs = self.band(k)?;
@@ -154,12 +154,14 @@ impl Map {
         }
         // per part: inside its outer ring and none of its holes
         let mut part_in: HashMap<u32, (bool, bool)> = HashMap::new();
+        #[allow(clippy::iter_over_hash_type)] // hash order: flags only set to true (an OR)
         for (&ring, &odd) in &parity {
             if !odd { continue; }
             let e = part_in.entry(self.ring_part[ring as usize]).or_insert((false, false));
             if self.ring_hole[ring as usize] { e.1 = true } else { e.0 = true }
         }
         let mut found = 0u16;
+        #[allow(clippy::iter_over_hash_type)] // hash order: the one code all parts agree on, else 0, in any order
         for (&part, &(outer, hole)) in &part_in {
             if !outer || hole { continue; }
             let code = self.part_code[part as usize] + 1;
@@ -175,7 +177,7 @@ fn maps() -> &'static Mutex<HashMap<String, Arc<Map>>> {
     M.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn map(path: &str) -> PyResult<Arc<Map>> {
+pub(crate) fn map(path: &str) -> PyResult<Arc<Map>> {
     let mut m = maps().lock().unwrap();
     if let Some(x) = m.get(path) { return Ok(x.clone()); }
     let x = Arc::new(Map::open(path).map_err(PyValueError::new_err)?);

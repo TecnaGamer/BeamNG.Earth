@@ -135,6 +135,57 @@ class ThroughputTest(unittest.TestCase):
         self.assertIsNone(g.throughput())
 
 
+class GzipTest(unittest.TestCase):
+    """A host with policy gzip: JSON asked for and sent compressed, decoded here; the counters keep the wire's bytes."""
+    JSON = b'{"entities": [' + b'{"id": "Q1", "label": "x"},' * 400 + b'{}]}'
+
+    def setUp(self):
+        import gzip
+        self.packed = gzip.compress(self.JSON)
+        self.pol = {"api.example": nf.HostPolicy(gzip=True), USGS: nf.HostPolicy()}
+
+    def test_asked_and_decoded(self):
+        f, _, _, tr = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        r = f.get("https://api.example/w/api.php")
+        self.assertEqual(r.body, self.JSON)
+        self.assertNotIn("content-encoding", r.headers)
+        self.assertEqual(tr.calls[0][2].get("Accept-Encoding"), "gzip")
+        self.assertEqual(f.host("api.example").total["bytes"], len(self.packed))
+
+    def test_not_asked_with_a_range_nor_by_other_hosts(self):
+        f, _, _, tr = fetcher(policies=self.pol)
+        f.get("https://api.example/file", headers={"Range": "bytes=0-9"})
+        f.get(url(USGS))
+        self.assertNotIn("Accept-Encoding", tr.calls[0][2])
+        self.assertNotIn("Accept-Encoding", tr.calls[1][2])
+
+    def test_a_caller_that_asks_itself_gets_the_bytes_as_sent(self):
+        """airports.py and bdtopo.py set Accept-Encoding and decode the body themselves."""
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        r = f.get("https://api.example/x", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(r.body, self.packed)
+
+    def test_a_broken_stream_is_a_failed_attempt(self):
+        f, _, _, tr = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, b"not gzip", 0.0)]}, self.pol)
+        with self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/x")
+        self.assertEqual(len(tr.calls), nf.HostPolicy().max_attempts)
+
+    def test_a_body_that_decodes_past_the_cap_is_a_failed_attempt(self):
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        with mock.patch.object(nf, "GZIP_MAX_BYTES", len(self.JSON) - 1), self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/x")
+
+    def test_every_member_of_a_multi_member_stream(self):
+        """RFC 1952: members one after another; the cap counts them all."""
+        import gzip
+        two = self.packed + gzip.compress(b"tail")
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, two, 0.0)] * 2}, self.pol)
+        self.assertEqual(f.get("https://api.example/x").body, self.JSON + b"tail")
+        with mock.patch.object(nf, "GZIP_MAX_BYTES", len(self.JSON) + 2), self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/y")
+
+
 class TokenBucketTest(unittest.TestCase):
     def test_burst_then_rate(self):
         """N demand requests at t=0: `burst` less URGENT_TOKENS go at once, the rest 1/rate apart (the bucket keeps
@@ -918,7 +969,8 @@ class UserAgentTest(unittest.TestCase):
         except OSError:
             pass
         for _, u, headers in tr.calls:
-            self.assertEqual(headers, {"User-Agent": nf.USER_AGENT})
+            # (a gzip host's Accept-Encoding says nothing about the player)
+            self.assertEqual({k: v for k, v in headers.items() if k != "Accept-Encoding"}, {"User-Agent": nf.USER_AGENT})
             # the project URL is the one identifying part (its owner is the project, not the player)
             text = (u + " " + json.dumps(headers)).replace(nf.PROJECT_URL, "")
             for s in personal:
@@ -992,7 +1044,7 @@ class OfflineTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def server(self, net, imagery=("usgs", "eox2023", "eox2016")):
+    def server(self, net, imagery=("usgs", "eox2016")):
         s = earthd.Server(self.tmp.name, os.path.join(self.tmp.name, "cache"), imagery=imagery, net=net)
         s.dem = test_server.FakeDem()
         return s

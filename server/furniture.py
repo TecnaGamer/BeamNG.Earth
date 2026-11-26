@@ -316,6 +316,11 @@ def _outbound(a):
 # three ranked arms (service roads, driveways, tracks are neither the road through nor stopped: no stop sign at
 # every driveway).
 PRIORITY_STOPS = os.environ.get("BNE_PRIORITY_STOPS", "off") == "on"
+# Racetracks get no street furniture along them (BNE_RACEWAY_PROPS=on, the Revamped roads setting; the user's reports
+# 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17): a raceway mapped lit=yes got a town street's wooden utility poles,
+# wires and cobra-head lamps 2.4 m off its edge, at its centreline's height on the banking (1-4 m of pole buried there),
+# where the aerials show the tracks' own tall floodlight masts behind the outer wall and in the car parks.
+RACEWAY_PROPS = os.environ.get("BNE_RACEWAY_PROPS", "off") == "on"
 PRIORITY_RANK = {"trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6, "unclassified": 5, "residential": 4,
                  "living_street": 3}
 PRIORITY_DRIVABILITY = {3: 0.50, 4: 0.79, 5: 0.80, 6: 0.90, 7: 0.96, 8: 0.97, 9: 0.98}
@@ -738,7 +743,11 @@ G_POLELAMP = "polelamp"     # a cobra-head arm on a utility pole (East Coast USA
 # Switzerland (not in that study; GitHub #911: poles along rural Swiss roads that have none): ElCom's line inventory at
 # 2009-12-31, 78,837 km of low-voltage cable (network level 7) to 12,720 km of low-voltage overhead line, 0.86; ElCom's
 # "ElCom in 2024, a brief overview": 90 % of the distribution network underground.
-BURIED_LV = {"NL": 1.0, "CH": 0.86, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30,
+# Hong Kong (not in that study; its two utilities publish no low-voltage split): the Lands Department's 1:1000 map
+# (iB1000) maps the electricity poles and pole transformers. On every 4th of its 3,333 sheets (2026-11-19: 9,332 poles,
+# 2,120 pole transformers) 87 km of the 1,090 km of street centre line have one within 25 m, 0.08; the sample's two
+# halves give 0.080 and 0.081.
+BURIED_LV = {"NL": 1.0, "HK": 0.92, "CH": 0.86, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30,
              "FR": 0.27, "PT": 0.19, "AT": 0.15, "ES": 0.14}
 
 
@@ -821,6 +830,10 @@ COLLISION_BOXES = {
     # Both catalog variants: each is scaled against its own catalog height (both 1.1 m).
     G_BIN: (1.1, ((-0.264, -0.264, -0.003, 0.264, 0.264, 1.111),)),
     "pylon": (35.8, ((-3.893, -4.152, -5.873, 3.893, 4.152, 29.818),)),
+    # West Coast USA's tower crane (areaprops.G_TC, s_crane_tower, 38.98 m: read from its LODs 2026-11-16): the 3.6 m
+    # lattice mast, then the jib and counter-jib turned with it (a crane on a construction site under the A7's
+    # Kalbach viaduct stood through the deck, a car hit its mast at 116 km/h, 2026-11-15)
+    "towercrane": (38.98, ((-1.81, -0.51, -0.5, 1.81, 3.11, 33.0), (-49.55, -2.02, 33.0, 14.42, 2.02, 38.98))),
     # the classic lantern on its post (bne_fr_lantern, 5.4 m): its lantern head's footprint over the post's height (the
     # Colmesh alone is the 0.12 m post to 4.65 m); the France kit's lamp (place: "fr_lantern")
     "fr_lantern": (5.4, ((-0.30, -0.30, -0.01, 0.30, 0.30, 5.41),)),
@@ -988,6 +1001,10 @@ class RoadClearance:
         return True
 
 
+# a mapped lamp's light:colour (BNE_LAMP_TAGS) -> its lens group (nightlights.lua's profile of that colour)
+LENS_COLOURS = {"white": "lamplens_white", "yellow": "lamplens_yellow"}
+
+
 def lamp_lenses(rows):
     """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under each head of every lamp row (LAMP_HEADS, MAPPED_LAMP_HEADS: a
     double arm has two; its scale: the row's height over the catalog's, 1 for both), and a G_GLOW row at the same
@@ -1005,6 +1022,8 @@ def lamp_lenses(rows):
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
         group = ("fr_lantern_light" if r[0] == "fr_lantern" else G_HIGH_MAST_LENS if r[0] == "streetlight_high_mast"
                  else G_LENS)
+        if len(r) > 8 and group == G_LENS and r[8] in LENS_COLOURS:
+            group = LENS_COLOURS[r[8]]     # (a mapped lamp's light:colour, BNE_LAMP_TAGS: worldprops)
         for head in heads:
             hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
             yaw = (r[4] + head[3]) % 360. if len(head) > 3 and head[3] else r[4]
@@ -1012,6 +1031,91 @@ def lamp_lenses(rows):
                     round(r[3] + hz - LENS_DROP_M, 2), yaw, 1.0, 1.0, r[7]]
             out += [lens, [G_GLOW] + lens[1:]]
     return out
+
+
+# Assemblies (the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17: a utility pole culled, its
+# cobra-head arm 7 m up and the wire ending 0.8 m farther out left in the air): a row mounted on another goes or stays
+# with that row, never by its own place or height (racedig.clear_props, under_decks), and a culled support takes the
+# wires ending within its reach, and a span goes with the supports at its ends wherever they are (Span). The rules in
+# Rust (earthfast propassembly: assembly_cull, wire_cull); here the rows' arrays and their lamps' heads (lamp_lenses).
+ASSEMBLY_KERNEL = 431
+
+
+def _assembly_arrays(rows):
+    """(names, group, xy, keys, heads) of rows for the assembly kernels: the groups' names and each row's index into
+    them, the rows' x, y, their x, y, z rounded to 1 cm, and their lamps' heads [row, group, x, y, z (1 cm)]
+    (lamp_lenses)."""
+    names, index = [], {}
+
+    def gi(g):
+        g = str(g)
+        k = index.get(g)
+        if k is None:
+            k = index[g] = len(names)
+            names.append(g)
+        return k
+    group = np.array([gi(r[0]) for r in rows], np.int64)
+    xy = np.array([[float(r[1]), float(r[2])] for r in rows], np.float64).reshape(-1, 2)
+    keys = np.array([[round(float(v), 2) for v in r[1:4]] for r in rows], np.float64).reshape(-1, 3)
+    heads = [[i, gi(lens[0])] + [round(float(v), 2) for v in lens[1:4]]
+             for i, r in enumerate(rows) if len(r) >= 8 for lens in lamp_lenses([r])]
+    heads = np.array(heads, np.float64).reshape(-1, 5)
+    return names, group, np.ascontiguousarray(xy), np.ascontiguousarray(keys), np.ascontiguousarray(heads)
+
+
+def assembly_drop(hit, rows):
+    """(n,) bool: rows culled, from hit (each row judged alone): an assembly as one when any structural member is hit
+    (its support or post, a pole lamp on it), its lenses and glows following (earthfast assembly_cull)."""
+    import fast
+    fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
+    names, group, xy, keys, heads = _assembly_arrays(rows)
+    return np.asarray(fast._ef.assembly_cull(names, group, xy, keys, heads, np.ascontiguousarray(hit, bool)), bool)
+
+
+class Span(np.ndarray):
+    """A wire's points (k, 3) that know the support rows at their two ends (ends: (row at the first point, row at the
+    last)): a span is drawn by the tile of its first pole only, so the pole at its other end may be no row of this tile,
+    yet the wire must go when that pole is culled (Codex's review of 1bc9f8cb). Used as the points themselves."""
+    ends = None
+    mounted = None
+
+
+def with_ends(wires, a, b, la=None, lb=None):
+    """wires (points, or (points, radius)) of one span tagged with its support rows a (at the first point) and b (None:
+    no support row there), and the rows mounted on them la, lb (a pole's arm, None for none): the whole assembly at
+    each end, whose verdict is the support's (assembly_cull; Codex's review of 0cf9fd9b: a far pole culled for its
+    arm under a deck left the span)."""
+    out = []
+    for w in wires:
+        pts, r = w if isinstance(w, tuple) else (w, None)
+        span = np.asarray(pts).view(Span)
+        span.ends = (None if a is None else list(a), None if b is None else list(b))
+        span.mounted = (None if la is None else list(la), None if lb is None else list(lb))
+        out.append(span if r is None else (span, r))
+    return out
+
+
+def wire_mounted(w):
+    """The rows mounted on the supports at a wire's two ends (with_ends), or (None, None)."""
+    return getattr(w[0] if isinstance(w, tuple) else w, "mounted", None) or (None, None)
+
+
+def wire_ends(w):
+    """The support rows (a, b) at a wire's two ends (with_ends), or None."""
+    return getattr(w[0] if isinstance(w, tuple) else w, "ends", None)
+
+
+def wire_cull(ends, cut, culled):
+    """(m,) bool: wire ends (m, 2) that go: their own support culled (cut (m,)), or within the reach of a wire support
+    among the culled rows (earthfast wire_cull)."""
+    import fast
+    fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
+    ends = np.ascontiguousarray(np.asarray(ends, np.float64).reshape(-1, 2))
+    names = sorted({str(r[0]) for r in culled})
+    group = np.array([names.index(str(r[0])) for r in culled], np.int64)
+    xy = np.array([[float(r[1]), float(r[2])] for r in culled], np.float64).reshape(-1, 2)
+    return np.asarray(fast._ef.wire_cull(ends, np.ascontiguousarray(cut, bool), names, group,
+                                         np.ascontiguousarray(xy)), bool)
 
 
 def roads_with_points(roads, points, extra_m, least=MAPPED_ALONG_MIN):
@@ -1073,16 +1177,40 @@ def under_decks(rows, decks, wires=None):
     out = rows
     if rows:
         r = np.asarray([[q[1], q[2], q[3], q[3] + q[6]] for q in rows], np.float64)
-        hit = levels.blocked(np.ascontiguousarray(r[:, 0]), np.ascontiguousarray(r[:, 1]),
-                             np.ascontiguousarray(r[:, 2]), np.ascontiguousarray(r[:, 3]), float(DECK_HEADROOM_M))
+        hit = np.asarray(levels.blocked(np.ascontiguousarray(r[:, 0]), np.ascontiguousarray(r[:, 1]),
+                                        np.ascontiguousarray(r[:, 2]), np.ascontiguousarray(r[:, 3]),
+                                        float(DECK_HEADROOM_M)), bool)
+        if hit.any():               # (an assembly as one: a pole's arm, a post's lens go or stay with it)
+            hit = assembly_drop(hit, rows)
+        gone = [q for q, h in zip(rows, hit) if h]
         out = [q for q, h in zip(rows, hit) if not h]
+    else:
+        gone = []
     if wires is not None:
+        pts = [np.asarray(w[0] if isinstance(w, tuple) else w, np.float64) for w in wires]  # (PR #505: (points, style))
+        at = np.zeros(2 * len(pts), bool)
+        # (each span's own supports judged alike, the next tile's pole too: with_ends)
+        # (and the rows mounted on them: an arm into a deck culls its pole: assembly_cull)
+        sup = [(2 * n_ + k, q) for n_, w in enumerate(wires) for e in (wire_ends(w),) if e for k, q in enumerate(e)
+               if q is not None]
+        sup += [(2 * n_ + k, q) for n_, w in enumerate(wires) if wire_ends(w) for k, q in enumerate(wire_mounted(w))
+                if q is not None]
+        cut = np.zeros(2 * len(pts), bool)
+        if sup:
+            q = np.asarray([[r[1], r[2], r[3], r[3] + r[6]] for _, r in sup], np.float64)
+            hit = np.asarray(levels.blocked(np.ascontiguousarray(q[:, 0]), np.ascontiguousarray(q[:, 1]),
+                                            np.ascontiguousarray(q[:, 2]), np.ascontiguousarray(q[:, 3]),
+                                            float(DECK_HEADROOM_M)), bool)
+            for (j, _), h in zip(sup, hit):
+                cut[j] |= bool(h)
+        if (gone or cut.any()) and pts:
+            ends = [[p[k, 0], p[k, 1]] if len(p) else [np.inf, np.inf] for p in pts for k in (0, -1)]
+            at = wire_cull(ends, cut, gone)
         keep = []
-        for w in wires:
-            entry = w      # (PR #505: a wire may come as (points, style))
-            w = np.asarray(w[0] if isinstance(w, tuple) else w, np.float64)
+        for n_, (entry, w) in enumerate(zip(wires, pts)):
             if not levels.wire_hit(np.ascontiguousarray(w[:, 0]), np.ascontiguousarray(w[:, 1]),
-                                   np.ascontiguousarray(w[:, 2]), float(DECK_WIRE_M), float(DECK_HEADROOM_M)):
+                                   np.ascontiguousarray(w[:, 2]), float(DECK_WIRE_M), float(DECK_HEADROOM_M)) \
+                    and not (len(w) and (at[2 * n_] or at[2 * n_ + 1])):
                 keep.append(entry)
         wires[:] = keep
     return out
@@ -1242,13 +1370,16 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                             wires.extend(_own_spans(run_poles, box))
                         run_poles = []
                         continue
-                    run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style))
+                    k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
+                    lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
+                             round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
+                            if lamp_ok(fid) and pole_lamp(spec.cls, k, region) else None)
+                    # (with its arm: the next tile's span to it goes when the arm culls the pole there)
+                    run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
                     if _owns(box, q[0], q[1]):
                         rows.append(pole)
-                        k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
-                        if lamp_ok(fid) and pole_lamp(spec.cls, k, region):
-                            rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                         round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                        if lamp is not None:
+                            rows.append(lamp)
                 if wires is not None and len(run_poles) > 1:
                     wires.extend(_own_spans(run_poles, box))
             rule = None
@@ -1267,7 +1398,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
             for p, out, s_line in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
                 q = p[:2] - out * (w / 2 - STREET_TREE_CURB_M)
-                if _owns(box, q[0], q[1]):
+                if _owns(box, q[0], q[1]) and not on_bed(q):
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)
                     k = int(round((s_line - tph) / STREET_TREE_SPACING))
@@ -1292,6 +1423,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue
+        if RACEWAY_PROPS and str(getattr(spec, "cls", "")) == "raceway":
+            continue            # (a racetrack's lit=yes is its floodlights: no street's poles, wires or lamps)
         # a street in built-up land (spec.urban: the land cover; the tile's `town` is only "not a dense core", true in
         # the countryside too) with no sidewalk run: lit from its edge; a country road: utility poles alone
         highway = spec.cls in HIGHWAY_CLASSES and (lighting.get(fid) == "yes"
@@ -1351,12 +1484,14 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     wires.extend(_own_spans(run, box))
                 run = []
                 continue
-            run.append((pole[1], pole[2], pole[3], pole[4], pole_style))
+            lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
+                     round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
+                    if drawn and pole_lamp(spec.cls, k, region) else None)
+            run.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
             if inside:
                 rows.append(pole)
-                if drawn and pole_lamp(spec.cls, k, region):
-                    rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                 round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                if lamp is not None:
+                    rows.append(lamp)
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
@@ -1375,10 +1510,31 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             import frgore
             rows.extend(frgore.place(pole_frame,roads,box,country_at,
                                     ground=sign_obstacles.ground if sign_obstacles is not None else None,decks=decks))
+    if bed is not None:     # (nothing guessed on a track's bed: the junctions' signs, the regional kit's markers and
+        # signs too; the poles were kept off it above, before their wires; Codex's review)
+        rows = [r for r in rows if not on_bed((float(r[1]), float(r[2])))]
     # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
     rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
-    return under_decks(rows + lamp_lenses(rows), list(decks), wires)
+    lenses = lamp_lenses(rows)
+    rows = [r[:8] if len(r) == 9 else r for r in rows]     # (a mapped lamp's colour: its lens's, not the row's)
+    return under_decks(rows + lenses, list(decks), wires)
+
+
+def off_rail_beds(rows, obstacles):
+    """rows (props rows) but those on or by a track's bed (obstacles: railxing.rail_obstacles', CLEAR_OTHER_M more): the
+    roadside rows placed after furniture.place (roads.build_tile's deferred gore markers and verge posts)."""
+    rows = list(rows)
+    if not obstacles or not rows:
+        return rows
+    import fast
+    bed = fast.Others(list(obstacles))
+    return [r for r in rows if bed.clear(np.array([float(r[1]), float(r[2])]), None, CLEAR_OTHER_M)]
+
+
+def _support_row(p):
+    """The props row of a run's pole (x, y, z, yaw, style): its pole's row as placed."""
+    return [p[4].group, p[0], p[1], p[2], p[3], 1.0, p[4].height, 0.0]
 
 
 def _own_spans(run, box):
@@ -1389,7 +1545,9 @@ def _own_spans(run, box):
         if _owns(box, a[0], a[1]):
             sa, sb = a[4], b[4]
             if (sa.wire_anchors, sa.wire_radius) == (sb.wire_anchors, sb.wire_radius):
-                out.extend(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius))
+                out.extend(with_ends(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius),
+                                     _support_row(a), _support_row(b), a[5] if len(a) > 5 else None,
+                                     b[5] if len(b) > 5 else None))
             # Different electrical layouts (three conductors / one bundle): terminate
             # the run here. Inventing a three-to-one electrical connection is misleading;
             # dedicated transition hardware is outside this visual prototype's scope.

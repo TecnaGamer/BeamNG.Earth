@@ -3,6 +3,7 @@ across the server's processes, not each process alone (2026-11-13 review of the 
 processes each had md6in's whole 1 request/s, and none saw another's Retry-After)."""
 import multiprocessing
 import os
+import struct
 import sys
 import tempfile
 import time
@@ -119,6 +120,29 @@ class SharedGateTest(unittest.TestCase):
             nf.SharedGate.release(slot)
         nf.SharedGate.release(g3.acquire("prefetch", 1.0, URL, HOST)[0])     # (free again)
 
+    def test_existing_gate_record_reserves_debt_and_keeps_its_clock(self):
+        # The machines' workers share this on-disk record, including a reservation made before its token exists.
+        now = [1000.25]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        gate = nf.SharedGate(self.tmp.name, HOST, policy(2.0), clock=lambda: now[0], sleep=sleep)
+        path = Path(self.tmp.name, HOST + ".gate")
+        path.write_bytes(struct.pack("<3d", 0.25, 1000.0, 0.0))
+        slot, waited = gate.acquire("demand", 1.0, URL, HOST)
+        try:
+            self.assertEqual(waited, 0.125)
+            self.assertEqual(path.read_bytes(), struct.pack("<3d", -0.25, 1000.25, 0.0))
+        finally:
+            gate.release(slot)
+        gate.block(30.0)
+        self.assertEqual(path.read_bytes(), struct.pack("<3d", 0.0, 1000.375, 1030.375))
+        # A timestamp from before reboot resets both the block and the debt.
+        now[0] = 10.0
+        self.assertEqual(gate.blocked(), 0.0)
+        self.assertEqual(path.read_bytes(), struct.pack("<3d", 1.0, 10.0, 0.0))
+
     def test_a_gate_that_fails_never_keeps_this_process_s_slot(self):
         # (review of 172d8032: the local slot was given back only for a FetchError; an OSError from the gate's files,
         # a full disk, kept it, and with max_conc 1 every later request to the host waited forever)
@@ -142,12 +166,20 @@ class SharedGateTest(unittest.TestCase):
         # (two fetchers, as two processes: each one's own bucket has room, the shared one makes them wait)
         fs = [nf.Fetcher(transport=_Transport(0.0), policies={HOST: policy(5.0, burst=1.0)}) for _ in range(2)]
         with mock.patch.object(nf, "GATE_LOG", log):
+            t0 = None
             for f in fs * 2:
                 f.get(URL, kind="demand")
+                t0 = time.monotonic() if t0 is None else t0
+            elapsed = time.monotonic() - t0
         lines = open(log).read().splitlines()
         self.assertGreaterEqual(len(lines), 3, "all but the first waited for the shared token")
-        self.assertTrue(all(float(ln.split()[-1]) > 0.1 for ln in lines))
-        self.assertGreaterEqual(sum(f.host(HOST).total["wait_ms"] for f in fs), 450, "counted as our own limits' wait")
+        self.assertTrue(all(float(ln.split()[-1]) > 0 for ln in lines), "each wait logged with its time")
+        # (the behaviour, not the load: the shared 5/s limit held across both fetchers, 3 more requests >= 0.6 s;
+        # on a busy machine each request takes longer itself and its logged wait is shorter, never the total)
+        self.assertGreaterEqual(elapsed, 0.55, "the shared limit held")
+        waited = sum(f.host(HOST).total["wait_ms"] for f in fs)
+        self.assertGreater(waited, 0, "counted as our own limits' wait")
+        self.assertLessEqual(waited, elapsed * 1000 + 50, "never more wait than time passed")
 
     def test_only_shared_hosts_and_only_with_a_folder(self):
         nf.SHARED_DIR = self.tmp.name

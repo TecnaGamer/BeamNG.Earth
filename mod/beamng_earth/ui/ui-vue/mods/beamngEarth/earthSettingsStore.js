@@ -22,9 +22,15 @@ export const settingsSchema = [
       { id: "groundPhoto", type: "select", default: "2048", name: "Ground photo", desc: "The sharpness of the aerial photo and the painted roads on the ground around you (each 1 km square). 1024: 1 m a pixel, the lightest (handhelds). 2048: 0.5 m, the default. 4096: 0.25 m, the crispest road edges and markings in the ground, but each square takes 1-3 s longer to make on a fast PC (much longer on a handheld) and uses 4 times the video memory.",
         note: "Takes effect when the level next loads.",
         options: [ { label: "1024 (light)", value: "1024" }, { label: "2048 (default)", value: "2048" }, { label: "4096 (sharpest)", value: "4096" } ] },
+      { id: "naturalCliffs", type: "bool", default: true, name: "Natural cliffs", desc: "Rock faces, outcrops and scattered rocks on steep terrain.", note: RESTART_NOTE, showIf: () => status.value.cliffsAvailable === true },
+      { id: "cliffRoadCuts", type: "bool", default: true, name: "Road-cut cliffs", desc: "Exposed rock faces and associated rocks where roads cut into hillsides.", note: RESTART_NOTE, showIf: () => status.value.cliffsAvailable === true },
+      { id: "cliffTextures", type: "select", default: "bundled", name: "Cliff textures", desc: "Bundled textures use less memory. Optional 4K textures add close-up detail and need an extra download. If unavailable, bundled textures are used.", note: RESTART_NOTE, showIf: () => status.value.cliffsAvailable === true, options: [{ label: "Bundled", value: "bundled" }, { label: "4K (optional download)", value: "4k" }] },
+      { id: "cliffDetail", type: "select", default: "normal", name: "Cliff detail", desc: "Low and Medium build simpler nearby cliffs. Higher settings keep detailed cliff shapes farther away. Texture sharpness stays the same. Graphics presets also set this choice.", note: RESTART_NOTE, showIf: () => status.value.cliffsAvailable === true,
+        options: [ { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" }, { label: "Extreme", value: "extreme" } ] },
       { id: "groundGrid", type: "select", default: "1", name: "Ground grid", desc: "How fine the ground you drive on is: the distance between the points of its shape. 1 m: the game's own maps' detail, sharp kerbs, banks and ditches. 2 m: the lighter ground of the Low and Medium presets: softer small bumps and road edges, a quarter of the data to load each time the ground moves with you (shorter hitches while driving, faster loading on handhelds).",
         note: RESTART_NOTE,
         options: [ { label: "1 m (default)", value: "1" }, { label: "2 m (lighter)", value: "2" } ] },
+      { id: "terrainShadows", type: "bool", default: true, name: "Ground shadows", desc: "The sun's shadows of the ground around you (the drawn square you drive on): hills and ridges shade the slopes behind them, as the distant ground does, so there is no line in the mountains where the shadows stop. Off: no shadow redraw each time the ground moves with you (shorter hitches on handhelds). The Low and Medium presets turn it off." },
       { id: "trees", type: "select", default: "normal", name: "Tree density", desc: "How many trees and bushes are drawn at each distance. Lowest and Low: thinner forests (the most frame time saved in wooded places). Ultra and Extreme: denser forests far out (strong GPUs).",
         options: [ { label: "Lowest", value: "lowest" }, { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" }, { label: "Ultra", value: "ultra" }, { label: "Extreme", value: "extreme" } ] },
       { id: "treeDistance", type: "select", default: "normal", name: "Tree draw distance", desc: "How far out trees, rocks, poles and roadside props are drawn: about 1.3 km at Normal, 1 km at Near, 0.8 km at Nearest, 2.8 km at Max. Farther needs more memory and a stronger GPU, and the app builds more tree tiles around you.",
@@ -57,9 +63,6 @@ export const settingsSchema = [
       { id: "skyMode", type: "select", default: "real", name: "Sun and stars", desc: "Real time: the sun, moon and stars follow the real clock and date where you are. Manual: use the game's own Time & Weather controls. Changing the time in the pause menu switches this to Manual by itself; choose Real time to go back.",
         note: "Changing the time in the pause menu switches this to Manual.",
         options: [ { label: "Real time", value: "real" }, { label: "Manual", value: "manual" } ] },
-      { id: "weatherMode", type: "select", default: "real", name: "Weather", desc: "Real: clouds, fog, wind, rain, snow and temperature follow the real weather where you are. Manual: use the game's own Time & Weather controls. Changing the weather in the pause menu (or another weather mod) switches this to Manual by itself; choose Real weather to go back.",
-        note: "Changing the weather in the pause menu switches this to Manual.",
-        options: [ { label: "Real weather", value: "real" }, { label: "Manual", value: "manual" } ] },
       { id: "clouds", type: "bool", default: true, name: "Clouds", desc: "A volumetric cloud layer that follows the ground under you." },
       { id: "realGravity", type: "bool", default: true, name: "Real gravity", desc: "Gravity as it really is where you are (it varies a little with latitude, height and the ground below). Off: the usual 9.81 m/s2." },
       { id: "lowFuelPrompt", type: "bool", default: true, name: "Low fuel prompt", desc: "When the fuel or charge drops below 15 %, a message names the nearest gas station (an EV charger for an electric car) and the key that routes the GPS there (Ctrl+Shift+Q, or Nearest station in the radial menu)." },
@@ -74,7 +77,45 @@ export const settingsSchema = [
       { id: "rumbleStrips", type: "bool", default: true, name: "Rumble strip sound", desc: "Plays a brief rumble when your car drifts onto a likely lane-departure strip on selected Australian, New Zealand and US highway types. Internal lane dividers are ignored. Corridor coverage is approximate because these strips are not mapped consistently." },
       { id: "townSigns", type: "bool", default: true, name: "Town signs", desc: "Each country's own town entry and exit signs where a road enters a town (in Germany the yellow Ortstafeln, where OpenStreetMap has them mapped), from the road network, the land cover and Overture's places. Needs Roads." },
       { id: "adaptiveTraffic", type: "bool", default: false, name: "Adaptive traffic amount", desc: "Experimental. The traffic amount follows the place: up to your full amount in cities, fewer cars in the suburbs and the country, from the nearby road network and the nearest town (changed one car every few seconds while you drive, at once after a teleport). Never more than the traffic amount you chose. Off: always your amount." },
+      { id: "stationBuses", type: "bool", default: true, name: "Buses at bus stations", desc: "One parked city bus at the bus station nearest you while traffic is on. Spawning it can pause the game for about a second on slower PCs; turn it off to never spawn one. Applies within a few seconds." },
+      { id: "autodriveObstacles", type: "bool", default: false, name: "Autodrive obstacle avoidance", desc: "Experimental. Autodrive checks for static obstacles ahead, brakes and tries clear lanes in your direction. The extra road sensing uses CPU time and may lower the frame rate, most at higher speeds. Off: normal AI driving. Braking for traffic lights works either way." },
+      { id: "autodriveOncomingPass", type: "bool", default: false, name: "Autodrive opposing-lane passing", desc: "Experimental. With obstacle avoidance on, Autodrive may pass an obstruction through a clear opposing lane. Road markings are not checked, so it can cross solid lines. The extra visibility and traffic checks use CPU time while a pass is judged." },
       { id: "rebaseDistance", type: "float", min: 2000, max: 16000, step: 100, default: 15000, name: "Rebase distance (m)", desc: "Advanced. How far you drive before the world quietly moves back under you (keeps the physics precise). 15 km keeps precision at about 1 mm." },
+    ],
+  },
+  {
+    // the weather (lua/ge/extensions/beamngEarth/weather.lua; the weather plan 2026-11-24, phase A): Real, a preset or
+    // Off, and how it looks; also in the radial menu (Weather)
+    name: "Weather",
+    intro: "Real weather where you are, a weather of your choice, or Off. Also in the radial menu: Weather. In multiplayer the server can set the weather for everyone; Show rain and snow and Rain visibility stay yours.",
+    items: [
+      { id: "weatherNow", type: "info", name: "Now", desc: "The weather shown now and where it comes from: real, your preset, the server's (multiplayer) or off." },
+      { id: "weatherMode", type: "select", default: "real", name: "Weather", desc: "Real weather: clouds, fog, wind, rain, snow and temperature follow the real weather where you are (Open-Meteo, every 10 minutes). Preset: the weather you pick below, the same for everyone who picks it. Off: the game's own Time & Weather controls, no rain or snow from BeamNG.Earth. Changing the weather in the pause menu (or another weather mod) switches this to Off by itself; choose Real weather or Preset to go back.",
+        note: "Changing the weather in the pause menu switches this to Off.",
+        options: [ { label: "Real weather", value: "real" }, { label: "Preset", value: "preset" }, { label: "Off (game controls)", value: "manual" } ] },
+      { id: "weatherPreset", type: "select", default: "rain", name: "Preset", desc: "The weather to show with Weather set to Preset. Rain, snow, fog and wind as named; Thunderstorm is heavy rain with strong gusts, lightning and thunder; Sleet is rain and wet snow together; Freezing rain falls as rain below 0 C.", showIf: c => c.weatherMode === "preset",
+        options: [ { label: "Clear", value: "clear" }, { label: "Few clouds", value: "fewclouds" }, { label: "Cloudy", value: "cloudy" }, { label: "Overcast", value: "overcast" }, { label: "Drizzle", value: "drizzle" }, { label: "Rain", value: "rain" }, { label: "Heavy rain", value: "heavyrain" }, { label: "Thunderstorm", value: "storm" }, { label: "Fog", value: "fog" }, { label: "Light snow", value: "lightsnow" }, { label: "Snow", value: "snow" }, { label: "Blizzard", value: "blizzard" }, { label: "Sleet", value: "sleet" }, { label: "Freezing rain", value: "freezingrain" }, { label: "Hail shower", value: "hail" } ] },
+      { id: "weatherIntensity", type: "float", min: 0, max: 1.5, step: 0.05, default: 1, name: "Intensity", desc: "How strong the weather is, for the real weather and the presets: rain and snow, wind and fog scale with it. 1: as it is. 0: no rain, snow or wind and clear air (the clouds stay). Up to 1.5 for more.", showIf: c => c.weatherMode !== "manual" },
+      { id: "weatherPrecip", type: "bool", default: true, name: "Show rain and snow", desc: "The falling rain and snow around you. Off: none drawn (the weather itself, its fog and wind, stays). Rain and snow always stop in tunnels, parking structures and under bridges." },
+      { id: "rainVisibility", type: "float", min: 0.5, max: 2.5, step: 0.1, default: 1.3, name: "Rain visibility", desc: "How many raindrops and snowflakes are drawn for the same rain. Real light rain is hard to see; 1.3 (the default) shows a little more than real. Higher costs a little frame time." },
+      { id: "weatherStreaks", type: "bool", default: false, name: "Rain streaks", desc: "Extra streaks of falling rain around you, lit by the sun, headlights and street lamps. Real rain hardly shows as streaks by day, so this is off by default; it costs some frame time on slower PCs and the Steam Deck. Off: the near drops only.", showIf: c => c.weatherMode !== "manual" && c.weatherPrecip !== false },
+      { id: "weatherStormLight", type: "bool", default: true, name: "Storm light", desc: "Under a thick cloud deck, in rain and in thunderstorms the day gets darker and the sun loses its shadows, as it really does. Off: the light of a clear day under any weather.", showIf: c => c.weatherMode !== "manual" },
+      { id: "weatherLightning", type: "bool", default: true, name: "Lightning and thunder", desc: "Lightning flashes and bolts in thunderstorms (the real ones where the weather data has them, and the Thunderstorm and Hail presets), with the thunder after the flash by the distance (about 5 seconds per mile). In multiplayer everyone with the same weather sees the same strikes.", showIf: c => c.weatherMode !== "manual" },
+      { id: "weatherSoundSource", type: "select", default: "prerecorded", name: "Weather sounds", desc: "Pre-recorded: the rain and thunder sound files in the mod. Live: the BeamNG.Earth app makes the thunder as you hear it (a different thunder for every strike) and plays it through your default audio device at the game's volume; the rain stays the pre-recorded loops for now. If the live sound fails or stops, the pre-recorded sounds come back by themselves; the line below says which plays.",
+        showIf: c => c.weatherMode !== "manual",
+        options: [ { label: "Pre-recorded (default)", value: "prerecorded" }, { label: "Live", value: "live" } ] },
+      { id: "weatherThunderSound", type: "select", default: "generated", name: "Thunder sound", desc: "Generated: thunder made by BeamNG.Earth's own physical model of a lightning channel. Recorded: thunder layered from real field recordings (CC0, credited in CREDITS.md), a different mix for every strike. Both work with pre-recorded and live weather sounds.", showIf: c => c.weatherMode !== "manual",
+        options: [ { label: "Generated (default)", value: "generated" }, { label: "Recorded", value: "recorded" } ] },
+      { id: "weatherSoundNow", type: "info", name: "Weather sounds now", desc: "Which weather sounds play now, and why the pre-recorded ones play when Live is chosen.", showIf: c => c.weatherMode !== "manual" },
+      { id: "weatherWetLook", type: "bool", default: true, name: "Wet look", desc: "City streets, sidewalks, markings, bridges and buildings look darker and glossier while it rains and for a while after, drying slowly (with the winter road conditions on: the road condition). City streets change as new ground loads around you.", showIf: c => c.weatherMode !== "manual" },
+      { id: "weatherChange", type: "select", default: "60", name: "Changes take", desc: "How long the weather takes to change to a new state: a new real report, another preset or intensity. Instant: at once.", showIf: c => c.weatherMode !== "manual",
+        options: [ { label: "Instant", value: "0" }, { label: "30 seconds", value: "30" }, { label: "1 minute (default)", value: "60" }, { label: "2 minutes", value: "120" } ] },
+      { id: "realClouds", type: "bool", default: true, name: "Real clouds", desc: "With Real weather: the real cloud cover. Off: clear skies, the rest of the real weather stays.", showIf: c => c.weatherMode === "real" },
+      { id: "realFog", type: "bool", default: true, name: "Real fog", desc: "With Real weather: the real visibility (fog, haze, mist). Off: clear air; rain and snow still thicken the air a little.", showIf: c => c.weatherMode === "real" },
+      { id: "realWind", type: "bool", default: true, name: "Real wind", desc: "With Real weather: the real wind and its gusts, which push the cars too. Off: calm.", showIf: c => c.weatherMode === "real" },
+      { id: "realPrecip", type: "bool", default: true, name: "Real rain and snow", desc: "With Real weather: the real rain, snow and hail. Off: dry.", showIf: c => c.weatherMode === "real" },
+      { id: "fogLimit", type: "select", default: "0", name: "Thickest fog", desc: "Limits how thick the fog can get, for the real weather and the presets: the shortest distance you can always see. Real: as thick as it really is.", showIf: c => c.weatherMode !== "manual",
+        options: [ { label: "Real", value: "0" }, { label: "650 ft (200 m)", value: "200" }, { label: "1/3 mile (500 m)", value: "500" }, { label: "1 mile (1.6 km)", value: "1600" } ] },
     ],
   },
   {
@@ -87,6 +128,12 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expNlRoadSigns", type: "bool", default: false, name: "Dutch road signs", desc: "Experimental. A first set of the Netherlands' own road signs, drawn by the Road signs above. Needs Road signs.",
         note: RESTART_NOTE, showIf: c => c.roadSigns === true },
+      { id: "expRoadRevamp", type: "bool", default: false, name: "Revamped roads", desc: "Experimental. The road revamp, still in progress: lane and width changes are as long as the road's speed needs; bridge decks curve over crests and dips to suit their speed; footbridges never block the road below; abandoned and disused railways no longer cross roads (heritage lines keep their crossings); racetracks keep their surface, with any tunnel dug under the track and no street poles or lamps along it; level crossings: the track runs right up to the crossing panel, no buffer stops where a siding is cut at a road, and no station platform worked out across a road; tracks beside a road up a hillside are no longer buried in a raised bank. Also the newest road work: wide, rounded cut and fill slopes like the stock maps (with rocks on steep rural cuts), bridge decks that follow the road's curve and bank, and highways built as one continuous road surface: lanes widen and narrow smoothly, exits split off at their real gore, and bridge decks follow the same surface without overlapping slabs or parapets across lanes. Places you visited before are built again once.",
+        note: RESTART_NOTE },
+      { id: "expSurfaceOverlay", type: "bool", default: false, name: "Road surface overlay", desc: "Experimental, still being fixed. A second surface layer on roads: patches, wear and blended edges, with markings lying just above the asphalt. In some cities it can sit below the ground. Places you visited before are built again once." ,
+        note: RESTART_NOTE },
+      { id: "expNewSidewalks", type: "bool", default: false, name: "New sidewalks", desc: "Experimental, still being fixed. Town sidewalks as one joined surface per block: kerbs that meet at corners, raised brick and paved plazas where the map says so, sidewalks reaching the buildings. Some kerbs can still have small steps. Places you visited before are built again once." ,
+        note: RESTART_NOTE },
       { id: "expEuScenery", type: "bool", default: false, name: "French and European road scenery", desc: "Experimental. Across Europe: each country's own steel guardrails (also along motorway edges where none is mapped), sign faces, bus stops and street edges (kerbs and pavements). In France also: French road markings and edge paint on country roads, bend and traffic signs, speed cameras, utility poles and regional house styles (untyped small buildings in housing areas become houses). Partly estimated where the map has no data.",
         note: RESTART_NOTE },
       { id: "expDropRails", type: "bool", default: false, name: "Guard rails at drops", desc: "Experimental. Steel guard rails along paved country roads wherever the ground falls away steeply beside the road (high embankments, cliffs, the valley side of mountain roads), where none is mapped.",
@@ -106,6 +153,8 @@ export const settingsSchema = [
       { id: "expPhotoSurface", type: "bool", default: false, name: "Road surface from aerial photos", desc: "Experimental. Roads whose map data has no surface are drawn paved, gravel or grass by the colour of the aerial photo along them, where a sharp regional photo source is available (such as Czechia). Otherwise such roads stay dirt as before.",
         note: RESTART_NOTE },
       { id: "expTerrainBumps", type: "bool", default: false, name: "Rougher land off the roads", desc: "Experimental. Small bumps in the open land away from the roads, so fields and verges are not perfectly smooth. Costs some world building time.",
+        note: RESTART_NOTE },
+      { id: "expRoadFollow", type: "bool", default: false, name: "Roads follow the land", desc: "Experimental. Roads keep more of the real hills and dips in the ground under them instead of being smoothed flat. Best where the elevation comes from lidar (most of the US and much of Europe); on the coarse global elevation roads get bumpier. Motorways and trunk roads are unchanged.",
         note: RESTART_NOTE },
       { id: "expCliffWalls", type: "bool", default: false, name: "Rock faces in deep road cuts", desc: "Experimental. Where a country road runs through a deep cutting, the sides become rock faces instead of dry-stone walls.",
         note: RESTART_NOTE },
@@ -129,7 +178,13 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expCanadaLidar", type: "bool", default: false, name: "Detailed Canadian lidar", desc: "Experimental. In Canada, the national lidar terrain (HRDEM) at full detail near you, and British Columbia's own 1 m lidar where it was flown. Sharper ground, but many more downloads: first visits there take much longer.",
         note: RESTART_NOTE },
+      { id: "expGenGround", type: "bool", default: false, name: "Generated ground", desc: "Experimental. The ground near you is made from 10 m satellite colour (Sentinel-2) and the map (land cover, fields, parks, pitches, squares, pools, paths, hedges, streams, tree heights, roads and buildings) instead of downloading 1 m aerial photos, and roofs take their mapped or typical colours instead of the photo's. Places load faster where the photo servers are slow or missing, but the ground shows less real detail where the map has none (unmapped ponds, drives and yards, crop stripes outside mapped fields).",
+        note: RESTART_NOTE },
       { id: "expStaleRevisit", type: "bool", default: false, name: "Show the older world while rebuilding", desc: "Experimental. After an update, places you visited before show the previous version's roads, trees, signs and ground photos while the new version builds them, instead of loading as a first visit.",
+        note: RESTART_NOTE },
+      { id: "expWinter", type: "bool", default: false, name: "Winter", desc: "Experimental. Snow and ice from the real weather. Roads get slippery with snow, slush, frost or ice: grip follows the snow on the ground and the road's class (main roads are cleared and salted first, bridges freeze first); the road's condition shows in the status bar. Snow lies on the ground near and far, cut by the real terrain: lower on slopes facing away from the sun, none on cliffs, evergreen forests dark and bare ones brown, rivers open and lakes frozen after a cold spell, permanent snow on high mountains and the poles; the 3D grass thins under snow and deep snow gets its own ground texture. Broadleaf trees go bare tree by tree through late autumn (some oaks and young beeches keep their dead brown leaves), near and far; evergreens stay green. Not yet: snowy roofs and snow on trees",
+        note: RESTART_NOTE },
+      { id: "expWetRoads", type: "bool", default: false, name: "Wet roads", desc: "Experimental. Rain leaves the roads wet for hours as they dry: less grip and tyre spray while they are wet (included in Winter grip).",
         note: RESTART_NOTE },
     ],
   },
@@ -144,6 +199,7 @@ export const settingsSchema = [
       { id: "telemetryPerf", type: "bool", default: true, name: "Performance data", desc: "Part of the anonymous reports: frame rate and hitches, how fast the world is built, the CPU / GPU model and the game and BeamNG.Earth settings, the kind of area you drive in (city, rural, ...) instead of where, and error codes. It shows what makes the game slow or crash on real players' machines.", showIf: c => c.telemetry !== false },
       { id: "telemetryNet", type: "bool", default: true, name: "Network load", desc: "Part of the anonymous reports: how many requests went to each map-data service, so we can slow down or cache before a free service is overloaded.", showIf: c => c.telemetry !== false },
       { id: "mapStyle", type: "select", default: "2d", name: "Map style", desc: "What the map key (M) and the pause menu's Map open. 2D: the flat world map. 3D: the camera flies up from your car and you look around the real world like a map app (move with WASD or the left stick, turn and tilt with the mouse or the right stick, zoom with the wheel); the map key again flies back down to the car. The 3D map is experimental. The map key opens the style you switched to last.", options: [ { label: "2D", value: "2d" }, { label: "3D (experimental)", value: "3d" } ] },
+      { id: "routeAvoidHighways", type: "bool", default: false, name: "GPS: avoid highways", desc: "The GPS plans routes without motorways when it can (country roads); a route only a motorway reaches uses it anyway, and the map says so. Also a button on the map's GPS box. Plans the route again when changed." },
       { id: "hudVisible", type: "bool", default: false, name: "Status window", desc: "The compact BeamNG.Earth status window (connection, location, loading, quick buttons). Also whether it opens at level start." },
       { id: "dashboardSatellite", type: "bool", default: true, name: "Satellite map on dashboards", desc: "BeamNG.Earth's satellite map on vehicles with dashboard screens. Off: the stock dashboard page." },
       { id: "creditsVisible", type: "bool", default: true, name: "Data credits on screen", desc: "Small text in a corner naming the sources of the imagery, elevation and weather around you. On by default: many of the data licences ask for visible credit. Hidden in the pause menu and the big map." },
@@ -151,6 +207,7 @@ export const settingsSchema = [
         options: [ { label: "Bottom left", value: "bottom-left" }, { label: "Bottom right", value: "bottom-right" }, { label: "Top left", value: "top-left" }, { label: "Top right", value: "top-right" } ] },
       { id: "creditsSize", type: "select", default: "small", name: "Data credits size", desc: "Text size of the data credits.", showIf: c => c.creditsVisible !== false,
         options: [ { label: "Small", value: "small" }, { label: "Normal", value: "normal" } ] },
+      { id: "mainMenuTile", type: "bool", default: true, name: "BeamNG.Earth on the main menu", desc: "A BeamNG.Earth tile in the place of Quick-Start Experiences on the game's main menu: a click starts BeamNG.Earth where you left off. Quick-Start stays on the menu's Discover page. Off: the stock tile. Takes effect the next time the main menu opens." },
     ],
   },
   {
@@ -216,6 +273,7 @@ export const settingsSchema = [
       { id: "contributors", type: "contributors", name: "Contributors", desc: "The GitHub users whose code is merged into this version. Thank you! Click a name to open their GitHub page." },
       { id: "credits", type: "text", name: "Data credits now", desc: "The data credits for what is around you now, as drawn in the screen corner." },
       { id: "attribution", type: "text", name: "Data sources", desc: "Credits for the elevation and imagery sources in use." },
+      { id: "weatherSounds", type: "text", name: "Weather sounds", desc: "Where the thunder and rain sounds come from (CREDITS.md)." },
     ],
   },
   {
@@ -242,7 +300,7 @@ export const settingsSchema = [
 
 // Each page's icon (the pause menu's side buttons take the icon's name, LayoutMenu's tabs the icon) and its button id
 // (the first keeps the old Mods-tab button's id: settings.lua M.BUTTON_ID, pageExists)
-export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Experimental: "test", Interface: "cogOutline",
+export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Weather: "weather", Experimental: "test", Interface: "cogOutline",
   Multiplayer: "peopleOutline", Storage: "floppyDisk", "Add-ons": "puzzleModule", Feedback: "bug", About: "info",
   Developer: "code" }
 export const pageId = (name, i) => i === 0 ? "beamngEarth-settings" : "beamngEarth-settings-" + name.toLowerCase()
@@ -304,6 +362,10 @@ export const connectionText = computed(() => {
 })
 
 export const statusText = computed(() => status.value.status || "-")
+// Off the BeamNG.Earth level (a stock level, the main menu) the settings are saved but nothing applies them until the
+// level loads (issue #1284: the pause menu's tab on West Coast USA looked as if it did nothing). Strictly false: the
+// first poll's answer, not the empty status before it.
+export const offLevel = computed(() => status.value.connection !== undefined && status.value.inOurLevel === false)
 
 // "Restart world server": the box at the top of each page (earthRestart.js) while a setting waits for a restart or one
 // is under way; the button asks the Lua side (settings.uiRestartServer), the poll shows the phases
@@ -354,8 +416,10 @@ export function infoValue(item) {
   if (item.id === "anchor") return s.anchorId ? `#${s.anchorId}  ${fmt(s.anchorLat, 5)}, ${fmt(s.anchorLon, 5)}` : "none"
   if (item.id === "player") return (typeof s.playerLat === "number") ? `${fmt(s.playerLat, 5)}, ${fmt(s.playerLon, 5)}  (${fmt(s.dist / 1000, 1)} km from origin)` : "-"
   if (item.id === "attribution") return s.attribution || "-"
+  if (item.id === "weatherSoundNow") return s.weatherSound || "Pre-recorded"
+  if (item.id === "weatherSounds") return "Thunder and rain generated by BeamNG.Earth's own synthesiser (native/weathersynth): no recordings."
   if (item.id === "credits") return s.credits || "-"
-  if (item.id === "weather") return s.weather || "-"
+  if (item.id === "weather" || item.id === "weatherNow") return s.weather || "-"
   if (item.id === "gravity") return s.gravity || "-"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
   if (item.id === "memoryUsage") return (s.memory && s.memory.line) || "-"

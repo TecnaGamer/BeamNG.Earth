@@ -9,6 +9,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import geodesy  # noqa: E402
+import geotiles  # noqa: E402
 import heightmap  # noqa: E402
 
 
@@ -52,6 +53,18 @@ class ChunkCacheTest(unittest.TestCase):
         cache = heightmap.ChunkCache(cap=10)
         heightmap.grid_u_chunked(self.frame, self.elev, 0.0, 0.0, 1024, cache)
         self.assertEqual(len(cache.chunks), 10)
+
+    def test_world_frame_samples_the_ellipsoid_lattice(self):
+        frame = geotiles.WorldFrame(39.2834, -76.5934)
+        cache = heightmap.ChunkCache()
+        size = 2 * heightmap.CHUNK
+        for cx in (65536, 65536 + heightmap.CHUNK * heightmap.SQUARE):
+            positions = {}
+            heightmap.grid_u_chunked(frame, elev, cx, 0, size, cache, positions)
+            east, north, _ = frame.geodetic_to_enu(positions["lat"], positions["lon"], 0.)
+            xs, ys = heightmap.sample_coords(cx, 0, size)
+            self.assertLess(np.max(np.abs(east - xs)), 1e-5)
+            self.assertLess(np.max(np.abs(north - ys[:, None])), 1e-5)
 
     def test_keep_matches_unchunked(self):
         k1, k2 = {}, {}

@@ -4,8 +4,9 @@ meet the block's 128 m-grid edges), gives them sinks, and writes the block's aer
 the block's footprint) next to its heightmap; terrain messages name it (base, baseSize)."""
 import os
 import sys
-import time
+import threading
 import unittest
+from unittest.mock import patch
 
 import struct
 
@@ -130,7 +131,7 @@ class DetailBaseRefreshTest(ServerHarness):
     def setUp(self):
         super().setUp()
         im = self.server.imagery
-        self.server.imagery = test_server.FakeImagery(im.cache_dir, chain=("naip", "usgs", "eox2023", "eox2016"))
+        self.server.imagery = test_server.FakeImagery(im.cache_dir, chain=("naip", "usgs", "eox2016"))
         self.server.imagery._probe_status = lambda key: "covered"
         self.server.imagery.disk = im.disk
 
@@ -196,6 +197,70 @@ class DetailQuickPhotoTest(ServerHarness):
         self.assertTrue(asked)
 
 
+class PhotoAheadTest(unittest.TestCase):
+    def test_missing_source_pixels_never_become_a_photo(self):
+        from types import SimpleNamespace as NS
+        from collections import deque
+        # The source counts always sum to the requested pixel count, including brown fill.
+        def render(frame, x0, y0, size, px, pending):
+            return np.zeros((px, px, 3), np.uint8), {"usgs": px * px - 1, "none": 1}
+
+        anchor = NS(id=1, frame=geodesy.EnuFrame(LAT, LON))
+        s = NS(layout=LAYOUT, imagery=NS(render=render), deshadow=None, base_stale=set(),
+               base_px=256, base_lock=threading.Lock(), recent_full=deque(), _photo_data_cached=lambda *_: False)
+        self.assertIsNone(earthd.Server.write_quick_base(s, anchor, 0., 0.))
+        self.assertIsNone(earthd.Server.write_base(s, anchor, 0., 0., quick=True))
+        self.assertIn((1, 0., 0.), s.base_stale)
+        with patch.object(earthd.blockworker, "_imagery", return_value=s.imagery):
+            self.assertIsNone(earthd.blockworker.base_photo(LAT, LON, 0., 0., 1024., 256, {}, False,
+                                                           16, "", (), quick=True))
+
+    def test_lasting_hole_is_taken_after_retries(self):
+        # A source with no tile there ever: refused BASE_NONE_TRIES times (the far ground meanwhile), then taken
+        # as before, never rendered again every few seconds for good.
+        from types import SimpleNamespace as NS
+        s, key = NS(base_stale=set()), (1, 0., 0.)
+        for _ in range(earthd.BASE_NONE_TRIES):
+            self.assertFalse(earthd.Server._none_ok(s, key))
+            self.assertTrue(earthd.Server._refuse_none(s, key))
+            self.assertIn(key, s.base_stale)
+        self.assertTrue(earthd.Server._none_ok(s, key))
+        self.assertFalse(earthd.Server._refuse_none(s, key))
+        self.assertFalse(earthd.Server._none_ok(s, (1, 1024., 0.)), "counted per block")
+
+        def render(frame, x0, y0, size, px, pending):
+            return np.zeros((px, px, 3), np.uint8), {"usgs": px * px - 1, "none": 1}
+        im = NS(render=render)
+        with patch.object(earthd.blockworker, "_imagery", return_value=im):
+            args = (LAT, LON, 0., 0., 1024., 256, {}, False, 16, "", ())
+            self.assertEqual(earthd.blockworker.base_photo(*args), "none", "the server told why")
+            self.assertIsNone(earthd.blockworker.base_photo(*args, quick=True, allow_none=True),
+                              "a stand-in never shows the brown fill")
+
+    def test_refinement_before_arrival(self):
+        from collections import deque
+        from types import SimpleNamespace as NS
+        from earthd import fast
+        here, ahead, behind = (1, 0., 0.), (1, 640., 0.), (1, -300., 0.)
+        s = NS(hm_committed=deque([here]), hm_sent=deque([here]), hm={k: {"base": "quick"} for k in
+               (here, ahead, behind)}, base_stale={here, ahead, behind}, base_skipped={here, ahead, behind})
+        c = NS(s=s, vel=(58., 0.), focus=(0., 0.), predicted_block=NS(cx=-300., cy=0.),
+               predicted_chain=[NS(cx=640., cy=0.)])
+        def select():
+            return fast._ef.photo_refresh_key(c, 1, None, 100.)
+        self.assertEqual(select(), ahead)
+        s.hm[ahead]["baseRetryAt"] = 105.
+        self.assertEqual(select(), here)
+        del s.hm[ahead]["baseRetryAt"]
+        s.hm[here]["base"] = None
+        self.assertEqual(select(), here)
+        s.hm[here]["base"] = "quick"
+        c.vel = (27., 0.)    # The distant block is now outside the time horizon.
+        self.assertEqual(select(), here)
+        c.vel = (-58., 0.)
+        self.assertEqual(select(), behind)
+
+
 class DetailFastPhotoLaterTest(ServerHarness):
     """A fast player (earthd FAST_BASE_V): a block whose photo is slow goes without it, the photo follows (block_base)
     and later answers for the block carry it."""
@@ -204,28 +269,61 @@ class DetailFastPhotoLaterTest(ServerHarness):
     cells = 64
     block = 1024
 
-    def _slow_block(self, speed, fast=True, photo_s=1.0, held_s=0.95):
+    def _slow_block(self, speed, fast, expected_wait):
         self.hello()
         aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
         s = self.server
         orig = s.write_base
 
+        release_photo = threading.Event()
+
         def slow(*a, **kw):
-            time.sleep(photo_s)
+            if not release_photo.wait(65):
+                raise TimeoutError("the block never arrived while its photo was pending")
             return orig(*a, **kw)
         s.write_base = slow
         s.fast = fast
         s.speed = speed
-        t0 = time.monotonic()
-        self.c.send({"type": "prepare_terrain", "requestId": 3, "anchorId": aid, "cx": 512.0, "cy": 0.0})
-        tr, _ = self.c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
-        self.assertLess(time.monotonic() - t0, held_s, "not held for the photo")
+        futures = earthd.concurrent.futures
+        finish = s._finish_heightmap_now
+        wait_for = futures.wait
+        target = threading.local()
+        photos, waits = [], []
+
+        def finish_block(anchor, cx, cy, info, t0, base=None, *args, **kwargs):
+            target.active = (anchor.id, cx, cy) == (aid, 512., 0.)
+            if target.active:
+                photos.append(base)
+            try:
+                return finish(anchor, cx, cy, info, t0, base, *args, **kwargs)
+            finally:
+                target.active = False
+
+        def observe_wait(fs, timeout=None, **kwargs):
+            if getattr(target, "active", False):
+                fs = list(fs)
+                waits.append((fs, timeout))
+            return wait_for(fs, timeout=timeout, **kwargs)
+
+        try:
+            with patch.object(s, "_finish_heightmap_now", finish_block), patch.object(futures, "wait", observe_wait):
+                self.c.send({"type": "prepare_terrain", "requestId": 3, "anchorId": aid, "cx": 512.0, "cy": 0.0})
+                tr, _ = self.c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
+            self.assertEqual(len(photos), 1)
+            if expected_wait is None:
+                self.assertEqual(photos, [None], "the request deferred its full photo")
+                self.assertEqual(waits, [])
+            else:
+                self.assertIsNotNone(photos[0])
+                self.assertEqual(waits, [([photos[0]], expected_wait)])
+        finally:
+            release_photo.set()
         return aid, tr
 
     def test_slow_photo_is_not_waited_for(self):
         """Slower than FAST_BASE_V a block waits BASE_WAIT_S at most for its photo (it held the blocks behind it), then
         goes with its stand-in."""
-        aid, tr = self._slow_block(20.0, fast=False, photo_s=earthd.BASE_WAIT_S + 3, held_s=earthd.BASE_WAIT_S + 2)
+        aid, tr = self._slow_block(20.0, fast=False, expected_wait=earthd.BASE_WAIT_S)
         self.assertTrue(tr.get("base", "").endswith("_base_q" + EXT), "sent with its stand-in")
         self._own_photo_follows(aid)
 
@@ -239,7 +337,8 @@ class DetailFastPhotoLaterTest(ServerHarness):
 
     def test_photo_follows_the_block(self):
         """Below QUICK_SYNC_MAX_V the block goes with its stand-in (the ground went to the flat base until it came)."""
-        aid, tr = self._slow_block(0.0)
+        self.assertLess(earthd.BASE_FAST_WAIT_S, 0.95, "fast requests have a sub-second photo budget")
+        aid, tr = self._slow_block(0.0, fast=True, expected_wait=earthd.BASE_FAST_WAIT_S)
         self.assertTrue(tr.get("base", "").endswith("_base_q" + EXT), "sent with its stand-in")
         self.assertTrue(os.path.exists(self.fs(tr["base"])))
         self._own_photo_follows(aid)
@@ -248,7 +347,7 @@ class DetailFastPhotoLaterTest(ServerHarness):
         """Faster: sent without a photo, a stand-in right after it (the imagery alone, write_quick_base; the level's
         green base was GitHub #548), then its own photo: faster than PHOTO_SKIP_V drawn by base_refresh for the block
         in use at the next pose (not at its request: at 150 mph it came after the car had left the block)."""
-        aid, tr = self._slow_block(earthd.QUICK_SYNC_MAX_V + 10)
+        aid, tr = self._slow_block(earthd.QUICK_SYNC_MAX_V + 10, fast=True, expected_wait=None)
         self.assertNotIn("base", tr, "sent without its photo")
         q, _ = self.c.until(lambda m: m["type"] == "block_base", timeout=30)
         self.assertTrue(q["base"].endswith("_base_q" + EXT), "a stand-in first")

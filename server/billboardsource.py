@@ -78,7 +78,7 @@ def features_of(ids, lat, lon):
     if len(ids) == 0:
         return mapgeom.empty("infrastructure")
     labels = [_label(i) for i in ids]
-    order = np.argsort(np.array(labels))
+    order = np.argsort(np.array(labels), kind="stable")
     labels = [labels[i] for i in order]
     lat, lon = lat[order], lon[order]
     geoms = [(mapgeom.POINT, [[np.array([[lo, la]], np.float64)]]) for la, lo in zip(lat, lon)]

@@ -41,17 +41,24 @@ class ColliderClearanceTest(unittest.TestCase):
         self.assertFalse(clear.clear(large))
 
     def test_real_overhead_arm_clearance_and_higher_crossing(self):
-        # Stock lamp collider's arm starts at z=7.124; its support is outside x=0..8 pavement.
+        # Stock lamp collider's arm starts at its second box's foot; its support is outside x=0..8 pavement.
         lamp = row('streetlight', -0.5, 0.)
+        arm = furniture.COLLISION_BOXES[furniture.G_LAMP][1][1][2]
+        headroom = roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
         ground = [(4., np.array([[4., -100., 0.], [4., 100., 0.]]))]
         self.assertTrue(furniture.RoadClearance(ground).clear(lamp))
-        raised = [(4., np.array([[4., -100., 2.], [4., 100., 2.]]))]
+        # (a road 1 m higher than the arm's foot less the traffic's headroom: its vehicles reach the arm)
+        up = arm - headroom + 1.
+        raised = [(4., np.array([[4., -100., up], [4., 100., up]]))]
         self.assertFalse(furniture.RoadClearance(raised).clear(lamp))
 
     def test_grade_separated_objects_above_and_below(self):
         ground = [(4., np.array([[-100., 0., 0.], [100., 0., 0.]]))]
         self.assertTrue(furniture.RoadClearance(ground).clear(row('stop', 0., 0., z=10.)))
-        self.assertFalse(furniture.RoadClearance(ground).clear(row('stop', 0., 0., z=6.)))
+        # (a sign hung inside the traffic's headroom over the road: its foot a metre under it)
+        headroom = roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
+        foot = furniture.COLLISION_BOXES['stop'][1][0][2]
+        self.assertFalse(furniture.RoadClearance(ground).clear(row('stop', 0., 0., z=headroom - foot - 1.)))
         deck = (np.array([[-100., 0., 50.], [100., 0., 50.]]), 4.)
         self.assertTrue(furniture.RoadClearance([], [deck]).clear(row('pylon', 0., 0.)))
         low = (np.array([[-100., 0., 20.], [100., 0., 20.]]), 4.)

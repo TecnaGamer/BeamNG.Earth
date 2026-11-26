@@ -7,13 +7,17 @@ dE 17.6). A smooth colour transfer cannot remove a sharp step, so the feather fi
 long, straight-ish steps of the ratio USGS / Sentinel-2 that S2 does not have (natural edges are in
 both images, survey seams only in USGS), measures each one's local step and moves each side half way,
 faded out with the distance to the seam (SIGMA_F_M). Away from seams the gain is exactly 1: nothing is
-pulled toward S2's palette (EOX S2 is far more saturated than NAIP; S2 is only the reference).
+pulled toward S2's palette (S2 is far more saturated than NAIP; S2 is only the reference).
+
+The reference (REFS, per z14 tile): the project's Sentinel-2 packs (bngs2, ESA WorldCover's 2021 composite) where the
+server's chain has them, enlarged from their finest zoom to the z14 grid, else EOX's 2016 cloudless mosaic (both CC BY
+4.0). Until 2026-11-23 it was EOX's 2023 mosaic, CC BY-NC-SA 4.0: VERSION 2 computes every seam and field again.
 
 All maths in linear light, per channel, on the z14 pixel grid ("cells", 4 x 4 z16 px, ~7.6 m at 37 N:
-EOX S2 cloudless at its native zoom, pixel-aligned with the USGS z14 tiles). Two stages per USGS z12
+Sentinel-2's native resolution, pixel-aligned with the USGS z14 tiles). Two stages per USGS z12
 tile ("region", 1024² cells, ~7.8 km at 37 N), each a pure function of source tiles, so a place comes
 out the same whatever order its regions were computed in, from whichever anchor:
-  1. seams (detect_region, <cache>/colormatch/v1/usgs/12/x/y.seams.npz): the region's z14 USGS and
+  1. seams (detect_region, <cache>/colormatch/v2/usgs/12/x/y.seams.npz): the region's z14 USGS and
      S2 tiles with a HALO-cell ring of neighbouring tiles (detection needs >= 1 km around the core).
      Reliability weights (deep shadow / water, snow or cloud in one source only, IRLS against a 30 m
      robust blur: cast shadows differ between NAIP and S2), an oriented step filter on a 15 m grid
@@ -24,7 +28,7 @@ out the same whatever order its regions were computed in, from whichever anchor:
      the local step (cut blur of the ratio at SIGMA_S_M, sampled 4 cells either side) and the
      sub-pixel line, fitted on the z16 USGS profile across the seam (z16 tiles fetched only along
      the seam). No seam: a ".seams.none" marker.
-  2. field (feather_field, <cache>/colormatch/v1/usgs/12/x/y.npz): from the seams of the region and
+  2. field (feather_field, <cache>/colormatch/v2/usgs/12/x/y.npz): from the seams of the region and
      its 8 neighbours (the fade reaches FADE_CUT <= one region), on a 30 m grid (COARSE cells, one z12
      pixel): the half-steps scattered on each side, extended along the sides with the cut blur (300 m;
      1500 m where the short one has no support), faded with a Gaussian of the distance to the seam
@@ -85,10 +89,10 @@ from deshadow import SRGB2LIN, down, lonlat_of_px, luma, to_srgb
 
 log = logging.getLogger("earthd.colormatch")
 
-VERSION = 1                         # bump: seams and fields are recomputed (the cache path holds it)
+VERSION = 2                         # bump: seams and fields are recomputed (the cache path holds it; 2: no EOX 2023)
 MODES = ("off", "s2")
 SOURCE = "usgs"
-REFS = ("eox2023", "eox2016")       # the reference, per z14 tile: S2 cloudless 2023, else 2016
+REFS = ("bngs2", "eox2016")         # the reference, per z14 tile: the S2 packs (when in the chain), else EOX 2016
 TILE = 256
 REGION_Z = 12                       # one seam set and field per z12 tile
 GRID_Z = 14                         # analysis grid = the z14 pixel grid (S2's native resolution)
@@ -139,55 +143,16 @@ _LUT16 = to_srgb(np.arange(65536) / 65535.0)     # linear (16 bit) -> sRGB
 
 
 # --- filters -----------------------------------------------------------------------------------
-def _rf_pass(X, cut_prev, a):
-    """In place recursive filter along axis 1 of X [rows, cols, ch], forward and backward;
-    cut_prev[r, c] True = no link between c - 1 and c."""
-    fast.require(1, "rf_pass")
-    Y = X if X.dtype == np.float32 and X.flags.c_contiguous and X.flags.writeable else np.ascontiguousarray(X, np.float32)
-    pacer.pace()
-    fast._ef.rf_pass(Y, np.ascontiguousarray(cut_prev, bool), float(a))     # (Rust)
-    pacer.pace()
-    if Y is not X:
-        X[...] = Y
-
-
 def dt_blur(X, sigma, cut=None, iters=3):
-    """Edge-aware blur (domain transform, recursive filter) of X [h, w, ch] with spatial sigma in
-    cells; cut: bool [h, w] cells that block propagation (every link touching one is cut)."""
-    X = X.astype(np.float32).copy()
-    h, w = X.shape[:2]
-    if cut is None:
-        cut = np.zeros((h, w), bool)
-    cut_h = np.zeros((h, w), bool)
-    cut_h[:, 1:] = cut[:, 1:] | cut[:, :-1]
-    cut_v = np.zeros((w, h), bool)
-    cut_v[:, 1:] = cut.T[:, 1:] | cut.T[:, :-1]
-    for i in range(iters):
-        pacer.pace()
-        s = sigma * math.sqrt(3) * 2 ** (iters - i - 1) / math.sqrt(4 ** iters - 1)
-        a = dmath.exp(-math.sqrt(2) / s)
-        _rf_pass(X, cut_h, a)
-        Xt = np.ascontiguousarray(X.transpose(1, 0, 2))
-        _rf_pass(Xt, cut_v, a)
-        X = np.ascontiguousarray(Xt.transpose(1, 0, 2))
-    return X
+    """Recursive edge-aware blur. Each cut cell blocks propagation through its links."""
+    fast.require(563, "colour_blur")
+    return fast._ef.colour_blur(np.asarray(X, np.float32), sigma, iters, pacer.pace, cut)
 
 
 def dilate(m, r=1):
     """8-neighbour dilation, r steps."""
-    out = m.copy()
-    for _ in range(r):
-        g = out.copy()
-        g[1:] |= out[:-1]
-        g[:-1] |= out[1:]
-        g[:, 1:] |= out[:, :-1]
-        g[:, :-1] |= out[:, 1:]
-        g[1:, 1:] |= out[:-1, :-1]
-        g[:-1, :-1] |= out[1:, 1:]
-        g[1:, :-1] |= out[:-1, 1:]
-        g[:-1, 1:] |= out[1:, :-1]
-        out = g
-    return out
+    fast.require(563, "colour_dilate")
+    return fast._ef.colour_dilate(m, r)
 
 
 def fill(C, mask, iters=64):
@@ -238,20 +203,9 @@ def smooth_ratio(U, S, w0, sigma, cut=None, robust=2, tau=0.25, usgs=False):
     """(Lsm, w): log ratio USGS / S2 of edge-aware weighted blurs, with IRLS outlier rejection
     (residuals against the blur, tau in log units). usgs: also the log of the weighted USGS blur
     alone, (Lsm, w, Lu) (the weight blurred as one more channel: the others are unchanged)."""
-    L = dnp.log(U + EPS) - dnp.log(S + EPS)
-    w = w0.copy()
-    for it in range(robust + 1):
-        pacer.pace()
-        last = usgs and it == robust
-        X = np.concatenate([U * w[..., None], S * w[..., None]] + ([w[..., None]] if last else []), -1)
-        B = dt_blur(X, sigma, cut)
-        Lsm = dnp.log(B[..., :3] + EPS * 0.25) - dnp.log(B[..., 3:6] + EPS * 0.25)
-        if it < robust:
-            r = np.sqrt((dnp.sq(L - Lsm)).mean(-1))
-            w = w0 * dnp.exp(-0.5 * dnp.sq(r / tau))
-    if usgs:
-        return Lsm, w, dnp.log(B[..., :3] / np.maximum(B[..., 6:], 1e-6) + EPS)
-    return Lsm, w
+    fast.require(563, "colour_ratio")
+    sm, w, lu = fast._ef.colour_ratio(U, S, w0, sigma, robust, tau, EPS, usgs, pacer.pace, cut)
+    return (sm, w, lu) if usgs else (sm, w)
 
 
 # --- seam detection ----------------------------------------------------------------------------
@@ -365,24 +319,8 @@ def _hysteresis(weak, strong):
 
 def _components(mask):
     """(ys, xs, root per cell) of the 8-connected components of mask (union-find)."""
-    ys, xs = np.nonzero(mask)
-    idx = {(y, x): i for i, (y, x) in enumerate(zip(ys.tolist(), xs.tolist()))}
-    parent = list(range(len(ys)))
-
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-    for (y, x), i in idx.items():
-        pacer.pace()
-        for dy, dx in ((0, 1), (1, -1), (1, 0), (1, 1)):
-            j = idx.get((y + dy, x + dx))
-            if j is not None:
-                a, b = find(i), find(j)
-                if a != b:
-                    parent[max(a, b)] = min(a, b)
-    return ys, xs, np.array([find(i) for i in range(len(ys))], np.int64)
+    fast.require(563, "seam_components")
+    return fast._ef.seam_components(mask, pacer.pace)
 
 
 def _drop_small(mask, min_cells, score, min_score, D, max_incons):
@@ -917,6 +855,7 @@ class ColorMatch:
         self.rz = region_z
         self.n = TILE << (GRID_Z - region_z)            # cells per region side
         self.dir = os.path.join(cache_dir, "colormatch", f"v{VERSION}", SOURCE, str(region_z))
+        self.refs = REFS
         self.meta = dict(version=VERSION, source=SOURCE, refs=",".join(REFS), region_z=region_z, mode=mode)
         self.mem = mem_regions
         self.imagery = None
@@ -941,7 +880,14 @@ class ColorMatch:
         self._thread.start()
 
     def bind(self, imagery):
+        """Use imagery's sources; the references are REFS without bngs2 when its chain has no bngs2 (the CDN switch
+        has the packs off): the cache's meta names the ones used, so fields made with the other set are made again."""
         self.imagery = imagery
+        names = {getattr(s_, "name", None) for s_ in getattr(imagery, "chain", ())}
+        refs = tuple(n for n in REFS if n != "bngs2" or "bngs2" in names)
+        if refs != self.refs:
+            self.refs = refs
+            self.meta = dict(self.meta, refs=",".join(refs))
 
     def add_listener(self, fn):
         """fn(rk, changed) from the worker thread once a region's field is ready (changed: it is
@@ -1319,7 +1265,7 @@ class ColorMatch:
 
     def _detect(self, rk):
         """Fetch the region's window (z14 USGS and S2 with a HALO ring) and detect its seams."""
-        from imagery import SOURCES
+        from imagery import SOURCES, _overzoom, nodata_mask, zoom_caps
         im = self.imagery
         usgs = SOURCES[SOURCE]
         k = self.n // TILE                  # z14 tiles per region side
@@ -1335,13 +1281,21 @@ class ColorMatch:
         if not have & {(i, j) for i in range(h, h + k) for j in range(h, h + k)}:
             return _seams_empty()           # no USGS in the core (outside its coverage)
         ref, todo = {}, sorted(have)
-        for name in REFS:                   # S2 2023, per tile 2016 where 2023 has nothing
-            rkeys = {ij: (SOURCES[name], GRID_Z, keys[ij][2], keys[ij][3]) for ij in todo}
-            rgot = self._bg_tiles(im, rkeys.values())
+        clat = self._center_of(rk)[0]
+        for name in self.refs:              # the S2 packs, per tile EOX 2016 where they have nothing
+            src = SOURCES[name]
+            d = max(0, GRID_Z - zoom_caps(src, clat)[0])      # (the packs' z13: enlarged to the z14 grid)
+            rkeys = {ij: (src, GRID_Z - d, keys[ij][2] >> d, keys[ij][3] >> d) for ij in todo}
+            rgot = self._bg_tiles(im, list(dict.fromkeys(rkeys.values())))
             for ij in todo:
                 t = rgot[rkeys[ij]]
-                if t is not None and not t.uniform:
-                    ref[ij] = t.rgb
+                if t is None or t.uniform:
+                    continue
+                if d:
+                    t = _overzoom(t, (src, GRID_Z, keys[ij][2], keys[ij][3]), d)
+                if nodata_mask(t.rgb) is not None:      # (a pack tile at the coast: black sea; the next reference)
+                    continue
+                ref[ij] = t.rgb
             todo = [ij for ij in todo if ij not in ref]
         U = np.zeros((W, W, 3), np.float32)
         S = np.zeros((W, W, 3), np.float32)

@@ -67,7 +67,8 @@ class JoinTest(unittest.TestCase):
         f = features([[(0, 0), (100, 0)], [(0, 500), (100, 500)], [(0, 10), (100, 10)]], ["primary"] * 3)
         f.attrs["src_record"] = np.array(["r7@1", "r7@1", "r8@1"])
         f.attrs["name"] = np.array(["Main", "Main", "Side"])
-        bbox = {"bx0": LON - 10 / M_LON, "by0": LAT - 5 / M_LAT, "bx1": LON + 110 / M_LON, "by1": LAT + 5 / M_LAT}
+        bbox = {"bx0": float(LON - 10 / M_LON), "by0": float(LAT - 5 / M_LAT), "bx1": float(LON + 110 / M_LON),
+                "by1": float(LAT + 5 / M_LAT)}       # (osm_tags' floats: the join's contract)
         osmtags.join(f, {9: dict(bbox, name="Main", lanes=6, osm_oneway="yes", sidewalk="separate")})
         self.assertEqual(f.attrs["osm_lanes"][0], 6)
         self.assertEqual(str(f.attrs["osm_sidewalk"][0]), "separate")
@@ -142,8 +143,8 @@ class OsmAheadOfClassTest(unittest.TestCase):
 
     def box(self, x0, x1, y=0.0):
         from test_roads import LAT, LON, M_LAT, M_LON
-        return {"bx0": LON + x0 / M_LON, "by0": LAT + (y - 5) / M_LAT, "bx1": LON + x1 / M_LON,
-                "by1": LAT + (y + 5) / M_LAT}
+        return {"bx0": float(LON + x0 / M_LON), "by0": float(LAT + (y - 5) / M_LAT), "bx1": float(LON + x1 / M_LON),
+                "by1": float(LAT + (y + 5) / M_LAT)}        # (osm_tags' floats: the join's contract)
 
     def test_way_without_lanes_takes_the_same_named_way_going_the_same_way(self):
         f = features([[(0, 0), (100, 0)], [(100, 0), (200, 0)], [(0, 300), (100, 300)], [(200, 0), (300, 0)]],
@@ -367,6 +368,52 @@ class TableSaveTest(unittest.TestCase):
 
     def test_replace_denied_nothing_there(self):
         self.check(False)
+
+
+class DeadHostTest(unittest.TestCase):
+    """The tag host unreachable (2026-11-08, GitHub #435): one probe, the rest fail at once, nobody waits behind it."""
+
+    def test_one_probe_then_the_marker_answers(self):
+        import tempfile
+        import threading
+        import time
+        import rangeread
+
+        class Fetcher:
+            calls = 0
+            gate = threading.Event()
+
+            def get(self, *a, **k):
+                Fetcher.calls += 1
+                Fetcher.gate.wait(5)
+                raise OSError("connect timed out")
+
+        with tempfile.TemporaryDirectory() as d:
+            t = osmtags.OsmTags(d, Fetcher())
+            first = []
+            th = threading.Thread(target=lambda: first.append(self._ask(t)))
+            th.start()
+            while not Fetcher.calls:
+                time.sleep(0.01)
+            t0 = time.time()
+            self.assertIn("another thread", self._ask(t))      # (while the first is still waiting on the host)
+            self.assertLess(time.time() - t0, 1.0)
+            self.assertTrue(os.path.exists(os.path.join(d, t.DIR, "unreachable")))   # (claimed before the answer)
+            Fetcher.gate.set()
+            th.join(5)
+            self.assertEqual(Fetcher.calls, 1)
+            self.assertIn("connect timed out", first[0])
+            self.assertIn("unreachable at the last try", self._ask(t))
+            self.assertEqual(Fetcher.calls, 1)                 # (the marker answered: no second request)
+
+    @staticmethod
+    def _ask(t):
+        import rangeread
+        try:
+            t.version()
+        except (OSError, rangeread.RangeError) as e:
+            return str(e)
+        return ""
 
 
 if __name__ == "__main__":

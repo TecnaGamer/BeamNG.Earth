@@ -14,6 +14,7 @@ import sys
 import runtimeprofiler
 import threading
 import time
+import v2host
 import weakref
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -165,6 +166,8 @@ def result_running(fut, timeout, waited=None, abandon=None, pool=None, what=None
     pool (the RespawningPool fut came from): past its timeout the job is waited for on while the pool's processes
     still use CPU (RespawningPool.overdue: busy, not hung), up to HUNG_CEILING_X times it; the TimeoutError's message
     says why it was given up on. what: the job in the one warning that says it is waited for on ("road tile 3_4")."""
+    if v2host.active() is not None:
+        return _result_running_v2(fut, timeout, waited, abandon, pool, what)
     t0 = time.perf_counter()
     while not fut.running() and not fut.done():
         if abandon is not None and abandon() and fut.cancel():
@@ -191,6 +194,49 @@ def result_running(fut, timeout, waited=None, abandon=None, pool=None, what=None
         why = pool.overdue(now - t_run, timeout, now, fut, what)
         if why:
             raise concurrent.futures.TimeoutError(why)
+
+
+V2_POLL_S = 0.05        # s between the looks of result_running under BNE_V2_HOST (abandon, the job's cancel flag)
+
+
+def _result_running_v2(fut, timeout, waited, abandon, pool, what):
+    """result_running under BNE_V2_HOST (v2host.py): the same answers, but waited for without holding a scheduler slot
+    (v2host.blocked: the job this thread runs waits for another), and given up on (Abandoned) once this thread's own
+    job is cancelled (a teleport left its place) whether fut is still queued or already running: a waiter never holds
+    its thread for a job of a place left (2026-11-22: two heightmap threads waited 137-262 s on Bonneville blocks after
+    the teleport to Fells Point, whose first graded block waited 61 s for one of them). abandon() as before: while fut
+    is queued (a running job of a place left ends by itself: SlotPool preempts it, its future raises Abandoned)."""
+    t0 = time.perf_counter()
+    t_run = None
+    with v2host.blocked():
+        while True:
+            if v2host.cancelled():
+                fut.cancel()
+                raise Abandoned()
+            if t_run is None and abandon is not None and not fut.running() and abandon() and fut.cancel():
+                raise Abandoned()
+            try:
+                return fut.result(timeout=V2_POLL_S)
+            except concurrent.futures.TimeoutError:
+                pass
+            if t_run is None and (fut.running() or fut.done()):
+                t_run = time.monotonic()
+                if waited is not None:
+                    waited.append(time.perf_counter() - t0)
+            if timeout is None or t_run is None:
+                continue
+            ran = time.monotonic() - t_run
+            if pool is None or not hasattr(pool, "overdue"):
+                if ran >= timeout:
+                    raise concurrent.futures.TimeoutError()
+                continue
+            if ran < timeout:
+                continue
+            now = time.monotonic()
+            pool.cpu_sample(now)
+            why = pool.overdue(ran, timeout, now, fut, what)
+            if why:
+                raise concurrent.futures.TimeoutError(why)
 
 
 def proc_name(name):
@@ -590,14 +636,15 @@ class RespawningPool:
                         limit_s * HUNG_CEILING_X)
         return ""
 
-    def recycle(self, why):
+    def recycle(self, why, force=False):
         """The pool's processes killed and the pool made again: for a worker that is alive but never answers (a
         road tile in flight for minutes left the loading line at "roads & buildings 0/26" for good, Windows,
         1.7.0-beta, KyzoFox): a dead process makes the pool broken (_renew), a hung one never did. The futures in
-        flight end with BrokenProcessPool (their callers retry). At most every RESPAWN_S. True when recycled."""
+        flight end with BrokenProcessPool (their callers retry). At most every RESPAWN_S (force: at once, SlotPool's
+        preemption of a job of a place left). True when recycled."""
         with self._lock:
             now = time.monotonic()
-            if now - self._last < RESPAWN_S:
+            if now - self._last < RESPAWN_S and not force:
                 return False
             self._last = now
             self.respawns += 1
@@ -688,6 +735,16 @@ EXTRA_IDLE_S = float(os.environ.get("BNGE_POOL_EXTRA_IDLE_S", "") or 60.0)
 REAP_CHECK_S = 5.0
 
 
+def burst_fits(name, n):
+    """Is there room under the server's memory limit for n more processes of pool name (budget.ROOM_MB, POOL_MB: the
+    watchdog's last check; each as big as the pool's biggest one)? True without a limit or before a check."""
+    import budget
+    room, mb = budget.ROOM_MB, budget.POOL_MB.get(name)
+    if room is None or not mb:
+        return True
+    return room >= n * mb
+
+
 class ElasticPool:
     """A RespawningPool of `base` processes kept for the session and, beside it, up to `extra` more started when every
     base process has a job and stopped again once they idle for EXTRA_IDLE_S: the far-tile pool's 10 processes (the 3D
@@ -729,6 +786,10 @@ class ElasticPool:
         if not self.extra_n or self.base.inflight < self.base_n or self._within_base():
             return self.base.submit(fn, *args, **kwargs)
         with self._lock:            # (the reaper stops them under it: never a submit to a pool shut down)
+            if self.extra is None and not burst_fits(self.name, self.extra_n):
+                # (nor a burst that would take the server over its memory limit: its processes as big as the base's;
+                # checked here, under the lock the reaper detaches them with)
+                return self.base.submit(fn, *args, **kwargs)
             if self.extra is None:
                 self.extra = RespawningPool(self.name, self.extra_n, *self._args, **self._kwargs)
                 self.extra_starts += 1
@@ -758,7 +819,10 @@ class ElasticPool:
                 log.debug("%s reaper: %s: %s", self.name, type(e).__name__, e)
 
     def reap_step(self, now):
-        """The extras stopped when they have had no job in flight for idle_s up to now. True when stopped."""
+        """The extras stopped when they have had no job in flight for idle_s up to now, or at once once the server is
+        over its memory limit and they have nothing in flight (budget.OVER: while it is set every job goes to the base
+        pool, so the drained extras will see no other job; waiting out the idle window only holds their memory, a
+        teleport-heavy session's 7 far-tile processes ~1 GB each outlived every boost, 2026-11-23). True when stopped."""
         with self._lock:
             ex = self.extra
             if ex is None or self.idle_s <= 0:
@@ -766,18 +830,22 @@ class ElasticPool:
             if ex.inflight:
                 self._idle_since = None
                 return False
-            if self._idle_since is None:
-                self._idle_since = now
-                return False
-            if now - self._idle_since < self.idle_s:
-                return False
+            import budget
+            over = bool(budget.OVER)
+            if not over:
+                if self._idle_since is None:
+                    self._idle_since = now
+                    return False
+                if now - self._idle_since < self.idle_s:
+                    return False
             self.extra, self._idle_since = None, None
             self.extra_stops += 1
         try:
             ex.shutdown(wait=False)
         except Exception:
             pass
-        log.info("%s: the %d burst processes stopped (idle %.0f s)", self.name, self.extra_n, self.idle_s)
+        log.info("%s: the %d burst processes stopped (%s)", self.name, self.extra_n,
+                 "the server over its memory limit, no job in flight" if over else f"idle {self.idle_s:.0f} s")
         return True
 
     def shutdown(self, *args, **kwargs):
@@ -786,3 +854,223 @@ class ElasticPool:
         if ex is not None:
             ex.shutdown(*args, **kwargs)
         return self.base.shutdown(*args, **kwargs)
+
+
+# BNE_V2_HOST (SlotPool): s a job of a place left may go on in its process after its place was left (its own cancel
+# checks: blockworker._abandon_check, xproc.check_cancel) before the process is restarted under it
+PREEMPT_GRACE_S = float(os.environ.get("BNE_V2_PREEMPT_S", "") or 1.5)
+SLOT_POLL_S = 0.05
+
+
+class SlotPool:
+    """BNE_V2_HOST (v2host.py): a worker pool of n single-process RespawningPools ("slots") whose jobs the Rust scheduler
+    (earthfast.Sched) starts by class and deadline (earthfast.sched_classify: road tiles P1 before far buildings P3,
+    a lane's own class otherwise; submit_low's at low_cls), drops when their place is left (a teleport) and preempts
+    when one still runs in its process PREEMPT_GRACE_S after its place was left: that slot's process alone is killed
+    and started again, the slot free for the new place at once (2026-11-22: Bonneville blocks kept the block processes
+    137-262 s after the teleport to Fells Point; a ProcessPoolExecutor cannot lose one process without failing every
+    job in flight, hence one executor per process). RespawningPool's submit / submit_low / submit_low_lazy / recycle /
+    overdue / inflight / workers for its callers and result_running."""
+
+    def __init__(self, sched, name, n, *args, cls=1, low_cls=2, adaptive=False, lane=None, **kwargs):
+        self.name, self.sched = name, sched
+        self.workers = max(1, int(n))
+        self.cls, self.low_cls = int(cls), int(low_cls)
+        self.slots = [RespawningPool(name, 1, *args, **kwargs) for _ in range(self.workers)]
+        # sched None (the v2 host off): the jobs in order of their submits, submit_low's after every other one waiting
+        # (RespawningPool's own order), one thread a slot taking the next; a slot is one process, so the memory
+        # watchdog replaces the processes one at a time, never a pool's whole backlog behind them (memwatch.py)
+        self.lane = sched.lane(lane or name, self.workers, adaptive, False) if sched is not None else None
+        self._queue = (collections.deque(), collections.deque())       # (normal, low)
+        self._queue_cv = threading.Condition()
+        self._closing = False       # (shutdown: no new jobs; the loops end once the queue is empty)
+        self._loops = []
+        if sched is None:
+            for i in range(self.workers):
+                t = threading.Thread(target=self._local_loop, daemon=True, name=f"{name}-slot{i}")
+                t.start()
+                self._loops.append(t)
+        self._free = collections.deque(range(self.workers))
+        self._free_cv = threading.Condition()
+        self._count_lock = threading.Lock()
+        self.inflight = 0
+        self.preempts = 0
+        self._where = weakref.WeakKeyDictionary()      # outer future -> [slot index] while it runs
+        self.cpu = self.slots[0].cpu
+
+    @property
+    def respawns(self):
+        return sum(p.respawns for p in self.slots)
+
+    @property
+    def rotations(self):
+        return sum(p.rotations for p in self.slots)
+
+    def submit(self, fn, *args, **kwargs):
+        return self._submit(fn, args, kwargs, None, False)
+
+    def submit_low(self, fn, *args, **kwargs):
+        return self._submit(fn, args, kwargs, None, True)
+
+    def submit_low_lazy(self, fn, make_args):
+        """submit_low with fn's arguments made when it starts (make_args() -> (args, kwargs))."""
+        return self._submit(fn, (), {}, make_args, True)
+
+    def _submit(self, fn, args, kwargs, make_args, low):
+        if self.sched is None:
+            fut = concurrent.futures.Future()
+            where = []
+            self._where[fut] = where
+            with self._queue_cv:
+                if self._closing:           # (as an executor after its shutdown; before the count and the future's use)
+                    self._where.pop(fut, None)
+                    raise RuntimeError("cannot schedule new futures after shutdown")
+                with self._count_lock:
+                    self.inflight += 1
+                fut.add_done_callback(self._done)
+                self._queue[1 if low else 0].append((fut, fn, args, kwargs, make_args, where))
+                self._queue_cv.notify()
+            return fut
+        import fast
+        cls, place = fast._ef.sched_classify(fn, args, self.low_cls if low else self.cls)
+        if low:
+            cls = max(cls, self.low_cls)
+        where = []
+        fut = self.sched.submit(self.lane, cls, None, place, None, self._run, fn, args, kwargs, make_args, where)
+        self._where[fut] = where
+        with self._count_lock:
+            self.inflight += 1
+        fut.add_done_callback(self._done)
+        return fut
+
+    def _done(self, _fut):
+        with self._count_lock:
+            self.inflight = max(0, self.inflight - 1)
+
+    def _local_loop(self):
+        """(sched None) one slot's worth of jobs: the next waiting one run in a free process, its result to its future."""
+        while True:
+            with self._queue_cv:
+                while not (self._queue[0] or self._queue[1]):
+                    if self._closing:       # (shut down and nothing left: the slots are shut after every loop ends)
+                        return
+                    self._queue_cv.wait()
+                fut, fn, args, kwargs, make_args, where = (self._queue[0] or self._queue[1]).popleft()
+            if not fut.set_running_or_notify_cancel():
+                continue                    # (cancelled while it waited: result_running's abandon)
+            try:
+                fut.set_result(self._run(fn, args, kwargs, make_args, where))
+            except BaseException as e:      # (the job's own exception, or the slot's: the caller's)
+                fut.set_exception(e)
+
+    def _take(self):
+        with self._free_cv:
+            while not self._free:           # (the lane's slots are the processes: one is free; a recycle's moment)
+                self._free_cv.wait(timeout=1.0)
+            return self._free.popleft()
+
+    def _give(self, i):
+        with self._free_cv:
+            self._free.append(i)
+            self._free_cv.notify()
+
+    def _run(self, fn, args, kwargs, make_args, where):
+        """(a scheduler thread holding one of the lane's slots) the job in a free process, waited for."""
+        if make_args is not None:
+            args, kwargs = make_args()
+        i = self._take()
+        where.append(i)
+        try:
+            slot = self.slots[i]
+            fut = slot.submit(fn, *args, **kwargs)
+            if self.sched is None:          # (no place to leave: the job's own result, waited for)
+                return fut.result()
+            while True:
+                try:
+                    return fut.result(timeout=SLOT_POLL_S)
+                except concurrent.futures.TimeoutError:
+                    pass
+                if not v2host.cancelled():
+                    continue
+                try:                        # (its place left: its own cancel checks first)
+                    return fut.result(timeout=PREEMPT_GRACE_S)
+                except concurrent.futures.TimeoutError:
+                    pass
+                self.preempts += 1
+                log.info("%s: a job of a place left (%s) still running %.1f s after: its process restarted (%d so far)",
+                         self.name, getattr(fn, "__name__", "job"), PREEMPT_GRACE_S, self.preempts)
+                slot.recycle("preempted: a job of a place left", force=True)
+                try:                        # (its new process started now, not by the next job)
+                    slot.submit(os.getpid)
+                except Exception:
+                    pass
+                raise Abandoned()
+        finally:
+            where.clear()
+            self._give(i)
+
+    def _slot_of(self, fut):
+        w = self._where.get(fut) if fut is not None else None
+        return self.slots[w[0]] if w else None
+
+    def cpu_sample(self, now=None):
+        return any([p.cpu_sample(now) for p in self.slots])
+
+    def overdue(self, ran_s, limit_s, now=None, fut=None, what=None):
+        """RespawningPool.overdue of the process fut runs in (all of them when not known)."""
+        slot = self._slot_of(fut)
+        if slot is not None:
+            return slot.overdue(ran_s, limit_s, now, None, what)
+        for p in self.slots:
+            why = p.overdue(ran_s, limit_s, now, None, what)
+            if not why:
+                return ""
+        return why if self.slots else ""
+
+    def recycle(self, why, force=False):
+        return any([p.recycle(why, force) for p in self.slots])
+
+    def rotate(self, why, now=None):
+        return any([p.rotate(why, now) for p in self.slots])
+
+    def worker_mb(self):
+        out = {}
+        for p in self.slots:
+            out.update(p.worker_mb())
+        return out
+
+    def _pids(self):
+        return [pid for p in self.slots for pid in p._pids()]
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        """As an executor's: no new jobs; the queued ones run (cancel_futures: cancelled), then the slots' processes are
+        shut. sched None: the loops stop taking jobs once the queue is empty and the slots are shut only after every
+        loop has ended (a job a loop had just taken was handed to a closed slot: RuntimeError, Gemini on 01df0d0f);
+        wait False returns at once, the rest done by a thread of its own."""
+        if self.sched is not None:
+            for p in self.slots:
+                p.shutdown(wait=wait, cancel_futures=cancel_futures)
+            return
+        with self._queue_cv:
+            self._closing = True
+            if cancel_futures:
+                for q in self._queue:
+                    while q:
+                        q.popleft()[0].cancel()
+            self._queue_cv.notify_all()
+
+        def finish():
+            for t in self._loops:
+                if t is not threading.current_thread():
+                    t.join()
+            for p in self.slots:
+                p.shutdown(wait=True)
+        if wait:
+            finish()
+        else:
+            threading.Thread(target=finish, daemon=True, name=f"{self.name}-shutdown").start()
+
+
+def members(pool):
+    """The RespawningPools a pool is made of (memwatch's view: SlotPool's slots, a pool otherwise)."""
+    return list(getattr(pool, "slots", None) or ([pool] if pool is not None else []))

@@ -14,6 +14,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use crate::dm::Dm;
 use pyo3::types::PyBytes;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -69,7 +70,7 @@ fn parse_role(r: &str) -> Result<Role, String> {
 
 /// (width, height, channels 1 / 3 / 4, 8-bit texels) of a PNG: grey stays one channel, grey + alpha and palettes
 /// become RGB(A); an alpha channel that is 255 everywhere is dropped (as the dev tool's load()).
-fn decode_png(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
+pub(crate) fn decode_png(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
     let mut dec = png::Decoder::new(std::io::Cursor::new(data));
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = dec.read_info().map_err(|e| format!("png: {e}"))?;
@@ -128,7 +129,7 @@ fn decode_webp(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
     Ok((w, h, chans, buf))
 }
 
-fn decode_image(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
+pub(crate) fn decode_image(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
     if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         decode_webp(data)
     } else if data.starts_with(b"\x89PNG") {
@@ -198,7 +199,7 @@ fn blur_fft(g: &mut [f64], w: usize, h: usize, sigma: f64) {
         let gain: Vec<f64> = (0..n)
             .map(|k| {
                 let f = freq(k, n);
-                libm::exp(-2.0 * (std::f64::consts::PI * sigma).powi(2) * (f * f))
+                libm::exp(-2.0 * (std::f64::consts::PI * sigma).sq() * (f * f))
             })
             .collect();
         let (mut re, mut im) = (vec![0f64; n], vec![0f64; n]);
@@ -269,7 +270,7 @@ fn rough_fft(w: usize, h: usize, c: usize, px: &[u8], lo: f64, hi: f64) -> Vec<u
 
 /// Pillow's ImageFilter.GaussianBlur(radius) of an 8-bit grey image (libImaging/BoxBlur.c: three extended box blurs
 /// along x, then three along y, edges extended, 8-bit rounding after each pass), bit for bit.
-fn pil_gaussian_blur(img: &mut [u8], w: usize, h: usize, radius: f32) {
+pub(crate) fn pil_gaussian_blur(img: &mut [u8], w: usize, h: usize, radius: f32) {
     let passes = 3i32;
     let sigma2: f32 = radius * radius / passes as f32;
     let big_l: f32 = (12.0f64 * sigma2 as f64 + 1.0).sqrt() as f32;
@@ -670,6 +671,38 @@ fn dds_header(w: usize, h: usize, mips: usize, dxgi: u32) -> Vec<u8> {
     u(&mut o, 1);
     u(&mut o, 0);
     o
+}
+
+/// Encode prefiltered scalar levels using the same BC4 backend as installed
+/// textures. Callers supply nonlinear coverage mips filtered in height space.
+pub(crate) fn scalar_levels_dds(levels: Vec<(usize, usize, Vec<u8>)>) -> Result<Vec<u8>, String> {
+    let (w, h, _) = levels.first().ok_or("empty scalar mip chain")?;
+    let mut out = dds_header(*w, *h, levels.len(), DXGI_BC4);
+    for (w, h, px) in levels {
+        if w == 0 || h == 0 || !w.is_power_of_two() || !h.is_power_of_two() || px.len() != w * h {
+            return Err("invalid scalar mip dimensions".into());
+        }
+        let level = Level { w, h, chans: 1, px };
+        out.extend(encode_rows(&level, DXGI_BC4, 0, h)?);
+    }
+    Ok(out)
+}
+
+/// Linear data with the standard mip filter. RGB detail must remain RGB: a
+/// single-channel shader detail map can introduce a red cast.
+pub(crate) fn data_dds(w: usize, h: usize, channels: usize, pixels: Vec<u8>) -> Result<Vec<u8>, String> {
+    if !w.is_power_of_two() || !h.is_power_of_two() || !matches!(channels, 1 | 3)
+        || pixels.len() != w * h * channels {
+        return Err("invalid detail map dimensions".into());
+    }
+    let dxgi = if channels == 1 { DXGI_BC4 } else { DXGI_BC7 };
+    let levels = mip_chain(w, h, channels, pixels, Role::Data);
+    let mut out = dds_header(w, h, levels.len(), dxgi);
+    for (w, h, pixels) in levels {
+        let level = to_encoder(w, h, channels, &pixels, dxgi);
+        out.extend(encode_rows(&level, dxgi, 0, level.h)?);
+    }
+    Ok(out)
 }
 
 /// Run f(i) for i in 0..n on `threads` workers (an index handed out at a time).

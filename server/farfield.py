@@ -14,10 +14,11 @@ Selection (select()):
     K' table, so selection stays one level coarser at the same distance);
   - hysteresis: a node refined last time stays refined until the player is (1 + h) times its
     switch distance away (h = 0.25, so the band is 25 % of the switch distance);
-  - terrain mode only: nodes overlapping a forced box (the committed, pending and predicted
+  - terrain mode: nodes overlapping a forced box (the committed, pending and predicted
     terrain blocks) are refined down to L0, so the 8 x 8 L0 tiles under every such block are
     always present: the mod hides the ones under the committed block and sinks the edge ring
-    (§2.3). Mesh mode has no forced boxes: the TerrainBlock is invisible (physics only);
+    (§2.3). In mesh mode the server forces exact tiles along a moving car's projected path
+    so sibling groups can be built and swapped before the car enters them;
   - everything intersecting the square of half-size RADIUS (80 km) around the player is kept.
 The selected tiles tile the radius square exactly once.
 
@@ -59,7 +60,6 @@ import json
 import functools
 import math
 import os
-import time
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -101,10 +101,9 @@ BLOCK_SIZES = tuple(int(m / heightmap.SQUARE) for m in (1024, 2048))  # terrain 
 # 2048 samples at 1 m
 TERRAIN_BLOCK = int(2048 / heightmap.SQUARE)
 # Triangles per tile shape: 8192 + 512 at 64 cells. The old 8192 was the ProceduralMesh rule;
-# .cdae has no such cliff (§3.1): its limit is the engine's 16-bit vertex indices (VERTS_MAX), which the fine near
+# .cdae has no such cliff (§3.1): its limit is the engine's 16-bit vertex indices (cdae.VERTS_MAX), which the fine near
 # tiles (NEAR_FINE_M, up to ~2x the grid's triangles at a cutting) keep under.
 TRIS_MAX = 9000
-VERTS_MAX = 65535
 HYSTERESIS = 0.25           # a refined node stays refined while d < (1 + h) * its switch distance
 HOLD_S = 2.0                # a node changes state at most once per HOLD_S seconds (§2.4)
 DETAIL_M = 2.0              # UV1 (detail map) repeat in metres; must divide 64 (see module doc)
@@ -390,73 +389,29 @@ def out_of_view(cone, x0, y0, x1, y1, d):
 SELECT_NEED = 304      # earthfast farsel.rs (far_select_nodes with its slack, far_horizon_radius)
 
 
-def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
-           radius=RADIUS, max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131,
-           disc=False, horizon=None, forced_level=0, view=None, region=None, eye_h=0.0, cone=None):
-    """Desired tiles for a player at (px, py) (earthfast farsel.rs far_select_nodes: the quadtree's traversal; every
-    pose asks it, and in Python it was the event loop's largest share of a drive's poses).
+def _rust(name):
+    """earthfast's function of that name (a stub that raises as fast.require does when the module is older)."""
+    f = getattr(fast._ef, name, None)
+    if f is not None:
+        return f
 
-    region (global far tiles, select_global): a Region, the refined finest global tiles; the roots are then the
-    max_level nodes over it, a node outside it is dropped, one across its edge is a Piece per global tile it overlaps
-    when it does not split (only its part inside that tile), one inside it a Tile.
-
-    forced: bboxes (terrain blocks) under which everything is refined to `forced_level` (terrain mode:
-    L0; detail mode: L-1, so tile edges meet the 128 m-grid edges of a 512² block).
-    prev_refined: the nodes (L, i, j) refined last time (for the hysteresis).
-    hold: nodes whose state must not change now (they changed less than HOLD_S ago).
-    min_level: finest level (0; layout.min_level in mesh mode); kfun / radii: K(L) and the
-    min-level radii (default: the layout's K table and NEAR_RADII row; only levels >= min_level
-    count).
-    disc (horizon mode): keep the nodes whose nearest point is closer than `radius` (a disc, not
-    the square). horizon: a Horizon; beyond HORIZON_MIN it drops every node past the line-of-sight
-    horizon, with its subtree (the server passes it with disc=True and max_level HORIZON_MAX_LEVEL).
-    view: a View (screen-space LOD, used when view.tau > 0): a node whose known geometric error would pop more than
-    view.tau px on screen splits too (within view.reach x the switch distance), one whose pop is under it does not
-    split even inside the distance rule, down to one level coarser than the distance rule (View.decide; the near
-    radii, the forced boxes, the holds and the finest level's switch distance stay as they are).
-    Returns ({key: Tile}, set of refined nodes)."""
-    fast.require(SELECT_NEED, "the far field's selection")
-    kfun = kfun or layout.k
-    radii = NEAR_RADII[layout.cells] if radii is None else radii
-    ks = [float(kfun(lvl)) if lvl >= 1 else 0.0 for lvl in range(max(max_level, 0) + 1)]
-    hz = None
-    if horizon is not None:
-        hz = (float(horizon.reach), float(HORIZON_MIN), float(R_REFRACTED),
-              np.ascontiguousarray(horizon.grid.base, np.float64), HORIZON_GRID_LEVEL, HORIZON_MAX_LEVEL)
-    vw = None
-    if view is not None and view.tau > 0:
-        errs, aid = view.err, None
-        if isinstance(view.err, ErrLookup):         # (a dict looked up node by node: earthd's lod_errs)
-            errs, aid = view.err.errs, view.err.aid
-        vw = (float(view.cx), float(view.cy), float(view.dz), float(view.ppr), float(view.tau), float(view.reach),
-              float(view.h), float(view.cap), float(view.cells), errs, aid)
-    reg = (region.arr, float(GLOBAL_MIN_AREA)) if region is not None else None
-    global LAST_SLACK
-    items, refined, LAST_SLACK = fast._ef.far_select_nodes(
-        float(px), float(py), float(radius), bool(disc), int(max_level), int(min_level), int(forced_level), float(h),
-        float(eye_h), ks, [(int(m), float(r)) for m, r in radii.items()],
-        [n for n in prev_refined if len(n) == 3], [n for n in hold if len(n) == 3],
-        [tuple(float(v) for v in b) for b in forced], hz, vw, reg, [float(v) for v in cone] if cone else None)
-    out = {}
-    for lvl, i, j, qi, poly in items:
-        if qi < 0:
-            t = tile_of(f"{lvl}_{i}_{j}")
-        else:
-            t = Piece(lvl, i, j, *region.tiles[qi], tuple(poly), region.quads[qi])
-        out[t.key] = t
-    return out, set(refined)
+    def missing(*a, **kw):
+        fast.require(540, "the far field's selection")
+    return missing
 
 
-class ErrLookup:
-    """A View's err(node) over a dict {(aid, node): err} (earthd's lod_errs): select looks it up node by node in Rust,
-    without a call back into Python per node."""
-
-    def __init__(self, errs, aid):
-        self.errs, self.aid = errs, aid
-
-    def __call__(self, node):
-        return self.errs.get((self.aid, node)) if len(node) == 3 else None
-
+# The desired tiles for a player at (px, py): ({key: Tile / Piece}, the refined nodes), earthfast host/farselect.rs
+# (far_select; the traversal is farsel.rs). Arguments: forced (boxes refined to forced_level), prev_refined (the
+# hysteresis), kfun (K(L); default the layout's), h, radius, max_level, hold (nodes whose state must not change now),
+# min_level, radii (the min-level radii; default the layout's NEAR_RADII row), layout, disc (keep the nodes nearer than
+# radius), horizon (a Horizon: the line-of-sight cull), forced_level, view (a View: screen-space LOD when view.tau > 0),
+# eye_h, cone (the 3D map's view cone, 9 values); with_slack=True adds the slack (the move under which the result
+# stays the same).
+select = _rust("far_select")
+# select with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile) and the anchor's nodes (L <= 2, Tile / Piece)
+# in the refined zoom-zf tiles: select_global(frame, px, py, zf, ...) with select's arguments and anchor_nodes (False:
+# the finest global tiles are leaves, the 3D map high up); the refined nodes are (L, i, j) and ("m", z, x, y).
+select_global = _rust("far_select_global")
 
 # Load order (2026-10-16): tiles outside the camera's view cone count as VIEW_PENALTY times as far, so what is on
 # screen fills first after a teleport; the cone is half the horizontal field of view plus VIEW_MARGIN_DEG (at most
@@ -520,60 +475,12 @@ def nearest_first(tiles, x, y):
     return sorted(tiles, key=lambda t: (t.distance(x, y), t.level, t.key))
 
 
-def diff(old, new):
-    """Keys to add and to remove to go from tile set `old` to `new` (dicts or sets of keys)."""
-    return [k for k in new if k not in old], [k for k in old if k not in new]
-
-
 def swap_groups(old, new, polys=None):
-    """LOD changes from key set `old` to `new` as swap groups: [(adds, removes)], each a
-    connected set of added and removed tiles that overlap (a parent and its descendants), so
-    both sides have the same footprint. Tiles that enter or leave the far radius have no
-    counterpart and form one-sided groups. Sorted lists, deterministic order.
-    Global tiles and pieces (select_global) join by their footprints: polys(key) -> the key's footprint polygon (flat
-    x, y list) in the anchor's world, or None (unknown: one-sided)."""
-    adds, removes = diff(old, new)
-    side = {k: 0 for k in adds}
-    side.update({k: 1 for k in removes})
-    by_node = {tile_of(k).node: k for k in side if not is_special_key(k)}
-    parent = {k: k for k in side}
-
-    def find(k):
-        while parent[k] != k:
-            parent[k] = parent[parent[k]]
-            k = parent[k]
-        return k
-
-    special = [k for k in side if is_special_key(k)]
-    if special and polys is not None:
-        keys, ps = [], []
-        for k in side:
-            p = polys(k) if is_special_key(k) else _square(tile_of(k).bbox)
-            if p is not None:
-                keys.append(k)
-                ps.append([float(v) for v in p])
-        fast.require(GLOBAL_NEED, "global far tiles")
-        for a, b in fast._ef.far_overlap_pairs(ps, [side[k] for k in keys], GLOBAL_MIN_AREA, GLOBAL_OVERLAP_REL):
-            ka, kb = keys[a], keys[b]
-            if is_special_key(ka) or is_special_key(kb):
-                parent[find(ka)] = find(kb)
-    for k in side:
-        if is_special_key(k):
-            continue
-        lvl, i, j = tile_of(k).node
-        while lvl < HORIZON_MAX_LEVEL:          # (no L10 node exists outside horizon mode)
-            lvl, i, j = lvl + 1, i >> 1, j >> 1
-            a = by_node.get((lvl, i, j))
-            if a is not None and side[a] != side[k]:
-                parent[find(k)] = find(a)
-    comps = {}
-    for k in side:
-        comps.setdefault(find(k), []).append(k)
-    groups = []
-    for ks in comps.values():
-        groups.append((sorted(k for k in ks if side[k] == 0), sorted(k for k in ks if side[k] == 1)))
-    groups.sort(key=lambda g: (g[0] or g[1])[0])
-    return groups
+    """LOD changes from key set `old` to `new` as swap groups [(adds, removes)]: each a connected set of added and removed
+    tiles that overlap (a parent and its descendants), so both sides have the same footprint; tiles entering or leaving
+    the far radius form one-sided groups; global tiles and pieces join by their footprints, polys(key) -> the polygon
+    (flat x, y) or None. Sorted lists, deterministic order (earthfast host/farstate.rs, the far state machine's own)."""
+    return fast._ef.far_swap_groups(old, new, polys)
 
 
 def transform_bbox(src, dst, bb):
@@ -591,7 +498,8 @@ def zoom_for_level(layout, lat, level):
 
 
 def skirt_depth(size, err=0.0):
-    return max(2.0, 0.02 * size, 2.5 * err + 1.0)
+    fast.require(578, "far skirt depth")
+    return fast._ef.far_skirt_depth(size, err)
 
 
 # --- global far tiles (geotiles phase 3b: docs/V1_4_SPEC.md 3.7 M6 on the geotiles grid) ------------------------
@@ -654,11 +562,6 @@ def parse_global(k):
     except ValueError:
         return None
     return z, x, y
-
-
-def _square(bb):
-    x0, y0, x1, y1 = bb
-    return (x0, y0, x1, y0, x1, y1, x0, y1)
 
 
 def _poly_bbox(p):
@@ -737,111 +640,6 @@ class Piece:
         return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
 
 
-class Region:
-    """The refined tiles of the finest global zoom (far_global_select's regions): what the anchor's nodes fill."""
-
-    def __init__(self, z, regions):
-        self.tiles = [(int(z), int(x), int(y)) for x, y, _ in regions]
-        self.quads = [tuple(float(v) for v in q) for _, _, q in regions]
-        self.arr = np.ascontiguousarray(np.array(self.quads, np.float64).reshape(-1, 8))
-        xs, ys = self.arr[:, 0::2], self.arr[:, 1::2]
-        self.bbox = (float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max()))
-
-    def cover(self, x0, y0, x1, y1):
-        """None: the box lies inside the region; []: outside it; else [(index, area, polygon)] of the tiles it
-        overlaps (it crosses the region's edge)."""
-        got = fast._ef.far_box_cover(self.arr, float(x0), float(y0), float(x1), float(y1), GLOBAL_MIN_AREA)
-        a = (x1 - x0) * (y1 - y0)
-        if sum(g[1] for g in got) >= a - max(1e-7 * a, GLOBAL_MIN_AREA * (1 + len(got))):
-            return None
-        return got
-
-
-def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS, radius=RADIUS,
-                  max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131, disc=False,
-                  horizon=None, forced_level=0, view=None, anchor_nodes=True, eye_h=0.0, cone=None):
-    """select() with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile, Mercator zoom zf for level 3) and the
-    anchor's nodes (L <= 2, Tile / Piece) in the refined zoom-zf tiles. frame: the anchor's EnuFrame; the rest as
-    select(). Returns ({key: tile}, refined nodes: anchor (L, i, j) and global ("m", z, x, y))."""
-    fast.require(GLOBAL_NEED if cone is None else GLOBAL_CONE_NEED, "global far tiles")
-    kfun = kfun or layout.k
-    radii = NEAR_RADII[layout.cells] if radii is None else radii
-    gprev = [tuple(n[1:]) for n in prev_refined if len(n) == 4]
-    ghold = [tuple(n[1:]) for n in hold if len(n) == 4]
-    ks = [float(kfun(lvl)) if lvl >= 1 else 0.0 for lvl in range(max_level + 1)]
-    rmin = max([float(r) for m, r in radii.items() if m >= min_level] or [0.0])
-    hz = None
-    if horizon is not None:
-        g = horizon.grid
-        merc = getattr(g, "merc", None)
-        hz = (float(horizon.reach), float(HORIZON_MIN), float(R_REFRACTED), np.ascontiguousarray(g.base, np.float64),
-              float(g.half), float(level_size(HORIZON_GRID_LEVEL)),
-              (int(merc[0]), int(merc[1]), int(merc[2]), merc[3]) if merc is not None else None)
-    kw = {}
-    if cone is not None:
-        kw["cone"] = [float(v) for v in cone]
-    if view is not None and view.tau > 0:       # (screen-space LOD: the same rule as select's, View.decide)
-        fast.require(SSE_NEED, "screen-space LOD")
-        kw["view"] = (float(view.cx), float(view.cy), float(view.dz), float(view.ppr), float(view.tau),
-                      float(view.reach), float(view.h), float(view.cap), float(view.cells), view.gerr)
-    t0 = time.perf_counter()
-    global LAST_SLACK
-    tiles, grefined, regions, gslack = fast._ef.far_global_select(
-        float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
-        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h), **kw)
-    out = {}
-    memo = _gtile_memo(frame, zf)
-    for z, x, y, q, s in tiles:
-        t = memo.get((z, x, y))
-        if t is None:           # (a tile's quad and size are its anchor's alone: the same object at every pose)
-            t = memo[(z, x, y)] = GTile(int(z), int(x), int(y), GLOBAL_MIN_LEVEL + int(zf) - int(z), tuple(q),
-                                        float(s))
-        out[t.key] = t
-    refined = {("m", int(z), int(x), int(y)) for z, x, y in grefined}
-    t1 = time.perf_counter()
-    if regions and not anchor_nodes:
-        # (a camera high above the ground, the 3D map: the finest global tiles are leaves, no anchor nodes in them;
-        # those nodes, a few metres to a km, are below a pixel from there, and their Python selection took 0.25-0.37 s
-        # of the event loop at each camera move, 2026-11-07)
-        for x, y, q in regions:
-            q = tuple(float(v) for v in q)
-            e = [math.hypot(q[(2 * k + 2) % 8] - q[2 * k], q[(2 * k + 3) % 8] - q[2 * k + 1]) for k in range(4)]
-            t = GTile(int(zf), int(x), int(y), GLOBAL_MIN_LEVEL, q, float(sum(e) / 4))
-            out[t.key] = t
-            refined.discard(("m", int(zf), int(x), int(y)))
-        regions = []
-    if regions:
-        aout, aref = select(px, py, forced, {n for n in prev_refined if len(n) == 3}, kfun, h, radius,
-                            GLOBAL_MIN_LEVEL - 1, {n for n in hold if len(n) == 3}, min_level, radii, layout, disc,
-                            None, forced_level, view, region=Region(zf, regions), eye_h=eye_h, cone=cone)
-        out.update(aout)
-        refined |= aref
-        gslack = min(gslack, LAST_SLACK)
-    LAST_SLACK = gslack
-    global LAST_GLOBAL_SELECT
-    LAST_GLOBAL_SELECT = (t1 - t0, time.perf_counter() - t1, len(regions or ()), len(tiles))
-    return out, refined
-
-
-LAST_GLOBAL_SELECT = None   # (global part s, anchor part s, regions, global tiles) of the last select_global (logs)
-# The last select / select_global's slack (m): its result stays the same while the player, the radius, the eye's height
-# over the ground and the camera (the screen-space LOD's) move less than this in all, the other inputs unchanged and
-# the previous result as prev_refined (earthd Connection._far_unchanged: a pose's selection skipped only then)
-LAST_SLACK = None
-_GTILE_MEMO = {}            # (lat0, lon0, zf) -> {(z, x, y): GTile}: select_global's tiles of an anchor's world
-_GTILE_MEMO_MAX = 20000
-
-
-def _gtile_memo(frame, zf):
-    k = (float(frame.lat0), float(frame.lon0), int(zf))
-    m = _GTILE_MEMO.get(k)
-    if m is None or len(m) > _GTILE_MEMO_MAX:
-        if len(_GTILE_MEMO) >= 4:       # (the last few anchors: a rebase's previous one stays useful a while)
-            _GTILE_MEMO.pop(next(iter(_GTILE_MEMO)))
-        m = _GTILE_MEMO[k] = {}
-    return m
-
-
 def global_frame_ll(z, x, y):
     """(lat, lon) of a global tile's frame (its centre)."""
     fast.require(GLOBAL_NEED, "global far tiles")
@@ -854,22 +652,14 @@ def build_global(dem, z, x, y, zoom, ref_zoom, layout=V131):
     Mercator position, u east, v north; grid: its surface's world z on the Mercator vertex grid, [j north, i east]):
     the DEM at `zoom` on its (cells + 1)^2 Mercator grid, the 2x reference at ref_zoom, simplified like the anchor's far
     levels (rtin within ADAPT_EPS of the spacing)."""
-    fast.require(GLOBAL_NEED, "global far tiles")
-    n = layout.cells
+    fast.require(578, "global far geometry")
+    def sample(steps, dem_zoom):
+        lat, lon = fast._ef.far_global_coordinates(z, x, y, steps)
+        return np.ascontiguousarray(dem.sample(lat, lon, dem_zoom), np.float64)
 
-    def ll(steps):
-        f = np.arange(steps + 1) / steps
-        X, Y = np.meshgrid(x + f, (y + 1) - f)          # [j north, i east]
-        w = float(2 ** z)
-        lon = X / w * 360.0 - 180.0
-        lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1.0 - 2.0 * Y / w))))
-        return lat, lon
-    lat, lon = ll(n)
-    elev = np.ascontiguousarray(np.asarray(dem.sample(lat, lon, zoom), np.float64))
-    rlat, rlon = ll(2 * n)
-    ref = np.ascontiguousarray(np.asarray(dem.sample(rlat, rlon, ref_zoom), np.float64))
+    elev = sample(layout.cells, zoom)
+    ref = sample(2 * layout.cells, ref_zoom)
     eps = ADAPT_EPS if layout.cells == 64 else 0.0
-    fast.require(SSE_NEED, "global far tiles' normal error")
     P, nrm, uv, planar, tris, grid, pz, err, skirt, size, err_n = fast._ef.far_global_mesh(int(z), int(x), int(y),
                                                                                            elev, ref, float(eps))
     return Built([0.0, 0.0, float(pz)], P, nrm, uv, planar, tris, grid.astype(np.float32), float(err), None,
@@ -1074,7 +864,7 @@ def palette_image():
     ]
     u = (np.arange(PALETTE_W) + 0.5) / PALETTE_W
     elev = elev_from_u(u)
-    base = np.stack([np.interp(elev, [e for e, _ in land], [c[k] for _, c in land]) for k in range(3)], -1)
+    base = np.stack([dnp.interp(elev, [e for e, _ in land], [c[k] for _, c in land]) for k in range(3)], -1)
     # Low land takes the terrain block's dirt colour (§2.3 colour continuity), blending into the
     # height palette between DIRT_UNTIL and DIRT_BLEND_TO; the slope tint fades in with it.
     w = np.clip((elev - DIRT_UNTIL) / (DIRT_BLEND_TO - DIRT_UNTIL), 0.0, 1.0)[:, None]
@@ -1144,49 +934,22 @@ def write_mod_assets(mod_dir):
 
 
 # --- geometry --------------------------------------------------------------------------
-def _skirt(nx, ny):
-    """Edge vertex index runs, each ordered so that the skirt faces outwards
-    (direction along the edge = up x outward normal)."""
-    g = np.arange(nx * ny).reshape(ny, nx)          # [j, i], j = north
-    return [g[0, :],            # south, west -> east
-            g[:, -1],           # east, south -> north
-            g[-1, ::-1],        # north, east -> west
-            g[::-1, 0]]         # west, north -> south
-
-
 def surface_at(grid, sp, fx, fy):
     """Height of a tile's triangulated surface at tile-local plane points (fx, fy in metres
     from the SW corner, inside the tile). grid: [j, i] vertex heights, spacing sp. Cells with
     i + j even are split along the SW-NE diagonal, the others along SE-NW, as build_tile
     triangulates them (the TerrainBlock's pattern, see torque_split45)."""
-    n = grid.shape[0] - 1
-    gx, gy = np.asarray(fx, np.float64) / sp, np.asarray(fy, np.float64) / sp
-    i = np.clip(np.floor(gx).astype(np.int64), 0, n - 1)
-    j = np.clip(np.floor(gy).astype(np.int64), 0, n - 1)
-    a, b = gx - i, gy - j
-    z00, z10 = grid[j, i], grid[j, i + 1]
-    z01, z11 = grid[j + 1, i], grid[j + 1, i + 1]
-    split45 = (i + j) % 2 == 0
-    # SW-NE diagonal: triangles (00, 10, 11) where a >= b and (00, 11, 01) above it.
-    z45 = np.where(a >= b, z00 + a * (z10 - z00) + b * (z11 - z10),
-                   z00 + a * (z11 - z01) + b * (z01 - z00))
-    # SE-NW diagonal: triangles (00, 10, 01) where a + b <= 1 and (10, 11, 01) above it.
-    z135 = np.where(a + b <= 1.0, z00 + a * (z10 - z00) + b * (z01 - z00),
-                    z11 + (1 - a) * (z01 - z11) + (1 - b) * (z10 - z11))
-    return np.where(split45, z45, z135)
+    fast.require(578, "far mesh surface sampling")
+    gx, gy = np.broadcast_arrays(np.asarray(fx, np.float64) / sp, np.asarray(fy, np.float64) / sp)
+    z = fast._ef.far_surface_points(grid, grid.shape[0], gx.ravel(), gy.ravel())
+    return z.reshape(gx.shape)
 
 
 def grid_triangles(n):
     """Triangles (counter-clockwise from +Z) of an (n+1) x (n+1) vertex grid indexed [j, i]:
     cell (i, j) is split SW-NE when i + j is even, SE-NW otherwise (torque_split45)."""
-    nx = n + 1
-    jj, ii = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
-    a = (jj * nx + ii).ravel()
-    b, c, d = a + 1, a + nx, a + nx + 1
-    even = ((ii + jj) % 2 == 0).ravel()[:, None]
-    t1 = np.where(even, np.stack([a, b, d], -1), np.stack([a, b, c], -1))
-    t2 = np.where(even, np.stack([a, d, c], -1), np.stack([b, d, c], -1))
-    return np.stack([t1, t2], 1).reshape(-1, 3)
+    fast.require(578, "far grid triangles")
+    return fast._ef.far_grid_triangles(n)
 
 
 @dataclass
@@ -1223,6 +986,7 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
     (the anchor's height quantum) and the heightmap zoom: vertices are then Q-rounded 2 m lattice
     samples, the same values the terrain block stores, and (L0, with_sink) `sink` is measured
     against the terrain's 2 m lattice."""
+    fast.require(578, "far tile geometry")
     cells = layout.cells
     x0, y0, x1, y1 = tile.bbox
     S = tile.size
@@ -1255,16 +1019,12 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
             # (on the far lattice, not the block's own 1 m samples: a dip at an odd metre can show a sliver of the tile
             # at the drawn block's edge ring; measuring at 1 m made every near tile ~4x the surface work and the
             # pending block's tiles slower than the rest, 2026-11-01)
-            terrain, terrain_sq = lq, heightmap.FAR_SQUARE
+            terrain = lq
     else:
-        xs = x0 + np.arange(cells + 1) * sp
-        ys = y0 + np.arange(cells + 1) * sp
+        xs, ys = fast._ef.far_axes((x0, y0), cells, sp)
         elev, U = heightmap.surface(frame, elev_fn, xs, ys)
-        if q is not None:
-            U = heightmap.quantise(U, q) * q
         rz = zoom if ref_zoom is None else ref_zoom
-        rxs = x0 + np.arange(2 * cells + 1) * (sp / 2)
-        rys = y0 + np.arange(2 * cells + 1) * (sp / 2)
+        rxs, rys = fast._ef.far_axes((x0, y0), 2 * cells, sp / 2)
         ref = heightmap.surface_u(frame, lambda la, lo: dem.sample(la, lo, rz), rxs, rys)
     step_f = (NEAR_FINE_M if tile.level == layout.exact_level else
               NEAR_FINE_NEXT_M if tile.level == layout.exact_level + 1 else 0.0) if NEAR_FINE_M > 0 else 0.0
@@ -1276,119 +1036,59 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
         ys = y0 + np.arange(nf) * step_f
         elev, U = heightmap.surface(frame, elev_fn, xs, ys)
         sp, cells = step_f, nf - 1
-    U = np.asarray(U, np.float64)
-    shade = U                           # the vertex normals: the whole grid's (its detail in the light)
-    adaptive = None
-    if fine:
-        fast.require(51, "fine near ground")
-        eps = NEAR_FINE_EPS * step_f
-        while True:
-            adaptive, surf, worst = fast._ef.rtin_mesh(np.ascontiguousarray(U), eps)
-            if len(np.unique(adaptive)) + 4 * nf <= NEAR_FINE_VERTS:
-                break
-            eps *= 2
-        U = surf
-    elif tile.level >= ADAPT_MIN_LEVEL and ADAPT_EPS > 0 and layout.cells == 64:    # (the v1.3.1 layout: its grid)
-        fast.require(51, "adaptive far tiles")
-        adaptive, U, _ = fast._ef.rtin_mesh(np.ascontiguousarray(U), ADAPT_EPS * sp)     # U: the mesh's surface
-
-    # Geometric error: the reference against the triangulated tile, on the 2x grid (fine: the samples themselves);
-    # vertical (the skirts) and along the normal (the screen-space LOD, earthfast normal_err)
-    if fine:
-        err = err_n = float(worst)
-    else:
-        rf = np.arange(2 * cells + 1) * (sp / 2)
-        RX, RY = np.meshgrid(rf, rf)
-        model = surface_at(U, sp, RX, RY)
-        err = float(np.abs(ref - model).max())
-        fast.require(SSE_NEED, "the far tiles' normal error")
-        err_n = float(fast._ef.far_normal_err(np.ascontiguousarray(ref, np.float64),
-                                              np.ascontiguousarray(model, np.float64), float(sp / 2)))
-    sink = None
-    if terrain is not None:
-        lf = np.arange(terrain.shape[0]) * terrain_sq
-        LX, LY = np.meshgrid(lf, lf)
-        sink = float(max(0.0, (surface_at(U, sp, LX, LY) - terrain).max()) + SINK_MARGIN)
-
-    X, Y = np.meshgrid(xs, ys)          # [j, i], j = north
-    # Colour: height along u, slope along v (mirrored palette, flat = 0.5).
-    gy, gx = np.gradient(elev, ys, xs)
-    slope_t = np.clip(dnp.hypot(gx, gy) / 1.0, 0.0, 1.0)
-    water = (elev <= 0.5) & (slope_t < 0.02)
-    uu = np.where(water, WATER_U, u_from_elev(elev))
-    vv = 0.5 - 0.47 * slope_t
-
-    # Vertex normals from the grid (central differences).
-    Ps = np.stack([X, Y, shade], -1)
-    di = np.gradient(Ps, axis=1)
-    dj = np.gradient(Ps, axis=0)
-    nrm = np.cross(di, dj)
-    nrm /= dnp.norm(nrm, axis=-1, keepdims=True)
-    P = np.stack([X, Y, U], -1)
-
-    ny, nx = X.shape
-    P, nrm = P.reshape(-1, 3), nrm.reshape(-1, 3)
-    uv = np.stack([uu, vv], -1).reshape(-1, 2)
-    runs = _skirt(nx, ny)
-    if adaptive is None:
-        tris = [grid_triangles(nx - 1)]     # CCW from +Z, the TerrainBlock's diagonals
-    else:                               # the mesh's vertices only; the skirts along its edge vertices
-        used = np.unique(adaptive)
-        new_of = np.full(nx * ny, -1, np.int64)
-        new_of[used] = np.arange(len(used))
-        tris = [new_of[adaptive]]
-        P, nrm, uv = P[used], nrm[used], uv[used]
-        runs = [new_of[r[new_of[r] >= 0]] for r in runs]
-
-    # Skirts: copies of the edge vertices, lowered; same normal and uv as the edge.
-    depth = skirt_depth(S, err)
-    extra_p, extra_n, extra_uv, nv = [], [], [], len(P)
-    for run in runs:
-        low = P[run] - (0.0, 0.0, depth)
-        t0, t1 = run[:-1], run[1:]
-        lo0 = nv + np.arange(len(run) - 1)
-        lo1 = lo0 + 1
-        tris.append(np.stack([t0, lo0, t1, t1, lo0, lo1], -1).reshape(-1, 3))
-        extra_p.append(low)
-        extra_n.append(nrm[run])
-        extra_uv.append(uv[run])
-        nv += len(run)
-    P = np.concatenate([P] + extra_p)
-    nrm = np.concatenate([nrm] + extra_n)
-    uv = np.concatenate([uv] + extra_uv)
-
-    pos = [float(x0), float(y0), float(np.round(U.mean()))]
-    P -= pos
-    planar = (P[:, :2] / S)
-    return Built(pos, P, nrm, uv, planar, np.concatenate(tris), U.astype(np.float32), err, sink, depth, S, err_n)
+    eps = (NEAR_FINE_EPS * step_f if fine else
+           ADAPT_EPS * sp if tile.level >= ADAPT_MIN_LEVEL and layout.cells == 64 else 0.0)
+    precision = elev.dtype.itemsize * 8 if elev.dtype.kind == "f" else 64
+    P, nrm, uv, planar, tris, grid, pz, err, sink, depth, err_n = fast._ef.far_local_mesh(
+        np.asarray(elev, np.float64), np.asarray(U, np.float64), np.asarray(ref, np.float64),
+        (x0, y0), S, sp, eps, NEAR_FINE_VERTS if fine else None, precision,
+        None if terrain is None else np.asarray(terrain, np.float64), heightmap.FAR_SQUARE, SINK_MARGIN,
+        q if tile.level > 0 else None)
+    return Built([float(x0), float(y0), pz], P, nrm, uv, planar, tris, grid, err, sink, depth, S, err_n)
 
 
-def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_px=None):
+def _shape_geometry(built, material, uvs, uvs2, cliff_frame=None, cliff_surface=None, cliff_texture=None):
+    """Shared geometry for direct writes and cached shape restoration."""
+    from cliffsettings import SETTINGS
+    built.cliff_colors = False
+    if SETTINGS.natural and cliff_frame is not None:
+        import farcliffs
+        cliff = farcliffs.geometry(built, cliff_frame, uvs, uvs2, material,
+                                   surface=cliff_surface, terrain_texture=cliff_texture)
+        if cliff is not None:
+            built.cliff_colors = True
+            # The shared writer bounds oversized meshes and preserves every vertex channel.
+            return cliff
+    return dict(positions=built.positions, tris=built.tris, normals=built.normals,
+                uvs=uvs, uvs2=uvs2, material=material, tangent_uvs=built.planar)
+
+
+def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_px=None,
+                *, cliff_frame=None, cliff_surface=None, cliff_texture=None):
     """Write a built tile as .cdae (default) or .dae; returns the file size. textured: the tile
     has its own imagery texture (UV0 = footprint, UV1 = world-locked detail); otherwise UV0 is
     the shared palette coordinate and there is no UV1. tex_px: the texture has a border of
     imagery.gutter(tex_px) texels around the footprint (UV0 is inset to match)."""
-    assert len(built.positions) <= VERTS_MAX
     uvs = built.uvs
     if textured:
         uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
     uvs2 = built.detail_uvs if textured else None
     if fmt == "cdae":
-        return cdae.write(path, built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=uvs2,
-                          material=material, tangent_uvs=built.planar, close=False)    # (terrain: a heightfield)
+        geometry = _shape_geometry(built, material, uvs, uvs2, cliff_frame, cliff_surface, cliff_texture)
+        return cdae.write(path, **geometry, close=False)    # (terrain: a heightfield)
     dae.write_grid_dae(path, built.positions.ravel(), uvs.ravel(), built.tris.ravel(),
                        material=material, normals=built.normals.ravel(),
                        uvs2=None if uvs2 is None else uvs2.ravel())
     return os.path.getsize(path)
 
 
-def built_shape(built, material, tex_px=None, packed=None):
+def built_shape(built, material, tex_px=None, packed=None,
+                *, cliff_frame=None, cliff_surface=None, cliff_texture=None):
     """The .cdae bytes write_built writes for a textured tile (farrestore: a worker's kept shape, packed=False with a
     placeholder name, the session's name stamped in when it is put back)."""
-    assert len(built.positions) <= VERTS_MAX
     uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
-    return cdae.encode(built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=built.detail_uvs,
-                       material=material, tangent_uvs=built.planar, close=False, open_tris=None, packed=packed)
+    geometry = _shape_geometry(built, material, uvs, built.detail_uvs, cliff_frame, cliff_surface, cliff_texture)
+    return cdae.encode(**geometry, close=False, open_tris=None, packed=packed)
 
 
 def write_tile(path, frame, dem, tile, zoom, q=None, ref_zoom=None, fmt="cdae", cancelled=None, layout=V131):
@@ -1398,6 +1098,47 @@ def write_tile(path, frame, dem, tile, zoom, q=None, ref_zoom=None, fmt="cdae", 
     built = build_tile(frame, dem, tile, zoom, q, ref_zoom, layout=layout)
     write_built(path, built, fmt)
     return built
+
+
+COVER_MARGIN = 0.5          # m: a partial tile's top this far under the block's surface (cover_sink), for the engine's
+# terrain triangles between the samples and its distant LOD
+
+
+def cover_sink(grid, tbbox, heights, bx0, by0, square, margin=COVER_MARGIN):
+    """How far (m, >= margin) a far tile must sink to lie under a terrain block everywhere they overlap: the exact cover
+    sink of a tile across the block's edge (farfield.lua 'partial', the terrain message's `cover`; the user, 2026-11-21:
+    "im driving through the old lod terrain sometimes with the solid ground being under it"), against the block's own
+    samples, not the tile's lattice. grid: the tile's [j, i] absolute vertex heights; tbbox its footprint; heights: the
+    block's [gy, gx] sample heights (gy = north, sample (gx, gy) at (bx0 + gx * square, by0 + gy * square)). The tile's
+    surface at each sample in the overlap is bounded by its cell's bilinear height + |z00 - z10 - z01 + z11| / 4, above
+    either diagonal's triangles (and an adaptive mesh's, whose diagonals run through the grid points). None: no
+    overlap. Only +, *, abs and max: the same on every machine."""
+    g = np.asarray(grid, np.float64)
+    n = g.shape[0] - 1
+    tx0, ty0, tx1, ty1 = tbbox
+    sp = (tx1 - tx0) / n
+    N = heights.shape[0]
+    gx0 = max(0, int(math.ceil((tx0 - bx0) / square - 1e-9)))
+    gx1 = min(N - 1, int(math.floor((tx1 - bx0) / square + 1e-9)))
+    gy0 = max(0, int(math.ceil((ty0 - by0) / square - 1e-9)))
+    gy1 = min(N - 1, int(math.floor((ty1 - by0) / square + 1e-9)))
+    if gx0 > gx1 or gy0 > gy1:
+        return None
+    u = ((bx0 + np.arange(gx0, gx1 + 1) * square) - tx0) / sp
+    i = np.clip(np.floor(u).astype(np.int64), 0, n - 1)
+    fu = u - i
+    worst = -math.inf
+    for r0 in range(gy0, gy1 + 1, 128):          # (rows in chunks: a coarse tile over the whole 1 km block is 1M samples)
+        r1 = min(gy1 + 1, r0 + 128)
+        v = ((by0 + np.arange(r0, r1) * square) - ty0) / sp
+        j = np.clip(np.floor(v).astype(np.int64), 0, n - 1)
+        fv = (v - j)[:, None]
+        z00, z10 = g[j[:, None], i[None, :]], g[j[:, None], i[None, :] + 1]
+        z01, z11 = g[j[:, None] + 1, i[None, :]], g[j[:, None] + 1, i[None, :] + 1]
+        bil = z00 * (1 - fu) * (1 - fv) + z10 * fu * (1 - fv) + z01 * (1 - fu) * fv + z11 * fu * fv
+        top = bil + np.abs(z00 - z10 - z01 + z11) * 0.25
+        worst = max(worst, float((top - heights[r0:r1, gx0:gx1 + 1]).max()))
+    return max(0.0, worst) + margin
 
 
 def group_deltas(group_tiles):

@@ -428,15 +428,62 @@ local function onAnchors(data)
       if lat and mpanchor.setRemote(pid, a.aLat, a.aLon) then
         local id = tostring(tonumber(pid))
         anchors[id] = { aLat = tonumber(a.aLat), aLon = tonumber(a.aLon), lat = lat, lon = lon,
-          name = a.name, h = a.h }
+          name = a.name, h = a.h, rel = M.releaseId(a.rel) }
         n = n + 1
       end
     end
   end
   mpanchor.retainRemote(anchors)
+  M.noteReleases(myPid())
   if n ~= lastPlayers then
     lastPlayers = n
     log('I', 'beamngEarth', string.format('BeamMP: %d player(s) with BeamNG.Earth', n))
+  end
+end
+
+-- The map data's release of a world server (an Overture release id), else nil.
+function M.releaseId(rel)
+  return (type(rel) == 'string' and rel:match('^%d%d%d%d%-%d%d%-%d%d%.%d%d?$')) and rel or nil
+end
+
+-- The level's map data release (core: releasepin's pin, from the live server's hello; nil: not known yet): our poses
+-- carry it whether or not shared generation's share_hello was answered.
+function M.setRelease(rel) M._ownRelease = M.releaseId(rel) end
+function M.ownRelease() return M._ownRelease or (shareInfo and shareInfo.release) or nil end
+
+-- Pure: the players (anchors: the plugin's, each with its world server's release when its poses carry one) whose
+-- release is known and not ours, as { { pid, name, rel } } in pid order; {} when ours is not known.
+function M.otherReleases(own, list, me)
+  local out = {}
+  if not own then return out end
+  for pid, a in pairs(list or {}) do
+    if pid ~= me and type(a) == 'table' and a.rel and a.rel ~= own then
+      out[#out + 1] = { pid = pid, name = tostring(a.name or ('player ' .. pid)), rel = a.rel }
+    end
+  end
+  table.sort(out, function(x, y) return x.pid < y.pid end)
+  return out
+end
+
+-- Players whose world servers read other map data than ours (BeamMP shared generation v2): their plans' codes differ
+-- (the map data's versions are in them: mpshare.expect_code), so nothing is shared with them, by construction; the
+-- player is told once for each new set (a toast and the log), never per frame (at each bngeAnchors).
+function M.noteReleases(me)
+  local own = M.ownRelease()
+  local others = M.otherReleases(own, anchors, me)
+  if #others == 0 then return end
+  local parts = {}
+  for _, o in ipairs(others) do parts[#parts + 1] = o.name .. ' (' .. o.rel .. ')' end
+  local text = table.concat(parts, ', ')
+  if M._releasesNoted == text then return end
+  M._releasesNoted = text
+  log('W', 'beamngEarth', 'BeamMP: other map data than ours (' .. own .. '): ' .. text .. '; world building not shared')
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger then
+    pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = 'BeamNG.Earth: other map data',
+      msg = text .. ' build the world from other map data than yours (' .. own .. '). World building is not shared '
+        .. 'with them and roads may not line up where you meet. BeamNG.Earth picks its map data when it starts: '
+        .. 'restart it (the app) on the older side to match.', config = { timeOut = 30000 } })
   end
 end
 
@@ -473,14 +520,15 @@ local function onConfig(data)
 end
 
 -- The server's time and weather (its plugin's G.TIME / G.WEATHER, in bngeConfig): { time = { hours, speed, epoch } or
--- nil (the real clock), weather = a preset name or nil (the real weather) }. A player who set Sky or Weather to
--- Manual keeps their own (the sky and weather only follow the server in their 'real' mode).
+-- nil (the real clock), weather = a preset name, 'real-host' (everyone gets the weather host's real weather: bngeWeather;
+-- weatherHost = true on the host itself, which sends its own) or nil (the real weather) }. A player who set Sky or
+-- Weather to Manual (Off) keeps their own (the sky and weather follow the server in their real and preset modes).
 function M.applyServerSky(d)
   local sk, wx = rawget(_G, 'beamngEarth_sky'), rawget(_G, 'beamngEarth_weather')
   local time = type(d) == 'table' and type(d.time) == 'table' and d.time or nil
   local weather = type(d) == 'table' and type(d.weather) == 'string' and d.weather or nil
   if sk and sk.setServerClock then pcall(sk.setServerClock, time) end
-  if wx and wx.setPreset then pcall(wx.setPreset, weather) end
+  if wx and wx.setPreset then pcall(wx.setPreset, weather, type(d) == 'table' and d.weatherHost == true) end
   if time or weather then
     log('I', 'beamngEarth', string.format('BeamMP: the server\'s time %s, weather %s',
       time and string.format('%05.2f h x%g', tonumber(time.hours) or 0, tonumber(time.speed) or 0) or 'real',
@@ -861,7 +909,8 @@ local function updateFloating(owners)
 end
 
 function M.onShareInfo(msg)
-  shareInfo = { code = tostring(msg.code or ''), weight = tonumber(msg.weight) or 1 }
+  shareInfo = { code = tostring(msg.code or ''), weight = tonumber(msg.weight) or 1,
+    release = M.releaseId(msg.overtureRelease) }
   log('I', 'beamngEarth', 'BeamMP: sharing world building with the players near us (code ' .. shareInfo.code .. ')')
 end
 
@@ -886,6 +935,28 @@ local function onShare(data)
   stats.shareIn = (stats.shareIn or 0) + 1
 end
 
+-- 'real-host': the weather host's real weather, relayed by the plugin (checked again here: weather.sanitizeMsg).
+local function onWeather(data)
+  local wx = rawget(_G, 'beamngEarth_weather')
+  if type(data) ~= 'string' or #data > M.WEATHER_MAX_BYTES or not (wx and wx.setHostWeather and wx.sanitizeMsg) then return end
+  local ok, d = pcall(jsonDecode, data)
+  if not ok then return end
+  local m = wx.sanitizeMsg(d)
+  if m then pcall(wx.setHostWeather, m) end
+end
+M._onWeather = onWeather   -- (tests)
+
+-- 'real-host' on the weather host: its real weather to the server, which passes it on (weather.lua's onWeather).
+M.WEATHER_MAX_BYTES = 2048
+function M.sendHostWeather(msg)
+  local wx = rawget(_G, 'beamngEarth_weather')
+  if not (rawget(_G, 'TriggerServerEvent') and wx and wx.sanitizeMsg) then return end
+  local m = wx.sanitizeMsg(msg)
+  if not m then return end
+  local ok, text = pcall(jsonEncode, m)
+  if ok and type(text) == 'string' and #text <= M.WEATHER_MAX_BYTES then TriggerServerEvent('bngeWeather', text) end
+end
+
 local function onGroup(data)
   if type(data) == 'string' then require('beamngEarth/net').send({ type = 'share_group', d = data }) end
 end
@@ -907,6 +978,7 @@ function M.update(dt, anchor, player)
     AddEventHandler('bngeGroup', onGroup, 'beamngEarth')
     -- AddEventHandler('bngePeers', onPeers, 'beamngEarth')     -- (shared world building, commented out)
     AddEventHandler('bngeConfig', onConfig, 'beamngEarth')
+    AddEventHandler('bngeWeather', onWeather, 'beamngEarth')
     handlers = true
   end
   local mpanchor = require('beamngEarth/mpanchor')
@@ -1035,7 +1107,8 @@ function M.update(dt, anchor, player)
     end
     TriggerServerEvent('bngePose', jsonEncode({ v = M.PROTO, aLat = anchor.lat, aLon = anchor.lon, lat = lat,
       lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil,
-      sc = shareInfo and shareInfo.code or nil, sw = shareInfo and shareInfo.weight or nil }))
+      sc = shareInfo and shareInfo.code or nil, sw = shareInfo and shareInfo.weight or nil,
+      rel = M.ownRelease() }))     -- (our map data's release: the others are told on another)
     stats.poses = stats.poses + 1
     if joined then log('I', 'beamngEarth', string.format('BeamMP: first pose sent (%.5f, %.5f)', lat, lon)) end
     joined = false
@@ -1196,6 +1269,7 @@ end
 -- The session's end (BeamMP left, the level's end): the deactivated cars back on, everything forgotten.
 function M.reset()
   shareInfo = nil             -- (asked again in the next session)
+  M._releasesNoted = nil
   for gid in pairs(deactivated) do
     local veh = vehicle(gid)
     if veh then veh:setActive(1) end

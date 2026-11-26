@@ -222,5 +222,45 @@ class RevisitTest(unittest.TestCase):
         self.assertIn(revisit.format_marker("plans", plancache.plans_format()), codes)
 
 
+class FrameKeyTest(unittest.TestCase):
+    """An item built in an anchor's frame is keyed by that frame exactly (revisit.frame_parts). MeshDrive64Test l2_bad
+    in the gates (2026-11-07 to 11-26): the drive's rebase anchor, the car's spot, lands a few 1e-7 degrees from the
+    last run's; keyed by the origin rounded to 7 decimals, the far tiles kept by a run whose anchor was under 5e-8
+    degrees away came back, one height quantum off the block at random vertices."""
+
+    LAT, LON = 36.5974164, -118.2331246
+
+    def test_nearby_frames_build_other_far_tiles_and_have_other_keys(self):
+        import types
+        import numpy as np
+        import blockworker
+        import farfield as ff
+        import geodesy
+
+        class Dem:
+            def sample(self, lat, lon, zoom, progress=None):
+                return 2900 + 300 * np.sin(lat * 90) * np.cos(lon * 70)
+
+        lay = ff.Layout(64, 1024, mesh=True)
+        tile = ff.Tile(lay.exact_level, 1, 2)
+        a, b = (self.LAT + 2e-8, self.LON), (self.LAT - 2e-8, self.LON)     # (~4 mm apart, one 7-decimal value)
+        self.assertEqual(round(a[0], 7), round(b[0], 7))
+        grids = [ff.build_tile(geodesy.EnuFrame(*f), Dem(), tile, 17, 1 / 64, with_sink=True, layout=lay).grid
+                 for f in (a, b)]
+        self.assertTrue((grids[0] != grids[1]).any())       # (another frame: other quantised heights)
+        saved = blockworker._s
+        blockworker._s = types.SimpleNamespace(md=None, sea=None, airports=None)
+        try:
+            keys = [blockworker._far_key(*f, tile, 17, 1 / 64, None, True, lay) for f in (a, b)]
+        finally:
+            blockworker._s = saved
+        self.assertNotEqual(revisit.key("far", *keys[0]), revisit.key("far", *keys[1]))    # (one key before)
+
+    def test_snapped_anchors_keep_their_keys(self):
+        """The mod's anchors (geodesy.snapAnchor: 6 decimals) are keyed as with the 7-decimal rounding of before."""
+        for lat, lon in ((36.58, -118.24), (39.28, -76.56), (-33.87, 151.2), (0.0, -0.0), (84.99, 179.68)):
+            self.assertEqual(repr(revisit.frame_parts(lat, lon)), repr((round(lat, 7), round(lon, 7))))
+
+
 if __name__ == "__main__":
     unittest.main()

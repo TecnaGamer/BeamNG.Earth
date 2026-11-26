@@ -342,16 +342,81 @@ def set_cancel(check):
         _cancel_proc[0] = check
 
 
+def set_thread_cancel(check):
+    """This thread's own cancel check only, never the process's: a thread that serves no job (blockworker's road plans
+    ahead) must not see the running job's "a teleport left its place" check, or it gives up the new place's cells
+    (2026-11-22 Fells Point: every plan ahead raised Abandoned while a Bonneville job ran in the process, and no road
+    tile came for 4 minutes). check() true raises pools.Abandoned; a check returning False shields the thread."""
+    _cancel.check = check
+
+
+_extra = [None]                 # BNE_V2_HOST (v2host.py): the scheduler's job flag (a place left), or None
+
+
+def extra_cancel(check):
+    """A check every thread's _cancelled also asks (v2host: earthfast.sched_cancelled, the flag of the scheduler job
+    the thread runs, raised when a teleport leaves its place); None: none (the default)."""
+    _extra[0] = check
+
+
 def _cancelled():
-    check = getattr(_cancel, "check", None) or _cancel_proc[0]
-    return check is not None and check()
+    local = getattr(_cancel, "check", None)
+    if local:                   # (this thread's own check decides: one returning False shields it, set_thread_cancel)
+        return bool(local())
+    check = _cancel_proc[0]
+    if check is not None and check():
+        return True
+    extra = _extra[0]
+    return extra is not None and extra()
+
+
+class TimeLimit(Exception):
+    """The step this thread is in ran past its wall-clock limit (set_deadline): raised by check_cancel, at the places that
+    already ask whether the job is still wanted. Never raised in a thread that set no deadline."""
+
+    def __init__(self, what, secs):
+        super().__init__("%s: time limit %g s" % (what, secs))
+        self.what, self.secs = what, secs
+
+
+_deadline = threading.local()       # this thread's .until (time.monotonic), .what, .secs
+
+
+def set_deadline(what, secs, used=0.0):
+    """This thread's time limit: secs for `what`, of which `used` seconds are spent already (None what: none). It is a
+    deadline for check_cancel, never a kill: the work stops where it next asks. Returns the one it replaces."""
+    old = (getattr(_deadline, "until", None), getattr(_deadline, "what", None), getattr(_deadline, "secs", None))
+    if what is None:
+        _deadline.until = _deadline.what = _deadline.secs = None
+    else:
+        _deadline.until, _deadline.what, _deadline.secs = time.monotonic() + secs - used, what, secs
+    return old
+
+
+def restore_deadline(old):
+    _deadline.until, _deadline.what, _deadline.secs = old
+
+
+def deadline_left():
+    """Seconds this thread's time limit has left (negative: over it), None without one."""
+    until = getattr(_deadline, "until", None)
+    return None if until is None else until - time.monotonic()
+
+
+def check_deadline():
+    """Raise TimeLimit when this thread's time limit (set_deadline) has run out."""
+    left = deadline_left()
+    if left is not None and left <= 0.0:
+        raise TimeLimit(_deadline.what, _deadline.secs)
 
 
 def check_cancel():
-    """Raise pools.Abandoned when this thread's (or worker process's) job is no longer wanted (set_cancel)."""
+    """Raise pools.Abandoned when this thread's (or worker process's) job is no longer wanted (set_cancel), and TimeLimit
+    when the step it is in has run out of time (set_deadline)."""
     if _cancelled():
         import pools
         raise pools.Abandoned()
+    check_deadline()
 
 
 def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_note=None, patient=False):
@@ -366,6 +431,13 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
     got = ready()
     if got is not None:
         return got, False
+    import v2host
+    with v2host.blocked():          # (BNE_V2_HOST: a scheduler job waiting here gives its slot back)
+        return _once_wait(lock, ready, wait_s, kind, on_wait, live_s, live_note, patient)
+
+
+def _once_wait(lock, ready, wait_s, kind, on_wait, live_s, live_note, patient):
+    """once() past its first look."""
     t0 = time.monotonic()
     waited = False
     holder = seen = None
@@ -413,6 +485,12 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
                 on_wait()
         if time.monotonic() - t0 > wait_s:
             if not (live_s is not None and time.monotonic() - t0 <= live_s and _works(lock, pid) and holds_none()):
+                # (a holder writes its result before it releases: one that finished since the last look has no lock
+                # left to look fresh, and its result is there: read it, not build it again here. Windows CI,
+                # 2026-11-19: LockTest's waiter returned (None, False) in that gap)
+                got = ready()
+                if got is not None:
+                    return got, False
                 return None, False
             if not warned and time.monotonic() - t0 > LIVE_WARN_S:
                 # (alive and touching its lock, not necessarily getting on: a holder stuck alive is waited out to

@@ -10,6 +10,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -110,19 +111,73 @@ class SwitchTest(unittest.TestCase):
     def test_chain_by_switch(self):
         d = tempfile.mkdtemp(prefix="cdnsw_")
         os.makedirs(os.path.join(d, "cdn"))
-        names = ["md6in", "naip", "usgs", "eox2023"]
-        for doc, want in (({"imagery": {"bngs2": {"enabled": True}}}, ["md6in", "naip", "bngs2", "usgs", "eox2023"]),
-                          ({"imagery": {"bngs2": {"enabled": False}}}, names), ({}, names)):
+        names = ["md6in", "naip", "usgs", "eox2016"]
+        fine = ["md6in", "naip", "bngs2", "usgs", "bngs2fine", "eox2016"]
+        self.addCleanup(os.environ.pop, "BNGE_S2_FINE", None)
+        os.environ.pop("BNGE_S2_FINE", None)
+        for doc, want in (({"imagery": {"bngs2": {"enabled": True}}}, fine),
+                          ({"imagery": {"bngs2": {"enabled": True, "fine": False}}},
+                           ["md6in", "naip", "bngs2", "usgs", "eox2016"]),
+                          ({"imagery": {"bngs2": {"enabled": False}}}, names), ({}, names),
+                          ({"imagery": {"bngs2": {"enabled": True}}}, fine)):     # (again: a chain of its own)
             with open(os.path.join(d, "cdn", "cdn.json"), "w") as fh:
                 json.dump(doc, fh)
             self.assertEqual(list(cdn.chain(names, None, d)), want)
+
+    def test_stale_switch_if_error(self):
+        """A copy past SWITCH_TTL_S is used when the net fails (offline, an HTTP error, a malformed answer) without a
+        build fault, the net asked again only after the backoff; an answer replaces the copy. No copy: {} (off)."""
+        import revisit
+        import time
+
+        class Site:
+            def __init__(self):
+                self.calls, self.answer = [], netfetch.Offline
+
+            def get(self, url, kind="demand", max_bytes=None):
+                self.calls.append(url)
+                if isinstance(self.answer, type):
+                    raise self.answer(f"down: {url}", url, "raw.githubusercontent.com")
+                return mock.Mock(body=self.answer)
+        d = tempfile.mkdtemp(prefix="cdnsw_")
+        os.makedirs(os.path.join(d, "cdn"))
+        path = os.path.join(d, "cdn", "cdn.json")
+        with open(path, "w") as fh:
+            json.dump({"imagery": {"bngs2": {"enabled": True}}}, fh)
+        old = time.time() - cdn.SWITCH_TTL_S - 60
+        os.utime(path, (old, old))
+        fresh = {"lock": cdn._refresh["lock"], "backoff": netfetch.Backoff(cdn.SWITCH_TTL_S / 6, cdn.SWITCH_TTL_S)}
+        with mock.patch.object(cdn, "_refresh", fresh):
+            for answer in (netfetch.Offline, netfetch.FetchFailed, b"<html>"):
+                fresh["backoff"].ok()
+                site = Site()
+                site.answer = answer
+                f0 = revisit.faults()
+                with revisit.scope() as b:
+                    self.assertEqual(cdn.switch(site, d), {"imagery": {"bngs2": {"enabled": True}}}, "the stale copy")
+                    self.assertEqual(cdn.switch(site, d), {"imagery": {"bngs2": {"enabled": True}}})
+                self.assertEqual(len(site.calls), 1, "asked once: then not before the backoff")
+                self.assertTrue(b.complete, f"{answer}: no build short ({b.why_not()})")
+                self.assertEqual(revisit.faults(), f0)
+            fresh["backoff"].until = time.monotonic() - 1        # (the backoff passed)
+            cdn.switch(site, d)
+            self.assertEqual(len(site.calls), 2, "asked again after the backoff")
+            self.assertEqual(fresh["backoff"].failures, 2)
+            fresh["backoff"].until = time.monotonic() - 1
+            site.answer = json.dumps({"imagery": {}}).encode()
+            self.assertEqual(cdn.switch(site, d), {"imagery": {}}, "an answer replaces it")
+            self.assertLess(time.time() - os.path.getmtime(path), 60)
+            self.assertEqual(fresh["backoff"].failures, 0)
+            os.remove(path)
+            site.answer = netfetch.Offline
+            self.assertEqual(cdn.switch(site, d), {}, "no copy: off, as before")
 
     def test_max_zoom_by_switch(self):
         d = tempfile.mkdtemp(prefix="cdnsw_")
         os.makedirs(os.path.join(d, "cdn"))
         self.addCleanup(os.environ.pop, imagery.S2_MAX_ZOOM_ENV, None)
         self.addCleanup(imagery.set_s2_max_zoom, 12)
-        names = ["naip", "usgs", "eox2023"]
+        names = ["naip", "usgs", "eox2016"]
         for doc, want in (({"enabled": True}, 12), ({"enabled": True, "max_zoom": 13}, 13),
                           ({"enabled": True, "max_zoom": 99}, 14), ({"enabled": True, "max_zoom": "x"}, 12)):
             imagery.set_s2_max_zoom(12)
@@ -131,6 +186,8 @@ class SwitchTest(unittest.TestCase):
             self.assertIn("bngs2", cdn.chain(names, None, d))
             s = imagery.SOURCES["bngs2"]
             self.assertEqual((s.max_zoom, s.max_view_zoom), (want, want))
+            f = imagery.SOURCES["bngs2fine"]        # (its second place: the same zoom, every finer view)
+            self.assertEqual((f.max_zoom, f.max_view_zoom, f.enlarge_only), (want, 99, True))
             self.assertEqual(os.environ.get(imagery.S2_MAX_ZOOM_ENV), "12" if want == 12 else str(want))
             # an Imagery made now (a spawned block worker imports imagery afresh: the environment) asks zoom want
             im = imagery.Imagery(d, ["bngs2"], fetcher=netfetch.Fetcher(offline=True))

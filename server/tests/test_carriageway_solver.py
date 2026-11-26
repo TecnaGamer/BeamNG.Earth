@@ -8,9 +8,20 @@ from unittest import mock
 
 import numpy as np
 
-# run_tests runs modules in separate processes: exercise carriageways even when the product default is off.
+# run_tests runs modules in separate processes: exercise carriageways even when the product default is off. Put back
+# when the module is done (tearDownModule): in one process (unittest discover) the switches leaked into the later
+# modules' worker processes and test_drivability scored 18 sites with carriageways on.
+_ENV_BEFORE = {k: os.environ.get(k) for k in ("BNE_INTERCHANGE", "BNE_CARRIAGEWAYS")}
 os.environ["BNE_INTERCHANGE"] = "1"
 os.environ["BNE_CARRIAGEWAYS"] = "on"
+
+
+def tearDownModule():
+    for k, v in _ENV_BEFORE.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import carriageways as cw
 import fast
@@ -188,6 +199,58 @@ class GradingConsumerTest(legacy.StackTest):
                 faults = revisit.thread_faults()
                 self.assertIsNone(planner._cw_z_at(np.array([[0., 0.], [4., 0.]]), np.array([[2., 0.]])))
                 self.assertGreater(revisit.thread_faults(), faults)
+
+
+class SegmentSpacingTest(unittest.TestCase):
+    """A segment's grade bound and a window's curve bound are its own spacings' (kernel VERSION 309), not the chain's one
+    closest-two-samples step: a dip piece with two samples 0.3 m apart was held to 0.3 m of grade over its whole length."""
+
+    def setUp(self):
+        if getattr(fast._ef, "VERSION", 0) < 309:
+            self.skipTest("the native module is older than 309")
+
+    @staticmethod
+    def chain(ds, slope, **options):
+        x = np.r_[0.0, np.cumsum(ds)]
+        return dict(t=slope * x, w=np.ones(len(x)), grade=0.06, K=50.0, lam=2.0, length=0.0, step=float(min(ds)), **options), x
+
+    def test_one_short_segment_no_longer_holds_the_whole_chain_to_its_step(self):
+        ds = np.array([4.0] * 10 + [0.3] + [4.0] * 10)
+        ch, x = self.chain(ds, 0.05)                   # (a 5 % climb, under the 6 % law)
+        flat = cw.solve([ch])[0]
+        own = cw.solve([dict(ch, ds=ds)])[0]
+        self.assertGreater(float(flat[-1] - flat[0]), -1.0)
+        self.assertLess(float(flat[-1] - flat[0]), 0.5 * float(0.05 * x[-1]))    # (held to 0.3 m of grade a step: ~1.5 %)
+        self.assertAlmostEqual(float(own[-1] - own[0]), 0.05 * float(x[-1]), delta=0.05)
+
+    def test_the_grade_law_holds_per_segment_by_its_own_spacing(self):
+        ds = np.array([4.0, 4.0, 0.3, 4.0, 4.0])
+        ch, x = self.chain(ds, 0.2)                    # (a 20 % climb: the law, 6 %, is what the solve may give)
+        info = {}
+        z = cw.solve([dict(ch, ds=ds)], diagnostics=info)[0]
+        self.assertTrue(info["feasible"], info)
+        rise = np.abs(np.diff(z))
+        allowed = 0.06 * np.maximum(ds, cw.MIN_SEGMENT_M)      # (a segment shorter than MIN_SEGMENT_M: its law)
+        self.assertTrue(np.all(rise <= allowed + 1e-6), (rise, allowed))
+        self.assertGreater(float(rise[0]), 0.2)        # (the 4 m segments climb 24 cm, not the 1.8 cm of the 0.3 m one)
+
+    def test_equal_spacings_are_the_chains_step_exactly(self):
+        t = np.array([0.0, 0.4, 0.5, 1.5, 1.4, 2.6, 2.0, 3.0])
+        ch = dict(t=t, w=np.ones(len(t)), grade=0.05, K=40.0, lam=2.0, length=0.0, step=4.0)
+        a = cw.solve([ch])[0]
+        b = cw.solve([dict(ch, ds=np.full(len(t) - 1, 4.0))])[0]
+        self.assertTrue(np.array_equal(a, b))
+
+    def test_a_coincident_pair_is_held_to_the_least_spacing(self):
+        ds = np.array([4.0, 0.0, 4.0])
+        ch, x = self.chain(np.array([4.0, 1.0, 4.0]), 0.2)
+        z = cw.solve([dict(ch, ds=ds)])[0]
+        self.assertLessEqual(float(abs(z[2] - z[1])), 0.06 * cw.MIN_SEGMENT_M + 1e-6)
+
+    def test_a_wrong_number_of_spacings_is_refused(self):
+        ch, _ = self.chain(np.array([4.0, 4.0, 4.0]), 0.0)
+        with self.assertRaises(ValueError):
+            cw.solve([dict(ch, ds=np.array([4.0, 4.0]))])
 
 
 if __name__ == "__main__": unittest.main()

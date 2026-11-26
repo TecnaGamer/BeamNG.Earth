@@ -51,10 +51,15 @@ class MinimumBridgeClearanceTest(TestCase):
             self.assertTrue(np.any(np.isclose(vertices[:, 0], p[0]) & np.isclose(vertices[:, 2], p[2])))
         np.testing.assert_allclose(left[:, 0], right[:, 0])
 
-    def test_default_counts_slab_and_girders_below_six_metres(self):
-        self.assertEqual(roads.MIN_BRIDGE_HEADROOM_M, 6.0)
-        self.assertAlmostEqual(roads.DECK_ROAD_CLEAR,
-                               6.0 + roads.BRIDGE_HEADROOM_MARGIN_M + roadmesh.DECK_DEPTH + roadmesh.GIRDER_D)
+    def test_default_counts_slab_and_girders_below_the_law_headroom(self):
+        # (the law: 4 m under a bridge over a road with no height limit, a track's 6 m: a wagon and its catenary)
+        self.assertEqual(roads.MIN_BRIDGE_HEADROOM_M, 4.0)
+        self.assertAlmostEqual(roads.DECK_ROAD_CLEAR, roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
+                               + roadmesh.DECK_DEPTH + roadmesh.GIRDER_D)
+        self.assertEqual(roads.RAIL_HEADROOM_M, 6.0)
+        self.assertAlmostEqual(roads.deck_rail_clear(), roads.RAIL_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
+                               + roadmesh.DECK_DEPTH + roadmesh.GIRDER_D)
+        self.assertGreater(roads.deck_rail_clear(1.0), roads.deck_road_clear(1.0), "a track's is the higher")
 
     def test_smoothing_cannot_lower_a_feasible_crossing_corridor(self):
         xy = line()
@@ -74,7 +79,7 @@ class MinimumBridgeClearanceTest(TestCase):
         vertices, triangles, *_ = roadmesh.deck([chunk], (0.0, 0.0, 0.0))
         corridor = vertices[(vertices[:, 0] >= 180.0) & (vertices[:, 0] <= 224.0)]
         self.assertGreater(len(corridor), 0)
-        self.assertGreaterEqual(float(corridor[:, 2].min()) - 10.0, 6.0)
+        self.assertGreaterEqual(float(corridor[:, 2].min()) - 10.0, roads.MIN_BRIDGE_HEADROOM_M)
         self.assertTrue(np.isfinite(vertices).all())
         self.assertTrue(((triangles >= 0) & (triangles < len(vertices))).all())
 
@@ -89,14 +94,14 @@ class MinimumBridgeClearanceTest(TestCase):
         b = np.c_[np.zeros(len(a)), a[:, 0]]
         low, high = roads.deck_profile([a, b], flat, levels=[1.0, 2.0], widths=[12.0, 12.0])
         usable = high[len(high) // 2] - low[len(low) // 2] - roadmesh.DECK_DEPTH - roadmesh.GIRDER_D
-        self.assertGreaterEqual(usable, 6.0)
+        self.assertGreaterEqual(usable, roads.MIN_BRIDGE_HEADROOM_M)
 
     def test_impossible_short_span_is_reported_without_a_vertical_wall(self):
         xy = line(60.0)
         z, = roads.deck_profile([xy], flat, [(0, 30.0, 10.0)])
         deficits = roads._clearance_deficits([xy], [z], [(0, 30.0, 10.0)])
         self.assertEqual(len(deficits), 1)
-        self.assertLess(deficits[0][1], 6.0)
+        self.assertLess(deficits[0][1], roads.MIN_BRIDGE_HEADROOM_M)
         self.assertLessEqual(float(np.abs(np.diff(z) / 4.0).max()), roads.DECK_MAX_GRADE + 0.02)
         self.assertAlmostEqual(z[0], 10.0)
         self.assertAlmostEqual(z[-1], 10.0)
@@ -124,7 +129,7 @@ class MinimumBridgeClearanceTest(TestCase):
         with mock.patch("bridgetypes.nav_clearance", return_value=0.0), \
                 self.assertLogs("earthd.roads", level="DEBUG") as messages:     # (debug: GitHub #391)
             bp._solve([key], pool, {("lower", "g"): [lower]})
-        self.assertIn("below 6.0 m target", " ".join(messages.output))
+        self.assertIn(f"below {roads.MIN_BRIDGE_HEADROOM_M:.1f} m target", " ".join(messages.output))
 
 
 class MergeJointTest(TestCase):
@@ -183,11 +188,64 @@ class TwinLiftTest(TestCase):
         self.assertAlmostEqual(float(out[0][-1]), float(out[2][0]), delta=0.5)     # (the parts still meet)
 
 
+class JointWeldTest(TestCase):
+    """A way that changes level (the K5 line at Daikoku Junction, level 2 then 3): the part of one level is lifted to the
+    deck of its level beside it and the other part is not, so the joint they share opened a step of 0.9-2.1 m."""
+
+    def parts(self, partner_z):
+        xa = np.arange(-60.0, 0.1, 4.0)
+        xb = np.arange(0.0, 60.1, 4.0)
+        a = np.c_[xa, np.zeros(len(xa))]
+        b = np.c_[xb, np.zeros(len(xb))]
+        c = np.c_[xb, np.full(len(xb), 7.0)]                    # a deck of the second part's level beside it
+        zs = [np.full(len(xa), 10.0), np.full(len(xb), 10.0), np.full(len(xb), partner_z)]
+        return [a, b, c], zs, [8.0, 8.0, 8.0], [2.0, 3.0, 3.0]
+
+    def test_parts_sharing_a_joint_meet_at_one_height(self):
+        for partner_z in (11.0, 13.0):
+            lines, zs, widths, levels = self.parts(partner_z)
+            out = roads._merge_overlaps(lines, zs, widths, levels)
+            self.assertLess(abs(float(out[0][-1] - out[1][0])), 0.05, f"partner at {partner_z}")
+            self.assertGreaterEqual(float(out[1].min()), 10.0 - 1e-6)
+            self.assertGreaterEqual(float(out[0].min()), 10.0 - 1e-6, "never lowered")
+            old = roads.MERGE_WELD_ON
+            roads.MERGE_WELD_ON = False
+            try:
+                before = roads._merge_overlaps(lines, zs, widths, levels)
+            finally:
+                roads.MERGE_WELD_ON = old
+            grade = np.abs(np.diff(out[0])) / 4.0
+            self.assertLess(float(grade.max()), float((np.abs(np.diff(before[0])) / 4.0).max()) + 0.035,
+                            "the raise is run out along the part")
+
+    def test_off(self):
+        old = roads.MERGE_WELD_ON
+        try:
+            roads.MERGE_WELD_ON = False
+            lines, zs, widths, levels = self.parts(11.0)
+            out = roads._merge_overlaps(lines, zs, widths, levels)
+        finally:
+            roads.MERGE_WELD_ON = old
+        self.assertGreater(abs(float(out[0][-1] - out[1][0])), 0.1, "(the step it is for)")
+
+    def test_an_abutment_keeps_its_height(self):
+        # a joint a ground road goes on from is an abutment: held at the ground, never welded to the other part's end
+        lines, zs, widths, levels = self.parts(13.0)
+        pins = [np.array([0.0, 0.0])]
+        out = roads._merge_overlaps(lines, zs, widths, levels, pins=pins)
+        self.assertAlmostEqual(float(out[0][-1]), 10.0, places=6)
+        self.assertAlmostEqual(float(out[1][0]), 10.0, places=6)
+
+
 class SemiApproachIntegrationTest(TestCase):
-    def test_approach_and_generated_deck_clear_six_metres(self):
+    def test_approach_and_generated_deck_clear_the_law_headroom(self):
         fixture = approaches.OverpassIntegrationTest("test_deck_clears_the_lanes")
-        separation, grade = fixture.deck_over_lanes(True)
+        separation, approach, deck = fixture.deck_over_lanes(True)
         # (the deck's own depth: roads.deck_depth of the 70 m bridge's span)
         usable = separation - roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
-        self.assertGreaterEqual(float(usable.min()), 6.0)
-        self.assertLessEqual(grade, roads.DECK_MAX_GRADE)
+        self.assertGreaterEqual(float(usable.min()), roads.MIN_BRIDGE_HEADROOM_M)
+        # (two roads, two laws: the approach road's ramp within its own road's grade, the generated deck within the
+        # deck law. They were one number, the approach read 100 m out against the deck's: the legacy ramp's 0.05 passed
+        # it and the shapes' ground there 0.0)
+        self.assertLessEqual(approach, approaches.approach_law() * 1.05, "the approach is a ramp, not a wall")
+        self.assertLessEqual(deck, roads.DECK_MAX_GRADE, "the generated deck climbs no steeper than the deck law")

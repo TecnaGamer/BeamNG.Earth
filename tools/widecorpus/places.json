@@ -1,0 +1,2694 @@
+[
+  {
+    "id": "manhattan-bridge-canal-street",
+    "name": "Manhattan Bridge Canal Street",
+    "country": "US",
+    "region": "United States",
+    "lat": 40.71537,
+    "lon": -73.99508,
+    "tags": [
+      "bridge-exit",
+      "signal"
+    ],
+    "why": "Wide bridge throat narrows into Chinatown's short blocks."
+  },
+  {
+    "id": "grand-army-plaza-brooklyn",
+    "name": "Grand Army Plaza Brooklyn",
+    "country": "US",
+    "region": "United States",
+    "lat": 40.67346,
+    "lon": -73.96977,
+    "tags": [
+      "roundabout",
+      "slip"
+    ],
+    "why": "Multiple carriageways surround a civic oval."
+  },
+  {
+    "id": "queens-plaza",
+    "name": "Queens Plaza",
+    "country": "US",
+    "region": "United States",
+    "lat": 40.75055,
+    "lon": -73.93924,
+    "tags": [
+      "rail-over-road",
+      "signal"
+    ],
+    "why": "Elevated subway crosses a divided boulevard at the bridge approach."
+  },
+  {
+    "id": "columbus-circle",
+    "name": "Columbus Circle",
+    "country": "US",
+    "region": "United States",
+    "lat": 40.76809,
+    "lon": -73.98189,
+    "tags": [
+      "roundabout",
+      "city-grid"
+    ],
+    "why": "Diagonal Broadway meets the numbered street grid."
+  },
+  {
+    "id": "chicago-loop-at-lake-and-wells",
+    "name": "Chicago Loop at Lake and Wells",
+    "country": "US",
+    "region": "United States",
+    "lat": 41.88567,
+    "lon": -87.6339,
+    "tags": [
+      "rail-over-road",
+      "city-grid"
+    ],
+    "why": "Elevated railway turns above a four-way street crossing."
+  },
+  {
+    "id": "michigan-avenue-dusable-bridge",
+    "name": "Michigan Avenue DuSable Bridge",
+    "country": "US",
+    "region": "United States",
+    "lat": 41.88815,
+    "lon": -87.62445,
+    "tags": [
+      "river-bridge",
+      "city-grid"
+    ],
+    "why": "Bascule bridge enters tightly spaced downtown intersections."
+  },
+  {
+    "id": "philadelphia-city-hall",
+    "name": "Philadelphia City Hall",
+    "country": "US",
+    "region": "United States",
+    "lat": 39.95248,
+    "lon": -75.16364,
+    "tags": [
+      "city-grid",
+      "signal"
+    ],
+    "why": "Broad Street splits around City Hall."
+  },
+  {
+    "id": "benjamin-franklin-parkway-at-logan-square",
+    "name": "Benjamin Franklin Parkway at Logan Square",
+    "country": "US",
+    "region": "United States",
+    "lat": 39.95718,
+    "lon": -75.17088,
+    "tags": [
+      "roundabout",
+      "slip"
+    ],
+    "why": "Diagonal boulevard crosses a square in a rectangular grid."
+  },
+  {
+    "id": "san-francisco-lombard-street",
+    "name": "San Francisco Lombard Street",
+    "country": "US",
+    "region": "United States",
+    "lat": 37.80205,
+    "lon": -122.41868,
+    "tags": [
+      "switchback",
+      "city-grid"
+    ],
+    "why": "Closely spaced downhill bends sit between straight cross streets."
+  },
+  {
+    "id": "san-francisco-ferry-building",
+    "name": "San Francisco Ferry Building",
+    "country": "US",
+    "region": "United States",
+    "lat": 37.79514,
+    "lon": -122.39388,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Streetcar tracks and turn pockets share the waterfront junction."
+  },
+  {
+    "id": "seattle-fremont-bridge",
+    "name": "Seattle Fremont Bridge",
+    "country": "US",
+    "region": "United States",
+    "lat": 47.64774,
+    "lon": -122.34982,
+    "tags": [
+      "river-bridge"
+    ],
+    "why": "Short steel bascule span has urban approaches at both ends."
+  },
+  {
+    "id": "portland-tilikum-crossing-west",
+    "name": "Portland Tilikum Crossing west",
+    "country": "US",
+    "region": "United States",
+    "lat": 45.5031881,
+    "lon": -122.6698614,
+    "tags": [
+      "tram",
+      "river-bridge"
+    ],
+    "why": "Transit bridge takes rail and bus approaches near the waterfront."
+  },
+  {
+    "id": "los-angeles-four-level-interchange",
+    "name": "Los Angeles Four Level Interchange",
+    "country": "US",
+    "region": "United States",
+    "lat": 34.06215,
+    "lon": -118.24883,
+    "tags": [
+      "stack"
+    ],
+    "why": "Four stacked levels test clearance and curved ramp ends."
+  },
+  {
+    "id": "high-five-interchange-dallas",
+    "name": "High Five Interchange Dallas",
+    "country": "US",
+    "region": "United States",
+    "lat": 32.9243,
+    "lon": -96.7636,
+    "tags": [
+      "stack",
+      "slip"
+    ],
+    "why": "High flyovers cross frontage-road traffic at US 75 and I-635."
+  },
+  {
+    "id": "los-angeles-olympic-and-figueroa",
+    "name": "Los Angeles Olympic and Figueroa",
+    "country": "US",
+    "region": "United States",
+    "lat": 34.04523,
+    "lon": -118.26409,
+    "tags": [
+      "city-grid",
+      "signal"
+    ],
+    "why": "Wide one-way downtown streets meet near the arena."
+  },
+  {
+    "id": "boston-longfellow-bridge",
+    "name": "Boston Longfellow Bridge",
+    "country": "US",
+    "region": "United States",
+    "lat": 42.36145,
+    "lon": -71.07622,
+    "tags": [
+      "river-bridge",
+      "rail"
+    ],
+    "why": "Roadways flank rail tracks on a curved river crossing."
+  },
+  {
+    "id": "pittsburgh-smithfield-street-bridge",
+    "name": "Pittsburgh Smithfield Street Bridge",
+    "country": "US",
+    "region": "United States",
+    "lat": 40.4348203,
+    "lon": -80.0020957,
+    "tags": [
+      "river-bridge"
+    ],
+    "why": "Two lenticular truss spans approach a gridded downtown."
+  },
+  {
+    "id": "new-orleans-canal-and-st-charles",
+    "name": "New Orleans Canal and St Charles",
+    "country": "US",
+    "region": "United States",
+    "lat": 29.9529,
+    "lon": -90.06945,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "A streetcar turns between two median reservations."
+  },
+  {
+    "id": "washington-dupont-circle",
+    "name": "Washington Dupont Circle",
+    "country": "US",
+    "region": "United States",
+    "lat": 38.90961,
+    "lon": -77.04345,
+    "tags": [
+      "roundabout",
+      "tunnel-portal"
+    ],
+    "why": "Surface circle sits above the Connecticut Avenue underpass."
+  },
+  {
+    "id": "houston-i-10-at-beltway-8",
+    "name": "Houston I-10 at Beltway 8",
+    "country": "US",
+    "region": "United States",
+    "lat": 29.78372,
+    "lon": -95.56257,
+    "tags": [
+      "stack",
+      "suburban-arterial"
+    ],
+    "why": "Frontage roads run beneath a multi-level interchange."
+  },
+  {
+    "id": "indianapolis-motor-speedway-turn-one",
+    "name": "Indianapolis Motor Speedway turn one",
+    "country": "US",
+    "region": "United States",
+    "lat": 39.7884361,
+    "lon": -86.2373131,
+    "tags": [
+      "racetrack"
+    ],
+    "why": "Banked oval entrance meets the long pit straight."
+  },
+  {
+    "id": "laguna-seca-corkscrew",
+    "name": "Laguna Seca Corkscrew",
+    "country": "US",
+    "region": "United States",
+    "lat": 36.5852273,
+    "lon": -121.7495938,
+    "tags": [
+      "racetrack",
+      "switchback"
+    ],
+    "why": "Crest and descending bends stress both curvature and grade."
+  },
+  {
+    "id": "golden-gate-bridge-south-approach",
+    "name": "Golden Gate Bridge south approach",
+    "country": "US",
+    "region": "United States",
+    "lat": 37.80666,
+    "lon": -122.47455,
+    "tags": [
+      "bridge-exit",
+      "motorway"
+    ],
+    "why": "Divided highway exits directly onto the Presidio approach."
+  },
+  {
+    "id": "blue-ridge-parkway-at-mabry-mill",
+    "name": "Blue Ridge Parkway at Mabry Mill",
+    "country": "US",
+    "region": "United States",
+    "lat": 36.74966,
+    "lon": -80.40516,
+    "tags": [
+      "rural-two-lane"
+    ],
+    "why": "Undivided scenic road passes a small access junction."
+  },
+  {
+    "id": "monument-valley-scenic-loop-entrance",
+    "name": "Monument Valley scenic loop entrance",
+    "country": "US",
+    "region": "United States",
+    "lat": 36.9850463,
+    "lon": -110.111321,
+    "tags": [
+      "gravel",
+      "switchback"
+    ],
+    "why": "Unpaved desert loop descends from the visitor centre."
+  },
+  {
+    "id": "eisenhower-tunnel-west-portal",
+    "name": "Eisenhower Tunnel west portal",
+    "country": "US",
+    "region": "United States",
+    "lat": 39.67825,
+    "lon": -105.93458,
+    "tags": [
+      "tunnel-portal",
+      "motorway"
+    ],
+    "why": "Twin motorway bores emerge onto a steep alpine descent."
+  },
+  {
+    "id": "springfield-ma-memorial-bridge",
+    "name": "Springfield MA Memorial Bridge",
+    "country": "US",
+    "region": "United States",
+    "lat": 42.09925,
+    "lon": -72.59462,
+    "tags": [
+      "river-bridge",
+      "bridge-exit"
+    ],
+    "why": "River span lands beside a grade-separated riverfront road."
+  },
+  {
+    "id": "vancouver-lions-gate-south",
+    "name": "Vancouver Lions Gate south",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 49.31287,
+    "lon": -123.1407,
+    "tags": [
+      "bridge-exit",
+      "suburban-arterial"
+    ],
+    "why": "Three-lane crossing descends through Stanley Park."
+  },
+  {
+    "id": "granville-bridge-north-vancouver",
+    "name": "Granville Bridge north Vancouver",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 49.2762378,
+    "lon": -123.1295162,
+    "tags": [
+      "bridge-exit",
+      "slip"
+    ],
+    "why": "Urban viaduct splits into downtown approaches."
+  },
+  {
+    "id": "vancouver-georgia-and-burrard",
+    "name": "Vancouver Georgia and Burrard",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 49.28406,
+    "lon": -123.12042,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "Multi-lane arterials intersect between tall blocks."
+  },
+  {
+    "id": "toronto-spadina-and-queen",
+    "name": "Toronto Spadina and Queen",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 43.64891,
+    "lon": -79.39588,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Two streetcar routes cross at an oblique downtown junction."
+  },
+  {
+    "id": "toronto-bloor-viaduct",
+    "name": "Toronto Bloor Viaduct",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 43.675234,
+    "lon": -79.36389,
+    "tags": [
+      "road-over-rail",
+      "river-bridge"
+    ],
+    "why": "Road deck crosses the Don Valley with transit below."
+  },
+  {
+    "id": "toronto-gardiner-at-spadina",
+    "name": "Toronto Gardiner at Spadina",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 43.638906,
+    "lon": -79.392467,
+    "tags": [
+      "bridge-exit",
+      "slip"
+    ],
+    "why": "Expressway ramps descend beside the lakefront intersection."
+  },
+  {
+    "id": "montreal-jacques-cartier-bridge",
+    "name": "Montreal Jacques Cartier Bridge",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 45.5206915,
+    "lon": -73.5347182,
+    "tags": [
+      "river-bridge",
+      "bridge-exit"
+    ],
+    "why": "Main river span meets the Sainte-Hélène island ramps."
+  },
+  {
+    "id": "montreal-place-du-canada",
+    "name": "Montreal Place du Canada",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 45.49842,
+    "lon": -73.56873,
+    "tags": [
+      "city-grid",
+      "signal"
+    ],
+    "why": "Downtown arterial offsets at a pair of civic squares."
+  },
+  {
+    "id": "quebec-city-pierre-laporte-bridge",
+    "name": "Quebec City Pierre-Laporte Bridge",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 46.74588,
+    "lon": -71.29017,
+    "tags": [
+      "river-bridge",
+      "motorway"
+    ],
+    "why": "Motorway suspension span stands beside a rail bridge."
+  },
+  {
+    "id": "ottawa-confederation-square",
+    "name": "Ottawa Confederation Square",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 45.42336,
+    "lon": -75.69544,
+    "tags": [
+      "signal",
+      "slip"
+    ],
+    "why": "Elgin Street forks around the war memorial."
+  },
+  {
+    "id": "calgary-centre-street-bridge",
+    "name": "Calgary Centre Street Bridge",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 51.05417,
+    "lon": -114.06254,
+    "tags": [
+      "river-bridge",
+      "city-grid"
+    ],
+    "why": "River crossing runs directly into a commercial grid."
+  },
+  {
+    "id": "banff-avenue-bow-river-bridge",
+    "name": "Banff Avenue Bow River Bridge",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 51.1729305,
+    "lon": -115.5711922,
+    "tags": [
+      "river-bridge",
+      "suburban-arterial"
+    ],
+    "why": "Two-lane bridge meets a divided main street."
+  },
+  {
+    "id": "sea-to-sky-highway-at-shannon-falls",
+    "name": "Sea to Sky Highway at Shannon Falls",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 49.6713426,
+    "lon": -123.1618967,
+    "tags": [
+      "mountain-road",
+      "signal",
+      "divided-highway"
+    ],
+    "why": "Mountain highway meets the park access at the valley foot."
+  },
+  {
+    "id": "dempster-highway-junction",
+    "name": "Dempster Highway junction",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 63.9905331,
+    "lon": -138.7514287,
+    "tags": [
+      "gravel",
+      "rural-two-lane"
+    ],
+    "why": "Long gravel highway begins at the Klondike Highway."
+  },
+  {
+    "id": "confederation-bridge-pei-approach",
+    "name": "Confederation Bridge PEI approach",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 46.2533765,
+    "lon": -63.7028128,
+    "tags": [
+      "bridge-exit",
+      "rural-two-lane"
+    ],
+    "why": "High fixed crossing transitions to an island approach road."
+  },
+  {
+    "id": "halifax-angus-l-macdonald-bridge",
+    "name": "Halifax Angus L Macdonald Bridge",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 44.6588167,
+    "lon": -63.5891032,
+    "tags": [
+      "bridge-exit",
+      "suburban-arterial"
+    ],
+    "why": "Suspension bridge approaches a built-up harbour shore."
+  },
+  {
+    "id": "london-oxford-circus",
+    "name": "London Oxford Circus",
+    "country": "GB",
+    "region": "UK",
+    "lat": 51.5153,
+    "lon": -0.1419,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "Two busy shopping streets cross within a compact block."
+  },
+  {
+    "id": "london-tower-bridge",
+    "name": "London Tower Bridge",
+    "country": "GB",
+    "region": "UK",
+    "lat": 51.50554,
+    "lon": -0.07538,
+    "tags": [
+      "river-bridge"
+    ],
+    "why": "Central bascule span connects two suspended side spans."
+  },
+  {
+    "id": "london-hanger-lane-gyratory",
+    "name": "London Hanger Lane Gyratory",
+    "country": "GB",
+    "region": "UK",
+    "lat": 51.52978,
+    "lon": -0.29349,
+    "tags": [
+      "roundabout",
+      "tunnel-portal"
+    ],
+    "why": "Large signalised gyratory spans a through-road tunnel."
+  },
+  {
+    "id": "swindon-magic-roundabout",
+    "name": "Swindon Magic Roundabout",
+    "country": "GB",
+    "region": "UK",
+    "lat": 51.56279,
+    "lon": -1.77172,
+    "tags": [
+      "roundabout"
+    ],
+    "why": "Five linked mini-roundabouts create short interwoven lane paths."
+  },
+  {
+    "id": "birmingham-gravelly-hill",
+    "name": "Birmingham Gravelly Hill",
+    "country": "GB",
+    "region": "UK",
+    "lat": 52.51128,
+    "lon": -1.8654,
+    "tags": [
+      "stack",
+      "river-bridge"
+    ],
+    "why": "Motorway ramps cross roads and canals at several levels."
+  },
+  {
+    "id": "manchester-piccadilly-gardens",
+    "name": "Manchester Piccadilly Gardens",
+    "country": "GB",
+    "region": "UK",
+    "lat": 53.48041,
+    "lon": -2.23706,
+    "tags": [
+      "tram",
+      "city-grid"
+    ],
+    "why": "Trams run through a tightly constrained city-centre junction."
+  },
+  {
+    "id": "edinburgh-princes-and-south-st-david",
+    "name": "Edinburgh Princes and South St David",
+    "country": "GB",
+    "region": "UK",
+    "lat": 55.95275,
+    "lon": -3.19406,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Tram alignment curves from the main east-west street."
+  },
+  {
+    "id": "bristol-clifton-suspension-bridge",
+    "name": "Bristol Clifton Suspension Bridge",
+    "country": "GB",
+    "region": "UK",
+    "lat": 51.45486,
+    "lon": -2.62775,
+    "tags": [
+      "river-bridge"
+    ],
+    "why": "Narrow roadway passes between towers over a deep gorge."
+  },
+  {
+    "id": "brighton-old-steine",
+    "name": "Brighton Old Steine",
+    "country": "GB",
+    "region": "UK",
+    "lat": 50.82084,
+    "lon": -0.13657,
+    "tags": [
+      "signal",
+      "slip"
+    ],
+    "why": "Offset junctions bring several streets to the seafront."
+  },
+  {
+    "id": "winnats-pass",
+    "name": "Winnats Pass",
+    "country": "GB",
+    "region": "UK",
+    "lat": 53.3422463,
+    "lon": -1.8025904,
+    "tags": [
+      "rural-two-lane",
+      "mountain-road"
+    ],
+    "why": "Short limestone pass confines the carriageway between steep slopes."
+  },
+  {
+    "id": "paris-place-de-la-concorde",
+    "name": "Paris Place de la Concorde",
+    "country": "FR",
+    "region": "Western Europe",
+    "lat": 48.86557,
+    "lon": 2.32116,
+    "tags": [
+      "signal",
+      "slip"
+    ],
+    "why": "Wide ceremonial approaches fan out across a large square."
+  },
+  {
+    "id": "paris-pont-neuf",
+    "name": "Paris Pont Neuf",
+    "country": "FR",
+    "region": "Western Europe",
+    "lat": 48.85729,
+    "lon": 2.34134,
+    "tags": [
+      "river-bridge"
+    ],
+    "why": "Two bridge arms meet on an island with a public square."
+  },
+  {
+    "id": "lyon-pont-de-la-guillotiere",
+    "name": "Lyon Pont de la Guillotière",
+    "country": "FR",
+    "region": "Western Europe",
+    "lat": 45.75713,
+    "lon": 4.83928,
+    "tags": [
+      "river-bridge",
+      "signal"
+    ],
+    "why": "Bridge lands between quays and a wide urban junction."
+  },
+  {
+    "id": "strasbourg-place-de-la-republique",
+    "name": "Strasbourg Place de la République",
+    "country": "FR",
+    "region": "Western Europe",
+    "lat": 48.58727,
+    "lon": 7.75382,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Multiple tram branches pass a landscaped square."
+  },
+  {
+    "id": "marseille-vieux-port",
+    "name": "Marseille Vieux Port",
+    "country": "FR",
+    "region": "Western Europe",
+    "lat": 43.29505,
+    "lon": 5.37422,
+    "tags": [
+      "city-grid",
+      "signal"
+    ],
+    "why": "Waterfront road changes direction at the head of the port."
+  },
+  {
+    "id": "alpe-d-huez-bend-21",
+    "name": "Alpe d'Huez bend 21",
+    "country": "FR",
+    "region": "Western Europe",
+    "lat": 45.07189,
+    "lon": 6.0392103,
+    "tags": [
+      "switchback"
+    ],
+    "why": "Lower hairpins climb abruptly from the valley floor."
+  },
+  {
+    "id": "le-mans-dunlop-bridge",
+    "name": "Le Mans Dunlop bridge",
+    "country": "FR",
+    "region": "Western Europe",
+    "lat": 47.9577953,
+    "lon": 0.212492,
+    "tags": [
+      "racetrack"
+    ],
+    "why": "Chicane and crest lead beneath the pedestrian bridge."
+  },
+  {
+    "id": "berlin-grosser-stern",
+    "name": "Berlin Grosser Stern",
+    "country": "DE",
+    "region": "Western Europe",
+    "lat": 52.51455,
+    "lon": 13.35006,
+    "tags": [
+      "roundabout",
+      "suburban-arterial"
+    ],
+    "why": "Five broad avenues meet in a multi-lane circle."
+  },
+  {
+    "id": "berlin-alexanderplatz-tram-crossing",
+    "name": "Berlin Alexanderplatz tram crossing",
+    "country": "DE",
+    "region": "Western Europe",
+    "lat": 52.52236,
+    "lon": 13.41389,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Tracks cross the pedestrian approaches to the square."
+  },
+  {
+    "id": "hamburg-landungsbrucken",
+    "name": "Hamburg Landungsbrücken",
+    "country": "DE",
+    "region": "Western Europe",
+    "lat": 53.54584,
+    "lon": 9.97014,
+    "tags": [
+      "rail-over-road",
+      "city-grid"
+    ],
+    "why": "Elevated U-Bahn tracks follow the curving harbour frontage."
+  },
+  {
+    "id": "cologne-deutzer-brucke",
+    "name": "Cologne Deutzer Brücke",
+    "country": "DE",
+    "region": "Western Europe",
+    "lat": 50.93688,
+    "lon": 6.96478,
+    "tags": [
+      "tram",
+      "river-bridge"
+    ],
+    "why": "Rail and road share a broad Rhine crossing."
+  },
+  {
+    "id": "frankfurter-kreuz",
+    "name": "Frankfurter Kreuz",
+    "country": "DE",
+    "region": "Western Europe",
+    "lat": 50.0530556,
+    "lon": 8.6041667,
+    "tags": [
+      "cloverleaf"
+    ],
+    "why": "Loops and directional ramps connect two high-volume Autobahnen."
+  },
+  {
+    "id": "munich-ludwigsbrucke",
+    "name": "Munich Ludwigsbrücke",
+    "country": "DE",
+    "region": "Western Europe",
+    "lat": 48.13198,
+    "lon": 11.58478,
+    "tags": [
+      "tram",
+      "river-bridge"
+    ],
+    "why": "Two bridge halves meet on an island in the Isar."
+  },
+  {
+    "id": "hockenheimring-hairpin",
+    "name": "Hockenheimring hairpin",
+    "country": "DE",
+    "region": "Western Europe",
+    "lat": 49.3325319,
+    "lon": 8.5843222,
+    "tags": [
+      "racetrack"
+    ],
+    "why": "Tight slow turn follows a long high-speed run."
+  },
+  {
+    "id": "rotterdam-erasmusbrug",
+    "name": "Rotterdam Erasmusbrug",
+    "country": "NL",
+    "region": "Western Europe",
+    "lat": 51.90906,
+    "lon": 4.4867,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "Tram tracks share a cable-stayed bridge with traffic."
+  },
+  {
+    "id": "amsterdam-muntplein",
+    "name": "Amsterdam Muntplein",
+    "country": "NL",
+    "region": "Western Europe",
+    "lat": 52.36682,
+    "lon": 4.89314,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Trams turn where two canals and shopping streets converge."
+  },
+  {
+    "id": "eindhoven-hovenring",
+    "name": "Eindhoven Hovenring",
+    "country": "NL",
+    "region": "Western Europe",
+    "lat": 51.4333833,
+    "lon": 5.4193028,
+    "tags": [
+      "roundabout",
+      "road-over-road"
+    ],
+    "why": "Suspended cycle circle sits over a signalised road junction."
+  },
+  {
+    "id": "rotterdam-kleinpolderplein",
+    "name": "Rotterdam Kleinpolderplein",
+    "country": "NL",
+    "region": "Western Europe",
+    "lat": 51.9308771,
+    "lon": 4.4387341,
+    "tags": [
+      "stack"
+    ],
+    "why": "Multi-level motorway ramps converge around a large traffic square."
+  },
+  {
+    "id": "brussels-montgomery-square",
+    "name": "Brussels Montgomery Square",
+    "country": "BE",
+    "region": "Western Europe",
+    "lat": 50.83832,
+    "lon": 4.40752,
+    "tags": [
+      "roundabout",
+      "tunnel-portal"
+    ],
+    "why": "Urban ring and radial streets cross above a tunnel."
+  },
+  {
+    "id": "antwerp-opera-square",
+    "name": "Antwerp Opera Square",
+    "country": "BE",
+    "region": "Western Europe",
+    "lat": 51.21814,
+    "lon": 4.41782,
+    "tags": [
+      "tram",
+      "tunnel-portal"
+    ],
+    "why": "City boulevard, tram lines and underpass meet at the opera."
+  },
+  {
+    "id": "zurich-bellevueplatz",
+    "name": "Zürich Bellevueplatz",
+    "country": "CH",
+    "region": "Western Europe",
+    "lat": 47.36695,
+    "lon": 8.54544,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Tram and traffic paths converge near the lake bridge."
+  },
+  {
+    "id": "bern-kirchenfeldbrucke",
+    "name": "Bern Kirchenfeldbrücke",
+    "country": "CH",
+    "region": "Western Europe",
+    "lat": 46.94479,
+    "lon": 7.44995,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "High bridge connects a tram junction and a tight urban grid."
+  },
+  {
+    "id": "gotthard-pass-tremola",
+    "name": "Gotthard Pass Tremola",
+    "country": "CH",
+    "region": "Western Europe",
+    "lat": 46.548221,
+    "lon": 8.5667674,
+    "tags": [
+      "switchback",
+      "rural-two-lane"
+    ],
+    "why": "Historic cobbled alpine route doubles back on itself."
+  },
+  {
+    "id": "vienna-schwarzenbergplatz",
+    "name": "Vienna Schwarzenbergplatz",
+    "country": "AT",
+    "region": "Western Europe",
+    "lat": 48.20086,
+    "lon": 16.37362,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Radial streets and tram tracks fan out around an elongated square."
+  },
+  {
+    "id": "innsbruck-innbrucke",
+    "name": "Innsbruck Innbrücke",
+    "country": "AT",
+    "region": "Western Europe",
+    "lat": 47.26862,
+    "lon": 11.3911,
+    "tags": [
+      "river-bridge"
+    ],
+    "why": "Short bridge enters the medieval street network."
+  },
+  {
+    "id": "copenhagen-dronning-louises-bro",
+    "name": "Copenhagen Dronning Louises Bro",
+    "country": "DK",
+    "region": "Northern Europe",
+    "lat": 55.68696,
+    "lon": 12.56293,
+    "tags": [
+      "river-bridge",
+      "suburban-arterial"
+    ],
+    "why": "Multi-modal boulevard crosses between the central lakes."
+  },
+  {
+    "id": "great-belt-east-bridge",
+    "name": "Great Belt East Bridge",
+    "country": "DK",
+    "region": "Northern Europe",
+    "lat": 55.34195,
+    "lon": 11.0352,
+    "tags": [
+      "motorway",
+      "sea-bridge"
+    ],
+    "why": "Elevated dual carriageway traverses open water near Sprogø."
+  },
+  {
+    "id": "stockholm-vasterbron",
+    "name": "Stockholm Västerbron",
+    "country": "SE",
+    "region": "Northern Europe",
+    "lat": 59.32562,
+    "lon": 18.02726,
+    "tags": [
+      "river-bridge",
+      "suburban-arterial"
+    ],
+    "why": "Tall arch span lands at a busy city approach."
+  },
+  {
+    "id": "gothenburg-jarntorget",
+    "name": "Gothenburg Järntorget",
+    "country": "SE",
+    "region": "Northern Europe",
+    "lat": 57.69947,
+    "lon": 11.95323,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Several tram curves share the approaches to a large urban square."
+  },
+  {
+    "id": "malmo-triangeln",
+    "name": "Malmö Triangeln",
+    "country": "SE",
+    "region": "Northern Europe",
+    "lat": 55.59588,
+    "lon": 13.0022,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "Broad inner-city streets converge in a triangular junction."
+  },
+  {
+    "id": "oslo-stortorvet",
+    "name": "Oslo Stortorvet",
+    "country": "NO",
+    "region": "Northern Europe",
+    "lat": 59.91312,
+    "lon": 10.74646,
+    "tags": [
+      "tram",
+      "city-grid"
+    ],
+    "why": "Trams turn beside the cathedral in a compact centre."
+  },
+  {
+    "id": "atlantic-road-storseisundet",
+    "name": "Atlantic Road Storseisundet",
+    "country": "NO",
+    "region": "Northern Europe",
+    "lat": 63.01688,
+    "lon": 7.35459,
+    "tags": [
+      "rural-two-lane",
+      "bridge-exit"
+    ],
+    "why": "Curved high bridge descends onto a narrow island road."
+  },
+  {
+    "id": "trollstigen-viewing-bend",
+    "name": "Trollstigen viewing bend",
+    "country": "NO",
+    "region": "Northern Europe",
+    "lat": 62.4600501,
+    "lon": 7.6704061,
+    "tags": [
+      "switchback"
+    ],
+    "why": "A narrow hairpin lies next to a steep mountain stream."
+  },
+  {
+    "id": "helsinki-mannerheimintie-at-lasipalatsi",
+    "name": "Helsinki Mannerheimintie at Lasipalatsi",
+    "country": "FI",
+    "region": "Northern Europe",
+    "lat": 60.17017,
+    "lon": 24.93745,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Major tram alignment crosses a downtown avenue."
+  },
+  {
+    "id": "tampere-hameensilta",
+    "name": "Tampere Hämeensilta",
+    "country": "FI",
+    "region": "Northern Europe",
+    "lat": 61.4979167,
+    "lon": 23.7636111,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "Transit street crosses the rapids on a short level deck."
+  },
+  {
+    "id": "reykjavik-hringbraut-at-nautholsvegur",
+    "name": "Reykjavík Hringbraut at Nauthólsvegur",
+    "country": "IS",
+    "region": "Northern Europe",
+    "lat": 64.13635,
+    "lon": -21.93302,
+    "tags": [
+      "suburban-arterial",
+      "slip"
+    ],
+    "why": "Channelised turns connect an urban through road."
+  },
+  {
+    "id": "thingvellir-route-36",
+    "name": "Thingvellir Route 36",
+    "country": "IS",
+    "region": "Northern Europe",
+    "lat": 64.2578181,
+    "lon": -21.1385413,
+    "tags": [
+      "rural-two-lane"
+    ],
+    "why": "Undivided road follows the edge of a rift valley."
+  },
+  {
+    "id": "warsaw-rondo-dmowskiego",
+    "name": "Warsaw Rondo Dmowskiego",
+    "country": "PL",
+    "region": "Eastern Europe",
+    "lat": 52.22983,
+    "lon": 21.01178,
+    "tags": [
+      "roundabout",
+      "tram"
+    ],
+    "why": "Two tram corridors cross a multi-lane traffic circle."
+  },
+  {
+    "id": "wrocaw-grunwaldzki-bridge",
+    "name": "Wrocław Grunwaldzki Bridge",
+    "country": "PL",
+    "region": "Eastern Europe",
+    "lat": 51.1094444,
+    "lon": 17.0527778,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "Historic suspension span carries mixed road and rail traffic."
+  },
+  {
+    "id": "krakow-plac-wszystkich-swietych",
+    "name": "Kraków Plac Wszystkich Świętych",
+    "country": "PL",
+    "region": "Eastern Europe",
+    "lat": 50.05914,
+    "lon": 19.93779,
+    "tags": [
+      "tram",
+      "city-grid"
+    ],
+    "why": "Tram junction constrained by an old-town square."
+  },
+  {
+    "id": "prague-palacky-bridge",
+    "name": "Prague Palacký Bridge",
+    "country": "CZ",
+    "region": "Eastern Europe",
+    "lat": 50.0727778,
+    "lon": 14.4122222,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "Tram tracks thread two complex bank-side junctions."
+  },
+  {
+    "id": "brno-moravske-namesti",
+    "name": "Brno Moravské náměstí",
+    "country": "CZ",
+    "region": "Eastern Europe",
+    "lat": 49.19906,
+    "lon": 16.60841,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Closely spaced tram curves meet on the inner ring."
+  },
+  {
+    "id": "budapest-margaret-bridge",
+    "name": "Budapest Margaret Bridge",
+    "country": "HU",
+    "region": "Eastern Europe",
+    "lat": 47.51456,
+    "lon": 19.04358,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "Bent bridge axis splits into an island approach at midspan."
+  },
+  {
+    "id": "budapest-oktogon",
+    "name": "Budapest Oktogon",
+    "country": "HU",
+    "region": "Eastern Europe",
+    "lat": 47.50524,
+    "lon": 19.06317,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Broad boulevard intersects a radial avenue in an octagonal square."
+  },
+  {
+    "id": "bucharest-piata-arcul-de-triumf",
+    "name": "Bucharest Piața Arcul de Triumf",
+    "country": "RO",
+    "region": "Eastern Europe",
+    "lat": 44.46725,
+    "lon": 26.07802,
+    "tags": [
+      "roundabout"
+    ],
+    "why": "Five arterial approaches surround a monument."
+  },
+  {
+    "id": "transfagarasan-balea-tunnel-north",
+    "name": "Transfăgărășan Bâlea tunnel north",
+    "country": "RO",
+    "region": "Eastern Europe",
+    "lat": 45.6024752,
+    "lon": 24.6140099,
+    "tags": [
+      "tunnel-portal",
+      "switchback"
+    ],
+    "why": "Summit tunnel meets a steep serpentine descent."
+  },
+  {
+    "id": "tallinn-viru-valjak",
+    "name": "Tallinn Viru väljak",
+    "country": "EE",
+    "region": "Eastern Europe",
+    "lat": 59.4366,
+    "lon": 24.75322,
+    "tags": [
+      "tram",
+      "roundabout"
+    ],
+    "why": "Tram lines and buses cross the old town's ring of streets."
+  },
+  {
+    "id": "riga-akmens-bridge",
+    "name": "Riga Akmens Bridge",
+    "country": "LV",
+    "region": "Eastern Europe",
+    "lat": 56.94557,
+    "lon": 24.10264,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "Tracks and carriageways cross the Daugava into the city centre."
+  },
+  {
+    "id": "vilnius-green-bridge",
+    "name": "Vilnius Green Bridge",
+    "country": "LT",
+    "region": "Eastern Europe",
+    "lat": 54.69162,
+    "lon": 25.27985,
+    "tags": [
+      "river-bridge",
+      "signal"
+    ],
+    "why": "Short Neris crossing connects two busy riverside junctions."
+  },
+  {
+    "id": "rome-piazza-venezia",
+    "name": "Rome Piazza Venezia",
+    "country": "IT",
+    "region": "Southern Europe",
+    "lat": 41.89565,
+    "lon": 12.48245,
+    "tags": [
+      "signal",
+      "slip"
+    ],
+    "why": "Broad approaches merge around a central monument."
+  },
+  {
+    "id": "florence-ponte-alla-carraia",
+    "name": "Florence Ponte alla Carraia",
+    "country": "IT",
+    "region": "Southern Europe",
+    "lat": 43.77011,
+    "lon": 11.24772,
+    "tags": [
+      "river-bridge",
+      "city-grid"
+    ],
+    "why": "Bridge lands on narrow streets in the historic centre."
+  },
+  {
+    "id": "milan-piazza-cordusio",
+    "name": "Milan Piazza Cordusio",
+    "country": "IT",
+    "region": "Southern Europe",
+    "lat": 45.46523,
+    "lon": 9.18683,
+    "tags": [
+      "tram",
+      "city-grid"
+    ],
+    "why": "Tram tracks cross several radial streets."
+  },
+  {
+    "id": "monza-rettifilo-chicane",
+    "name": "Monza Rettifilo chicane",
+    "country": "IT",
+    "region": "Southern Europe",
+    "lat": 45.6245734,
+    "lon": 9.2824393,
+    "tags": [
+      "racetrack"
+    ],
+    "why": "Two tight directional changes follow the main straight."
+  },
+  {
+    "id": "madrid-plaza-de-cibeles",
+    "name": "Madrid Plaza de Cibeles",
+    "country": "ES",
+    "region": "Southern Europe",
+    "lat": 40.41938,
+    "lon": -3.69308,
+    "tags": [
+      "roundabout",
+      "signal"
+    ],
+    "why": "Broad radial boulevards pass a central fountain."
+  },
+  {
+    "id": "barcelona-placa-d-espanya",
+    "name": "Barcelona Plaça d'Espanya",
+    "country": "ES",
+    "region": "Southern Europe",
+    "lat": 41.37514,
+    "lon": 2.1491,
+    "tags": [
+      "roundabout",
+      "slip"
+    ],
+    "why": "Multi-lane rotary meets the diagonal street grid."
+  },
+  {
+    "id": "seville-puente-de-triana",
+    "name": "Seville Puente de Triana",
+    "country": "ES",
+    "region": "Southern Europe",
+    "lat": 37.38622,
+    "lon": -6.00325,
+    "tags": [
+      "river-bridge",
+      "city-grid"
+    ],
+    "why": "River bridge descends into narrow quayside streets."
+  },
+  {
+    "id": "bilbao-puente-del-arenal",
+    "name": "Bilbao Puente del Arenal",
+    "country": "ES",
+    "region": "Southern Europe",
+    "lat": 43.25992,
+    "lon": -2.92549,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "Bridge meets a curved tram alignment on the riverbank."
+  },
+  {
+    "id": "lisbon-praca-do-comercio",
+    "name": "Lisbon Praça do Comércio",
+    "country": "PT",
+    "region": "Southern Europe",
+    "lat": 38.70811,
+    "lon": -9.13664,
+    "tags": [
+      "tram",
+      "city-grid"
+    ],
+    "why": "Streetcar tracks share the edge of a waterfront square."
+  },
+  {
+    "id": "porto-dom-luis-i-lower-deck",
+    "name": "Porto Dom Luís I lower deck",
+    "country": "PT",
+    "region": "Southern Europe",
+    "lat": 41.13951,
+    "lon": -8.60954,
+    "tags": [
+      "river-bridge",
+      "stacked-deck"
+    ],
+    "why": "Two decks occupy the same horizontal footprint at different heights."
+  },
+  {
+    "id": "athens-syntagma-square",
+    "name": "Athens Syntagma Square",
+    "country": "GR",
+    "region": "Southern Europe",
+    "lat": 37.97539,
+    "lon": 23.7352,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "A wide boulevard meets one-way streets beside Parliament."
+  },
+  {
+    "id": "corinth-canal-road-bridge",
+    "name": "Corinth Canal road bridge",
+    "country": "GR",
+    "region": "Southern Europe",
+    "lat": 37.927015,
+    "lon": 22.994725,
+    "tags": [
+      "canal-bridge",
+      "arterial"
+    ],
+    "why": "Short deck spans a deep narrow cutting."
+  },
+  {
+    "id": "tokyo-shibuya-crossing",
+    "name": "Tokyo Shibuya Crossing",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 35.65948,
+    "lon": 139.70052,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "Five approaches meet in a busy diagonal pedestrian crossing."
+  },
+  {
+    "id": "tokyo-nihonbashi-bridge",
+    "name": "Tokyo Nihonbashi bridge",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 35.68394,
+    "lon": 139.77444,
+    "tags": [
+      "river-bridge",
+      "road-over-road"
+    ],
+    "why": "Historic bridge sits under an elevated expressway."
+  },
+  {
+    "id": "tokyo-sukiyabashi-crossing",
+    "name": "Tokyo Sukiyabashi Crossing",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 35.67265,
+    "lon": 139.76319,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "Diagonal avenue meets the Ginza street grid."
+  },
+  {
+    "id": "osaka-namba-crossing",
+    "name": "Osaka Namba crossing",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 34.66649,
+    "lon": 135.50034,
+    "tags": [
+      "signal",
+      "suburban-arterial"
+    ],
+    "why": "A wide one-way route meets station access streets."
+  },
+  {
+    "id": "hiroshima-aioi-bridge",
+    "name": "Hiroshima Aioi Bridge",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 34.3964,
+    "lon": 132.4535,
+    "tags": [
+      "river-bridge",
+      "tram"
+    ],
+    "why": "T-shaped river bridge carries a tram alignment."
+  },
+  {
+    "id": "kyoto-shijo-ohashi",
+    "name": "Kyoto Shijo Ohashi",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 35.00378,
+    "lon": 135.77177,
+    "tags": [
+      "river-bridge",
+      "city-grid"
+    ],
+    "why": "Bridge meets short commercial blocks at both ends."
+  },
+  {
+    "id": "sapporo-susukino-crossing",
+    "name": "Sapporo Susukino crossing",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 43.05543,
+    "lon": 141.3533,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Streetcar line bends at an arterial crossing."
+  },
+  {
+    "id": "nagasaki-dejima-tram-stop",
+    "name": "Nagasaki Dejima tram stop",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 32.7439,
+    "lon": 129.872,
+    "tags": [
+      "tram",
+      "city-grid"
+    ],
+    "why": "Tracks run between canal frontage and a dense grid."
+  },
+  {
+    "id": "suzuka-circuit-crossover",
+    "name": "Suzuka Circuit crossover",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 34.84399,
+    "lon": 136.53057,
+    "tags": [
+      "racetrack",
+      "road-over-road"
+    ],
+    "why": "Figure-eight circuit crosses its own alignment."
+  },
+  {
+    "id": "rainbow-bridge-tokyo",
+    "name": "Rainbow Bridge Tokyo",
+    "country": "JP",
+    "region": "Japan",
+    "lat": 35.63657,
+    "lon": 139.76307,
+    "tags": [
+      "sea-bridge",
+      "stacked-deck"
+    ],
+    "why": "Expressway and lower road occupy separate levels above Tokyo Bay."
+  },
+  {
+    "id": "melbourne-flinders-and-swanston",
+    "name": "Melbourne Flinders and Swanston",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -37.81735,
+    "lon": 144.96715,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Two tram corridors cross beside the main station."
+  },
+  {
+    "id": "melbourne-st-kilda-junction",
+    "name": "Melbourne St Kilda Junction",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -37.85625,
+    "lon": 144.98277,
+    "tags": [
+      "tram",
+      "slip"
+    ],
+    "why": "Multiple arterial branches and a tram underpass converge."
+  },
+  {
+    "id": "sydney-harbour-bridge-south",
+    "name": "Sydney Harbour Bridge south",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -33.8590571,
+    "lon": 151.2065368,
+    "tags": [
+      "bridge-exit",
+      "rail"
+    ],
+    "why": "Parallel road and rail decks feed the city approaches."
+  },
+  {
+    "id": "sydney-george-and-hay",
+    "name": "Sydney George and Hay",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -33.87998,
+    "lon": 151.20492,
+    "tags": [
+      "tram",
+      "city-grid"
+    ],
+    "why": "Light rail turns within a dense downtown grid."
+  },
+  {
+    "id": "brisbane-story-bridge",
+    "name": "Brisbane Story Bridge",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -27.46335,
+    "lon": 153.03544,
+    "tags": [
+      "river-bridge",
+      "bridge-exit"
+    ],
+    "why": "Long approach viaducts connect a high steel river span."
+  },
+  {
+    "id": "adelaide-victoria-square",
+    "name": "Adelaide Victoria Square",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -34.92844,
+    "lon": 138.60066,
+    "tags": [
+      "tram",
+      "signal"
+    ],
+    "why": "Tram curves cross an elongated signalised square."
+  },
+  {
+    "id": "perth-narrows-bridge",
+    "name": "Perth Narrows Bridge",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -31.9633,
+    "lon": 115.8469,
+    "tags": [
+      "river-bridge",
+      "motorway"
+    ],
+    "why": "Twin freeway decks cross the Swan River."
+  },
+  {
+    "id": "mount-panorama-the-dipper",
+    "name": "Mount Panorama The Dipper",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -33.4564737,
+    "lon": 149.553586,
+    "tags": [
+      "racetrack",
+      "switchback"
+    ],
+    "why": "Steep descent changes direction between close walls."
+  },
+  {
+    "id": "great-ocean-road-memorial-arch",
+    "name": "Great Ocean Road Memorial Arch",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -38.4719227,
+    "lon": 144.0445336,
+    "tags": [
+      "rural-two-lane"
+    ],
+    "why": "Narrow two-lane coastal route passes a short turnout."
+  },
+  {
+    "id": "sao-paulo-avenida-paulista-at-consolacao",
+    "name": "São Paulo Avenida Paulista at Consolação",
+    "country": "BR",
+    "region": "South America",
+    "lat": -23.55554,
+    "lon": -46.66278,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "A divided avenue meets diagonal lanes above an underpass."
+  },
+  {
+    "id": "rio-de-janeiro-arcos-da-lapa",
+    "name": "Rio de Janeiro Arcos da Lapa",
+    "country": "BR",
+    "region": "South America",
+    "lat": -22.9133,
+    "lon": -43.1797,
+    "tags": [
+      "rail-over-road",
+      "tram"
+    ],
+    "why": "A tram aqueduct crosses an arterial near its arches."
+  },
+  {
+    "id": "brasilia-central-rodoviaria",
+    "name": "Brasília Central Rodoviária",
+    "country": "BR",
+    "region": "South America",
+    "lat": -15.79243,
+    "lon": -47.88279,
+    "tags": [
+      "stack",
+      "suburban-arterial"
+    ],
+    "why": "A multi-level bus terminal occupies the crossing of two arterial axes."
+  },
+  {
+    "id": "interlagos-senna-s",
+    "name": "Interlagos Senna S",
+    "country": "BR",
+    "region": "South America",
+    "lat": -23.7059445,
+    "lon": -46.6980579,
+    "tags": [
+      "racetrack"
+    ],
+    "why": "A downhill chicane follows a long banked straight."
+  },
+  {
+    "id": "buenos-aires-obelisco",
+    "name": "Buenos Aires Obelisco",
+    "country": "AR",
+    "region": "South America",
+    "lat": -34.60371,
+    "lon": -58.38158,
+    "tags": [
+      "signal",
+      "suburban-arterial"
+    ],
+    "why": "Extremely wide avenue meets a diagonal and a central busway."
+  },
+  {
+    "id": "buenos-aires-puente-de-la-mujer-approach",
+    "name": "Buenos Aires Puente de la Mujer approach",
+    "country": "AR",
+    "region": "South America",
+    "lat": -34.6082278,
+    "lon": -58.3666771,
+    "tags": [
+      "city-grid"
+    ],
+    "why": "Dockside grid meets pedestrian bridge approaches."
+  },
+  {
+    "id": "cordoba-puente-centenario",
+    "name": "Córdoba Puente Centenario",
+    "country": "AR",
+    "region": "South America",
+    "lat": -31.40592,
+    "lon": -64.182982,
+    "tags": [
+      "river-bridge",
+      "city-grid"
+    ],
+    "why": "Urban bridge connects the central grid across the Suquía."
+  },
+  {
+    "id": "santiago-plaza-baquedano",
+    "name": "Santiago Plaza Baquedano",
+    "country": "CL",
+    "region": "South America",
+    "lat": -33.43714,
+    "lon": -70.63414,
+    "tags": [
+      "roundabout",
+      "signal"
+    ],
+    "why": "Several wide arterial approaches meet by the Mapocho."
+  },
+  {
+    "id": "valparaiso-avenida-argentina",
+    "name": "Valparaíso Avenida Argentina",
+    "country": "CL",
+    "region": "South America",
+    "lat": -33.04731,
+    "lon": -71.60446,
+    "tags": [
+      "suburban-arterial",
+      "signal"
+    ],
+    "why": "A broad valley-floor avenue meets port traffic."
+  },
+  {
+    "id": "lima-plaza-bolognesi",
+    "name": "Lima Plaza Bolognesi",
+    "country": "PE",
+    "region": "South America",
+    "lat": -12.06075,
+    "lon": -77.04205,
+    "tags": [
+      "roundabout"
+    ],
+    "why": "Large monument circle takes six radial roads."
+  },
+  {
+    "id": "bogota-carrera-septima-at-calle-72",
+    "name": "Bogotá Carrera Séptima at Calle 72",
+    "country": "CO",
+    "region": "South America",
+    "lat": 4.65549,
+    "lon": -74.05563,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "A north-south arterial crosses a closely spaced street grid."
+  },
+  {
+    "id": "montevideo-plaza-independencia",
+    "name": "Montevideo Plaza Independencia",
+    "country": "UY",
+    "region": "South America",
+    "lat": -34.90651,
+    "lon": -56.1997,
+    "tags": [
+      "city-grid",
+      "signal"
+    ],
+    "why": "The old town meets a broad avenue at a civic square."
+  },
+  {
+    "id": "cape-town-buitengracht-and-strand",
+    "name": "Cape Town Buitengracht and Strand",
+    "country": "ZA",
+    "region": "Southern Africa",
+    "lat": -33.91824,
+    "lon": 18.41863,
+    "tags": [
+      "signal",
+      "suburban-arterial"
+    ],
+    "why": "Arterial enters a dense grid below a steep hillside."
+  },
+  {
+    "id": "chapman-s-peak-drive-lookout",
+    "name": "Chapman's Peak Drive coastal bends",
+    "country": "ZA",
+    "region": "Southern Africa",
+    "lat": -34.0874111,
+    "lon": 18.35615,
+    "tags": [
+      "rural-two-lane",
+      "mountain-road"
+    ],
+    "why": "Coastal road curves between a steep cliff and the sea."
+  },
+  {
+    "id": "auckland-grafton-bridge",
+    "name": "Auckland Grafton Bridge",
+    "country": "NZ",
+    "region": "Oceania",
+    "lat": -36.8585229,
+    "lon": 174.7638018,
+    "tags": [
+      "bridge-exit",
+      "city-grid"
+    ],
+    "why": "Narrow high bridge crosses a motorway corridor."
+  },
+  {
+    "id": "wellington-basin-reserve",
+    "name": "Wellington Basin Reserve",
+    "country": "NZ",
+    "region": "Oceania",
+    "lat": -41.3012452,
+    "lon": 174.7801638,
+    "tags": [
+      "roundabout",
+      "slip"
+    ],
+    "why": "Urban one-way routes divide around a cricket ground."
+  },
+  {
+    "id": "mumbai-hutatma-chowk",
+    "name": "Mumbai Hutatma Chowk",
+    "country": "IN",
+    "region": "South Asia",
+    "lat": 18.93247,
+    "lon": 72.83153,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "Radial roads meet an irregular colonial-era street grid."
+  },
+  {
+    "id": "kolkata-howrah-bridge",
+    "name": "Kolkata Howrah Bridge",
+    "country": "IN",
+    "region": "South Asia",
+    "lat": 22.58512,
+    "lon": 88.34664,
+    "tags": [
+      "river-bridge",
+      "suburban-arterial"
+    ],
+    "why": "Busy cantilever span meets dense station-side streets."
+  },
+  {
+    "id": "singapore-fullerton-road-at-anderson-bridge",
+    "name": "Singapore Fullerton Road at Anderson Bridge",
+    "country": "SG",
+    "region": "Southeast Asia",
+    "lat": 1.2861646,
+    "lon": 103.8536497,
+    "tags": [
+      "river-bridge",
+      "city-grid"
+    ],
+    "why": "Paved arterial runs beside pedestrianised Anderson Bridge and approaches the modern river crossing."
+  },
+  {
+    "id": "hong-kong-nathan-and-jordan",
+    "name": "Hong Kong Nathan and Jordan",
+    "country": "HK",
+    "region": "East Asia",
+    "lat": 22.30458,
+    "lon": 114.17197,
+    "tags": [
+      "signal",
+      "city-grid"
+    ],
+    "why": "Wide arterial crosses a tight Kowloon grid."
+  },
+  {
+    "id": "hong-kong-central-des-voeux-road",
+    "name": "Hong Kong Central Des Voeux Road",
+    "country": "HK",
+    "region": "East Asia",
+    "lat": 22.2818,
+    "lon": 114.15788,
+    "tags": [
+      "tram",
+      "city-grid"
+    ],
+    "why": "Tram tracks curve through narrow financial-district streets."
+  },
+  {
+    "id": "mexico-city-angel-de-la-independencia",
+    "name": "Mexico City Ángel de la Independencia",
+    "country": "MX",
+    "region": "Mexico",
+    "lat": 19.42704,
+    "lon": -99.16767,
+    "tags": [
+      "roundabout",
+      "suburban-arterial"
+    ],
+    "why": "Broad divided avenues meet a monument circle."
+  },
+  {
+    "id": "guadalajara-glorieta-minerva",
+    "name": "Guadalajara Glorieta Minerva",
+    "country": "MX",
+    "region": "Mexico",
+    "lat": 20.67429,
+    "lon": -103.38715,
+    "tags": [
+      "roundabout",
+      "slip"
+    ],
+    "why": "Several large avenues feed a multi-lane rotary."
+  },
+  {
+    "id": "springfield-missouri-i44-kansas-expressway",
+    "name": "Springfield I-44 and Kansas Expressway",
+    "country": "US",
+    "region": "United States",
+    "lat": 37.2496769,
+    "lon": -93.3106871,
+    "tags": [
+      "diamond",
+      "signal"
+    ],
+    "why": "A diverging diamond crosses opposing arterial lanes on the approaches to the motorway."
+  },
+  {
+    "id": "agadez-route-nationale",
+    "name": "Agadez",
+    "country": "NE",
+    "region": "West Africa",
+    "lat": 16.97317,
+    "lon": 7.98979,
+    "tags": [
+      "desert",
+      "poorly-mapped",
+      "sparse"
+    ],
+    "why": "Sahara market town of sand streets and a few paved arterials.",
+    "data": "pin on a secondary, ground road; within 500 m: 24 km of roads, lanes tagged on 0 %, width 0 %, surface 20 % (16 % unpaved), maxspeed 0 % of length; 2842 buildings, 9 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "abeche-town-streets",
+    "name": "Abeche",
+    "country": "TD",
+    "region": "Central Africa",
+    "lat": 13.82938,
+    "lon": 20.83238,
+    "tags": [
+      "desert",
+      "poorly-mapped",
+      "sparse"
+    ],
+    "why": "Sahel town on the N'Djamena road: OSM building outlines from a mapping campaign, almost no road tags.",
+    "data": "pin on a trunk road; within 500 m: 15 km of roads, lanes tagged on 0 %, width 0 %, surface 56 % (32 % unpaved), maxspeed 0 % of length; 4233 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "lalibela-highland-road",
+    "name": "Lalibela",
+    "country": "ET",
+    "region": "East Africa",
+    "lat": 12.03331,
+    "lon": 39.04843,
+    "tags": [
+      "mountain-road",
+      "rural",
+      "sparse"
+    ],
+    "why": "Ethiopian highland road climbing to a town on steep terrain with a coarse DEM.",
+    "data": "pin on a secondary, paved road; within 500 m: 20 km of roads, lanes tagged on 0 %, width 0 %, surface 37 % (24 % unpaved), maxspeed 0 % of length; 1050 buildings, 6 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "narok-rift-valley-road",
+    "name": "Narok",
+    "country": "KE",
+    "region": "East Africa",
+    "lat": -1.08308,
+    "lon": 35.86851,
+    "tags": [
+      "rural-two-lane",
+      "sparse",
+      "town"
+    ],
+    "why": "Rift Valley market town on the B3 with unpaved side streets.",
+    "data": "pin on a trunk road; within 500 m: 11 km of roads, lanes tagged on 0 %, width 0 %, surface 6 % (6 % unpaved), maxspeed 0 % of length; 799 buildings, 84 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "ambositra-rn7",
+    "name": "Ambositra",
+    "country": "MG",
+    "region": "East Africa",
+    "lat": -20.53116,
+    "lon": 47.24677,
+    "tags": [
+      "mountain-road",
+      "sparse",
+      "town"
+    ],
+    "why": "Madagascar highland RN7 through a hill town.",
+    "data": "pin on a primary road; within 500 m: 13 km of roads, lanes tagged on 0 %, width 0 %, surface 27 % (26 % unpaved), maxspeed 0 % of length; 1738 buildings, 84 % from OSM (else machine-learned), 2 with a height or levels"
+  },
+  {
+    "id": "sesriem-c27-gravel",
+    "name": "Sesriem C27",
+    "country": "NA",
+    "region": "Southern Africa",
+    "lat": -24.48813,
+    "lon": 15.81184,
+    "tags": [
+      "desert",
+      "gravel",
+      "sparse"
+    ],
+    "why": "Namibian gravel C-road in open desert.",
+    "data": "pin on an unclassified, gravel road; within 500 m: 30 km of roads, lanes tagged on 40 %, width 0 %, surface 91 % (51 % unpaved), maxspeed 44 % of length; 19 buildings, 84 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "kisangani-congo-river",
+    "name": "Kisangani",
+    "country": "CD",
+    "region": "Central Africa",
+    "lat": 0.51684,
+    "lon": 25.19984,
+    "tags": [
+      "jungle",
+      "sparse",
+      "town"
+    ],
+    "why": "Congo basin city at the edge of rainforest; laterite streets.",
+    "data": "pin on a residential road; within 500 m: 11 km of roads, lanes tagged on 0 %, width 0 %, surface 42 % (26 % unpaved), maxspeed 0 % of length; 1724 buildings, 79 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "bria-central-african",
+    "name": "Bria",
+    "country": "CF",
+    "region": "Central Africa",
+    "lat": 6.54128,
+    "lon": 21.98748,
+    "tags": [
+      "jungle",
+      "poorly-mapped",
+      "sparse"
+    ],
+    "why": "Central African town mapped by humanitarian campaigns: unpaved streets tagged, no lanes or widths.",
+    "data": "pin on a primary, unpaved road; within 500 m: 9 km of roads, lanes tagged on 0 %, width 0 %, surface 99 % (99 % unpaved), maxspeed 0 % of length; 1590 buildings, 73 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "gaya-bihar-village-road",
+    "name": "Bihar village near Gaya",
+    "country": "IN",
+    "region": "South Asia",
+    "lat": 24.79055,
+    "lon": 85.00017,
+    "tags": [
+      "poorly-mapped",
+      "rural",
+      "sparse"
+    ],
+    "why": "Dense Gangetic plain village roads with almost no tags.",
+    "data": "pin on a residential road; within 500 m: 19 km of roads, lanes tagged on 9 %, width 0 %, surface 13 % (0 % unpaved), maxspeed 0 % of length; 1301 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "khardung-la-road",
+    "name": "Khardung La road",
+    "country": "IN",
+    "region": "South Asia",
+    "lat": 34.27862,
+    "lon": 77.60462,
+    "tags": [
+      "mountain-road",
+      "sparse",
+      "switchback"
+    ],
+    "why": "High Himalayan pass road above 5,000 m on a coarse DEM.",
+    "data": "pin on a primary road; within 500 m: 48 km of roads, lanes tagged on 0 %, width 0 %, surface 29 % (0 % unpaved), maxspeed 0 % of length; 6 buildings, 67 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "mugling-prithvi-highway",
+    "name": "Prithvi Highway at Mugling",
+    "country": "NP",
+    "region": "South Asia",
+    "lat": 27.85449,
+    "lon": 84.55635,
+    "tags": [
+      "mountain-road",
+      "river-bridge",
+      "sparse"
+    ],
+    "why": "Himalayan foothill highway in a gorge.",
+    "data": "pin on a trunk road; within 500 m: 13 km of roads, lanes tagged on 22 %, width 0 %, surface 84 % (3 % unpaved), maxspeed 0 % of length; 365 buildings, 95 % from OSM (else machine-learned), 1 with a height or levels"
+  },
+  {
+    "id": "karakoram-highway-hunza",
+    "name": "Karakoram Highway at Hunza",
+    "country": "PK",
+    "region": "South Asia",
+    "lat": 36.31544,
+    "lon": 74.65049,
+    "tags": [
+      "mountain-road",
+      "sparse"
+    ],
+    "why": "Karakoram Highway along the Hunza valley under steep slopes.",
+    "data": "pin on a trunk, paved road; within 500 m: 11 km of roads, lanes tagged on 0 %, width 0 %, surface 28 % (0 % unpaved), maxspeed 0 % of length; 550 buildings, 45 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "phonsavan-route-7",
+    "name": "Phonsavan",
+    "country": "LA",
+    "region": "Southeast Asia",
+    "lat": 19.44964,
+    "lon": 103.20011,
+    "tags": [
+      "poorly-mapped",
+      "sparse",
+      "town"
+    ],
+    "why": "Lao plateau town on Route 7.",
+    "data": "pin on a residential road; within 500 m: 10 km of roads, lanes tagged on 0 %, width 0 %, surface 38 % (23 % unpaved), maxspeed 0 % of length; 1455 buildings, 2 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "kampong-thom-national-road",
+    "name": "Kampong Thom",
+    "country": "KH",
+    "region": "Southeast Asia",
+    "lat": 12.71113,
+    "lon": 104.88876,
+    "tags": [
+      "rural",
+      "sparse",
+      "town"
+    ],
+    "why": "Cambodian provincial town on National Road 6.",
+    "data": "pin on a primary road; within 500 m: 13 km of roads, lanes tagged on 4 %, width 0 %, surface 28 % (0 % unpaved), maxspeed 0 % of length; 1357 buildings, 3 % from OSM (else machine-learned), 1 with a height or levels"
+  },
+  {
+    "id": "wamena-baliem-valley",
+    "name": "Wamena",
+    "country": "ID",
+    "region": "Southeast Asia",
+    "lat": -4.09654,
+    "lon": 138.94701,
+    "tags": [
+      "jungle",
+      "poorly-mapped",
+      "sparse"
+    ],
+    "why": "Papua highland town with no road link to the coast.",
+    "data": "pin on a trunk, paved road; within 500 m: 17 km of roads, lanes tagged on 58 %, width 0 %, surface 78 % (3 % unpaved), maxspeed 12 % of length; 926 buildings, 94 % from OSM (else machine-learned), 6 with a height or levels"
+  },
+  {
+    "id": "dong-van-ha-giang-loop",
+    "name": "Dong Van",
+    "country": "VN",
+    "region": "Southeast Asia",
+    "lat": 23.27814,
+    "lon": 105.362,
+    "tags": [
+      "mountain-road",
+      "sparse",
+      "switchback"
+    ],
+    "why": "Karst mountain road in northern Vietnam.",
+    "data": "pin on a trunk, asphalt road; within 500 m: 8 km of roads, lanes tagged on 10 %, width 0 %, surface 28 % (0 % unpaved), maxspeed 0 % of length; 807 buildings, 9 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "uyuni-altiplano-town",
+    "name": "Uyuni",
+    "country": "BO",
+    "region": "South America",
+    "lat": -20.46022,
+    "lon": -66.8262,
+    "tags": [
+      "desert",
+      "gravel",
+      "sparse"
+    ],
+    "why": "Altiplano town of wide unpaved streets.",
+    "data": "pin on a residential road; within 500 m: 25 km of roads, lanes tagged on 14 %, width 0 %, surface 35 % (10 % unpaved), maxspeed 0 % of length; 2823 buildings, 2 % from OSM (else machine-learned), 49 with a height or levels"
+  },
+  {
+    "id": "ticlio-carretera-central",
+    "name": "Ticlio pass",
+    "country": "PE",
+    "region": "South America",
+    "lat": -11.59628,
+    "lon": -76.19112,
+    "tags": [
+      "mountain-road",
+      "sparse",
+      "switchback"
+    ],
+    "why": "Andes highway near 4,800 m.",
+    "data": "pin on a trunk, asphalt road; within 500 m: 16 km of roads, lanes tagged on 61 %, width 0 %, surface 82 % (22 % unpaved), maxspeed 82 % of length; 11 buildings, 82 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "itaituba-transamazonica",
+    "name": "Itaituba",
+    "country": "BR",
+    "region": "South America",
+    "lat": -4.27604,
+    "lon": -55.98363,
+    "tags": [
+      "jungle",
+      "sparse",
+      "town"
+    ],
+    "why": "Amazon river town on the Trans-Amazonian highway.",
+    "data": "pin on a primary road; within 500 m: 8 km of roads, lanes tagged on 55 %, width 0 %, surface 87 % (0 % unpaved), maxspeed 24 % of length; 863 buildings, 21 % from OSM (else machine-learned), 40 with a height or levels"
+  },
+  {
+    "id": "leticia-amazon-town",
+    "name": "Leticia",
+    "country": "CO",
+    "region": "South America",
+    "lat": -4.21525,
+    "lon": -69.94061,
+    "tags": [
+      "jungle",
+      "sparse",
+      "town"
+    ],
+    "why": "Amazon town with no road out.",
+    "data": "pin on a residential road; within 500 m: 12 km of roads, lanes tagged on 34 %, width 0 %, surface 13 % (0 % unpaved), maxspeed 0 % of length; 1614 buildings, 90 % from OSM (else machine-learned), 2 with a height or levels"
+  },
+  {
+    "id": "bajo-caracoles-ruta-40",
+    "name": "Ruta 40 at Bajo Caracoles",
+    "country": "AR",
+    "region": "South America",
+    "lat": -47.44476,
+    "lon": -70.92538,
+    "tags": [
+      "gravel",
+      "sparse",
+      "steppe"
+    ],
+    "why": "Patagonian steppe highway hamlet.",
+    "data": "pin on a trunk, asphalt road; within 500 m: 20 km of roads, lanes tagged on 16 %, width 0 %, surface 94 % (86 % unpaved), maxspeed 16 % of length; 61 buildings, 64 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "filadelfia-chaco",
+    "name": "Filadelfia",
+    "country": "PY",
+    "region": "South America",
+    "lat": -22.35011,
+    "lon": -60.03,
+    "tags": [
+      "gravel",
+      "sparse",
+      "town"
+    ],
+    "why": "Chaco colony town of red-earth roads.",
+    "data": "pin on a residential road; within 500 m: 12 km of roads, lanes tagged on 86 %, width 0 %, surface 89 % (73 % unpaved), maxspeed 86 % of length; 407 buildings, 91 % from OSM (else machine-learned), 1 with a height or levels"
+  },
+  {
+    "id": "murghab-pamir-highway",
+    "name": "Murghab",
+    "country": "TJ",
+    "region": "Central Asia",
+    "lat": 38.16846,
+    "lon": 73.96518,
+    "tags": [
+      "mountain-road",
+      "poorly-mapped",
+      "sparse"
+    ],
+    "why": "Pamir Highway settlement at 3,600 m.",
+    "data": "pin on a primary, asphalt road; within 500 m: 10 km of roads, lanes tagged on 14 %, width 0 %, surface 20 % (6 % unpaved), maxspeed 0 % of length; 330 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "kharkhorin-steppe",
+    "name": "Kharkhorin",
+    "country": "MN",
+    "region": "Central Asia",
+    "lat": 47.19666,
+    "lon": 102.82427,
+    "tags": [
+      "gravel",
+      "sparse",
+      "steppe"
+    ],
+    "why": "Mongolian steppe town with dirt tracks.",
+    "data": "pin on a tertiary, asphalt road; within 500 m: 10 km of roads, lanes tagged on 0 %, width 0 %, surface 70 % (35 % unpaved), maxspeed 0 % of length; 203 buildings, 93 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "al-ula-desert-town",
+    "name": "AlUla",
+    "country": "SA",
+    "region": "Middle East",
+    "lat": 26.60828,
+    "lon": 37.92299,
+    "tags": [
+      "desert",
+      "sparse",
+      "town"
+    ],
+    "why": "Saudi desert oasis town.",
+    "data": "pin on a residential road; within 500 m: 20 km of roads, lanes tagged on 0 %, width 0 %, surface 32 % (0 % unpaved), maxspeed 0 % of length; 540 buildings, 3 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "ibri-oman",
+    "name": "Ibri",
+    "country": "OM",
+    "region": "Middle East",
+    "lat": 23.22586,
+    "lon": 56.51578,
+    "tags": [
+      "desert",
+      "sparse",
+      "town"
+    ],
+    "why": "Omani interior desert town.",
+    "data": "pin on a residential road; within 500 m: 21 km of roads, lanes tagged on 34 %, width 12 %, surface 49 % (4 % unpaved), maxspeed 23 % of length; 755 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "tabas-desert-town",
+    "name": "Tabas",
+    "country": "IR",
+    "region": "Middle East",
+    "lat": 33.59575,
+    "lon": 56.92454,
+    "tags": [
+      "desert",
+      "sparse",
+      "town"
+    ],
+    "why": "Iranian desert town.",
+    "data": "pin on a residential road; within 500 m: 21 km of roads, lanes tagged on 0 %, width 0 %, surface 1 % (0 % unpaved), maxspeed 58 % of length; 1091 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "shibam-hadramawt",
+    "name": "Shibam",
+    "country": "YE",
+    "region": "Middle East",
+    "lat": 15.92532,
+    "lon": 48.62668,
+    "tags": [
+      "desert",
+      "poorly-mapped",
+      "sparse"
+    ],
+    "why": "Hadramawt wadi town.",
+    "data": "pin on a trunk road; within 500 m: 10 km of roads, lanes tagged on 0 %, width 0 %, surface 0 % (0 % unpaved), maxspeed 0 % of length; 858 buildings, 63 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "oodnadatta-track",
+    "name": "Oodnadatta",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -27.54596,
+    "lon": 135.4484,
+    "tags": [
+      "desert",
+      "gravel",
+      "sparse"
+    ],
+    "why": "Outback track town.",
+    "data": "pin on an unclassified, unpaved road; within 500 m: 71 km of roads, lanes tagged on 0 %, width 0 %, surface 97 % (95 % unpaved), maxspeed 32 % of length; 109 buildings, 100 % from OSM (else machine-learned), 2 with a height or levels"
+  },
+  {
+    "id": "hermannsburg-ntaria",
+    "name": "Ntaria (Hermannsburg)",
+    "country": "AU",
+    "region": "Australia",
+    "lat": -23.94341,
+    "lon": 132.77699,
+    "tags": [
+      "desert",
+      "gravel",
+      "sparse"
+    ],
+    "why": "Remote Central Australian community.",
+    "data": "pin on a residential road; within 500 m: 7 km of roads, lanes tagged on 0 %, width 0 %, surface 58 % (24 % unpaved), maxspeed 46 % of length; 143 buildings, 34 % from OSM (else machine-learned), 97 with a height or levels"
+  },
+  {
+    "id": "tomtor-oymyakon",
+    "name": "Tomtor (Oymyakon)",
+    "country": "RU",
+    "region": "Russia",
+    "lat": 63.25917,
+    "lon": 143.2355,
+    "tags": [
+      "gravel",
+      "sparse",
+      "village"
+    ],
+    "why": "Yakutian village on a gravel road, permafrost.",
+    "data": "pin on a tertiary, gravel road; within 500 m: 4 km of roads, lanes tagged on 0 %, width 0 %, surface 32 % (32 % unpaved), maxspeed 0 % of length; 16 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "churapcha-yakutia",
+    "name": "Churapcha",
+    "country": "RU",
+    "region": "Russia",
+    "lat": 62.00301,
+    "lon": 132.43285,
+    "tags": [
+      "poorly-mapped",
+      "sparse",
+      "village"
+    ],
+    "why": "Yakutian village of wooden houses.",
+    "data": "pin on a secondary road; within 500 m: 8 km of roads, lanes tagged on 0 %, width 0 %, surface 35 % (35 % unpaved), maxspeed 0 % of length; 981 buildings, 29 % from OSM (else machine-learned), 82 with a height or levels"
+  },
+  {
+    "id": "tunka-buryatia",
+    "name": "Kyren (Tunka valley)",
+    "country": "RU",
+    "region": "Russia",
+    "lat": 51.68017,
+    "lon": 102.13148,
+    "tags": [
+      "mountain-road",
+      "sparse",
+      "village"
+    ],
+    "why": "Siberian valley village under the Sayan range.",
+    "data": "pin on a residential road; within 500 m: 11 km of roads, lanes tagged on 11 %, width 0 %, surface 14 % (3 % unpaved), maxspeed 11 % of length; 111 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "longyearbyen-svalbard",
+    "name": "Longyearbyen",
+    "country": "NO",
+    "region": "Arctic",
+    "lat": 78.22321,
+    "lon": 15.62676,
+    "tags": [
+      "arctic",
+      "sparse",
+      "town"
+    ],
+    "why": "Arctic town on Svalbard with no outside road link.",
+    "data": "pin on an unclassified road; within 500 m: 8 km of roads, lanes tagged on 6 %, width 0 %, surface 51 % (13 % unpaved), maxspeed 62 % of length; 244 buildings, 91 % from OSM (else machine-learned), 9 with a height or levels"
+  },
+  {
+    "id": "kangerlussuaq-greenland",
+    "name": "Kangerlussuaq",
+    "country": "GL",
+    "region": "Arctic",
+    "lat": 67.00862,
+    "lon": -50.68917,
+    "tags": [
+      "arctic",
+      "gravel",
+      "sparse"
+    ],
+    "why": "Greenland settlement with the road to the ice sheet.",
+    "data": "pin on a primary, asphalt road; within 500 m: 7 km of roads, lanes tagged on 4 %, width 0 %, surface 95 % (29 % unpaved), maxspeed 0 % of length; 72 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "iqaluit-nunavut",
+    "name": "Iqaluit",
+    "country": "CA",
+    "region": "Arctic",
+    "lat": 63.74686,
+    "lon": -68.51748,
+    "tags": [
+      "arctic",
+      "gravel",
+      "sparse"
+    ],
+    "why": "Nunavut capital of gravel streets on permafrost.",
+    "data": "pin on a residential road; within 500 m: 10 km of roads, lanes tagged on 0 %, width 0 %, surface 59 % (7 % unpaved), maxspeed 28 % of length; 280 buildings, 97 % from OSM (else machine-learned), 64 with a height or levels"
+  },
+  {
+    "id": "coldfoot-dalton-highway",
+    "name": "Dalton Highway at Coldfoot",
+    "country": "US",
+    "region": "Arctic",
+    "lat": 67.25337,
+    "lon": -150.1796,
+    "tags": [
+      "arctic",
+      "gravel",
+      "sparse"
+    ],
+    "why": "Gravel haul road north of the Arctic Circle.",
+    "data": "pin on a primary, paved road; within 500 m: 33 km of roads, lanes tagged on 50 %, width 0 %, surface 98 % (49 % unpaved), maxspeed 0 % of length; 18 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "tanna-lenakel",
+    "name": "Lenakel (Tanna)",
+    "country": "VU",
+    "region": "Oceania",
+    "lat": -19.53111,
+    "lon": 169.26883,
+    "tags": [
+      "island",
+      "poorly-mapped",
+      "sparse"
+    ],
+    "why": "Volcanic island town with dirt roads.",
+    "data": "pin on an unclassified road; within 500 m: 9 km of roads, lanes tagged on 0 %, width 0 %, surface 9 % (9 % unpaved), maxspeed 0 % of length; 560 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "tarawa-causeway",
+    "name": "South Tarawa",
+    "country": "KI",
+    "region": "Oceania",
+    "lat": 1.32999,
+    "lon": 172.98,
+    "tags": [
+      "island",
+      "sparse"
+    ],
+    "why": "Atoll causeway road one metre above the sea.",
+    "data": "pin on a residential road; within 500 m: 3 km of roads, lanes tagged on 91 %, width 0 %, surface 73 % (3 % unpaved), maxspeed 91 % of length; 595 buildings, 100 % from OSM (else machine-learned), 6 with a height or levels"
+  },
+  {
+    "id": "santo-antao-cobbled-road",
+    "name": "Santo Antao road",
+    "country": "CV",
+    "region": "West Africa",
+    "lat": 17.09567,
+    "lon": -25.06147,
+    "tags": [
+      "island",
+      "mountain-road",
+      "sparse"
+    ],
+    "why": "Cobbled mountain road on a volcanic island.",
+    "data": "pin on a secondary road; within 500 m: 4 km of roads, lanes tagged on 0 %, width 0 %, surface 0 % (0 % unpaved), maxspeed 0 % of length; 17 buildings, 53 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "hiiumaa-gravel",
+    "name": "Hiiumaa gravel road",
+    "country": "EE",
+    "region": "Northern Europe",
+    "lat": 58.83542,
+    "lon": 22.51612,
+    "tags": [
+      "gravel",
+      "rural",
+      "sparse"
+    ],
+    "why": "Estonian island gravel road network.",
+    "data": "pin on a tertiary, compacted road; within 500 m: 6 km of roads, lanes tagged on 0 %, width 0 %, surface 51 % (51 % unpaved), maxspeed 0 % of length; 4 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "arvidsjaur-forest-roads",
+    "name": "Arvidsjaur forest road",
+    "country": "SE",
+    "region": "Northern Europe",
+    "lat": 65.49992,
+    "lon": 19.39704,
+    "tags": [
+      "gravel",
+      "rural",
+      "sparse"
+    ],
+    "why": "Swedish Norrland forest gravel roads.",
+    "data": "pin on a track, unpaved road; within 500 m: 4 km of roads, lanes tagged on 0 %, width 0 %, surface 100 % (100 % unpaved), maxspeed 0 % of length; 0 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "kindersley-grid-roads",
+    "name": "Kindersley grid roads",
+    "country": "CA",
+    "region": "Canada",
+    "lat": 51.4,
+    "lon": -109.30888,
+    "tags": [
+      "gravel",
+      "rural",
+      "sparse"
+    ],
+    "why": "Saskatchewan prairie section-line gravel grid.",
+    "data": "pin on an unclassified, gravel road; within 500 m: 5 km of roads, lanes tagged on 100 %, width 0 %, surface 100 % (100 % unpaved), maxspeed 84 % of length; 1 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+  },
+  {
+    "id": "iowa-gravel-grid",
+    "name": "Iowa gravel grid",
+    "country": "US",
+    "region": "United States",
+    "lat": 41.99369,
+    "lon": -94.00003,
+    "tags": [
+      "gravel",
+      "rural",
+      "sparse"
+    ],
+    "why": "Iowa section-line gravel roads.",
+    "data": "pin on a tertiary, unpaved road; within 500 m: 2 km of roads, lanes tagged on 0 %, width 0 %, surface 86 % (86 % unpaved), maxspeed 86 % of length; 4 buildings, 0 % from OSM (else machine-learned), 4 with a height or levels"
+  },
+  {
+    "id": "hole-in-the-rock-road",
+    "name": "Hole-in-the-Rock Road",
+    "country": "US",
+    "region": "United States",
+    "lat": 37.69309,
+    "lon": -111.49935,
+    "tags": [
+      "desert",
+      "gravel",
+      "sparse"
+    ],
+    "why": "Utah desert gravel road.",
+    "data": "pin on an unclassified, unpaved road; within 500 m: 5 km of roads, lanes tagged on 0 %, width 0 %, surface 100 % (100 % unpaved), maxspeed 0 % of length; 0 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+  }
+]

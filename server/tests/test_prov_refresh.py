@@ -5,6 +5,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -25,7 +26,9 @@ class FakeMapData:
 
 class ProvRefreshTest(unittest.TestCase):
     def setUp(self):
-        self.out = tempfile.mkdtemp()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.out = tmp.name
         self.pool = ThreadPoolExecutor(1)
         self.md = FakeMapData()
         self.built = []
@@ -36,14 +39,22 @@ class ProvRefreshTest(unittest.TestCase):
         def remake(a, cx, cy):
             if self.gate is not None:
                 self.gate()
-            name = f"hm_1_0_0_r{len(self.built)}.ter"
-            open(os.path.join(self.out, name), "wb").close()
-            self.built.append(name)
-            return {"ter": name, "stages": {"l0Samples": 10.0, "l0roads": 0.01}}
+            stem = f"hm_1_0_0_r{len(self.built)}"
+            info = {"ter": stem + ".ter", "heightmap": stem + ".png", "layers": [stem + "_m0.png"]}
+            for name in earthd.block_files(info):
+                open(os.path.join(self.out, name), "wb").close()
+            self.built.append(info["ter"])
+            return info
+        def remove(paths):
+            for path in paths:
+                earthd.Server._remove(path)
+
         s = types.SimpleNamespace(mapdata=self.md, surface=object(), anchors={1: anchor},
                                   layout=types.SimpleNamespace(block=1024), prov_pool=self.pool,
                                   remake_provisional=remake, base_shown={}, out_dir=self.out, prov_info={},
-                                  _remove=earthd.Server._remove, ground_bases={}, hm_committed=[(1, 0.0, 0.0)])
+                                  remove_off_loop=remove, ground_bases={}, hm_committed=[(1, 0.0, 0.0)])
+        self.retired = []
+        s.retire_terrain = self.retired.extend
         self.grounds = []
 
         def ground(a, cx, cy, info):
@@ -107,7 +118,40 @@ class ProvRefreshTest(unittest.TestCase):
         self.run_loop(again)
         self.assertEqual(len(self.built), 1, "once per block")
         olds = self.conn.graded_sent(key)
-        self.assertEqual(sorted(olds), sorted(["a.ter", self.built[0]]), "the graded block's sender deletes both")
+        self.assertEqual(self.retired, ["a.ter"])
+        self.assertCountEqual(olds, ["hm_1_0_0_r0.ter", "hm_1_0_0_r0.png", "hm_1_0_0_r0_m0.png"])
+
+    def test_graded_reply_while_ground_standin_is_being_written(self):
+        key, server = (1, 0.0, 0.0), self.conn.s
+        self.md.here = True
+        original = "g_first.jpg"
+        open(os.path.join(self.out, original), "wb").close()
+        server.base_shown[key], server.ground_bases[key] = original, [original]
+        server.base_lock = threading.Lock()
+        server._base_paths = lambda name: [os.path.join(self.out, name)]
+        server.remove_revision_files = server.remove_off_loop
+        render = server.write_ground_base
+        started, finish = threading.Event(), threading.Event()
+        def paint(*args):
+            started.set()
+            if not finish.wait(10):
+                raise TimeoutError("waiting for the graded reply")
+            return render(*args)
+        server.write_ground_base = paint
+
+        async def go():
+            self.conn.note_provisional(self.anchor, key, {"roadsComplete": False})
+            self.conn.prov_refresh(1)
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 10))
+                self.conn.graded_sent(key)
+            finally:
+                finish.set()
+
+        self.run_loop(go)
+        self.assertFalse(self.sent)
+        self.assertEqual(os.listdir(self.out), [original])
+        self.assertEqual(server.ground_bases[key], [original])
 
     def test_ground_stand_in_made_again(self):
         """A ground stand-in shown (l0roads.ground_photo: no imagery on disk at the teleport) is made again from the
@@ -148,7 +192,7 @@ class ProvRefreshTest(unittest.TestCase):
             release.set()
         self.run_loop(go)
         self.assertEqual(self.sent, [], "the graded block is the better one: no refresh after it")
-        self.assertFalse(os.path.exists(os.path.join(self.out, self.built[0])), "its .ter removed")
+        self.assertEqual(os.listdir(self.out), [], "all files of the discarded revision removed")
 
 
 if __name__ == "__main__":

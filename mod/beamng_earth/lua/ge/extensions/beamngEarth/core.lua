@@ -17,8 +17,8 @@
 -- Robustness (docs/ROADMAP.md "Robustness: no server, lost server, lost internet" 1-3): the
 -- connection banner (banner.lua) says what is wrong with the world server, the edge guard
 -- (edgeguard.lua) holds the car on the last physics block while the server cannot move it (never
--- while the server is healthy), and hello / pose name the session folders whose files the far
--- tiles still use (roads.allHeldSessions), so a restarted server keeps them (server/README.md).
+-- while the server is healthy), and hello / pose name the session folders still in use by terrain,
+-- roads and far tiles so a restarted server keeps their files (server/README.md).
 --
 -- World logic is active in our level (levels/beamng_earth) from the start, and in any other
 -- level once the player teleports (for testing). Console helpers:
@@ -146,10 +146,12 @@ local DEFAULT_LAT, DEFAULT_LON = 36.596718, -118.169991 -- Whitney Portal Road u
 local STUCK_S = 5
 local ERROR_HOLD_S = 10
 local ATTRIBUTION = 'Elevation: Mapterhorn (https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen'
--- shown once satellite-textured tiles arrive (docs/V1_3_SPEC.md C; EOX's required wording)
+-- shown once satellite-textured tiles arrive (docs/V1_3_SPEC.md C; EOX's required wording; the server's hello.attribution
+-- replaces it with the sources it uses. EOX's 2023 mosaic, CC BY-NC-SA, left the chain 2026-11-23)
 local IMAGERY_ATTRIBUTION = 'Imagery: USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); '
+  .. 'Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0); '
   .. 'EOxCloudless https://cloudless.eox.at by '
-  .. 'EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023 / 2016 & 2017; CC BY-NC-SA 4.0 / CC BY 4.0)'
+  .. 'EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017; CC BY 4.0)'
 local FULL_ATTRIBUTION = IMAGERY_ATTRIBUTION .. '\n' .. ATTRIBUTION
 
 local st -- all runtime state, see resetState()
@@ -303,6 +305,10 @@ local function requestAnchor(lat, lon, purpose, cx, cy, place)
     setStatus('Companion server not connected (127.0.0.1:' .. net.PORT .. ')')
     return false
   end
+  if st.releaseHold then      -- (a server of other map data than this level's world: nothing is asked of it)
+    setStatus(M._releaseHoldText())
+    return false
+  end
   local id = nextId()
   if purpose == 'teleport' then st.loadingFault = nil end
   st.pending = { requestId = id, purpose = purpose, lat = lat, lon = lon, sentAt = st.clock, cx = cx, cy = cy,
@@ -381,7 +387,7 @@ end
 -- The server's .ter (terrain.swap) is taken whenever the block exists: ~12 ms, no collision rebuild
 -- (the third result is then true; teleports and rebases rebuild it anyway), and it carries the edge
 -- holes (heightmap.write_ter). The first import of a session takes the .ter right after it too.
-local function loadBlock(tr)
+local function loadBlock(tr, aid)
   local x, y = follow.blockOrigin(tr.cx, tr.cy)
   local sq = tonumber(tr.squareSize) or follow.SQUARE_SIZE
   if math.abs(sq - follow.SQUARE_SIZE) > 1e-9 then
@@ -393,14 +399,28 @@ local function loadBlock(tr)
   local layers = (type(tr.layers) == 'table' and type(tr.materials) == 'table')
     and { masks = tr.layers, materials = tr.materials } or nil -- server --surface on (surface.py)
   if layers then groundcover.ensure() end
-  -- detail mode: the block's aerial photo as its base colour (server write_base); else the level's
-  -- (false: detail mode without a photo -> the level's flat base; nil: other modes, untouched)
+  -- Detail mode: the block's photo (server write_base; or its stand-in, write_quick_base: the far tiles' textures of
+  -- its ground), else the level's flat base (false). nil (left as it was) kept the block before's photo on the
+  -- materials, drawn on this block where it had moved: the ground of 128 m or more away, its painted roads beside the
+  -- real ones, since photo-less blocks are drawn again (PHOTOLESS_FAR_GROUND).
   local base = nil
-  if nearVisual == 'detail' then base = type(tr.base) == 'string' and tr.base or false end
+  if nearVisual == 'detail' then
+    base = false
+    if type(tr.base) == 'string' and FS:fileExists(tr.base) then
+      base = tr.base
+    elseif aid == st.anchorId and st.anchorSession == st.sessionId and st.block and
+        st.block.cx == tr.cx and st.block.cy == tr.cy and not st.photoMissing then
+      base = terrain.base() or false  -- a same-place regrade can keep the correctly aligned photograph
+      if base and not FS:fileExists(base) then base = false end
+    end
+  end
   local ter = M.TER_SWAP and type(tr.ter) == 'string'
   if ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
+    M._rewetDrop(tr.ter)
+    st.blockLoads = (st.blockLoads or 0) + 1      -- (M.groundSerial)
     roads.terrainSwapped()      -- its collision follows by itself next frame: no other rebuild meanwhile
     groundcover.afterBlockChange()
+    M._blockPhotoInstalled(base)
     st.blockMsg = tr            -- (the block in use, as it was sent: a generation swap's rollback installs it again)
     return true, nil, true
   end
@@ -410,8 +430,57 @@ local function loadBlock(tr)
   end
   -- every block import / move drops all the grass on it; rebuild it before this frame is drawn
   groundcover.afterBlockChange()
-  if ok then st.blockMsg = tr end   -- (as above: every terrain install leaves the snapshot a rollback needs)
+  if ok then
+    st.blockLoads = (st.blockLoads or 0) + 1
+    M._blockPhotoInstalled(base)
+    st.blockMsg = tr
+  end
   return ok, err
+end
+
+-- Wet city streets at once (the 2026-11-26 playtest: "ground dosnt look super wet"): wetlook.lua's step reaches the
+-- terrain's paved layers at a block swap (terrain.applyWet: their wet maps ride on the swap's own rebind; a terrain
+-- material change of its own, updateMaterial, costs ~1 s), and a car standing in the rain saw no swap. So the block in
+-- use is swapped in again from a second name of its .ter (a copy beside it: the engine skips a terrainFile it already
+-- has; the next re-wet goes back to the first name): one swap's cost per wet step, a few per rain. Only while the car
+-- stands still (REWET_STILL_MS): a moving car's next block swap brings the step anyway within a few hundred metres, and
+-- a swap's next frame can be slow (RenderShadows). The copy goes when the next block comes (_rewetDrop).
+M.REWET_STILL_MS = 2
+M._rewetAlt = nil       -- the copy made (its path), until the next block
+function M._rewetDrop(ter)
+  local alt = M._rewetAlt
+  if alt and alt ~= ter then
+    M._rewetAlt = nil
+    pcall(function() if FS:fileExists(alt) then FS:removeFile(alt) end end)
+  end
+end
+-- Called every frame (a flag test while nothing waits); force: also while moving (probes). -> what it did.
+function M._rewetBlock(force)
+  if not terrain.wetDirty then return 'clean' end
+  local tr = st.blockMsg
+  if not (st.inOurLevel and M.TER_SWAP and type(tr) == 'table' and type(tr.ter) == 'string' and st.block
+      and tr.cx == st.block.cx and tr.cy == st.block.cy) then return 'no block' end
+  if st.swap or M._loadCover() then return 'busy' end
+  if not terrain.wetPending() then terrain.wetDirty = false; return 'on step' end
+  local p = st.player
+  if not force and p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) > M.REWET_STILL_MS then return 'moving' end
+  local orig = tr.ter         -- (the block as sent; the copy is ours, never in blockMsg)
+  local alt = orig:gsub('%.ter$', '') .. '_wet.ter'
+  local tb = terrain.get()
+  local want = (tb and tb:getField('terrainFile', 0) == alt) and orig or alt
+  if want == alt and not FS:fileExists(alt) then
+    local okc, res = pcall(function() return FS:copyFile(orig, alt) end)
+    if not (okc and (res == true or res == 0) and FS:fileExists(alt)) then
+      terrain.wetDirty = false          -- (no copy possible: the next block swap brings the step)
+      return 'no copy'
+    end
+  end
+  if not terrain.reswap(want) then terrain.wetDirty = false; return 'failed' end
+  if want == alt then M._rewetAlt = alt end
+  roads.terrainSwapped()      -- (its collision follows by itself next frame, the same heights)
+  groundcover.afterBlockChange()
+  terrain.wetDirty = false
+  return 'rewet'
 end
 
 -- M1h: in horizon mode LevelInfo.visibleDistance follows the server's radius (+10 %, with
@@ -554,7 +623,7 @@ local function commitTeleport(msg)
   if st.viewFrame then M._leaveViewFrame() end   -- (the 3D map's Drive here: the car is placed in the new frame)
   local sw = stopwatch.new()
   local ok
-  if tr then ok, err = loadBlock(tr) end
+  if tr then ok, err = loadBlock(tr, msg.anchorId) end
   -- a new place: grass made fresh (with tools/gcpatch the engine keeps it across block moves)
   if ok then groundcover.rebuild() end
   if not ok then
@@ -574,7 +643,8 @@ local function commitTeleport(msg)
     pcall(require('beamngEarth/globe').transform, xf, msg.anchorId)
     keepOld = true
   end
-  farfield.switchAnchor(msg.anchorId, keepOld, { cx = tr.cx, cy = tr.cy }, st.sessionId, newA)
+  farfield.switchAnchor(msg.anchorId, keepOld, { cx = tr.cx, cy = tr.cy, zBase = tr.zBase, cover = tr.cover }, st.sessionId,
+    newA)
   st.loadingUntil = st.clock + LOADING_AFTER_TELEPORT_S
   st.teleportAt = st.clock         -- (the loading cover past loadingUntil: M._loadCover)
   st.placeFrames = PLACE_DELAY_FRAMES
@@ -605,6 +675,8 @@ local function commitTeleport(msg)
 
   local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
+  st.koppen = tonumber(msg.koppen)  -- (anchor_ready.koppen: the place's Koppen-Geiger class, server climate.py; nil when not
+                                    -- sent: the full leaf cycle; seasonlook.climateFactor, baretrees.lua)
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
   require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)
@@ -633,7 +705,7 @@ local function finishRebase()
   st.recouple = rebase.recoupleStart(rb.couplings, st.clock)   -- (trailers hitched again: rebase.lua)
   local ok, err = true, nil
   if tr then
-    ok, err = loadBlock(tr)
+    ok, err = loadBlock(tr, msg.anchorId)
     -- the world shifts under the grass: made fresh (with tools/gcpatch the engine would keep it)
     groundcover.rebuild()
   end
@@ -656,7 +728,8 @@ local function finishRebase()
   navgraph.transform(xf, msg.anchorId)    -- (the AI's road graph too: applied again at once, the AI planning afresh)
   -- a resync with a restarted server keeps the previous session's tiles the same way (st.sessionId
   -- is the new session's): they go once the new session's tiles cover them
-  farfield.switchAnchor(msg.anchorId, true, tr and { cx = tr.cx, cy = tr.cy } or false, st.sessionId, rb.newAnchor)
+  farfield.switchAnchor(msg.anchorId, true, tr and { cx = tr.cx, cy = tr.cy, zBase = tr.zBase, cover = tr.cover } or false,
+    st.sessionId, rb.newAnchor)
   -- (the 3D map's own camera is placed by latitude / longitude: nothing of it to shift)
   local cs = viewMove and { points = 0, triples = 0, viaDebug = true }
     or camshift.shift(xf, rb.playerOld[1], rb.playerOld[2], rb.playerOld[3])
@@ -667,6 +740,7 @@ local function finishRebase()
 
   local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
+  st.koppen = tonumber(msg.koppen) or st.koppen    -- (a rebase nearby: the same climate when not sent)
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(st.anchor.lat, st.anchor.lon)
   M._apiRebased(oldAnchor, rb.purpose)
@@ -864,7 +938,7 @@ local frameTimer = hptimer and hptimer() or nil
 
 local function commitTerrain(msg, quiet)
   local sw = stopwatch.new()
-  local ok, err, swapped = loadBlock(msg)
+  local ok, err, swapped = loadBlock(msg, msg.anchorId)
   if not ok then
     setStatus('Terrain-follow import failed: ' .. tostring(err))
     if not quiet then st.terrainRetryAt = st.clock + follow.RETRY_S end
@@ -876,7 +950,7 @@ local function commitTerrain(msg, quiet)
     roads.collisionRebuilt()      -- the sidewalks made so far collide now too
   end
   local tColl = sw()
-  farfield.onBlockCommit(msg.cx, msg.cy)
+  farfield.onBlockCommit(msg.cx, msg.cy, msg)   -- (each far tile against this block: its zBase, cover)
   local ls = swapped and terrain.lastSwap or nil
   local c = { load = tLoad, coll = tColl - tLoad, cover = sw() - tColl, f = {}, swap = swapped or nil,
     ter = ls and ls.apply or nil,   -- the .ter load alone (ms)
@@ -1149,6 +1223,15 @@ M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 
     swap_begin = true, swap_end = true, swap_abort = true,
     block_base = true, terrain_patch = true, ground_ahead = true, deck_spans = true, status = true, load_progress = true, where_result = true, geocode_result = true, stations_result = true,
     route_result = true, random_place_result = true, runtime_profiler_pong = true } }
+-- Pure: may a ready block (its terrain message msg) be taken now as far as its photo goes? Detail mode: not one that came
+-- without its photo (the level's flat brown base until its block_base, which fills msg.base) while the block in use
+-- shows one (shown: terrain.base()). It is follow.decide's gate, so only until the hard commit distance: past it the
+-- block is taken anyway. The ground went brown for seconds at a time on every lap of Daytona (2026-11-19): blocks built
+-- again came without their photo and were taken at once; the block in use still had its own under the car.
+function M.photoGateOpen(msg, shown, mode)
+  if mode ~= 'detail' or shown == nil or type(msg) ~= 'table' then return true end
+  return type(msg.base) == 'string'
+end
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
 -- is slower than BASE_NOW_MS, if that block is still the one in use (a later block brings its own photo)
 M.BASE_LATER_MS, M.BASE_NOW_MS = 35, 30         -- m/s (78 / 67 mph; the server skips a block's photo wait over 89 mph)
@@ -1189,11 +1272,13 @@ function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: pro
 function M.netBacklog() return #M._netq.q - M._netq.head + 1 + (net.decodeBacklog and net.decodeBacklog() or 0) end  -- (+ those not decoded yet)
 if net.setUrgent then net.setUrgent(M._netq.urgent) end  -- (net.lua decodes these at once while other payloads wait to be decoded)
 
+M._terrainFiles = require('beamngEarth/terrainfiles')
+
 local function onMessage(msg)
   local t = msg.type
   if t == '_connected' then
     if not net.isCurrent(msg) then return end -- a queued event of an already-replaced transport cannot start a snapshot
-    -- sessions: the session folders our far tiles still use (a restarted server keeps them)
+    -- A restarted server keeps the session folders our terrain, roads and far tiles still use.
     -- slotsHeld: the pooled shape slots our objects hold, if the server is the one that sent them (a reconnect)
     local leaseSession, leaseId = net.lease()
     local snapshotSession = leaseSession or farfield.session()
@@ -1210,8 +1295,9 @@ local function onMessage(msg)
     -- its version, and the app tells the player when it is not its own; none in the dev tree)
     release = M.releaseVersion(),
       waterguard = sea.GUARD_VERSION,
+      terrainFiles = 1, terrainHeld = M._terrainFiles.snapshot(st, M._netq, leaseSession, terrain),
       streamLease = 1, leaseSession = leaseSession, leaseId = leaseId,
-      sessions = roads.allHeldSessions(), slotSession = snapshotSession, slotsHeld = held, held = anchors, vegFlat = true,
+      sessions = M._terrainFiles.sessions(roads.allHeldSessions()), slotSession = snapshotSession, slotsHeld = held, held = anchors, vegFlat = true,
       geoTiles = require('beamngEarth/geotile').Z,
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
@@ -1241,12 +1327,14 @@ local function onMessage(msg)
     -- now waits for the new server, srvrestart.lua)
     st.startSettings, st.startFixed, st.restartable = nil, nil, false
     M._srvrestart.disconnected(M._restart, st.clock)
+    M._relpin.disconnected(M._relpinState)     -- (a level started from now on is pinned by the next server's hello)
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
     -- an auto-teleport lost with the connection is retried on the next hello
     if not st.anchor then st.autoTeleportDone = false end
     sea.clear()
     trees.clear()
     ambience.clear()
+    require('beamngEarth/liveaudio').reset()    -- (the pre-recorded weather sounds back at once)
     M._trafficvisuals.session(nil, false)
     setStatus('Disconnected from companion server: ' .. tostring(msg.error))
   elseif t == 'runtime_profiler_pong' then
@@ -1254,6 +1342,12 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    M._cliffsAvailable = msg.cliffs and msg.cliffs.available == true or false
+    M._cliffsDebug = msg.cliffs and msg.cliffs.debug == true or false     -- (server BNE_CLIFFS_DEBUG)
+    require('beamngEarth/clifftalus').configure(msg.cliffs)
+    require('beamngEarth/cliffmaterials').configure(msg.cliffs)
+    require('beamngEarth/cliffcontact').configure(msg.cliffs)
+    roads.configureCliffs(msg.cliffs)     -- (the cliff parts in the tile loops: only when on)
     if msg.streamLease == 1 and type(msg.leaseId) == 'string' then
       net.serverHello(msg.sessionId, msg.leaseId, msg)
     else
@@ -1271,6 +1365,11 @@ local function onMessage(msg)
     st.startFixed = type(msg.startFixed) == 'table' and msg.startFixed or nil     -- (set by hand: never pending)
     st.restartable = msg.restartable == true
     M._srvrestart.hello(M._restart, st.clock, msg.sessionId)
+    -- the map data's release (releasepin.lua): this level's world is of the release it was pinned to; a server of
+    -- another one (or of none after a known one) streams nothing into it (st.releaseHold, below)
+    st.releaseHold = M._relpin.hello(M._relpinState, msg.overtureRelease, st.inOurLevel, msg.sessionId) == 'mismatch'
+      or nil
+    pcall(mpsession.setRelease, M._relpin.pinned(M._relpinState))     -- (the level's: BeamMP poses carry it)
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
     st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
     roads.setSession(msg.sessionId)   -- the road / building tiles' pooled shape files belong to this server
@@ -1303,9 +1402,11 @@ local function onMessage(msg)
     -- a new server session: its own gravity message follows the first pose (none with --gravity off)
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.clearGravity then w.clearGravity() end
+    if M._winter then M._winter.onHello() end   -- (a server without winter: stock grip again after a while)
     st.deshadow = msg.deshadow -- server-side imagery de-shadowing ('lambert' / 'full'; nil = off), shown on the settings page
     st.colormatch = msg.colormatch -- server-side imagery colour-seam removal ('s2'; nil = off), likewise
     seasonlook.setMode(msg.season) -- the imagery's season (server --season): the leaves follow it
+    seasonlook.setSnow(msg.snow) -- winter's snow (server BNE_WINTER; nil: off): the snow layer's look, the grass
     st.mapPort = msg.mapPort -- the world map's tile endpoint on 127.0.0.1 (server/maptiles.py; nil = an older server)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the
     -- server keeps it for its next start too)
@@ -1315,6 +1416,12 @@ local function onMessage(msg)
     if settings and settings.cacheCapGb then net.send({ type = 'cache', capGb = settings.cacheCapGb() }) end
     -- gas stations on, after every hello (a server started without them too; this comes before any tile request)
     net.send({ type = 'gas_stations', on = true })
+    -- live weather sounds: the Weather sounds setting said again to this server (liveaudio.lua)
+    do
+      local la = require('beamngEarth/liveaudio')
+      la.reset()
+      la.setSender(function(m) if st.sessionId and net.isConnected() then net.send(m) return true end return false end)
+    end
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
     -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
@@ -1388,7 +1495,10 @@ local function onMessage(msg)
     serverCreditsByArea = type(msg.imageryCredits) == 'table' and msg.imageryCredits or nil
     serverOtherCredits = type(msg.otherCredits) == 'string' and msg.otherCredits or nil
     pcall(places.syncLevel)     -- the level select's place pictures (the server makes the missing ones)
-    if st.anchor then
+    if st.releaseHold then
+      st.resync = st.anchor ~= nil    -- (the block does not follow, no anchor is asked: nothing of the other release)
+      M._releaseMismatch(msg.overtureRelease)
+    elseif st.anchor then
       -- A (re)started server knows nothing of our anchor: re-register the SAME geodetic origin under
       -- a new anchorId. The transform is then the identity, so nothing in the world moves (a shift
       -- here could happen close to the origin, where camshift cannot tell positions from offsets).
@@ -1441,6 +1551,7 @@ local function onMessage(msg)
     local p = st.pending
     if p and msg.requestId == p.requestId and not p.ready then p.stage, p.progressAt = msg.stage, st.clock end
   elseif t == 'anchor_ready' then
+    M._terrainFiles.received(msg)
     local p = st.pending
     if not p or msg.requestId ~= p.requestId then return end -- stale answer
     if p.importAt then return end       -- duplicate ready while retrying the same files
@@ -1473,6 +1584,7 @@ local function onMessage(msg)
   elseif t == 'terrain_ready_set' then   -- blocks built already (follow.preferReady): this anchor's only
     follow.setReady(msg.anchorId == st.anchorId and msg.centres or {})
   elseif t == 'terrain_ready' then
+    M._terrainFiles.received(msg)
     local p = st.terrainPending
     if not p or msg.requestId ~= p.requestId or msg.anchorId ~= st.anchorId then return end -- stale
     if msg.size ~= terrain.SIZE or msg.cx ~= p.cx or msg.cy ~= p.cy then
@@ -1484,6 +1596,7 @@ local function onMessage(msg)
     if p.sentAt then st.terrainLatency = st.clock - p.sentAt; pcall(M._psum.mod.block, st.terrainLatency) end
     st.terrainErrorAt = nil
   elseif t == 'terrain_refresh' then
+    M._terrainFiles.received(msg)
     -- the graded block in place of a teleport's provisional one (server make_provisional; the user, 2026-10-22:
     -- "place the car as soon as possible"): swapped in while that block is still ours, else dropped (the block
     -- moved on: its replacements are built graded anyway)
@@ -1550,6 +1663,13 @@ local function onMessage(msg)
     -- real weather (server weather.py): applied by the separate beamngEarth_weather extension
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.onWeather then w.onWeather(msg) end
+  elseif t == 'audio_state' then
+    require('beamngEarth/liveaudio').onAudioState(msg) -- live weather sounds (server liveaudio.py): the synth's state
+  elseif t == 'snowstate' then
+    -- winter grip (server snow.py, BNE_WINTER only): winter.lua loads with the first one (nothing of it runs before)
+    M._winter = M._winter or require('beamngEarth/winter')
+    M._winter.onState(msg)
+    seasonlook.setSnowState(msg) -- (the bare trees' frost, baretrees.lua)
   elseif t == 'gravity' then
     -- real gravity at the player (server gravity.py): applied by beamngEarth_weather's setGravity path
     local w = rawget(_G, 'beamngEarth_weather')
@@ -1558,6 +1678,8 @@ local function onMessage(msg)
     -- the BeamNG.Earth servers for the tab in BeamMP's server browser (serverlist.lua)
     local sl = rawget(_G, 'beamngEarth_serverlist')
     if sl and sl.onList then sl.onList(msg) end
+  elseif t == 'snow' then
+    seasonlook.setSnow(msg.snow) -- another snow state live (server snow_mode)
   elseif t == 'block_base' then
     -- detail mode: a block's base photo rendered again with its NAIP tiles (server base_refresh): the block
     -- in use takes it now, a ready one not committed yet takes it at its commit
@@ -1569,16 +1691,19 @@ local function onMessage(msg)
         -- car slows: M.applyBaseLater)
         -- (only a photo replacing another: a block taken without one (the level's flat brown base, its photo not
         -- ready at speed) takes its first at once; deferred, the ground stayed brown until the car slowed down)
-        local pl = st.player
-        if pl and (pl.speed or 0) > M.BASE_LATER_MS and terrain.base() ~= nil then
+        local pl, shown = st.player, terrain.base()
+        -- A cold teleport can have a slope-coloured ground stand-in before its first aerial.
+        if pl and (pl.speed or 0) > M.BASE_LATER_MS and not st.photoMissing and shown and not shown:match('_base_g%d+%.') then
           M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base, size = tonumber(msg.baseSize) }
         else
           M._baseLater = nil
-          terrain.setBase(msg.base, tonumber(msg.baseSize))
-          st.baseRefreshes = (st.baseRefreshes or 0) + 1
+          if terrain.setBase(msg.base, tonumber(msg.baseSize)) then
+            M._blockPhotoInstalled(msg.base)
+            st.baseRefreshes = (st.baseRefreshes or 0) + 1
+          end
         end
       end
-      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base = msg.base end
+      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base, tp.msg.baseSize = msg.base, msg.baseSize end
     end
   elseif t == 'deck_spans' then
     -- the bridges round the car (server deckspans.py): the deck guard slows the car before one whose tile is late
@@ -1643,7 +1768,7 @@ local function onMessage(msg)
   elseif t == 'route_result' then
     -- (legs and steps too: gps.lua reads them for the API's gpsRoute().legs / .steps; GitHub #1259)
     if msg.id then routeResults[msg.id] = { points = msg.points or {}, dist = msg.dist, dur = msg.dur, error = msg.error,
-      elev = msg.elev, legs = msg.legs, steps = msg.steps } end
+      elev = msg.elev, legs = msg.legs, steps = msg.steps, avoided = msg.avoided } end
   elseif t == 'route_download' then
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)
@@ -1659,6 +1784,8 @@ local function onMessage(msg)
     if type(msg.result) == 'table' and msg.result.id then M._areaResults = { [msg.result.id] = msg.result } end
   elseif t == 'area_plan_result' then
     if msg.id then M._areaPlans = { [msg.id] = msg } end
+  elseif t == 'debug_map_result' then
+    if msg.id then M._debugMapResults = { [msg.id] = msg } end
   elseif t == 'cache_map_result' then
     -- the map's cache view: a grid of levels for the asked box (EarthMap.vue polls takeCacheMap)
     if msg.id then M._cacheMapResults = { [msg.id] = msg } end
@@ -1824,6 +1951,10 @@ M.dropHoldState = function() return dropHold end      -- (tests, tools)
 -- before allowing teleport. gray out the button"). Never for good: a teleport whose ground failed and waits to be
 -- asked again (teleportRetry) lets another place be asked, and one the server has not answered in GO_WAIT_MAX_S too.
 M.GO_WAIT_MAX_S = 120
+-- Changes whenever the collidable ground may have: a block installed or a collision rebuild (new road tiles, decks,
+-- buildings). gps.lua sets its route line's heights again then.
+function M.groundSerial() return (st.blockLoads or 0) + roads.reloads() end
+
 function M.groundReady()
   if st.teleportRetry then return true end
   local p = st.pending
@@ -1999,6 +2130,7 @@ local function updateWorld(dt)
   if st.poseTimer >= POSE_INTERVAL and net.isReady() and anchorKnown() and not st.rebasing then
     st.poseTimer = 0
     local c = st.cam
+    local fMean, fMax = gov:frameWindow()     -- (the frames since the last pose: the server's CPU share follows them)
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
     -- ids are another server's); sessions: every session folder in use
     net.send({ type = 'pose', anchorId = st.anchorId, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx, vy = pl.vy,
@@ -2006,7 +2138,7 @@ local function updateWorld(dt)
       view = st.viewFrame and true or nil,       -- (the 3D map's view frame: server Conn.map_view)
       map = (rawget(_G, 'beamngEarth_map3d') and beamngEarth_map3d.isActive()) and true or nil,   -- (Conn.map_open)
       held = (farfield.session() == st.sessionId) and farfield.heldAnchors() or {},
-      sessions = roads.allHeldSessions(),
+      sessions = M._terrainFiles.sessions(roads.allHeldSessions()),
       slotsGone = slotsGoneNow(), -- pooled shape slots let go (server/matslots.py)
       foci = poseFoci(),          -- other vehicles' collision islands (collisionfoci.lua; earthd parse_foci)
       -- the edge guard holds the car for its ground: the server takes every core meanwhile (earthd hold_boost)
@@ -2014,11 +2146,13 @@ local function updateWorld(dt)
       -- built first, deckWait)
       guardHold = (st.guard.mode == 'hold' or M._deckguard.waiting(st.deck)) or nil,
       deckWait = M._deckguard.waitKeys(st.deck),
+      frameMs = fMean and math.floor(fMean * 10 + 0.5) / 10 or nil,
+      frameMaxMs = fMax and math.floor(fMax * 10 + 0.5) / 10 or nil,
       cam = c and { x = c.x, y = c.y, z = c.z, fx = c.fx, fy = c.fy, fz = c.fz, fovDeg = c.fovDeg, h = c.h } or nil })
   end
 
   -- a resync the server could not build (anchor_error: offline, never visited) is asked again
-  if st.resync and not st.pending and st.sessionId and st.clock >= st.retryAt then
+  if st.resync and not st.pending and st.sessionId and st.clock >= st.retryAt and not st.releaseHold then
     requestAnchor(st.anchor.lat, st.anchor.lon, 'resync', resyncHint())
   end
 
@@ -2116,7 +2250,11 @@ local function updateWorld(dt)
   local b = st.block
   -- commit gating: the far tiles of the strip the move uncovers must be live, and no coarse tile
   -- may straddle the new block (design 2.3, farfield.uncoverReady)
-  local gate = b and function(ncx, ncy) return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) end
+  -- detail mode: and a block that came without its photo is not taken while the one in use shows one (M.photoGateOpen)
+  local gate = b and function(ncx, ncy)
+    local tp = st.terrainPending
+    return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) and M.photoGateOpen(tp and tp.msg, not st.photoMissing and terrain.base() or nil, nearVisual)
+  end
   local fa, tx, ty, preferred = follow.decide(pl.x, pl.y, pl.vx, pl.vy, b and b.cx, b and b.cy, st.terrainPending,
     st.clock, st.terrainRetryAt, gate, st.terrainLatency)
   if fa == 'prepare' then
@@ -2150,20 +2288,29 @@ end
 ------------------------------------------------------------------------------------------
 -- robustness: the edge guard and the connection banner (docs/ROADMAP.md "Robustness" 1, 2)
 
-local function terrainStuck()
+local function terrainStuck(allowPending)
   local tp = st.terrainPending
-  if tp and not tp.ready and tp.sentAt and st.clock - tp.sentAt > STUCK_S then return true end
+  if not allowPending and tp and not tp.ready and tp.sentAt and st.clock - tp.sentAt > STUCK_S then return true end
   return st.terrainErrorAt ~= nil and st.clock - st.terrainErrorAt < ERROR_HOLD_S
 end
 
 -- Can the server move the physics block? Connected, its hello arrived, an anchor block committed
 -- (terrain-follow never moves the level-start flat block), no resync pending (a server that came
 -- back: until it commits, nothing follows) and terrain requests answered.
-local function serverHealthy()
-  return net.isConnected() and st.sessionId ~= nil and st.block ~= nil and not st.resync and not terrainStuck()
+local function serverHealthy(allowPending)
+  return net.isConnected() and st.sessionId ~= nil and st.block ~= nil and not st.resync and not terrainStuck(allowPending)
 end
 
 M.serverHealthy = function() return serverHealthy() end
+-- A late prefetch does not remove the ground already loaded. Let the AI keep
+-- using it; the edge guard still uses normal health and protects its boundary.
+-- Connection loss, resync and actual terrain errors continue to hold Autodrive.
+M.autodriveReady = function()
+  local g = st.guard
+  -- An overdue prefetch may wait while usable ground remains. Brake before
+  -- its warning becomes a whole-game edge pause; a healthy moving block keeps following normally.
+  return serverHealthy(true) and not (g.pausedByUs or g.mode == 'hold' or (g.mode == 'warn' and not g.healthy))
+end
 M.mpStatus = function() return mpanchor.status() end -- console: beamngEarth_core.mpStatus()
 
 -- The collidable area of the block in use (the anchor's, else the level-start flat block), or nil.
@@ -2804,6 +2951,13 @@ function M.heldReason()
 end
 function M._psum.frame(ms, hrec)
   local ps = M._psum
+  -- the engine patches' status files, read once a few seconds after our level started (enginepatches.lua: a warning
+  -- when one is not applied, and the setup's enginePatches); nothing once read
+  if not ps.epDone and st.clock >= (ps.epAt or 0) then
+    ps.epAt = st.clock + 1
+    local okE, d = pcall(M._enginepatches.tick, os.time(), M._epWarn)
+    ps.epDone = not okE or d
+  end
   local kb = collectgarbage('count')
   local gc = ps.kb ~= nil and kb < ps.kb - 1024          -- (the heap fell a MB or more since the last frame: a sweep)
   ps.kb = kb
@@ -2826,12 +2980,12 @@ function M._psum.frame(ms, hrec)
   ps.sampleAt = st.clock + 1
   local okS, smp = pcall(ps.sample)
   if okS then ps.mod.sample(st.clock, smp) end
-  if not ps.setupSent then
+  if not ps.setupSent and not M._enginepatches.pending() then
     local rep = rawget(_G, 'beamngEarth_report')
     local okH, hw = pcall(function() return rep and rep.collectHardware and rep.collectHardware() end)
     local S = rawget(_G, 'beamngEarth_settings')
     if okH and hw then
-      local okU, setup = pcall(ps.mod.setup, hw, S and S.get)
+      local okU, setup = pcall(ps.mod.setup, hw, S and S.get, M._enginepatches.states())
       if okU then net.send({ type = 'perf_setup', setup = setup }); ps.setupSent = true end
     end
   end
@@ -2889,6 +3043,12 @@ function M.checkMapView()
 end
 
 local function onUpdate(dtReal, dtSim)
+  -- The previous frame has finished using its messages and applying the TerrainBlock.
+  M._terrainReleaseIn = (M._terrainReleaseIn or 0) - (dtReal or 0)
+  if M._terrainReleaseIn <= 0 then
+    M._terrainReleaseIn = 0.5
+    M._terrainFiles.release(st, net, terrain)
+  end
   M.checkMapView()
   dtReal = dtReal or 0
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
@@ -2925,7 +3085,8 @@ local function onUpdate(dtReal, dtSim)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
-  seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
+  seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat, st.koppen)
+  if terrain.wetDirty then pcall(M._rewetBlock) end        -- (the wet streets' step: a flag test otherwise)
   t = mark('ui', t)
   local frameMs = frameMs0
   statusbar.frame(frameMs0)
@@ -3162,6 +3323,10 @@ local function onUpdate(dtReal, dtSim)
       if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
     end
     t = mark('speeding', t)
+    if M._winter then                -- (winter grip: its once-a-second check; nil unless the server sent a snowstate)
+      local ok, err = pcall(M._winter.update, dtReal)
+      if not ok then log('E', 'beamngEarth', 'winter: ' .. tostring(err)) end
+    end
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)
     do
@@ -3194,6 +3359,13 @@ end
 -- visible. Hook order relative to core_camera does not matter here; this only measures.
 M._devbuild = require('beamngEarth/devbuild')    -- the development build's notice (a field: the 200-local limit)
 M._pacer = require('beamngEarth/framepacer')    -- even frame pacing (fields: the main chunk's 200-local limit)
+M._enginepatches = require('beamngEarth/enginepatches')   -- the engine patches' states (warned once when not applied)
+function M._epWarn(title, text)
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger then
+    pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = title, msg = text, config = { timeOut = 30000 } })
+  end
+end
 M._gcpace = require('beamngEarth/gcpace')       -- Lua garbage collection pacing (onUpdate)
 M._paceClock = stopwatch.clock()
 local function onPreRender(dtReal, dtSim)
@@ -3259,6 +3431,9 @@ end
 local function onLevelStart()
   -- the connection outlives levels: keep its session, the request id sequence and the rest of its hello
   M._resetKeepingConnection()
+  -- (this level's world is of the LIVE connection's map data release, or of the next hello's: releasepin.lua)
+  M._relpin.levelStart(M._relpinState)
+  pcall(mpsession.setRelease, M._relpin.pinned(M._relpinState))
   farfield.forget()
   terrain.onLevelChanged()
   st.inOurLevel = getCurrentLevelIdentifier() == LEVEL_ID
@@ -3266,6 +3441,8 @@ local function onLevelStart()
   -- the pause-menu settings page it is a compact HUD, hidden unless the settings show it.
   ui.visible = st.inOurLevel and not settings.hudHiddenAtStart()
   groundcover.enginePatch(st.inOurLevel)
+  if st.inOurLevel then M._enginepatches.levelStart(os.time()) else M._enginepatches.levelEnd() end
+  M._psum.epDone, M._psum.epAt = false, 0
   M._gcpace.reset()               -- (the level's load ran full collections of its own: estimate afresh)
   if not st.inOurLevel then return end
   -- the player's traffic / parked cars choice, before freeroam spawns them on a map without our roads yet
@@ -3309,6 +3486,7 @@ end
 M.APP_LAYOUT = 'beamngEarth'
 local function onClientPostStartMission(levelPath)
   if type(levelPath) ~= 'string' or not levelPath:find('/' .. LEVEL_ID .. '/', 1, true) then return end
+  require('beamngEarth/cliffcontact').onMissionStart()
   local gs = rawget(_G, 'core_gamestate')
   if gs and gs.setGameState then pcall(gs.setGameState, 'freeroam', M.APP_LAYOUT, 'freeroam') end
 end
@@ -3404,7 +3582,6 @@ local function onExtensionUnloaded()
   require('beamngEarth/minimaproads').unhook()
   levelinfo.unhookSpawnPois()
   groundcover.enginePatch(false)
-  net.close()
   farfield.clear()
   M._swapTeardown()     -- (a generation swap under way: its hold released, nothing of it left)
   M._restartTeardown()  -- (a world server restart's hold released)
@@ -3413,6 +3590,8 @@ local function onExtensionUnloaded()
   trees.clear()
   ambience.clear()
   terrain.delete()
+  if lastHello and lastHello.terrainFiles == 1 then net.send({ type = 'terrain_release', unloaded = true }) end
+  net.close()
   -- M1h: the level stays loaded; give it back its sky and view distance
   horizon.restoreSky()
   if st.visibleDistance and horizon.setVisibleDistance(VISIBLE_DISTANCE) then st.visibleDistance = nil end
@@ -3523,10 +3702,30 @@ end
 -- 'detail' (the mesh layout with the block drawn: aerial photo base, surface textures; 2026-10-12) or
 -- 'terrain' (v1.2; anything else). Set by the server's hello; callable from the console to test.
 local rawView = false
+-- Detail mode, a block without its photo (a provisional block at speed, its photo later: block_base): true showed the
+-- far tiles at their own height as the ground instead of the block's flat base (7fd80cff, "far-field ground instead of
+-- brown"), but they are not the ground the car drives on: L-1 tiles 4 m apart, graded where a provisional block is not,
+-- coarse ones not split yet; the car drove through them (the user, 2026-11-21: "im driving through the old lod terrain
+-- sometimes with the solid ground being under it"). false: the block is drawn (its flat base until the photo comes) and
+-- the far tiles under it covered as with a photo.
+M.PHOTOLESS_FAR_GROUND = false
+function M._groundRender()
+  local tiles = rawView or (nearVisual == 'detail' and st.photoMissing == true and M.PHOTOLESS_FAR_GROUND)
+  farfield.setRawView(tiles)
+  terrain.setRenderEnabled(nearVisual == 'terrain' or (nearVisual == 'detail' and not tiles))
+end
+
+function M._blockPhotoInstalled(base)   -- (base: the photo's path; nil or false: the level's flat base)
+  if nearVisual ~= 'detail' then return end
+  st.photoMissing = not base
+  M._baseLater = nil
+  M._groundRender()
+end
+
 function M.setNearVisual(mode)
   nearVisual = (mode == 'mesh' or mode == 'detail') and mode or 'terrain'
-  terrain.setRenderEnabled(nearVisual == 'terrain' or (nearVisual == 'detail' and not rawView))
   farfield.setNearVisual(nearVisual)
+  M._groundRender()
   return nearVisual
 end
 
@@ -3535,8 +3734,7 @@ end
 -- under the block are loaded anyway (hidden or sunk). Returns the state.
 function M.setRawView(on)
   rawView = on and true or false
-  farfield.setRawView(rawView)
-  terrain.setRenderEnabled(nearVisual == 'terrain' or (nearVisual == 'detail' and not rawView))
+  M._groundRender()
   return rawView
 end
 
@@ -3602,7 +3800,7 @@ function M.status()
     cells = crossover.cells(), blockSize = blockSize, anchorLatency = st.anchorLatency,
     terrainLatency = st.terrainLatency, horizon = horizonOn, farRadius = farRadius,
     visibleDistance = st.visibleDistance or VISIBLE_DISTANCE, banner = banner.current().id, guard = st.guard.mode,
-    sessions = roads.allHeldSessions(), tileSession = farfield.session(), sea = sea.status(), trees = trees.status(), ambience = ambience.status(),
+    sessions = M._terrainFiles.sessions(roads.allHeldSessions()), tileSession = farfield.session(), sea = sea.status(), trees = trees.status(), ambience = ambience.status(),
     trafficAdaptive = navgraph.trafficStatus(), pacer = M._pacer.stats() })
 end
 
@@ -3637,6 +3835,11 @@ function M.updateInfo() return updateInfo end
 -- in GB (0 = unlimited), a clear (answered with clearedBytes), fresh usage numbers. Each returns
 -- whether it went out (false without a server session; a clear also needs the server's numbers, and
 -- says why it did not go out).
+-- Only the server's explicit startup opt-in can expose Dynamic cliffs controls.
+function M.cliffsAvailable() return M._cliffsAvailable == true end
+-- The world map's "Cliff placement" overlay: only with cliffs available (BNE_CLIFFS) or the server's BNE_CLIFFS_DEBUG.
+function M.cliffDebugAvailable() return M._cliffsAvailable == true or M._cliffsDebug == true end
+
 function M.cacheState() return cacheInfo end
 local function cacheReady() return net.isConnected() and st.sessionId ~= nil end
 function M.cacheSetCap(gb)
@@ -3712,7 +3915,7 @@ end
 function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    via = via, download = settings.get('routeDownload') })
+    via = via, download = settings.get('routeDownload'), avoid = settings.get('routeAvoidHighways') and true or nil })
   return true
 end
 function M.takeRoute(id)
@@ -3729,6 +3932,20 @@ end
 -- The world map's cache view (server covermap.py): what is cached in the zoom-z tiles x0..x1, y0..y1 (mode: summary,
 -- elevation, imagery, mapdata); the answer is cache_map_result. Only the newest answer is kept (M._cacheMapResults:
 -- a field, not a local: the main chunk is at Lua's 200-local limit).
+-- Regional placement debug requests share the existing companion connection.
+function M.requestDebugMap(id, layer, s, w, n, e)
+  if not net.isConnected() then return false end
+  M._debugMapResults = {}
+  net.send({ type = 'debug_map', id = id, layer = layer, s = s, w = w, n = n, e = e })
+  return true
+end
+function M.takeDebugMap(id)
+  local results = M._debugMapResults or {}
+  local result = results[id]
+  results[id] = nil
+  return result
+end
+
 function M.requestCacheMap(id, z, x0, y0, x1, y1, mode)
   if not net.isConnected() then return false end
   M._cacheMapResults = {}
@@ -3798,6 +4015,27 @@ end
 -- player let go themselves (resumed the game) is theirs from then on. Nothing runs per frame without a restart.
 M._srvrestart = require('beamngEarth/srvrestart')
 M._restart = M._srvrestart.new()
+M._relpin = require('beamngEarth/releasepin')
+M._relpinState = M._relpin.new()
+function M._releaseHoldText()
+  return 'The world server uses other map data than this level was built with: load the level again'
+end
+-- A server of another map data release than this level's world (releasepin.lua, st.releaseHold): the world stays as it
+-- is (no anchor, no resync, the block does not follow: old roads never meet new terrain) and the player is told to
+-- load the level again. Nothing restarts by itself (no loops); a later hello of the level's release lifts the hold.
+function M._releaseMismatch(serverRelease)
+  local pin = M._relpin.pinned(M._relpinState)
+  log('W', 'beamngEarth', string.format("the world server reads map data %s, this level's world %s: held (load the "
+    .. 'level again)', tostring(serverRelease or M._relpin.NONE), tostring(pin)))
+  setStatus(M._releaseHoldText())
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger and M._releaseToasted ~= st.sessionId then
+    M._releaseToasted = st.sessionId
+    pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = 'BeamNG.Earth: map data changed',
+      msg = 'The world server now uses other map data than this level was built with. Load the level again to '
+        .. 'continue building the world.', config = { timeOut = 30000 } })
+  end
+end
 M._restartCtx = {}
 M.RESTART_KEY_FILE = '/temp/beamngEarth/restart.key'     -- (server srvrestart.KEY_FILE in its session root)
 function M.restartKey()

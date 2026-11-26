@@ -278,8 +278,8 @@ def _stations(xy, offsets_of):
     # vertices' directions, their two segments' mean, blended along each segment: no jump at a vertex (medians.rs)
     v = np.vstack([u[:1], u[:-1] + u[1:], u[-1:]])
     v /= np.maximum(dnp.hypot(*v.T), 1e-9)[:, None]
-    p = np.c_[np.interp(s, cum, xy[:, 0]), np.interp(s, cum, xy[:, 1])]
-    t = np.c_[np.interp(s, cum, v[:, 0]), np.interp(s, cum, v[:, 1])]
+    p = np.c_[dnp.interp(s, cum, xy[:, 0]), dnp.interp(s, cum, xy[:, 1])]
+    t = np.c_[dnp.interp(s, cum, v[:, 0]), dnp.interp(s, cum, v[:, 1])]
     t /= np.maximum(dnp.hypot(*t.T), 1e-9)[:, None]
     return p + np.c_[-t[:, 1], t[:, 0]] * np.asarray(offsets_of(s, length))[:, None]
 
@@ -350,12 +350,14 @@ def modules(ways, box, left_hand=False, mapped_rows=()):
 def _ground_stretches(feats, i):
     """(lon/lat polyline, way id, tags) of feature i's ground parts, cut where its OpenStreetMap way changes."""
     import roads
-    ground = roads.ground_ranges(roads.level_ranges(feats, i))
+    rngs = roads.level_ranges(feats, i)
+    floor = roads.part_floor(feats, i, rngs)
+    ground = roads.ground_ranges(rngs, floor)
     out = []
     for start, end, way, tags in roads.lane_tag_parts(feats, i):
         for a, b in ground:
             lo, hi = max(a, start), min(b, end)
-            if hi - lo <= roads.MIN_PART:
+            if hi - lo <= floor:
                 continue
             for part in feats.parts(i):
                 for ring in part:

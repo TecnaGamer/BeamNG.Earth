@@ -74,14 +74,16 @@ pub fn ram_tier(limit_mb: f64) -> &'static str {
 
 /// The desktop tier's sizes for a limit: (decoded DEM tiles a process, map data MB a process, a worker's shed ceiling
 /// MB, its pool's rotation ceiling MB, road-tile processes at most, far-tile processes at most). From a 6.5 GB limit
-/// (a 20 GB PC's Auto) to 16 GB and more (a 32 GB PC's Auto: 17.9 GB): DEM ~200 -> 512 tiles, map data 160 -> 256 MB,
+/// (a 20 GB PC's Auto) to 16 GB and more (a 32 GB PC's Auto: 17.9 GB): DEM ~200 -> 512 tiles, map data 160 -> 256 MB (384 at the 24 GB cap),
 /// ceilings 1350 / 1800 -> 3000 / 4000 MB (the RAM-keyed ceilings before: 2000 / 2800 below 40 GB, 3000 / 3800 below
 /// 56 GB, none above).
 #[pyfunction]
 pub fn ram_desktop_sizes(limit_mb: f64) -> (i64, i64, i64, i64, i64, i64) {
     let l = limit_mb.max(0.0);
     let dem = (l / 32.0).clamp(192.0, 512.0) as i64;
-    let mapdata = (l / 64.0).clamp(160.0, 256.0) as i64;
+    // (384 at the cap, 256 at 16 GB as before: five road processes in five cities decoded 200-1587 layers again per
+    // 25 tiles in 256 MB and 64-416 in 384, for 71 MB more private memory a process, 2026-11-15)
+    let mapdata = (l / 64.0).clamp(160.0, 384.0) as i64;
     let rotate = (0.24 * l + 250.0).clamp(1800.0, 4000.0);
     let shed = 0.75 * rotate;
     let road = (((l - 3072.0) / 1229.0).floor() as i64).max(2);
@@ -107,6 +109,50 @@ pub fn ram_effective_mb(limit_mb: f64, total_mb: f64, avail_mb: f64, reserve_mb:
     }
     let short = reserve_mb - avail_mb;
     limit_mb.min((total_mb - short).max(SHORT_FLOOR_FRAC * limit_mb))
+}
+
+/// The RAM one MB of the server's swapped pages really holds (0..1): swapped to a compressed RAM disk (zram) a page
+/// holds what it compresses to; swapped to a disk, nothing of the RAM, but it is counted whole as before (the swap
+/// file's pages come back as hitches). swap_used_mb: the system's swap in use (every device); zram_orig_mb /
+/// zram_ram_mb: what its zram devices hold uncompressed and the RAM they take for it (mm_stat orig_data_size,
+/// mem_used_total). 1 without zram or when unknown. (2026-11-26 Baltimore playtest: the road processes' 1.5 GB each of
+/// zram-swapped pages, at a 0.55 ratio, were counted as 6 GB of the server's 24 GB limit; the system had 16-26 GB
+/// available all along and the sheds and replacements for that memory cost the world's loading.)
+#[pyfunction]
+pub fn ram_swap_weight(swap_used_mb: f64, zram_orig_mb: f64, zram_ram_mb: f64) -> f64 {
+    if !(swap_used_mb > 0.0) || !(zram_orig_mb > 0.0) || !(zram_ram_mb >= 0.0) {
+        return 1.0;
+    }
+    let share = (zram_orig_mb / swap_used_mb).clamp(0.0, 1.0);
+    let ratio = (zram_ram_mb / zram_orig_mb).clamp(0.0, 1.0);
+    1.0 - share * (1.0 - ratio)
+}
+
+/// A process's memory as the watchdog counts it (MB): its resident share (Linux Pss) and its swapped pages at
+/// ram_swap_weight.
+#[pyfunction]
+pub fn ram_counted_mb(resident_mb: f64, swapped_mb: f64, swap_weight: f64) -> f64 {
+    let w = if swap_weight.is_finite() { swap_weight.clamp(0.0, 1.0) } else { 1.0 };
+    resident_mb.max(0.0) + swapped_mb.max(0.0) * w
+}
+
+/// The room (MB) a far-tile burst (short-lived processes, stopped after a minute without a job) may take: under the
+/// player's own Max RAM the room left under it, as before; under Auto, at least what the system has available beyond
+/// the reserve kept for the game and the system and BURST_GAME_MB more (Auto's 24 GB cap held a 64 GB PC with 16-26 GB
+/// available to 3 far-tile processes through two Baltimore teleports, 2026-11-26). avail_mb < 0: unknown (the
+/// limit's room alone). limit_mb 0: no limit (unbounded).
+pub const BURST_GAME_MB: f64 = 4096.0;
+
+#[pyfunction]
+pub fn ram_burst_room_mb(limit_mb: f64, total_mb: f64, avail_mb: f64, reserve_mb: f64, auto: bool) -> f64 {
+    if !(limit_mb > 0.0) {
+        return f64::INFINITY;
+    }
+    let room = limit_mb - total_mb;
+    if !auto || !(avail_mb >= 0.0) {
+        return room;
+    }
+    room.max(avail_mb - reserve_mb.max(0.0) - BURST_GAME_MB)
 }
 
 /// One watchdog step. limit_mb: the limit; total_mb: the server's measured memory now; avail_mb / reserve_mb: the
@@ -195,8 +241,9 @@ mod tests {
     #[test]
     fn desktop_sizes_follow_the_limit() {
         let (dem, md, shed, rot, road, far) = ram_desktop_sizes(AUTO_MAX_MB);
-        assert_eq!((dem, md, shed, rot), (512, 256, 3000, 4000));
+        assert_eq!((dem, md, shed, rot), (512, 384, 3000, 4000));
         assert!(road >= 4 && far >= 10);
+        assert_eq!(ram_desktop_sizes(16384.0).1, 256, "a 16 GB limit: as before");
         let (dem, md, shed, rot, road, far) = ram_desktop_sizes(ram_auto_mb(32.0 * GB));
         assert!(dem >= 500 && md >= 250 && shed >= 2900 && rot >= 3900, "a 32 GB PC: about the desktop sizes");
         assert!(road >= 4 && far >= 10, "no fewer processes than the CPU allows");
@@ -212,6 +259,29 @@ mod tests {
         assert_eq!(ram_effective_mb(8000.0, 6000.0, -1.0, 2000.0), 8000.0);
         assert_eq!(ram_effective_mb(8000.0, 6000.0, 500.0, 2000.0), 4500.0);
         assert_eq!(ram_effective_mb(8000.0, 3000.0, 0.0, 2000.0), 3200.0); // (the floor)
+    }
+
+    #[test]
+    fn swap_counted_at_its_ram() {
+        assert_eq!(ram_swap_weight(0.0, 0.0, 0.0), 1.0);
+        assert_eq!(ram_swap_weight(1000.0, 0.0, 0.0), 1.0, "disk swap: whole");
+        let w = ram_swap_weight(18000.0, 18000.0, 10000.0);
+        assert!((w - 10000.0 / 18000.0).abs() < 1e-12, "all zram: its ratio");
+        let w = ram_swap_weight(20000.0, 10000.0, 5000.0);
+        assert!((w - 0.75).abs() < 1e-12, "half zram at 0.5, half disk");
+        assert_eq!(ram_swap_weight(100.0, 200.0, 300.0), 1.0, "nonsense clamps");
+        assert_eq!(ram_counted_mb(2000.0, 1500.0, 0.5), 2750.0);
+        assert_eq!(ram_counted_mb(2000.0, 1500.0, f64::NAN), 3500.0);
+        assert_eq!(ram_counted_mb(2000.0, -5.0, 0.5), 2000.0);
+    }
+
+    #[test]
+    fn burst_room() {
+        assert_eq!(ram_burst_room_mb(0.0, 9000.0, 100.0, 0.0, true), f64::INFINITY);
+        assert_eq!(ram_burst_room_mb(24576.0, 24000.0, 20000.0, 3000.0, false), 576.0, "a player's limit holds");
+        assert_eq!(ram_burst_room_mb(24576.0, 25000.0, 20000.0, 3000.0, true), 20000.0 - 3000.0 - BURST_GAME_MB);
+        assert_eq!(ram_burst_room_mb(24576.0, 20000.0, 2000.0, 3000.0, true), 4576.0, "short system: the limit's");
+        assert_eq!(ram_burst_room_mb(24576.0, 20000.0, -1.0, 3000.0, true), 4576.0, "unknown: the limit's");
     }
 
     #[test]

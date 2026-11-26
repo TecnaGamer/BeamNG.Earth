@@ -62,13 +62,37 @@ LOOKS = {
     K_OIL: {"m": "bne_spot_oil", "p": 8, "layer": "spot"},
     K_LEAVES: {"m": "bne_spot_leaves", "p": 8, "layer": "spot"},
 }
-MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}))     # (prewarm.py)
+# The road revamp v2's surface overlays (P1c, BNE_SURFACE_V2: roadmesh.SURFACE_V2; the user, studying the stock maps:
+# "they use that 2nd layer alot to both add more texture to the roads and to hide seems between the road and diffrent
+# terrain"): earthfast.surface_plan's pieces (roadwear.rs) over 70-90 % of the asphalt as in the stock maps. The surface
+# variation (the stock AsphaltRoad_variation textures: faint mottling and streaks, 5-24 % opaque) in 5-9 m strips about
+# 50 m long, 10 m end fades, texture length about 100 m, running on through the junction mouths; tyre wear (the stock
+# tread_marks_worn at its stock tint and opacity: ours at full brightness and opacity were the "very bright" bands of
+# 2026-11-11) up to 4-5 m wide on the lane centres, capped at one lane on urban surface streets in 40-60 m runs with 5-20 m fades, in place of K_TREAD; repair patch strips
+# (the stock road_patches1 strip) about 8 a km, 15-40 m long, half of them with a joint line across each end. Their
+# materials (roadwear.materials.json) write no depth: roadmesh.v2_rank orders them.
+SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
+K_VAR1, K_VAR2, K_TREAD2, K_PATCH2 = 10, 11, 12, 13
+LOOKS_V2 = {
+    K_VAR1: {"m": "bne_wear_var_01", "p": 5, "layer": "var", "fade": True, "feather": 0},
+    K_VAR2: {"m": "bne_wear_var_02", "p": 5, "layer": "var", "fade": True, "feather": 0},
+    K_TREAD2: {"m": "bne_wear_tread2", "p": 9, "layer": "wear", "fade": True, "feather": 0},
+    K_PATCH2: {"m": "bne_wear_patchstrip", "p": 7, "layer": "patch", "fade": True, "feather": 0},
+}
+MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}
+                         | ({v["m"] for v in LOOKS_V2.values()} if SURFACE_V2 else set())))     # (prewarm.py)
 # The full-lane strips (tyre polish, sealed and alligator crack networks) are left out for now (the user, in game at
 # Fells Point 2026-11-11: "the extra road decals look out of place and very bright"): in the road mesh their stock
 # opacity maps did not shape them (whole bright bands across each lane; darkened, uniform brown bands like rails).
 # BNE_WEAR_STRIPS=on draws them (for reworking the materials); the spots and crack lines stay.
 STRIPS_ON = os.environ.get("BNE_WEAR_STRIPS", "off").strip().lower() == "on"
 STRIP_KINDS = (K_TREAD, K_SEALED, K_CRACKS, K_MANHOLE)   # (the manhole covers too: bright white discs in game)
+# With the v2 surface overlays (SURFACE_V2) the full-lane strips are left out even with BNE_WEAR_STRIPS=on: the v2
+# lane-centre wear replaces the polish, its variation and repair patch strips the sealed and crack networks. Drawn
+# too, the sealed / crack strips lay over the v2 pieces on the same lanes 0.2 mm apart (Revamped roads + Wear strips,
+# 2026-11-19: +1,030 m2 of overlays within 1 mm of another's at Fells Point, 380 m2 at the Queensboro Bridge, 20 more
+# samples under the ground at the Stelvio, markprobe): two wear layers on one lane. The manhole covers stay.
+V2_REPLACES = (K_TREAD, K_SEALED, K_CRACKS)
 
 
 def _grid(cols, rows):
@@ -252,7 +276,7 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
     for k in range(len(A)):
         kind, width, tl, slen, cell = A[k]
         kind = int(kind)
-        if kind in STRIP_KINDS and not STRIPS_ON:
+        if kind in STRIP_KINDS and not STRIPS_ON or SURFACE_V2 and kind in V2_REPLACES:
             continue
         look = LOOKS[kind]
         q = P[O[k]:O[k + 1]]
@@ -270,8 +294,104 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
             if "feather" in look:
                 ch["feather"] = look["feather"]
         out.append(ch)
+    if SURFACE_V2:
+        out.extend(surface_chunks(pts, off, rows, excl, box, tier))
     for kind in sorted(spots):
         look = LOOKS[kind]
         out.append({"m": look["m"], "p": look["p"], "layer": look["layer"], "wear": 1, "w": 0.0, "tl": 1.0, "n": [],
                     "poly": spots[kind][0], "uvq": spots[kind][1], "quads": 1})
+    return out
+
+
+# Puddles (the 2026-11-26 playtest: "theres no puddles either. remember this game has physicly based textures"): where
+# rain water stands on a paved road, laid by the native earthfast.puddle_plan (roadwear.rs: the sags of the centre
+# line's profile, a kerb's gutter, the wheel paths' ruts; from each road's seed and distance along it, as the wear),
+# quads of the puddle atlas (PUDDLE_CELLS: 4 shapes a row, the rows ever shallower). The chunks carry "puddle": 1:
+# roadmesh.build leaves them out of the road mesh, and a geotile's skin draws them as a mesh of their own (blockworker
+# _geo_skin_build: the "puddle" part), which the mod shows only while the ground is wet (wetlook.lua: the material's
+# alpha threshold falls as the rain fills them, rises as they dry: a smooth water film, roughness 0.06, its colour the
+# overcast sky a puddle mirrors: broker r9, our static meshes got no sky reflection at Normal, a dark film vanished on
+# the wet asphalt; an APPROXIMATION for the missing reflections until a real reflection source, a later job: see
+# wetlook.lua). BNE_PUDDLES=off: none (keyed by the build switches).
+PUDDLES = os.environ.get("BNE_PUDDLES", "on").strip().lower() not in ("off", "0", "no", "false")
+PUDDLE_MATERIAL = "bne_puddle"
+PUDDLE_CELLS = _grid(4, 4)
+PUDDLE_KINDS = (20, 21, 22)      # roadwear.rs K_PUDDLE_SAG / GUTTER / RUT
+
+
+def puddle_chunks(roads, seen, box, has_sidewalks, exclude=None, skip=()):
+    """The puddle chunks of a tile's roads (tile_chunks's arguments; has_sidewalks(spec): kerbs along its edges, the
+    gutters). One chunk of quads ("quads": 1, "puddle": 1, "wear": 1: no DecalRoad fallback draws it), or none."""
+    if not PUDDLES or not roads:
+        return []
+    import fast
+    import roads as roadsmod
+    fast.require(639, "puddle_plan")
+    pts, off, rows, gut = [], [0], [], []
+    for fid, spec, p, _lon in roads:
+        p = np.asarray(p, np.float64)
+        pts.append(p[:, :3])
+        off.append(off[-1] + len(p))
+        hw = float(spec.width) / 2
+        paved = spec.kind in roadsmod.BUILT and fid not in skip and len(p) >= 2     # (asphalt and setts: Fells Point's brick streets)
+        drive, lanes, doff = 2 * hw, 1, 0.0
+        if paved:
+            drive, lanes = roadsmod.lane_layout(spec)
+            doff = roadsmod.driving_offset(spec)
+        feats, i = (seen[fid][0], seen[fid][1]) if fid in seen else (None, 0)
+        rows.append((hw, float(drive), float(doff), float(lanes), float(bool(spec.oneway)),
+                     float(CLASS_CODE.get(spec.cls, 7)), float(spec.surf == "concrete"), float(bool(spec.urban)),
+                     _condition(feats, i), float(_seed(fid)), float(paved), 0.0, hw + CUT_MARGIN, 0.0, 0.0))
+        gut.append(1 if paved and has_sidewalks(spec) else 0)
+    if not any(r[10] for r in rows):
+        return []
+    excl = []
+    if exclude is not None:
+        bxs = [(q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()) for q in pts]
+        ids = [r[0] for r in roads]
+        for a, ba in enumerate(bxs):
+            if not rows[a][10]:
+                continue
+            for b, bb in enumerate(bxs):
+                if a != b and ba[0] <= bb[2] + 20 and bb[0] <= ba[2] + 20 and ba[1] <= bb[3] + 20 \
+                        and bb[1] <= ba[3] + 20 and exclude(ids[a], ids[b]):
+                    excl.append((a, b))
+    P, O, A = fast._ef.puddle_plan(np.ascontiguousarray(np.concatenate(pts)), np.asarray(off, np.int64),
+                                   np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, NA)),
+                                   np.asarray(excl, np.int64).reshape(-1, 2), np.asarray(box, np.float64)[:4],
+                                   np.asarray(gut, np.uint8))
+    corners, uvs = [], []
+    for k in range(len(A)):
+        u0, v0, u1, v1 = PUDDLE_CELLS[int(A[k][4]) % len(PUDDLE_CELLS)]
+        corners.extend(np.round(P[O[k]:O[k + 1], :3], 3).tolist())
+        uvs.extend([[u0, v1], [u1, v1], [u1, v0], [u0, v0]])
+    if not corners:
+        return []
+    return [{"m": PUDDLE_MATERIAL, "p": 8, "layer": "puddle", "wear": 1, "puddle": 1, "w": 0.0, "tl": 1.0, "n": [],
+             "poly": corners, "uvq": uvs, "quads": 1}]
+
+
+def surface_chunks(pts, off, rows, excl, box, tier):
+    """The v2 surface pieces (SURFACE_V2: earthfast.surface_plan) as road mesh chunks; tile_chunks's arrays (the roads'
+    centre lines, offsets, attrs rows, excluded pairs), box and tier. Each strip carries its end fade ("fend_m")."""
+    import fast
+    fast.require(570, "surface_plan")
+    P, O, A = fast._ef.surface_plan(np.ascontiguousarray(np.concatenate(pts)), np.asarray(off, np.int64),
+                                    np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, NA)),
+                                    np.asarray(excl, np.int64).reshape(-1, 2),
+                                    np.asarray(box, np.float64)[:4], int(tier), fit_to_road=True)
+    out = []
+    for k in range(len(A)):
+        kind, width, tl, slen, _cell, fend = A[k]
+        kind = int(kind)
+        look = LOOKS_V2.get(kind) or LOOKS[kind]
+        q = P[O[k]:O[k + 1]]
+        ch = {"m": look["m"], "p": look["p"], "layer": look["layer"], "wear": 1,
+              "w": round(float(width), 2), "tl": round(float(tl), 2), "n": np.round(q[:, :3], 3).tolist()}
+        if look.get("fade") and slen > 0:
+            ch.update(s0=round(float(q[0, 3]), 3), s1=round(float(q[-1, 3]), 3), slen=round(float(slen), 3),
+                      fends=[1, 1], fend_m=round(float(fend), 2))
+            if "feather" in look:
+                ch["feather"] = look["feather"]
+        out.append(ch)
     return out

@@ -25,7 +25,7 @@ log = logging.getLogger("earthd.picnic")
 URL = "https://data.openstreetmap.us/layercake/pois.parquet"
 PATH = "osm/pois.parquet"
 VERSION_TTL_S = 7 * 86400
-RETRY_S = 3600
+RETRY_S = 120               # the source unreachable: asked again after this long, doubling per failure in a row up to VERSION_TTL_S (rangeread.pinned_version); short to start: a host back up must not stay shut out (2026-11-08)
 COLUMNS = ("id", "leisure", "amenity", "tourism")
 TABLES = {"picnic_table"}
 SITES = {"picnic_site"}
@@ -36,9 +36,11 @@ class Source:
     """Picnic features of a map cell, from the pinned Layercake POIs version."""
 
     def __init__(self, reader, fetcher, url=URL):
-        self.reader, self.fetcher, self.url = reader, fetcher, url
+        self.reader, self.url = reader, url
         self.raw_dir = reader.raw_dir
+        self.fetcher = rangeread.HostDown(fetcher, os.path.join(self.raw_dir, "picnicsource", "hostdown"))
         self._lock = threading.Lock()
+        self._probing = threading.Lock()    # (the one thread asking the host for its version: _version)
         self._remote = None
         self._checked = 0.0
         self._meta = None           # (RemoteFile, row groups)
@@ -89,6 +91,10 @@ class Source:
             return t
 
     def _cell(self, key, kind):
+        import cip
+        got = cip.side_json(cip.any_reader(), "f:picnic", key)
+        if got is not None:             # (the cell's rows as the builder read them: CIP on)
+            return features_of([(int(fid), le, am, to, bytes.fromhex(g)) for fid, le, am, to, g in got])
         if self._down:
             return None
         for attempt in (0, 1):
@@ -122,45 +128,25 @@ class Source:
         return None
 
     def _version(self, kind):
+        if self._probing.locked():      # (another thread is asking the host: not waiting behind it)
+            raise rangeread.RangeError(f"{self.url}: being asked by another thread")
         with self._lock:
             if self._remote is not None and time.time() - self._checked < VERSION_TTL_S:
                 return self._remote
-            pin = os.path.join(self.raw_dir, "picnicsource", "pinned")
-            etag = size = None
+            # (a pin past VERSION_TTL_S stays in use when the server cannot be asked: stale-if-error, upstream dev's
+            # rangeread.pinned_version.) The fork's HostDown wrapper (self.fetcher) and its one-asker rule stay: the
+            # asking thread holds _probing, and every other thread is turned away at the top of this method at once
+            # (RangeError) instead of waiting on the lock behind a dead host's connect timeouts (2026-11-08, GitHub #435)
+            self._probing.acquire()
             try:
-                with open(pin) as f:
-                    etag, size, when = f.read().split("\n")[:3]
-                    size, when = int(size), float(when)
-                if time.time() - when > VERSION_TTL_S:
-                    etag = None
-            except (OSError, ValueError):
-                etag = None
-            if etag is None:
-                down = os.path.join(self.raw_dir, "picnicsource", "unreachable")
-                try:
-                    recent = time.time() - os.path.getmtime(down) < RETRY_S
-                except OSError:
-                    recent = False
-                if recent:
-                    raise rangeread.RangeError(f"{self.url}: unreachable at the last try")
-                try:
-                    r = self.fetcher.get(self.url, kind=kind, headers={"Range": "bytes=0-15"})
-                    etag = r.headers.get("etag", "").strip()
-                    m = rangeread.CONTENT_RANGE.match(r.headers.get("content-range", ""))
-                    if not etag or not m or m.group(3) == "*":
-                        raise rangeread.RangeError(f"{self.url}: no ETag or size")
-                except Exception:
-                    os.makedirs(os.path.dirname(down), exist_ok=True)
-                    open(down, "w").close()
-                    raise
-                size = int(m.group(3))
-                os.makedirs(os.path.dirname(pin), exist_ok=True)
-                with open(pin + ".tmp", "w") as f:
-                    f.write(f"{etag}\n{size}\n{time.time()}\n")
-                os.replace(pin + ".tmp", pin)
+                etag, size, fresh_for = rangeread.pinned_version(
+                    self.fetcher, self.url, os.path.join(self.raw_dir, "picnicsource"), kind, VERSION_TTL_S, RETRY_S,
+                    f"picnic tables: {self.url}")
+            finally:
+                self._probing.release()
             d = os.path.join(self.raw_dir, "picnicsource", re.sub(r"[^A-Za-z0-9]+", "_", etag).strip("_"))
             self._remote = (etag, rangeread.RemoteFile([self.url], size, d, self.fetcher, if_match=etag))
-            self._checked = time.time()
+            self._checked = time.time() - VERSION_TTL_S + fresh_for     # (asked again after fresh_for)
             return self._remote
 
     def _forget(self):
@@ -235,6 +221,86 @@ class Source:
             if geom is None:
                 continue
             out.append((int(fid), leisure, amenity, tourism, bytes(geom)))
+        return out
+
+    def store_many(self, keys, kind="demand"):
+        """The rows of cells keys read in one scan of their union's row groups and kept as _cell keeps each cell's
+        (_rows_save; tools/build_cip.py: a z10 unit's 256 cells were 256 scans of the same row groups, ~0.1 s each).
+        Each cell's rows are _query's for it: its box tested in DuckDB with the same expression, the rows in file order
+        (_query's single-threaded scan order). Errors are raised (the builder records the cells as lacking)."""
+        keys = list(keys)
+        for attempt in (0, 1):
+            etag, remote = self._version(kind)
+            todo = [k for k in keys if _rows_load(remote, k) is None]
+            try:
+                got = self._query_many(remote, [k.bounds() for k in todo], kind) if todo else []
+            except rangeread.Changed:
+                if attempt:
+                    raise
+                log.info("picnic tables: %s changed (was %s)", self.url, etag)
+                self._forget()
+                continue
+            for k, rows in zip(todo, got):
+                _rows_save(remote, k, rows)
+            return len(todo)
+        return 0
+
+    def _query_many(self, remote, bounds_list, kind):
+        out = [[] for _ in bounds_list]
+        if not bounds_list:
+            return out
+        u = (min(b[0] for b in bounds_list), min(b[1] for b in bounds_list), max(b[2] for b in bounds_list),
+             max(b[3] for b in bounds_list))
+        rd = self.reader
+        files = {PATH: remote}
+        con, proto, errors = rd._connect(files, kind)
+
+        def box(b):
+            lon0, lat0, lon1, lat1 = b
+            return (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND bbox.ymin <= {lat1!r} "
+                    f"AND bbox.ymax >= {lat0!r}")
+        try:
+            uri = f"'{proto}://{PATH}'"
+            groups = self._groups(con, uri, remote, kind)
+            cand = _candidates(groups, u)
+            if not cand:
+                return out
+            want = set(COLUMNS) | {"bbox"}
+            rd._fetch(files, {PATH: [r for rg in cand for c, rs in groups[rg]["cols"].items() if c in want
+                                     for r in rs]}, kind)
+            only = " OR ".join(f"file_row_number BETWEEN {groups[rg]['first']} AND "
+                               f"{groups[rg]['first'] + groups[rg]['n'] - 1}" for rg in cand)
+            mark = ("lower(leisure) IN ('picnic_table', 'picnic_site') OR "
+                    "lower(amenity) IN ('picnic_table', 'bbq', 'barbecue', 'bbq_grill') OR "
+                    "lower(tourism) = 'picnic_site'")
+            con.execute(f"""CREATE TEMP TABLE pu AS SELECT id, leisure, amenity, tourism, file_row_number, bbox
+                FROM read_parquet({uri}, file_row_number = true) WHERE ({only}) AND {box(u)} AND ({mark})""")
+            per = [con.execute(f"""SELECT id, leisure, amenity, tourism, file_row_number FROM pu WHERE {box(b)}
+                ORDER BY file_row_number""").fetchall() for b in bounds_list]
+            nums = sorted({int(row[4]) for rows in per for row in rows})
+            if not nums:
+                return out
+            hit = sorted({rg for n in nums for rg in cand
+                          if groups[rg]["first"] <= n < groups[rg]["first"] + groups[rg]["n"]})
+            rd._fetch(files, {PATH: [r for rg in hit for span in groups[rg]["cols"].get("geometry", [])
+                                     for r in (span,)]}, kind)
+            try:
+                con.execute("SET enable_geoparquet_conversion = false")
+            except Exception:
+                pass
+            geoms = dict(con.execute(f"""SELECT file_row_number, geometry
+                FROM read_parquet({uri}, file_row_number = true)
+                WHERE file_row_number IN ({', '.join(map(str, nums))})""").fetchall())
+        except Exception:
+            for e in errors:
+                if isinstance(e, rangeread.Changed):
+                    raise e
+            raise
+        finally:
+            con.close()
+        for i, rows in enumerate(per):
+            out[i] = [(int(fid), le, am, to, bytes(geoms[num])) for fid, le, am, to, num in rows
+                      if geoms.get(num) is not None]
         return out
 
 

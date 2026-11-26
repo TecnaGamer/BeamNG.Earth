@@ -37,6 +37,33 @@ R, R2 = (701, 1612), (702, 1612)
 RETEX_FIELDS = {"type", "anchorId", "key", "texture"}
 
 
+class _FarView:
+    """Connection.far's queries (earthfast.FarState) over the fake connection's own dicts."""
+
+    def __init__(self, c):
+        self.c = c
+
+    def _ck(self, aid, k):
+        return (earthd.GLOBAL_AID, k) if ff.is_global_key(k) else (aid, k)
+
+    def names_in_use(self, aid):
+        c = self.c
+        return {self._ck(aid, k) for k in list(c.sent) + list(c.desired)} | set(c.inflight)
+
+    def in_use(self, aid, now, keep):
+        c = self.c
+        return set(c.shown) | self.names_in_use(aid) | {ck for ck, t in c.retired.items() if now - t < keep}
+
+    def is_shown(self, ck):
+        return ck in self.c.shown
+
+    def is_sent(self, key):
+        return key in self.c.sent
+
+    def busy(self):
+        return sum(1 for f, _ in self.c.inflight.values() if not f.done())
+
+
 class Conn:
     """What the retexture scheduler reads of a Connection, and the messages it gets."""
 
@@ -47,6 +74,7 @@ class Conn:
         self.desired, self.inflight, self.retired, self.held = {}, {}, {}, set()    # Server.in_use reads these
         self.slot_holds = {}            # Server.slot_held
         self.credits = types.SimpleNamespace(poke=lambda c: None)
+        self.far = _FarView(self)
 
     def send(self, m):
         self.msgs.append(m)
@@ -139,7 +167,10 @@ class SchedulerTest(unittest.TestCase):
         # bounds: one at a time, starts at least 1 / rate apart, on the tile pool (never the loop)
         self.assertEqual(self.peak[0], 1)
         t = [a for a, _ in self.starts]
-        self.assertTrue(all(b - a >= 1 / s.retex_rate - 0.005 for a, b in zip(t, t[1:])), t)
+        # (the starts are stamped when the pool's thread takes each one, the pacing is set when it is handed over: a
+        # late pick-up of one makes the next gap look shorter, 44 ms of 50 on a busy machine, gate batch337)
+        self.assertTrue(all(b - a >= 1 / s.retex_rate - 0.015 for a, b in zip(t, t[1:])), t)
+        self.assertGreaterEqual(t[-1] - t[0], (len(t) - 1) / s.retex_rate - 0.015, t)
         self.assertTrue(all(n.startswith("far") for n in self.threads), self.threads)
         self.assertEqual((s.retex_stats["started"], s.retex_stats["sent"]), (4, 4))
 
@@ -850,7 +881,7 @@ class SessionTest(MeshHarness):
         px = s.tex_size(t.level)
         rgb, _ = s.imagery.render(s.anchors[aid].frame, *imagery.gutter_square(*t.bbox[:2], t.size, px), px)
         with open(self.fs(msgs[0]["texture"]), "rb") as f:
-            self.assertEqual(f.read(), imagery.encode_dds(rgb))
+            self.assertEqual(f.read(), imagery.encode_dds(rgb, imagery.FAR_SRGB))
         # back to the start: a tile swapped out earlier is sent again with its re-rendered texture
         self.pose(aid, 0.0, 0.0)
         _, seen3 = self.stream_until_done(far, aid)

@@ -51,7 +51,7 @@ def runs(frame, rows, blockers, box, elev):
                     continue
                 ticks = np.arange(np.ceil(piece[0, 5]/POST_SPACING)*POST_SPACING,
                                   piece[-1, 5]+1e-7, POST_SPACING)
-                posts = np.column_stack([np.interp(ticks, piece[:, 5], piece[:, d]) for d in range(5)])
+                posts = np.column_stack([dnp.interp(ticks, piece[:, 5], piece[:, d]) for d in range(5)])
                 # One owner for posts at a shared tile edge; wires meet exactly.
                 posts = posts[(posts[:, 0] >= box[0]) & (posts[:, 0] < box[2]) &
                               (posts[:, 1] >= box[1]) & (posts[:, 1] < box[3])]

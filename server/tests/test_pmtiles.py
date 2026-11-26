@@ -591,6 +591,276 @@ class MapDataTest(Base):
         self.assertFalse(os.path.exists(md.path(key, "roads")))
         self.assertTrue(os.path.exists(md.path(key, "roads", parquet=True)))
 
+    def test_stand_in_buildings_measure_nothing_kept(self):
+        """A parquet-only cached buildings cell (no provenance format, empty) stands in when the tiles fail: the road
+        widths and clearances measured on it are neither stored nor remembered (walls, sets, memos) and the build is
+        not kept; once the tiles are back (and the stand-in's STAND_IN_S past), the same RoadWidths and MapData measure
+        the tiles' buildings (Codex, 2026-11-18)."""
+        import gc
+        import overture
+        import roadwidth
+        self.enterContext(mock.patch.object(mapdata, "MAP_SOURCE", "pmtiles"))
+        with mock.patch.object(mapdata, "MAP_SOURCE", "parquet"):
+            mdp = self.md(FakeFetcher({}))
+        with mock.patch.object(mdp.overture, "query", return_value=(overture.empty("buildings"), {})):
+            mdp.layer_arrays(CELL, "buildings")
+        f = FakeFetcher({"buildings.pmtiles": archive(buildings())})
+        md = self.md(f)
+        self.assertEqual(md.path(CELL, "buildings", parquet=True), mdp.path(CELL, "buildings"))
+        self.assertTrue(os.path.exists(md.path(CELL, "buildings", parquet=True)))
+        store = roadwidth.store_dir(os.path.join(self.tmp, "w"), md)
+        rw = roadwidth.RoadWidths(lambda k: md.cell(k, ("buildings",)).layers.get("buildings"), store)
+        # a street along the building across the tiles' edge, ~9 m north of its wall
+        ll = np.array([lonlat(*world(A, 3900, 80)), lonlat(*world(EAST, 60, 80))])
+        f.down.update(pmtiles.HOSTS)
+        with mock.patch.object(md.overture, "query", return_value=(overture.empty("buildings"), {})):
+            with revisit.scope() as b:
+                rw.measure_many([("r", ll, 3)])
+                got = (rw.get("r", ll), rw.cap("r", ll))
+        self.assertEqual(got, (None, None))                 # (the stand-in cells have no buildings)
+        self.assertFalse(b.complete)
+        self.assertEqual((rw.memo, rw.caps, len(rw.walls), len(rw.combos), len(rw.reframed)), ({}, {}, 0, 0, 0))
+        self.assertFalse(os.path.exists(store) and any(fs for _, _, fs in os.walk(store)))
+        self.assertFalse(os.path.exists(md.path(CELL, "buildings")))
+        # the tiles back: the stand-in cells served from memory for STAND_IN_S (still not kept), then the tiles asked
+        # again on the same MapData: the tiles' building measured, kept
+        f.down.clear()
+        with revisit.scope() as b:
+            self.assertIsNone(rw.cap("r", ll))
+        self.assertFalse(b.complete)
+        self.assertEqual(rw.caps, {})
+        self.enterContext(mock.patch.object(mapdata, "STAND_IN_S", -1.0))
+        with revisit.scope() as b:
+            rw.measure_many([("r", ll, 3)])
+            cap = rw.cap("r", ll)
+        self.assertTrue(b.complete)
+        self.assertIsNotNone(cap)
+        self.assertIsNotNone(cap[0])
+        ref = roadwidth.RoadWidths(lambda k: md.cell(k, ("buildings",)).layers.get("buildings"))
+        self.assertEqual(cap, ref.cap("r", ll))
+        self.assertEqual(rw.get("r", ll), ref.get("r", ll))
+        self.assertTrue(os.path.exists(md.path(CELL, "buildings")))
+        self.assertTrue(any(fs for _, _, fs in os.walk(store)))
+        del rw, ref
+        gc.collect()
+
+    def test_a_fallback_is_kept_short_and_the_tiles_replace_it(self):
+        """The tiles failed: the parquet fallback's outcome (its cell, or the error when it failed too) is had once and
+        served again from memory for STAND_IN_S, a stand-in every time (a revisit fault, the decoded layer marked, the
+        tiles' file never written), each caller its own copy; one fallback for many threads at once; the tiles' file,
+        once there (another process's), read at once instead; after STAND_IN_S (>=) the tiles asked again and their
+        layer replaces it (study-express: 73,096 failed fallbacks of 18 building cells, BNE_ROADSYS=surface)."""
+        import overture
+        self.enterContext(mock.patch.object(mapdata, "MAP_SOURCE", "pmtiles"))
+        f = FakeFetcher({"buildings.pmtiles": archive(buildings())})
+        md = self.md(f)
+        f.down.update(pmtiles.HOSTS)
+        builds = []
+        real = mapdata.MapData._build
+
+        def counted(self_, key, layer, kind):
+            builds.append((str(key), layer))
+            return real(self_, key, layer, kind)
+        self.enterContext(mock.patch.object(mapdata.MapData, "_build", counted))
+        q = self.enterContext(mock.patch.object(md.overture, "query", return_value=(overture.empty("buildings"), {})))
+        # many threads at once: one fallback
+        out, gate = [], threading.Barrier(6)
+
+        def read():
+            gate.wait()
+            out.append(md.layer_arrays(CELL, "buildings"))
+        ts = [threading.Thread(target=read) for _ in range(6)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual((len(builds), q.call_count), (1, 1))
+        self.assertTrue(all(isinstance(a, mapdata.StandIn) and not hit for a, hit in out))
+        seen = len(f.seen)
+        for _ in range(3):
+            before = revisit.faults()
+            arrays, hit = md.layer_arrays(CELL, "buildings")
+            self.assertIsInstance(arrays, mapdata.StandIn)
+            self.assertFalse(hit)
+            self.assertGreater(revisit.faults(), before, "short every time it is served")
+            for v in arrays.values():                   # (a caller changing its copy never changes the kept one)
+                if v.flags.writeable and v.size:
+                    v.fill(0) if v.dtype.kind in "biuf" else None
+        self.assertEqual((len(builds), q.call_count, len(f.seen)), (1, 1, seen), "the tiles not asked again")
+        self.assertEqual(md.cell_stats()["stand_in_hits"], 8)
+        ref = mapdata.digest_arrays({k: v for k, v in out[0][0].items() if k != "provenance"})
+        self.assertEqual(mapdata.digest_arrays({k: v for k, v in md.layer_arrays(CELL, "buildings")[0].items()
+                                                if k != "provenance"}), ref)
+        # decoded from it (memory dropped: decoded again from the kept arrays): marked a stand-in, from when the
+        # fallback ended, the build that takes it not kept
+        with md._mem_lock:
+            md._mem.clear()
+            md._mem_bytes = 0
+        with revisit.scope() as b:
+            lay = md.cell(CELL, ("buildings",)).layers["buildings"]
+        self.assertFalse(b.complete)
+        self.assertLessEqual(lay.__dict__["_bnge_fallback"], md._stand_ins[md.path(CELL, "buildings")][0])
+        self.assertEqual(len(builds), 1)
+        self.assertFalse(os.path.exists(md.path(CELL, "buildings")), "never kept under the tiles' key")
+        # the fallback failing too (no parquet cell offline): the error kept the same way, a fault each time
+        other = mapcells.CellKey(*EAST)
+        q.side_effect = netfetch.Offline("offline: parquet", "u", "h")
+        for _ in range(3):
+            before = revisit.faults()
+            with self.assertRaises(netfetch.Offline):
+                md.layer_arrays(other, "buildings")
+            self.assertGreater(revisit.faults(), before)
+        self.assertEqual(builds.count((str(other), "buildings")), 1)
+        with self.assertRaises(netfetch.Offline) as raised:
+            md.cell(other, ("buildings",))
+        kept = md._stand_ins[md.path(other, "buildings")][2]
+        self.assertIsNot(raised.exception, kept)
+        self.assertEqual((str(kept), kept.url, kept.host), ("offline: parquet", "u", "h"))
+        # (no traceback kept: it held the last reader's frames, and through them its whole stack's locals)
+        self.assertEqual((kept.__traceback__, kept.__context__, kept.__cause__), (None, None, None))
+        self.assertEqual(builds.count((str(other), "buildings")), 1)
+        # a kind that never falls back is not served the fallback's outcome (its own answer, the tiles' refusal)
+        with self.assertRaises(mapdata.DEFERRED):
+            md.layer_arrays(other, "buildings", kind="prefetch")
+        # the tiles back, their file written by another process: read at once, never the kept fallback again
+        f.down.clear()
+        q.side_effect = None
+        self.assertIsInstance(md.layer_arrays(CELL, "buildings")[0], mapdata.StandIn, "STAND_IN_S not past yet")
+        md2 = self.md(f)
+        clean, hit = md2.layer_arrays(CELL, "buildings")
+        self.assertNotIsInstance(clean, mapdata.StandIn)
+        got, hit = md.layer_arrays(CELL, "buildings")
+        self.assertNotIsInstance(got, mapdata.StandIn)
+        self.assertTrue(hit)
+        # STAND_IN_S past (>=: at once when 0): the tiles asked again, their layer replaces the kept error
+        self.assertIn(md.path(other, "buildings"), md._stand_ins)
+        with mock.patch.object(mapdata, "STAND_IN_S", 0.0):
+            got, hit = md.layer_arrays(other, "buildings")
+        self.assertNotIsInstance(got, mapdata.StandIn)
+        self.assertFalse(hit)
+        self.assertTrue(os.path.exists(md.path(other, "buildings")))
+        self.assertNotIn(md.path(other, "buildings"), md._stand_ins)
+        lay = md.cell(other, ("buildings",)).layers["buildings"]
+        self.assertIsNone(lay.__dict__.get("_bnge_fallback"))
+
+    def test_only_lasting_fallback_errors_are_kept_and_never_for_a_more_urgent_read(self):
+        """The fallback's passing refusals (the limiter, a rate limit, a circuit open, a timeout: DEFERRED and the other
+        fetch errors) and errors of no fetch at all are never kept: the next read asks the sources again. A lasting one
+        (offline, not found) is kept for reads as urgent as the one that had it or less; a more urgent read tries the
+        sources itself, and its own answer is then kept for both (Gemini review of a82c9ae8e)."""
+        import overture
+        self.enterContext(mock.patch.object(mapdata, "MAP_SOURCE", "pmtiles"))
+        md = self.md(FakeFetcher({}))
+        md.fetcher.down.update(pmtiles.HOSTS)
+        builds = []
+        real = mapdata.MapData._build
+
+        def counted(self_, key, layer, kind):
+            builds.append(kind)
+            return real(self_, key, layer, kind)
+        self.enterContext(mock.patch.object(mapdata.MapData, "_build", counted))
+        q = self.enterContext(mock.patch.object(md.overture, "query", return_value=(overture.empty("buildings"), {})))
+        passing = [netfetch.Deferred("busy, demand dropped", "u", "h"),
+                   netfetch.RateLimited("rate limited for 3 s", "u", "h", retry_after=3.0),
+                   netfetch.HostUnavailable("h unavailable for 9 s (circuit open)", "u", "h"),
+                   netfetch.FetchError("timed out", "u", "h"), ValueError("bad row group")]
+        for i, err in enumerate(passing):
+            key = mapcells.CellKey(14, CELL.x, CELL.y + 10 + i)
+            q.side_effect = err
+            n = len(builds)
+            for _ in range(2):
+                with self.assertRaises(type(err)):
+                    md.layer_arrays(key, "buildings")
+            self.assertEqual(len(builds) - n, 2, f"{type(err).__name__} asked again, not kept")
+            self.assertNotIn(md.path(key, "buildings"), md._stand_ins)
+        # a lasting one, had by a demand read: kept for demand reads, not for an urgent one
+        key = mapcells.CellKey(14, CELL.x, CELL.y + 20)
+        q.side_effect = netfetch.Offline("offline: parquet", "u", "h")
+        n = len(builds)
+        for _ in range(2):
+            with self.assertRaises(netfetch.Offline):
+                md.layer_arrays(key, "buildings", kind="demand")
+        self.assertEqual(builds[n:], ["demand"])
+        with self.assertRaises(netfetch.Offline):
+            md.layer_arrays(key, "buildings", kind="urgent")
+        self.assertEqual(builds[n:], ["demand", "urgent"], "the urgent read tried the sources itself")
+        for kind in ("urgent", "demand"):          # (the urgent read's own answer: kept for both)
+            with self.assertRaises(netfetch.Offline):
+                md.layer_arrays(key, "buildings", kind=kind)
+        self.assertEqual(builds[n:], ["demand", "urgent"])
+        # not found: kept too
+        key = mapcells.CellKey(14, CELL.x, CELL.y + 21)
+        q.side_effect = netfetch.NotFound("404", "u", "h", status=404)
+        for _ in range(2):
+            with self.assertRaises(netfetch.NotFound):
+                md.layer_arrays(key, "buildings")
+        self.assertEqual(builds.count("demand"), len(passing) * 2 + 2)
+
+    def test_bare_error_copies(self):
+        """_bare_error: the class, message, args and attributes, OSError's filename / filename2 (outside __dict__),
+        no traceback; None for an exception it cannot make alike (its __new__ refuses the args), which is then not
+        kept: the read raises its own error, never a TypeError of the copy (Gemini review of a82c9ae8e)."""
+        e = FileNotFoundError(2, "No such file or directory", "/data/x.parquet")
+        c = mapdata._bare_error(e)
+        self.assertEqual((type(c), str(c), c.errno, c.strerror, c.filename), (type(e), str(e), 2, e.strerror,
+                                                                                "/data/x.parquet"))
+        e2 = OSError(18, "Invalid cross-device link", "/a", None, "/b")
+        c2 = mapdata._bare_error(e2)
+        self.assertEqual((type(c2), str(c2), c2.filename, c2.filename2), (type(e2), str(e2), "/a", "/b"))
+        try:
+            raise netfetch.Offline("offline: u", "u", "h")
+        except netfetch.Offline as raised:
+            c3 = mapdata._bare_error(raised)
+        self.assertEqual((type(c3), str(c3), c3.url, c3.host, c3.__traceback__), (netfetch.Offline, "offline: u", "u",
+                                                                                   "h", None))
+
+        class Odd(netfetch.NotFound):
+            def __new__(cls, code, where):
+                return super().__new__(cls)
+
+            def __init__(self, code, where):
+                super().__init__(f"{code} at {where}", where, "h")
+        self.assertIsNone(mapdata._bare_error(Odd(404, "u")))
+        self.enterContext(mock.patch.object(mapdata, "MAP_SOURCE", "pmtiles"))
+        md = self.md(FakeFetcher({}))
+        md.fetcher.down.update(pmtiles.HOSTS)
+
+        def odd(*a, **k):
+            raise Odd(404, "u")
+        self.enterContext(mock.patch.object(md.overture, "query", side_effect=odd))
+        for _ in range(2):
+            with self.assertRaises(Odd):
+                md.layer_arrays(CELL, "buildings")
+        self.assertNotIn(md.path(CELL, "buildings"), md._stand_ins)
+
+    def test_kept_fallbacks_are_bounded(self):
+        """The kept fallbacks: at most STAND_IN_N layers and STAND_IN_MB of arrays in memory (the mirror's mapped
+        views not counted), the least recently used out; one larger than STAND_IN_MB alone not kept; dropped by
+        clear_memory."""
+        md = self.md(FakeFetcher({}))
+        big = mapdata.StandIn(a=np.zeros(300_000))      # 2.4 MB in memory
+        mapped = np.zeros(10**6)
+        mapped.flags.writeable = False
+        with mock.patch.object(mapdata, "STAND_IN_N", 3), mock.patch.object(mapdata, "STAND_IN_MB", 5):
+            for i in range(4):
+                self.assertIsNotNone(md._stand_in_put(f"p{i}", None, ValueError(i)))
+            self.assertEqual(list(md._stand_ins), ["p1", "p2", "p3"])
+            with self.assertRaises(ValueError):
+                md._stand_in_get("p1", "demand")        # (used: the last to go)
+            self.assertIsNotNone(md._stand_in_put("m", mapdata.StandIn(a=mapped), None))
+            self.assertEqual(list(md._stand_ins), ["p3", "p1", "m"])
+            self.assertEqual(md._stand_ins_bytes, 0, "mapped views: shared pages")
+            md._stand_in_put("b1", big, None)
+            md._stand_in_put("b2", big, None)
+            self.assertEqual(list(md._stand_ins), ["m", "b1", "b2"])
+            md._stand_in_put("b3", big, None)
+            self.assertEqual(list(md._stand_ins), ["b2", "b3"], "past STAND_IN_MB: the least recently used out")
+            self.assertEqual(md._stand_ins_bytes, 2 * 2_400_000)
+            self.assertIsNone(md._stand_in_put("huge", mapdata.StandIn(a=np.zeros(10**6)), None))
+            self.assertNotIn("huge", md._stand_ins)
+        md.clear_memory()
+        self.assertEqual((len(md._stand_ins), md._stand_ins_bytes), (0, 0))
+
     def test_parquet_source_keeps_the_old_keys(self):
         with mock.patch.object(mapdata, "MAP_SOURCE", "parquet"):
             md = self.md(FakeFetcher({}))

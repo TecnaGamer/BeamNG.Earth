@@ -31,6 +31,10 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 import mtarchive  # noqa: E402
 
 LIST_URL = "https://download.mapterhorn.com/download_urls.json"

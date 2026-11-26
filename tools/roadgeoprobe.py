@@ -32,17 +32,28 @@ def mesh_of(path, pos):
     """(P (n, 3) world, T (m, 3), material name per triangle) of a .cdae's first detail at pos."""
     import cdae
     d = cdae.read(path)
-    m = next(m for m in d["meshes"] if m["type"] == 0)     # (a collision-only shape: a null mesh first)
-    a = cdae.mesh_arrays(m)
-    P = np.asarray(a["verts"], np.float64) + np.asarray(pos, np.float64)
-    idx = np.asarray(a["indices"], np.int64)
+    objects = np.frombuffer(d["objects"][2], "<i4").reshape(-1, 6)
+    # An object has a slot per detail. Pick the finest populated detail (the collision detail
+    # for a collision-only shape), and read every object at that detail.
+    meshes = []
+    for level in range(d["details"][0]):
+        meshes = [d["meshes"][start + level] for _, count, start, *_ in objects if level < count
+                  and d["meshes"][start + level]["type"] == 0]
+        if meshes:
+            break
     mats = [x["name"] for x in d["materials"]]
-    T, M = [], []
-    for start, count, mi in np.asarray(a["primitives"]).reshape(-1, 3):
-        tri = idx[start:start + count].reshape(-1, 3)
-        T.append(tri)
-        M += [mats[mi & cdae.PRIM_MATERIAL_MASK]] * len(tri)
-    return P, (np.concatenate(T) if T else np.zeros((0, 3), np.int64)), np.asarray(M)
+    points, triangles, materials = [], [], []
+    offset = 0
+    for mesh in meshes:
+        a = cdae.mesh_arrays(mesh)
+        points.append(np.asarray(a["verts"], np.float64) + np.asarray(pos, np.float64))
+        idx = np.asarray(a["indices"], np.int64)
+        for start, count, mi in a["primitives"]:
+            tri = idx[start:start + count].reshape(-1, 3)
+            triangles.append(tri + offset)
+            materials.extend([mats[mi & cdae.PRIM_MATERIAL_MASK]] * len(tri))
+        offset += len(points[-1])
+    return np.concatenate(points), np.concatenate(triangles), np.asarray(materials)
 
 
 def heights_at(P, T, M, pts, mat, near=None):

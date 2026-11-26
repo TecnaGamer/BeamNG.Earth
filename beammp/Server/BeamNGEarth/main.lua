@@ -4,11 +4,14 @@
 -- metres from an origin (the "anchor") that each player's game picks for itself and moves as they drive (a rebase
 -- every 15 km). Each client converts the other players' positions from their owner's anchor into its own
 -- (mpanchor.lua, from Thai-v4's PR #88); this plugin tells every client where everyone's anchor is:
---   - bngeAnchors { pid -> { aLat, aLon, lat, lon, name, h } }: every player's anchor and place (from the client's
+--   - bngeAnchors { pid -> { aLat, aLon, lat, lon, name, h, rel } }: every player's anchor and place (from the client's
 --     bngePose, every 2 s and at once when its anchor changes), its name and heading (degrees from north; none
---     without a car: the world map's arrows), to everyone each TICK_MS and at once when an anchor changes;
+--     without a car: the world map's arrows) and its world server's map data release (rel: players are told of others), to everyone each TICK_MS and at once when an anchor changes;
 --   - bngeGoTo { lat, lon }: a player who joins is sent to the others (the longest-joined player's place);
---   - bngeConfig { time, weather }: the server's settings (below), to a player at their first pose.
+--   - bngeConfig { time, weather, weatherHost }: the server's settings (below), to a player at their first pose (and
+--     again to the weather host when it changes);
+--   - bngeWeather { a weather message }: with G.WEATHER = 'real-host', the weather host's real weather (from its
+--     client's bngeWeather, checked and reduced to the weather's own fields), to every other player.
 --   - bngeShare: shared world generation v2 (below): this server keeps and serves its players' world building.
 -- (v1 shared world building, its bngeConfig sharePort and bngePeers, is commented out below: off since 2026-10-23.)
 -- Positions stay latitude / longitude here: no coordinates are converted on the server. Nothing of BeamMP itself is
@@ -32,8 +35,9 @@ G.LISTED = true
 G.TIME = 'real'
 -- With a fixed time: 0 = it stays there; 1 = it runs at real speed; 60 = an hour of the day in every real minute.
 G.TIME_SPEED = 0
--- Weather for everyone: 'real' (the live weather where each player is, the default), or one of 'clear', 'cloudy',
--- 'rain', 'storm', 'snow', 'fog'.
+-- Weather for everyone: 'real' (the live weather where each player is, the default); 'real-host' (everyone gets the
+-- live weather where the longest-joined player is); or one of the presets 'clear', 'fewclouds', 'cloudy', 'overcast',
+-- 'drizzle', 'rain', 'heavyrain', 'storm', 'fog', 'lightsnow', 'snow', 'blizzard', 'sleet', 'freezingrain', 'hail'.
 G.WEATHER = 'real'
 -- ===================================================================================================================
 
@@ -47,7 +51,12 @@ G.STALE_S = 15              -- a player's pose this old: left out
 G.TICK_MS = 2000
 
 G.players = {}              -- pid -> { name, aLat, aLon, lat, lon, t, joinedAt }
-G.WEATHERS = { clear = true, cloudy = true, rain = true, storm = true, snow = true, fog = true }
+G.WEATHERS = { clear = true, fewclouds = true, cloudy = true, overcast = true, drizzle = true, rain = true,
+  heavyrain = true, storm = true, fog = true, lightsnow = true, snow = true, blizzard = true, sleet = true,
+  freezingrain = true, hail = true, ['real-host'] = true }
+G.hostWeather = nil         -- 'real-host': the weather host's latest message (checked: G.weatherMsg)
+G.hostPid = nil             -- ... and who that host is now
+G.WEATHER_MAX_BYTES = 2048
 G.started = os.time()       -- (a running server clock starts here: every player computes the same time from it)
 G.clock = 0
 
@@ -100,7 +109,7 @@ end
 function G.anchors(players)
   local out = {}
   for pid, p in pairs(players) do
-    out[tostring(pid)] = { aLat = p.aLat, aLon = p.aLon, lat = p.lat, lon = p.lon, name = p.name, h = p.h }
+    out[tostring(pid)] = { aLat = p.aLat, aLon = p.aLon, lat = p.lat, lon = p.lon, name = p.name, h = p.h, rel = p.rel }
   end
   return out
 end
@@ -117,7 +126,7 @@ function G.meetingPlace(players, newPid)
   return best and { lat = players[best].lat, lon = players[best].lon } or nil
 end
 
--- A client's pose { v, aLat, aLon, lat, lon, joined, h }. Returns place (the meeting place for its first pose after
+-- A client's pose { v, aLat, aLon, lat, lon, joined, h, rel }. Returns place (the meeting place for its first pose after
 -- joining, or nil) and moved (its anchor is new or changed: the anchors go out at once).
 function G.onPose(pid, d, name)
   if type(d) ~= 'table' or tonumber(d.v) ~= G.PROTO then return nil, false end
@@ -137,6 +146,9 @@ function G.onPose(pid, d, name)
   p.name, p.aLat, p.aLon, p.lat, p.lon, p.t = name, aLat, aLon, lat, lon, G.clock
   local h = tonumber(d.h)
   p.h = (h and h >= 0 and h <= 360) and h or nil
+  -- its world server's map data release (an Overture release id; passed on in bngeAnchors: players of another one are
+  -- told, mpsession.noteReleases; their world building is never mixed, the plans' codes differ)
+  p.rel = (type(d.rel) == 'string' and d.rel:match('^%d%d%d%d%-%d%d%-%d%d%.%d%d?$')) and d.rel or nil
   -- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
   -- local sp = tonumber(d.sp)
   -- p.sp = (sp and sp >= 1 and sp <= 65535 and sp % 1 == 0) and sp or nil
@@ -514,11 +526,63 @@ function G.timeConfig(time, speed, epoch)
   return { hours = h + m / 60, speed = math.max(0, tonumber(speed) or 0), epoch = epoch }
 end
 
--- The settings each player gets (bngeConfig): the server's time and weather (nil: the real ones). (Its sharePort,
--- shared world building's, is commented out: off since 2026-10-23.)
-function G.config()
+-- The settings each player gets (bngeConfig): the server's time and weather (nil: the real ones); with 'real-host',
+-- weatherHost = true for the player whose weather everyone gets. (Its sharePort, shared world building's, is commented
+-- out: off since 2026-10-23.)
+function G.config(pid)
   local w = tostring(G.WEATHER or 'real'):lower()
-  return { time = G.timeConfig(G.TIME, G.TIME_SPEED, G.started), weather = G.WEATHERS[w] and w or nil }
+  local cfg = { time = G.timeConfig(G.TIME, G.TIME_SPEED, G.started), weather = G.WEATHERS[w] and w or nil }
+  if cfg.weather == 'real-host' then cfg.weatherHost = pid ~= nil and pid == G.weatherHost(G.players) end
+  return cfg
+end
+
+-- Pure: the weather host with 'real-host': the longest-joined player (ties: the lowest id), nil when no one is on.
+function G.weatherHost(players)
+  local best = nil
+  for pid, p in pairs(players) do
+    if not best or (p.joinedAt or 0) < (players[best].joinedAt or 0)
+        or ((p.joinedAt or 0) == (players[best].joinedAt or 0) and pid < best) then
+      best = pid
+    end
+  end
+  return best
+end
+
+-- Pure: a client's weather message reduced to the weather's own fields, each a number in its range (or the fog flag);
+-- nil when it is not a table. (The mod's weather.lua sanitizeMsg does the same on the receiving side.)
+local WX_NUM = { code = { 0, 99 }, visM = { 0, 1e6 }, rainMmH = { 0, 500 }, snowCmH = { 0, 100 }, hailCmH = { 0, 100 },
+  slTempC = { -90, 60 }, tempC = { -90, 60 }, baseAglM = { 0, 20000 } }
+local function inRange(v, r)
+  v = tonumber(v)
+  if not v or v ~= v then return nil end
+  return math.max(r[1], math.min(r[2], v))
+end
+function G.weatherMsg(t)
+  if type(t) ~= 'table' then return nil end
+  local m = {}
+  for k, r in pairs(WX_NUM) do m[k] = inRange(t[k], r) end
+  if type(t.cover) == 'table' then
+    m.cover = { low = inRange(t.cover.low, { 0, 100 }) or 0, mid = inRange(t.cover.mid, { 0, 100 }) or 0,
+      high = inRange(t.cover.high, { 0, 100 }) or 0 }
+  end
+  for _, k in ipairs({ 'wind', 'aloft' }) do
+    if type(t[k]) == 'table' then
+      m[k] = { ms = inRange(t[k].ms, { 0, 150 }) or 0, gustMs = inRange(t[k].gustMs, { 0, 200 }),
+        fromDeg = inRange(t[k].fromDeg, { 0, 360 }) or 0 }
+    end
+  end
+  if t.fog == true then m.fog = true end
+  return m
+end
+
+-- A client's bngeWeather (its real weather, decoded): kept and passed on only from the weather host while the server
+-- runs 'real-host'. Returns the message to send to the others, or nil.
+function G.onWeather(pid, d)
+  if tostring(G.WEATHER or ''):lower() ~= 'real-host' or pid ~= G.weatherHost(G.players) then return nil end
+  local m = G.weatherMsg(d)
+  if not m then return nil end
+  G.hostWeather = m
+  return m
 end
 
 -- Pure: the server's name, description, tags, map, port, player cap, resource folder and whether it has a password
@@ -623,7 +687,8 @@ if MP and MP.RegisterEvent then
       if okI and type(ids) == 'table' and type(ids.ip) == 'string' then p.ip = ids.ip end
     end
     if p and not known then
-      MP.TriggerClientEvent(pid, 'bngeConfig', encode(G.config()))
+      MP.TriggerClientEvent(pid, 'bngeConfig', encode(G.config(pid)))
+      if G.hostWeather and pid ~= G.hostPid then MP.TriggerClientEvent(pid, 'bngeWeather', encode(G.hostWeather)) end
       print(string.format('[BeamNG.Earth] %s at %.5f, %.5f (anchor %s)', tostring(p.name), p.lat, p.lon,
         G.key(p.aLat, p.aLon)))
     end
@@ -637,6 +702,32 @@ if MP and MP.RegisterEvent then
   end
 
   function BNGE_onLeave(pid) G.onLeave(pid); G.shareLeave(pid) end
+
+  -- 'real-host': the weather host's real weather to the others (a message at most WEATHER_MAX_BYTES, from the host only)
+  function BNGE_weather(pid, data)
+    if type(data) ~= 'string' or #data > G.WEATHER_MAX_BYTES then return end
+    local ok, d = pcall(Util.JsonDecode, data)
+    if not ok then return end
+    local m = G.onWeather(pid, d)
+    if not m then return end
+    local text = encode(m)
+    for other in pairs(G.players) do
+      if other ~= pid then MP.TriggerClientEvent(other, 'bngeWeather', text) end
+    end
+  end
+
+  -- 'real-host': a new weather host (the old one left) is told it is one, the old one (if still on) that it is not
+  local function checkHost()
+    if tostring(G.WEATHER or ''):lower() ~= 'real-host' then return end
+    local h = G.weatherHost(G.players)
+    if h == G.hostPid then return end
+    if G.hostPid and G.players[G.hostPid] then MP.TriggerClientEvent(G.hostPid, 'bngeConfig', encode(G.config(G.hostPid))) end
+    G.hostPid = h
+    if h then
+      MP.TriggerClientEvent(h, 'bngeConfig', encode(G.config(h)))
+      print('[BeamNG.Earth] the weather host is now ' .. tostring(G.players[h] and G.players[h].name))
+    end
+  end
 
   -- shared world generation v2: the file layer (BeamMP's FS and Lua's io), the events, the paced sends
   local function base(f) return tostring(f):match('([^/\\]+)$') end
@@ -701,6 +792,7 @@ if MP and MP.RegisterEvent then
 
   function BNGE_tick()
     MP.TriggerClientEvent(-1, 'bngeAnchors', encode(G.tick(G.TICK_MS / 1000)))
+    checkHost()
     if next(G.sh.seen) then          -- (the helper's inbox, while anyone shares)
       local players, misses = G.spool()
       G.fs.write(G.SHARE_DIR .. '/spool/players.json', players)
@@ -790,6 +882,7 @@ if MP and MP.RegisterEvent then
   MP.RegisterEvent('BNGE_tick', 'BNGE_tick')
   MP.CreateEventTimer('BNGE_tick', G.TICK_MS)
   MP.RegisterEvent('bngeShare', 'BNGE_share')
+  MP.RegisterEvent('bngeWeather', 'BNGE_weather')
   MP.RegisterEvent('BNGE_shareDrain', 'BNGE_shareDrain')
   MP.CreateEventTimer('BNGE_shareDrain', G.SHARE_DRAIN_MS)
   local cfg = G.config()
@@ -802,8 +895,9 @@ if MP and MP.RegisterEvent then
     print('[BeamNG.Earth] G.TIME "' .. tostring(G.TIME) .. '" is not "real" or HH:MM: the real time is used')
   end
   if tostring(G.WEATHER or 'real'):lower() ~= 'real' and not cfg.weather then
-    print('[BeamNG.Earth] G.WEATHER "' .. tostring(G.WEATHER) .. '" is not one of real, clear, cloudy, rain, storm, '
-      .. 'snow, fog: the real weather is used')
+    print('[BeamNG.Earth] G.WEATHER "' .. tostring(G.WEATHER) .. '" is not real, real-host or a preset (clear, '
+      .. 'fewclouds, cloudy, overcast, drizzle, rain, heavyrain, storm, fog, lightsnow, snow, blizzard, sleet, '
+      .. 'freezingrain, hail): the real weather is used')
   end
 end
 

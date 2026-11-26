@@ -98,5 +98,70 @@ class WarmNextTest(unittest.TestCase):
         self.assertEqual(blockworker._warm_next([(g, "a")], True), (g, "a"))
 
 
+
+class WarmOwnCancelTest(unittest.TestCase):
+    """The plans-ahead thread's cancel is its own list's anchor's (xproc.set_thread_cancel), never the worker
+    process's job-wide one: an old anchor's job in the process cancelled the current place's plans ('road plans ahead
+    ... pools.Abandoned', 694 times at Popoli), and with no job in the process a left city's plans went on for minutes."""
+
+    def run_loop(self, warm_of, process_check, left):
+        import pools
+        import xproc
+        seen, done = [], threading.Event()
+
+        class G:
+            shared = None
+
+            def __init__(self):
+                self.ok = set()
+
+            def planned(self, k):
+                return k in self.ok
+
+            def warm(self, k):
+                try:
+                    seen.append(xproc._cancelled())
+                    xproc.check_cancel()
+                    self.ok.add(k)
+                finally:
+                    done.set()
+        g = G()
+        st = types.SimpleNamespace(cv=threading.Condition(), want=[(g, "k")], warm_of=warm_of, warm_read_only=False)
+        old = xproc._cancel_proc[0]
+        xproc._cancel_proc[0] = process_check
+        try:
+            with mock.patch.object(blockworker, "_s", st),                     mock.patch.object(blockworker, "abandoned", lambda out_dir, aid: aid in left),                     mock.patch.object(blockworker.log, "exception") as logged:
+                threading.Thread(target=blockworker._warm_loop, daemon=True).start()
+                self.assertTrue(done.wait(10))
+                for _ in range(100):            # (its list trimmed after the warm)
+                    with st.cv:
+                        if not st.want or g.planned("k"):
+                            break
+                    threading.Event().wait(0.01)
+        finally:
+            xproc._cancel_proc[0] = old
+        return seen, st, g, logged, pools
+
+    def test_another_anchors_job_does_not_cancel_it(self):
+        seen, st, g, logged, _ = self.run_loop((5, "out"), lambda: True, left={4})
+        self.assertEqual(seen, [False])
+        self.assertTrue(g.planned("k"))
+        logged.assert_not_called()
+
+    def test_a_left_anchors_plans_stop_with_no_job_in_the_process(self):
+        seen, st, g, logged, _ = self.run_loop((4, "out"), None, left={4})
+        self.assertEqual(seen, [True])
+        self.assertFalse(g.planned("k"))
+        with st.cv:
+            self.assertEqual(st.want, [], "its cell dropped from the list")
+        logged.assert_not_called()          # (expected: no error logged)
+
+    def test_the_list_carries_its_anchor(self):
+        st = types.SimpleNamespace(cv=threading.Condition(), want=None, anchor=lambda aid, la, lo: ("grader", None))
+        with mock.patch.object(blockworker, "_s", st):
+            blockworker._read_warm(_Q([(5, 1.0, 2.0, ["k"], False, "out")]))
+        self.assertEqual(st.warm_of, (5, "out"))
+
+
 if __name__ == "__main__":
     unittest.main()

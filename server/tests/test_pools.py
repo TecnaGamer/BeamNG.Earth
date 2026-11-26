@@ -290,6 +290,28 @@ class ElasticPoolTest(unittest.TestCase):
         for f in futs:
             f.result(timeout=60)
 
+    def test_over_the_memory_limit_stops_drained_extras_at_once(self):
+        import time
+        import budget
+        p = self._pool()
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        for f in futs:
+            f.result(timeout=60)
+        ex = p.extra
+        deadline = time.monotonic() + 10
+        while ex.inflight and time.monotonic() < deadline:
+            time.sleep(0.05)                # (the done callbacks)
+        budget.OVER = True
+        try:
+            with self.assertLogs("earthd.pools", "INFO") as seen:
+                self.assertTrue(p.reap_step(1000.0), "no idle window once over the limit and drained")
+        finally:
+            budget.OVER = False
+        self.assertIsNone(p.extra)
+        self.assertEqual(p.extra_stops, 1)
+        self.assertTrue(any("over its memory limit" in line for line in seen.output), seen.output)
+        self.assertEqual(p.submit(abs, -5).result(timeout=60), 5, "the base goes on")
+
     def test_the_old_way_without_a_reaper(self):
         p = pools.ElasticPool("test", 1, 2, mp_context=SPAWN, idle_s=0)
         self.addCleanup(p.shutdown)
@@ -358,6 +380,98 @@ class RotateTest(unittest.TestCase):
         if sys.platform.startswith("linux") or sys.platform == "win32":
             self.assertGreater(mb, 1.0)
         self.assertIsNone(self.budget.process_mb(2 ** 22 + 12345))   # (no such process)
+
+
+class LocalSlotsTest(unittest.TestCase):
+    """pools.SlotPool without the v2 scheduler (the road tiles' pool, earthd.ROAD_SLOTS): one process a slot, the jobs
+    in order with submit_low's after the others, results and exceptions to their futures, a queued job cancelled;
+    the memory watchdog may replace one slot's process while the others' jobs and the queue go on."""
+
+    def test_jobs_in_order(self):
+        """With the queue held (the loops cannot take a job meanwhile: _queue_cv), a low job queued before a normal one
+        runs after it: one slot, so the loop takes the normal one first and the low one only once it is done."""
+        p = pools.SlotPool(None, "test", 1, mp_context=SPAWN)
+        try:
+            self.assertEqual([f.result(timeout=60) for f in [p.submit(abs, -i) for i in range(4)]], [0, 1, 2, 3])
+            with self.assertRaises(ZeroDivisionError):
+                p.submit(divmod, 1, 0).result(timeout=60)
+            got = []
+            with p._queue_cv:
+                low = p.submit_low(abs, -9)
+                gone = p.submit(abs, -7)
+                self.assertTrue(gone.cancel(), "queued: cancelled")
+                normal = p.submit(abs, -5)
+                normal.add_done_callback(lambda f: got.append("normal"))
+                low.add_done_callback(lambda f: got.append("low"))
+            self.assertEqual((normal.result(timeout=60), low.result(timeout=60)), (5, 9))
+            self.assertEqual(got, ["normal", "low"], "the low job after the normal one")
+            self.assertTrue(gone.cancelled())
+            self.assertEqual(p.inflight, 0)
+        finally:
+            p.shutdown()
+
+    def test_one_slot_replaced_alone(self):
+        """The memory watchdog replaces one slot: a job given to it before still finishes there, its next job runs in a
+        new process, and the other slot keeps its own."""
+        import time
+        p = pools.SlotPool(None, "test", 2, mp_context=SPAWN)
+        try:
+            slots = pools.members(p)
+            self.assertEqual(len(slots), 2)
+            for sl in slots:                    # (each slot's process started, directly)
+                self.assertEqual(sl.submit(abs, -1).result(timeout=60), 1)
+            before = [set(sl.worker_mb()) for sl in slots]
+            self.assertTrue(all(before))
+            running = slots[0].submit(time.sleep, 0.3)
+            self.assertTrue(slots[0].rotate("test"))
+            self.assertIsNone(running.result(timeout=60), "a job given to the slot before its replacement finished")
+            self.assertEqual(slots[0].submit(abs, -2).result(timeout=60), 2)
+            self.assertEqual(slots[1].submit(abs, -3).result(timeout=60), 3)
+            after = [set(sl.worker_mb()) for sl in slots]
+            self.assertTrue(after[0] and after[0].isdisjoint(before[0]), "the replaced slot: a new process")
+            self.assertEqual(after[1], before[1], "the other slot: its own process still")
+            self.assertEqual([f.result(timeout=60) for f in [p.submit(abs, -i) for i in range(6)]], list(range(6)))
+            self.assertEqual(p.inflight, 0)
+        finally:
+            p.shutdown()
+
+
+class LocalSlotsShutdownTest(unittest.TestCase):
+    """SlotPool (sched None) shutdown as an executor's: the queued jobs run to the end (or are cancelled with
+    cancel_futures), the slots shut only after the loops end, so no job taken just before is handed to a closed slot
+    (Gemini on 01df0d0f); a submit after it raises RuntimeError."""
+
+    def test_queued_jobs_finish_then_the_slots_close(self):
+        import time
+        p = pools.SlotPool(None, "test", 2, mp_context=SPAWN)
+        p.submit(abs, -1).result(timeout=60)            # (both processes started)
+        futs = [p.submit(time.sleep, 0.05) for _ in range(12)] + [p.submit(abs, -3)]
+        p.shutdown(wait=True)
+        self.assertTrue(all(f.done() and f.exception() is None for f in futs), "every queued job ran")
+        self.assertEqual(futs[-1].result(), 3)
+        with self.assertRaises(RuntimeError):
+            p.submit(abs, -1)
+        self.assertFalse(any(t.is_alive() for t in p._loops))
+        self.assertEqual(p.inflight, 0)
+
+    def test_cancel_futures_and_no_wait(self):
+        import time
+        p = pools.SlotPool(None, "test", 1, mp_context=SPAWN)
+        p.submit(abs, -1).result(timeout=60)
+        running = p.submit(time.sleep, 0.5)
+        deadline = time.monotonic() + 30
+        while not (running.running() or running.done()) and time.monotonic() < deadline:
+            time.sleep(0.01)                # (taken by the slot's loop: out of the queue)
+        with p._queue_cv:                   # (the loop cannot take the next ones before the shutdown cancels them)
+            queued = [p.submit(abs, -i) for i in range(5)]
+            p.shutdown(wait=False, cancel_futures=True)
+        self.assertTrue(all(f.cancelled() for f in queued), "the queued jobs cancelled")
+        self.assertIsNone(running.result(timeout=60), "the running one finished in its open slot")
+        deadline = time.monotonic() + 30
+        while any(t.is_alive() for t in p._loops) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(any(t.is_alive() for t in p._loops))
+        self.assertEqual(p.inflight, 0)
 
 
 class TasksPerChildTest(unittest.TestCase):

@@ -82,10 +82,12 @@ class SmoothRoadCollisionTest(unittest.TestCase):
                 mesh = next(m for m in shape["meshes"] if m["type"] == 0)
                 v = cdae.mesh_arrays(mesh)["verts"]
                 world = v + np.array([cx, cy, 0.])
-                track = world[abs(world[:, 1]) < 1e-6]
+                # (colliders sit up to cdae.COLLIDER_UNALIGN_M off the lattice in x and y; heights untouched)
+                tol = cdae.COLLIDER_UNALIGN_M + 1e-6
+                track = world[abs(world[:, 1]) < tol]
                 self.assertGreater(len(track), 2)
                 self.assertLess(np.max(abs(track[:, 2] - (50 + .04 * track[:, 0] + grading.ROAD_LIFT))), .006)
-                edge.extend(world[(abs(world[:, 0]) < 1e-6) & (abs(world[:, 1]) < 1e-6), 2])
+                edge.extend(world[(abs(world[:, 0]) < tol) & (abs(world[:, 1]) < tol), 2])
             self.assertEqual(len(edge), 2)
             self.assertAlmostEqual(edge[0], edge[1], places=6)
 

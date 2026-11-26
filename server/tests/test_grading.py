@@ -295,6 +295,46 @@ class GradePointsTest(unittest.TestCase):
         # changes nothing for a road at 20 degrees to it.
         np.testing.assert_array_equal(self.open_tunnel_case(True, 20.0)[1], self.open_tunnel_case(False, 20.0)[1])
 
+    def trench_case(self, section, angle_deg=0.0, along=False):
+        """grade_points across a primary street 5 m over a trunk's tunnel section held in the open (a trench, the tunnel
+        covered elsewhere: not open_tunnel), as the map has them in Barcelona: the street's line 8.3 m off the trunk's,
+        its 13.1 m carriageway reaching 4.25 m over the trunk's 12 m one. At angle_deg to the trunk, through (0, -8.3);
+        across it (along: along its line, from 20 m before that point): (offsets, heights)."""
+        tun = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([4.3, 4.3]), 6.0)
+        tun.rank = grading.grade_rank(roads.Spec(12.0, "paved", True, "trunk"))
+        tun.tunnel_section = section
+        a = np.radians(angle_deg)
+        d = np.array([np.cos(a), np.sin(a)])
+        o = np.array([0.0, -8.3])
+        street = grading.Plan(np.array([o - 200.0 * d, o + 200.0 * d]), np.array([9.3, 9.3]), 9.55, road_half=6.55)
+        street.rank = grading.grade_rank(roads.Spec(13.1, "paved", True, "primary"))
+        tun.rid, street.rid = 1, 2
+        s = np.arange(-20.0, 8.01, 0.5)
+        n = d if along else np.array([-d[1], d[0]])     # (across the street: toward the trunk)
+        pts = o[None, :] + (s[:, None] + 8.3) * n[None, :]
+        return s, grading.grade_points(pts[:, 0], pts[:, 1], np.full(len(s), 9.3), [tun, street])
+
+    def test_a_street_beside_a_trench_keeps_its_ground(self):
+        # A primary along the top of a trunk's trench (a tunnel section held in the open, covered further on), within
+        # the rank gap of the trunk (RANK_SIDE_MAX_DIFF): the side ease took its carriageway from 9.3 m down to 5.9 m
+        # at the trench's painted edge, its lanes tilted 50 % and the trucks on them in the ground at the kerb (the
+        # junction eval's Barcelona trench: 32 of its 36 hits). Flagged a tunnel section, the street keeps its level up
+        # to the trench's painted edge, and the trench's carriageway holds under the part of the street mapped over it.
+        y, old = self.trench_case(False)
+        street = (y >= -8.3 - 6.55 + 0.01) & (y <= -6.0 - 0.01)
+        trench = np.abs(y) <= 6.0 - 0.01
+        self.assertLess(float(old[street].min()), 8.0, "(the ease this fixes)")
+        y, z = self.trench_case(True)
+        self.assertTrue(np.allclose(z[street], 9.3, atol=0.02), f"the street keeps its level: {z[street]}")
+        self.assertTrue(np.allclose(z[trench], 4.3, atol=0.02), f"the trench's carriageway holds: {z[trench]}")
+        np.testing.assert_array_equal(z[trench], old[trench])
+
+    def test_a_street_crossing_a_trench_section_grades_as_before(self):
+        # The flag is for a road beside the section: one crossing it at grade grades the same with and without it.
+        y, z = self.trench_case(True, 90.0, along=True)
+        np.testing.assert_array_equal(z, self.trench_case(False, 90.0, along=True)[1])
+        self.assertTrue(np.allclose(z[np.abs(y) <= 6.0 - 0.01], 4.3, atol=0.02), "(over the trench: its floor)")
+
     def test_a_deeper_dirt_road_still_leaves_the_paved_carriageway_whole(self):
         # A dirt path 1.8 m under the asphalt's level beside it (the height rule's fade starts at 1.5 m): the paved
         # carriageway is still held whole, and only the shoulder starts to fall toward the dirt.
@@ -460,11 +500,10 @@ class AbutmentEndTest(unittest.TestCase):
         self.assertAlmostEqual(out[4], 82.0, delta=0.05, msg="the approach")
         for x, z in zip(px[1:4], out[1:4]):
             self.assertLessEqual(z, 82.0 + x * grading.ABUT_UNDER_GRADE + 0.05, f"past the end by {-x} m")
-        with unittest.mock.patch.object(grading, "ABUT_UNDER_GRADE", 0.0):
-            old = grading.grade_points(px, py, base, [approach])
-        self.assertGreater(old[2], 81.9, "before: held at the end's height 6 m back over the deck")
-        plain = grading.Plan(xy, np.full(21, 82.0), 9.0)    # an ordinary road end (no bridge): its round end as before
-        self.assertTrue(np.allclose(grading.grade_points(px, py, base, [plain]), old, atol=1e-9), "a plain road end: as before")
+        for x, z in zip(px[1:4], out[1:4]):              # under the deck: the abutment's slope, 1 in SLOPE_RUN
+            self.assertLessEqual(z, 82.0 + x / grading.SLOPE_RUN + 0.05, f"the abutment's slope, {-x} m past the end")
+        plain = grading.Plan(xy, np.full(21, 82.0), 9.0)    # an ordinary road end (no bridge): its round end, held
+        self.assertGreater(grading.grade_points(px, py, base, [plain])[2], 81.9, "a plain road end: its round end")
 
     def test_end_abutment_too(self):
         xy = np.stack([np.arange(-80.0, 0.1, 4.0), np.zeros(21)], axis=1)  # the approach, its end the abutment
@@ -472,6 +511,27 @@ class AbutmentEndTest(unittest.TestCase):
         out = grading.grade_points(np.array([0.0, 5.0]), np.zeros(2), np.full(2, 40.0), [approach])
         self.assertAlmostEqual(out[0], 50.0, delta=0.05)
         self.assertLessEqual(out[1], 50.0 - 5.0 * grading.ABUT_UNDER_GRADE + 0.05)
+
+    def test_a_short_deck_clears_its_ground(self):
+        # The A5 by Heidelberg (49.3546 N 8.6316 E): a carriageway on its 8 m fill crosses a service road on a 21.4 m
+        # deck. Its approaches' round ends, falling 8 % over the deck, stood 0.2-0.9 m over the girders' underside
+        # from either abutment to the service road's cutting, whose walls rose into the girders.
+        span, top = 21.4, 111.0
+        under = top - roads.deck_depth(span)
+        south = np.arange(-120.0, 0.1, 4.0)
+        north = np.arange(span, span + 120.1, 4.0)
+        approaches = [grading.Plan(np.stack([x, np.zeros(len(x))], axis=1), np.full(len(x), top), 8.0, abut=ab,
+                                   road_half=7.0) for x, ab in ((south, (False, True)), (north, (True, False)))]
+        ys = np.arange(-100.0, 100.1, 4.0)
+        service = grading.Plan(np.stack([np.full(len(ys), span / 2), ys], axis=1), np.full(len(ys), 102.6), 3.0)
+        for p, rid, rank in ((approaches[0], 1, 150), (approaches[1], 1, 150), (service, 2, 105)):
+            p.rid, p.rank = rid, rank
+        X, Y = np.meshgrid(np.r_[np.arange(0.0, span, 0.5), span], np.arange(-7.0, 7.01, 1.0))
+        z = grading.grade_points(X.ravel(), Y.ravel(), np.full(X.size, 103.6), approaches + [service]).reshape(X.shape)
+        self.assertTrue(np.allclose(z[:, [0, -1]], top, atol=0.05), "the abutments at their roads' height")
+        seat = 2.0 * roads.deck_depth(span)
+        inner = (X >= seat) & (X <= span - seat)
+        self.assertLessEqual(float(z[inner].max()), under, "the ground under the span clears its girders")
 
 
 class RailUnderAbutmentTest(unittest.TestCase):
@@ -860,6 +920,69 @@ class DirtTest(unittest.TestCase):
                                  "the synthetic tilt raises a road edge at most four centimetres")
 
 
+class DirtNoiseTest(unittest.TestCase):
+    """earthfast.DirtNoise (dirtnoise.rs): the dirt profile's random numbers, the same bits on every platform (numpy's
+    Generator's normal and poisson called the platform's C maths library, GitHub #1169)."""
+
+    def setUp(self):
+        import fast
+        fast.require(470, "DirtNoise")
+        self.ef = fast._ef
+
+    def test_splitmix64_reference(self):
+        # Vigna's splitmix64.c, seed 1234567: first output 6457827717110365317; a uniform is its top 53 bits / 2^53
+        self.assertEqual(self.ef.DirtNoise(1234567).uniform(0.0, 1.0), (6457827717110365317 >> 11) / 2.0 ** 53)
+
+    def test_pinned_bits(self):
+        bits = lambda a: [float(v).hex() for v in np.atleast_1d(a)]
+        r = self.ef.DirtNoise(42)
+        got = (bits(r.uniform(3.0, 6.0)), bits(r.normals(3)), r.poisson(5.0), r.poisson(80.0),
+               bits(r.uniforms(-1.0, 1.0, 2)), r.poisson(0.3))
+        self.assertEqual(got, PINNED_DIRT_NOISE)
+
+    def test_the_draws_have_their_moments(self):
+        r = self.ef.DirtNoise(7)
+        x = r.normals(200_000)
+        self.assertLess(abs(float(x.mean())), 0.01)
+        self.assertLess(abs(float(x.var()) - 1.0), 0.015)
+        self.assertLessEqual(float(np.abs(x).max()), 6.0)
+        u = r.uniforms(2.0, 5.0, 100_000)
+        self.assertGreaterEqual(float(u.min()), 2.0)
+        self.assertLess(float(u.max()), 5.0)
+        self.assertLess(abs(float(u.mean()) - 3.5), 0.02)
+        for lam in (0.3, 1.0, 4.0, 31.0, 33.0, 95.0, 400.0):    # (chunks of at most 32: 33 is the first split)
+            k = np.array([r.poisson(lam) for _ in range(20_000)], np.float64)
+            self.assertLess(abs(float(k.mean()) - lam), 4.0 * math.sqrt(lam / len(k)), lam)
+            self.assertLess(abs(float(k.var()) / lam - 1.0), 0.06, lam)
+        self.assertEqual(r.poisson(0.0), 0)
+        with self.assertRaises(ValueError):
+            r.poisson(float("nan"))
+        with self.assertRaises(ValueError):
+            r.uniform(1.0, float("inf"))
+
+    def test_the_dirt_profile_draws_no_numpy_randoms(self):
+        import inspect
+        for fn in (grading.dirt_bumps, grading.dirt_bank):
+            self.assertNotIn("np.random", inspect.getsource(fn), fn.__name__)
+
+    def test_the_damage_is_pinned(self):
+        # the whole profile for one road, both switches on: a moved draw (another stream order, a platform's maths)
+        # changes these bits
+        xy = np.stack([np.arange(300, dtype=np.float64) * 2.0 + 1234.5, np.full(300, -877.25)], axis=1)
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        with unittest.mock.patch.object(grading, "DIRT_ROUGH", 1.0), \
+                unittest.mock.patch.object(grading, "DIRT_BANK_M", 0.015):
+            b = grading.dirt_bumps(xy, sp, len(xy))
+            lean = grading.dirt_bank(xy, sp)
+        import hashlib
+        self.assertEqual(hashlib.sha1(b.tobytes() + lean.tobytes()).hexdigest()[:16], PINNED_DIRT_PROFILE)
+
+
+PINNED_DIRT_NOISE = (["0x1.4e61659ca3f09p+2"], ["-0x1.1f4f328577338p+0", "-0x1.cfc1194c04938p-1", "0x1.94d6e0146acf0p+0"],
+                     4, 79, ["-0x1.37fba1759aee4p-1", "-0x1.92d6b49cfcc7cp-1"], 0)
+PINNED_DIRT_PROFILE = "3a1ebc7c11dd161a"
+
+
 class GraderTest(unittest.TestCase):
     def setUp(self):
         # (no measured road heights' provider: a test that made a Server (test_areas, test_fargeo) left one set, and
@@ -990,7 +1113,8 @@ class ChainTest(unittest.TestCase):
     def plans(self, on):
         # A ends at the junction (0, 0) where B goes on straight and C branches off 31 degrees to the left
         f = features([[(-300, 0), (0, 0)], [(0, 0), (300, 0)], [(0, 0), (200, 120)]], ["primary"] * 3)
-        with unittest.mock.patch.object(grading, "CHAIN_ON", on):
+        # (the road laws off: they would ease the bump of the parts smoothed alone too, the case this compares with)
+        with unittest.mock.patch.object(grading, "CHAIN_ON", on), unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False):
             g = grading.Grader(FRAME, FakeMD(f), self.hill)
             return {fid: p for fid, p in g._cell_plans(mapcells.cell_of(LAT, LON))}
 
@@ -1014,7 +1138,7 @@ class ChainTest(unittest.TestCase):
         coff = np.array([0, 2, 4, 6, 8], np.int64)
 
         def ext(roads, cls=(1, 1, 1, 1), reach=50.0):
-            pts, off = fast._ef.chain_extensions(
+            pts, off, _which = fast._ef.chain_extensions(
                 cxy, coff, np.array(cls, np.int64), np.array(roads, np.int64), np.array([[0.0, 0.0]]),
                 np.array([[1.0, 0.0]]), np.array([1], np.int64), np.array([7], np.int64), np.array([reach]),
                 1.0, 35.0, 10.0)
@@ -1107,6 +1231,76 @@ class OverTunnels(unittest.TestCase):
         self.assertIsNone(grading.Grader._over_tunnels(g, np.array([50.0]), np.array([30.0])))
 
 
+class RoadOverTunnelTest(unittest.TestCase):
+    """A road crossing over a covered tunnel keeps its own cutting over the tube; the tunnel's own road (its approaches)
+    still leaves the ground over the tube uncut. The stage road over the A25's twin tubes at Popoli (2026-11-14): its
+    cutting was undone in a strip over each tube, the hillside standing back up across the road."""
+
+    def setUp(self):
+        from test_roads import M_LON, M_LAT
+
+        def ground(la, lo):
+            e = (np.asarray(lo) - LON) * M_LON                          # along the tunnel, -500 .. 500
+            n = (np.asarray(la) - LAT) * M_LAT
+            hill = 100.0 + 60.0 * np.clip(1.0 - np.abs(e) / 400.0, 0.0, 1.0)
+            return hill + 6.0 * np.exp(-(n / 8.0) ** 2)                 # a bump on the line of the road across
+        self.ground = ground
+
+    def change(self, f, pts):
+        g = grading.Grader(FRAME, FakeMD(f), self.ground)
+        e = np.array([p[0] for p in pts], np.float64)
+        n = np.array([p[1] for p in pts], np.float64)
+        la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.0)
+        base = self.ground(la, lo)
+        return g.apply(la, lo, base.copy()) - base
+
+    def tunnel(self, crossing=True):
+        lines = [[(-500, 0), (500, 0)]] + ([[(0, -150), (0, 150)]] if crossing else [])
+        return features(lines, ["primary", "secondary"][:len(lines)], flags=[(0, "is_tunnel", 0.25, 0.75)],
+                        ids=["tube", "across"][:len(lines)])
+
+    def test_the_road_across_keeps_its_cutting_over_the_tube(self):
+        d = self.change(self.tunnel(), [(0.0, 0.0), (0.0, 3.0)])
+        self.assertLess(float(d[0]), -2.0, "the bump under the road's centre cut away, as on any road")
+        self.assertLess(float(d[1]), -2.0, "... and under its lane edge")
+
+    def test_the_tunnels_own_road_does_not_cut_over_the_tube(self):
+        # (every 2 m: the approach's cutting reached ~6 m in over the cover, between samples 20 m apart)
+        pts = [(x, y) for x in range(-246, 247, 2) for y in (-4.0, 0.0, 4.0)]
+        d = self.change(self.tunnel(crossing=False), pts)
+        self.assertGreater(float(d.min()), -grading.OVER_TUNNEL_SMALL_M, "the ground over the tube not cut down")
+
+    def test_own_roads_per_cell(self):
+        # (each cell's verdict from its own plans: a road ending at an end of a tunnel's plans (a portal, or a join
+        # between its sections: the Peripherique's trunk reaches its tube at one) is its approach; one ending 3.5 m off
+        # an end, or crossing over the tube, is not)
+        import threading
+
+        def plan(*xy):
+            return grading.Plan(np.array(xy, np.float64), np.zeros(len(xy)), 3.0)
+        tag = grading.TUNNEL_TAG
+        ps = [("g.0#1" + tag, plan((0, 0), (100, 0))),                 # a section, its ends joins
+              ("g.0#1" + tag + "m0", plan((0, 0), (4, 0))),            # mouth: portal at (0, 0), inner end (4, 0)
+              ("g", plan((-50, 0), (150, 0))),                         # the tunnel's own way
+              ("approach", plan((-80, 0), (0.5, 0))),                  # ends 0.5 m from the portal
+              ("at_join", plan((100, 40), (100, 0.5))),                # ends at the section's far join
+              ("at_inner", plan((4, 40), (4, 0.5))),                   # ends at the mouth plan's inner end
+              ("off_end", plan((40, 40), (40, 3.5))),                  # ends beside the tube, 3.5 m off its line
+              ("across", plan((50, -100), (50, 100)))]                 # crosses over the tube
+        g = types.SimpleNamespace(lock=threading.Lock(), cells={"c": ps}, _cell_plans=lambda k: ps)
+        got, own = grading._Planner._cell_own_roads(g, "c")
+        self.assertIs(got, ps)
+        self.assertEqual({f for f, _x, _y in own},
+                         {"g.0#1" + tag, "g.0#1" + tag + "m0", "g", "approach", "at_join", "at_inner"})
+        self.assertIs(grading._Planner._cell_own_roads(g, "c")[1], own, "made once per cell")
+
+    def test_a_tunnel_plans_feature(self):
+        # (a tunnel's plans are named for its sections, the map part's id (roads: f"{fid}.{n}") then "#k")
+        self.assertEqual(grading._tunnel_feature("35f45a70-54b2.9398624#1:tunm1"), "35f45a70-54b2")
+        self.assertEqual(grading._tunnel_feature("eeb16a87.0#0:tun"), "eeb16a87")
+        self.assertEqual(grading._tunnel_feature("tube"), "tube")
+
+
 class WallHeightTest(unittest.TestCase):
     def test_city_concrete_walls_full_height(self):
         """A major road's cutting in town keeps a full-height concrete wall (McGraw-Graben); stone walls elsewhere
@@ -1121,15 +1315,24 @@ class WallHeightTest(unittest.TestCase):
 
 
 class UnderpassTest(unittest.TestCase):
+    SPAN = 40.0         # m: the motorway bridges these tests draw
+
+    @classmethod
+    def deck_drop(cls):
+        """m the road under such a bridge is dug under its deck: the deck's own clearance (its depth is its span's:
+        roads.deck_road_clear) and the road's lift, within the maximum excavation depth."""
+        clear = roads.deck_road_clear(roads.deck_depth(cls.SPAN)) + grading.ROAD_LIFT
+        return min(clear, grading.UNDER_MAX_DROP_M)
+
     def test_road_dips_under_a_motorway_overpass(self):
         """A local road crossing under a short motorway bridge whose terrain was interpolated at deck height (lidar
-        with the bridge removed) dips to the deck minus UNDER_CLEAR_M; a road crossing nothing is left alone."""
+        with the bridge removed) dips to the deck minus the bridge's clearance; a road crossing nothing is left alone."""
         f = features([[(-200, 0), (200, 0)], [(0, -20), (0, 20)], [(-200, 300), (200, 300)]],
                      ["residential", "motorway", "residential"], flags=[(1, "is_bridge")])
         g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 195.0, 0.0]), np.array([0.0, 0.0, 300.0]), 0.0)
         out = g.apply(la, lo, np.full(3, 10.0))
-        self.assertAlmostEqual(float(out[0]), 10.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M),
+        self.assertAlmostEqual(float(out[0]), 10.0 - self.deck_drop(),
                                delta=0.3, msg="under the deck, within the maximum excavation depth")
         self.assertAlmostEqual(float(out[1]), 10.0, delta=0.1, msg="back up past the ramp")
         # the ramp: no steeper than UNDER_GRADE, and no kinks (the grade changes smoothly)
@@ -1151,7 +1354,7 @@ class UnderpassTest(unittest.TestCase):
     def test_an_overpass_mapped_in_parts_is_one_span(self):
         """An overpass mapped as two ways end to end, or ending on the carriageways' fork (3 m stubs: the M1 near
         Dundalk, GitHub #960): the road under dips as under one part; off, it kept its ground (the bug)."""
-        deep = 10.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
+        deep = 10.0 - self.deck_drop()
         halves = [[(5, -20), (5, 3)], [(5, 3), (5, 20)]]
         fork = [[(5, -20), (5, 20)], [(5, 20), (3, 23)], [(5, 20), (7, 23)]]
         for name, lines in (("two halves", halves), ("a fork at its end", fork)):
@@ -1178,8 +1381,32 @@ class UnderpassTest(unittest.TestCase):
         steep, z0 = grade()
         self.assertLess(z0, 10.0 - 1.5, "(the case: the junction dug)")
         self.assertLessEqual(steep, grading.UNDER_MAX_GRADE + 0.01)
-        with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5):
+        with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5),                 unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False):     # (they would ease the bug's step)
             self.assertGreater(grade()[0], 0.3, "(0.5 m: a step, the bug)")
+
+    def _long_deck_z(self, cross_y, length=500.0):
+        """The height of a residential road crossing under a `length` m motorway deck (no carriageway profile) at
+        cross_y m along it, with the motorway's own ground road either side; the ground is flat at 10 m."""
+        f = features([[(-300, cross_y), (300, cross_y)], [(0, 0), (0, length)], [(0, -260), (0, 0)],
+                      [(0, length), (0, length + 260)]], ["residential", "motorway", "motorway", "motorway"],
+                     flags=[(1, "is_bridge")])
+        g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([float(cross_y)]), 0.0)
+        return float(g.apply(la, lo, np.full(1, 10.0))[0])
+
+    def test_a_road_near_the_end_of_a_long_deck_dips(self):
+        """A road crossing under a deck longer than UNDER_MAX_BRIDGE_M (a viaduct, a long ramp) near one of its ends:
+        the deck there is no higher than it climbs from the abutment, so the road kept its ground under a ceiling a
+        truck did not fit (Popoli's SS17 ramps under the A25's viaduct, Boston's Storrow Drive ramps under the Bowker
+        Overpass: reference trucks in the deck). It dips as under a short one, by the climb from that end alone; in
+        the long deck's middle it is left as it was; BNE_UNDERPASS_LONG=off (UNDER_LONG_ON): as before."""
+        for y in (90.0, 410.0):             # (near either end of the 500 m deck)
+            with self.subTest(y=y):
+                self.assertLess(self._long_deck_z(y), 10.0 - 2.0, "(under the deck's end, dug)")
+                with unittest.mock.patch.object(grading, "UNDER_LONG_ON", False):
+                    self.assertAlmostEqual(self._long_deck_z(y), 10.0, delta=0.1, msg="(off: no dip, the bug)")
+        self.assertAlmostEqual(self._long_deck_z(250.0), 10.0, delta=0.1,
+                               msg="the middle of a long deck is not modelled")
 
     def test_merge_span_chains(self):
         a = np.array([[0.0, 0.0], [10.0, 0.0]])
@@ -1208,12 +1435,12 @@ class UnderpassTest(unittest.TestCase):
         UNDER_SEA_M over the sea's surface, whose water tiles flood any ground under it; higher up it is as deep as
         before, and ground already under the sea (a polder) is dug as before."""
         floor = grading.seatiles.SEA_E + grading.UNDER_SEA_M
-        self.assertGreater(min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M), 3.0 - floor, "(the case digs)")
+        self.assertGreater(self.deck_drop(), 3.0 - floor, "(the case digs)")
         self.assertAlmostEqual(self._dip_at(3.0), floor, delta=0.1, msg="by the sea: dug to the floor, not under it")
         self.assertLess(self._dip_at(3.0), 3.0 - 1.0, "still dug where there is room")
-        deep = 30.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
+        deep = 30.0 - self.deck_drop()
         self.assertAlmostEqual(self._dip_at(30.0), deep, delta=0.3, msg="high ground: as deep as before")
-        polder = -4.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
+        polder = -4.0 - self.deck_drop()
         self.assertAlmostEqual(self._dip_at(-4.0), polder, delta=0.3, msg="a polder: as before")
         with unittest.mock.patch.object(grading, "UNDER_SEA_ON", False):
             self.assertLess(self._dip_at(3.0), grading.seatiles.SEA_E, "(off: under the sea, the reported bug)")
@@ -1253,7 +1480,12 @@ class UnderDipTest(unittest.TestCase):
         self.assertIsNone(grading.under_dip(d, 4.0, (20.0, 300.0)), "no room even at UNDER_MAX_GRADE")
 
 
+# (the legacy pass's own behaviour, pinned: under BNE_SHAPES the deck's rise is the shapes' and findground's cost law is asked
+# of every span, which prices a rise the frontage roads would hold down as free: a motorway under a deck whose ramps cannot
+# rise is the legacy pass's dip, as these tests hold)
+@unittest.mock.patch.object(grading, "SHAPES_ON", False)
 class UnderpassShortfallTest(unittest.TestCase):
+    @unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False)     # (the dip's own rule; a motorway's laws lengthen it)
     def test_road_under_gives_way_for_what_the_ramps_could_not_raise(self):
         """A local road's bridge over a motorway (the motorway never rises): with room for its ramps the overpass rises
         and the motorway stays; with frontage roads hugging both ends (the ramps held down) the motorway dips under it
@@ -1327,7 +1559,10 @@ class UnderpassShortfallTest(unittest.TestCase):
         roads under were dug 2.8-3.8 m, and their slip roads beside them not, a step between them."""
         lines = [[(-300, 0), (300, 0)], [(0, -28), (0, 28)], [(0, -260), (0, -28)], [(0, 28), (0, 260)]]
         classes = ["residential", "motorway", "motorway", "motorway"]
-        top = 9.0       # the embankment over the road under; its slopes from 20 m to 40 m either side of the road
+        depth = roads.deck_depth(56.0)
+        # the embankment over the road under, 0.6 m over the deck's clearance (room enough for the deck to clear the
+        # road); its slopes from 20 m to 40 m either side of the road
+        top = roads.deck_road_clear(depth) + grading.ROAD_LIFT + 0.6
 
         def elev(la, lo):
             e, n, _ = FRAME.geodetic_to_enu(la, lo, 0.0)
@@ -1340,7 +1575,6 @@ class UnderpassShortfallTest(unittest.TestCase):
             return g.apply(la, lo, elev(la, lo))
         deck_end, under = (float(v) for v in z_at([0.0, 0.0], [28.0, 0.0]))
         self.assertGreater(deck_end, 10.0 + top - 0.5, "(the deck's end on its embankment)")
-        depth = roads.deck_depth(56.0)
         self.assertGreater(deck_end - 10.0, roads.deck_road_clear(depth) + grading.ROAD_LIFT, "(room enough)")
         self.assertAlmostEqual(under, 10.0, delta=0.3, msg="the road under keeps its ground")
         with unittest.mock.patch.object(grading, "ABUT_FILL_ON", False):
@@ -1376,8 +1610,36 @@ class StreetRunsTest(unittest.TestCase):
                                                 [(0, 300), (0, 0)])]
         self.assertEqual(grading.street_runs(ring, ["tertiary"] * 4, [(0, 150.0, 5.0)]), ([(0, 150.0, 5.0)], []))
 
+    def test_a_dead_end_does_not_hold_the_dip_at_the_ground(self):
+        """Popoli's service road under the railway (2026-11-16): its west end, 38 m from the crossing, joins nothing; held
+        there the dip was 0.2 m deep. Free (free: a dead end), the run goes on straight past it by the longest ramp, and
+        the crossing keeps its arc along the run's start; a loose end that touches a line is held as before."""
+        lines = [np.array([(0.0, 0.0), (200.0, 0.0)]), np.array([(200.0, 0.0), (200.0, 200.0)]),
+                 np.array([(200.0, 0.0), (400.0, 0.0)])]
+        cls = ["service"] * 3
+        req = [(0, 38.0, 5.0)]
+        net, runs = grading.street_runs(lines, cls, req)
+        self.assertEqual(net, req, "(held at its dead end: no room for the dip, spread as before)")
+        touch = [np.asarray(ln) for ln in lines]
+        net, runs = grading.street_runs(lines, cls, req, free=lambda q, own: grading.dead_end(q, own, touch))
+        self.assertEqual(net, [])
+        xy, members, reqs = runs[0]
+        ext = grading.UNDER_MAX_DROP_M * np.pi / (2 * grading.UNDER_GRADE) + grading.UNDER_FLAT_M
+        np.testing.assert_allclose(xy[0], (-ext, 0.0))
+        np.testing.assert_allclose(xy[-1], (200.0, 0.0), err_msg="(the junction end held)")
+        self.assertAlmostEqual(reqs[0][1], ext + 38.0)
+        off = grading.underpass_offsets([xy], reqs, [(0, np.array([[38.0, 0.0]]))])[0]
+        self.assertLess(float(off[0]), -4.0, "the dip about as deep as asked at the crossing")
+        wall = touch + [np.array([(-2.0, -5.0), (-2.0, 5.0)])]          # (a line 2 m past the end: no dead end)
+        self.assertFalse(grading.dead_end(lines[0][0], lines[0], wall))
 
+
+# (the legacy pass's own behaviour, pinned: under BNE_SHAPES the deck's rise is the shapes' and findground's cost law is asked
+# of every span, which prices a rise the frontage roads would hold down as free: a motorway under a deck whose ramps cannot
+# rise is the legacy pass's dip, as these tests hold)
+@unittest.mock.patch.object(grading, "SHAPES_ON", False)
 class CoarseUnderpassTest(unittest.TestCase):
+    @unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False)     # (the dip's own rule; the laws lengthen its ramps)
     def test_a_street_dip_stays_on_the_street_on_coarse_elevation(self):
         """Samara (2026-11-02): on the 30 m model a street under a bridge whose ramps the frontage roads hold down dips
         between its own junctions only, as deep as fits there (UNDER_RUN_*); the side streets stay at their ground.
@@ -1550,6 +1812,39 @@ class DirtEndsTest(unittest.TestCase):
         xy = np.stack([np.arange(0.0, 200.0, 2.0), np.zeros(100)], 1)
         self.assertIsNone(grading.dirt_bumps(xy, spec, 100))
 
+class AbutEndsTest(unittest.TestCase):
+    """Which road ends lead onto a bridge (_Planner._abut_ends): those within APPROACH_TOUCH_M of its end, except a
+    junction behind a ground part that reaches the end itself. Riva del Garda, Via Gardesana: a way's 1.03 m of ground
+    between a junction and its bridge; the junction's three roads (the approach, the stub, a side road) and the stub's
+    own start all stood within 2.5 m of the bridge's end, so all were abutments, held at their own heights: the stub
+    took the hillside's raw 28 % fall in its metre (0.86 m under the approach at the same node) and the approach's
+    8 % under-deck ground stood over the stub's own surface. With the game's abutment slope under decks (native 306)
+    the stub's own fall showed: a 0.30 m step into a primary road's bridge."""
+
+    def touch(self, pe, bridge_end=(0.0, 0.0)):
+        key = mapcells.cell_of(LAT, LON)
+        planner = types.SimpleNamespace(frame=FRAME, _cell_enu=lambda home, ground=True: {"ends": np.array([bridge_end])})
+        return grading._Planner._abut_ends(planner, key, np.array(pe, np.float64)).tolist()
+
+    def test_a_junction_behind_a_stub_is_no_abutment(self):
+        # (the junction J 1.05 m before the bridge's end: the approach ends there, a stub runs on from it to the
+        # bridge's end, a side road starts there)
+        got = self.touch([[-60.0, 0.0], [-1.05, 0.0],         # the approach: start, end at J
+                          [-1.05, 0.0], [0.04, 0.0],          # the stub: J, the bridge's end
+                          [-1.05, 0.0], [30.0, 30.0]])        # the side road: J, far
+        self.assertEqual(got, [False, False, False, True, False, False])
+
+    def test_a_road_ending_short_of_the_bridge_still_leads_onto_it(self):
+        # (no end at the bridge's end: the map's gaps, up to APPROACH_TOUCH_M, stay abutments)
+        got = self.touch([[-60.0, 0.0], [-2.0, 0.0], [0.0, 40.0], [0.0, 1.5]])
+        self.assertEqual(got, [False, True, False, True])
+
+    def test_two_roads_ending_at_the_bridge_both_lead_onto_it(self):
+        # (a bridge between two carriageways' ends: each its own abutment)
+        got = self.touch([[-60.0, 0.0], [-0.3, 0.0], [0.0, 40.0], [0.2, 0.9]])
+        self.assertEqual(got, [False, True, False, True])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -1633,5 +1928,424 @@ class ContinuationHoldTest(unittest.TestCase):
         self.assertNotEqual(ra.tolist(), rb.tolist())
 
 
+class RailDeckHeightTest(unittest.TestCase):
+    """Compiegne (49.4222 N 2.8068 E): a street under the railway's 7 m bridge. The shapes put the deck at the ground
+    of its mapped ends, down the slopes of the street's cutting, and the track's level found beyond them: 37.3 m where
+    the railways lay its bed at 40.1 (a neighbouring deck's level carried along the line), the deck drawn there. The
+    street was dug for the shapes' deck, 8.75 m under the drawn one where 6.15 m clears it, and the track's fill beside
+    it stood 10.5 m tall. A street meeting a bridge within railways.AT_GRADE_END_M of its structure's end (here 3.5 m)
+    meets it at grade: no road dips in so few metres (asked to, the roundabout there scored 3.9 -> 41.4 on the
+    drivability ratchet: grades of 40 %), so findground's cost law is not asked and the track rises over the street,
+    which stays on its ground; the same law says the street goes down under a bridge long enough to dip it
+    (test_findground)."""
+
+    def setup_street(self):
+        import railprofile
+        railprofile._NODES.clear()
+        f = features([[(-600.0, 0.0), (-3.5, 0.0)], [(-3.5, 0.0), (3.5, 0.0)], [(3.5, 0.0), (600.0, 0.0)],
+                      [(0.0, -150.0), (0.0, 150.0)]],
+                     ["standard_gauge"] * 3 + ["secondary"], subtypes=["rail"] * 3 + ["road"],
+                     flags=[(1, "is_bridge")], ids=["r0", "r1", "r2", "street"])
+        return f, lambda la, lo: np.full(np.shape(la), 30.0)
+
+    def test_the_track_rises_over_the_street_at_a_bridge_too_short_to_dip_it_under(self):
+        import railprofile
+        import railways
+        f, elev = self.setup_street()
+        g = grading._Planner(FRAME, FakeMD(f), elev)
+        try:
+            bed = float(np.asarray(g._track_bed(np.array([[0.0, 0.0]])), np.float64)[0])
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 0.0, 0.0]), np.array([0.0, 60.0, 140.0]), 0.0)
+            z = np.asarray(grading.Grader(FRAME, FakeMD(f), elev).apply(la, lo, elev(la, lo), grading.ROAD_LIFT), np.float64)
+        finally:
+            railprofile._NODES.clear()
+        underside = bed - (railways.DECK_D - railways.BALLAST_H)    # (the railways' bed, the deck drawn on it)
+        headroom = grading._gsh.HEADROOM_M + grading._gsh.HEADROOM_MARGIN_M
+        self.assertGreater(bed, 30.0 + headroom, "the track rises over the street")
+        self.assertGreaterEqual(underside - float(z[0]), headroom - 0.1, "and clears it")
+        self.assertAlmostEqual(float(z[0]), 30.0, delta=0.3, msg="the street stays on its ground")
+
+    def test_the_cost_law_is_the_same_for_the_track_and_the_street(self):
+        f, elev = self.setup_street()
+        import gradelaw
+        import railways
+        clear = grading._gsh.HEADROOM_M + grading._gsh.HEADROOM_MARGIN_M + (railways.DECK_D - railways.BALLAST_H)
+        fill = grading.findground.fill_run(clear, (3.5, 3.5), railways.GRADE)
+        dip = grading.findground.dip_run(clear, gradelaw.road_grade("secondary"))
+        self.assertGreater(fill, dip)
+        self.assertEqual(grading.findground.leaves("ground", "bridge", clear, (3.5, 3.5), railways.GRADE,
+                                                   gradelaw.road_grade("secondary")), "lower")
+
+    def test_the_railways_are_made_once_for_a_window_not_once_for_each_point_read(self):
+        # the shapes read a rail deck's height at every point of every crossing: the railways near it made for each
+        # point on its own (track_beds: its parts, its underpasses, its beds) were 98 % of Duttweiler Bruecke's shapes'
+        # time; made once for the box of all the net's tracks they were a Shanghai region's 1,209 of 1,305 CPU s (the
+        # box 16 x 7.5 km, 1,748 lattice nodes, for a few hundred points read). Made once for each window cell a
+        # point lies in and read at each point: the very heights, and a point read again (another crossing's, another
+        # system's, another region's) makes nothing
+        import railprofile
+        import railways
+        railprofile._NODES.clear()
+        f = features([[(-600.0, 0.0), (-3.5, 0.0)], [(-3.5, 0.0), (3.5, 0.0)], [(3.5, 0.0), (600.0, 0.0)],
+                      [(0.0, -150.0), (0.0, 150.0)]],
+                     ["standard_gauge"] * 3 + ["secondary"], subtypes=["rail"] * 3 + ["road"],
+                     flags=[(1, "is_bridge")], ids=["r0", "r1", "r2", "street"])
+
+        def elev(la, lo):
+            return np.full(np.shape(la), 30.0) + 0.01 * (np.asarray(lo) - LON) * 1e3
+        g = grading._Planner(FRAME, FakeMD(f), elev)
+        line = np.array([[-600.0, 0.0], [-3.5, 0.0]])
+        net = grading._gsh.Net([grading._gsh.Member(("rail", "rail", "r0", -600, 0, -4, 0), line, "rail", "rail", None,
+                                                    0.0, 2.0, None)])
+        made = []
+        real = railways.track_beds
+
+        def counted(*a, **k):
+            made.append(1)
+            return real(*a, **k)
+        sv = [float(v) for v in np.arange(5.0, 590.0, 5.5)]
+        tiles = {int(np.floor((v - 600.0) / grading.RAIL_WINDOW_M)) for v in sv}
+        try:
+            with unittest.mock.patch.object(railways, "track_beds", counted):
+                tops = {}
+                got = []
+                for part in (sv[:40], sv[30:80], sv[80:], sv):       # (crossings reading the same deck again)
+                    got = g._rail_tops(net, 0, part, tops)
+                self.assertEqual(len(made), len(tiles), "the railways of each of the deck's %d windows made once for all "
+                                 "%d points" % (len(tiles), len(sv)))
+                made.clear()
+                alone = [float(g._track_bed(np.array([[v - 600.0, 0.0]]), "r0")[0]) for v in sv[::13]]
+                self.assertEqual(len(made), 0, "(each of these on its own read the windows made)")
+        finally:
+            railprofile._NODES.clear()
+        self.assertTrue(all(z is not None and np.isfinite(z) for z in got), "the railways lay the deck's track")
+        for z, bed in zip(got[::13], alone):
+            self.assertEqual(z, bed + railways.RAIL_TOP_M, "a point's bed is the same read among the deck's or alone")
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShapeHoldTest(unittest.TestCase):
+    """The road laws hold a road where an interchange's shape set its height, and keep it within a cut's ceiling or
+    over a fill's floor where the shape set nothing (shape_heights): Popoli, two pieces of a roundabout under two
+    cuts' ceilings 1.7-2.4 m over them, held there at their bases 0.93 m apart at their joint, and the primary leaving
+    at the joint pinned to that step (17.7 % against its 9 %): its network had no answer and was left as it was."""
+
+    def laws(self, ceiling_m, step_m=0.93):
+        x = np.arange(-40.0, 0.1, 4.0)
+        a = grading.Plan(np.c_[x, 0 * x], 100.0 + 0 * x, 5.0, road_half=4.0)            # (flat to the joint)
+        x2 = np.arange(0.0, 40.1, 4.0)
+        b = grading.Plan(np.c_[x2, 0 * x2], 100.0 + step_m - 0.06 * x2, 5.0, road_half=4.0)   # (over a's end)
+        u = np.array([math.cos(math.radians(14.0)), math.sin(math.radians(14.0))])
+        t = np.arange(0.0, 48.1, 4.0)
+        side = grading.Plan(t[:, None] * u[None, :], 100.0 + 0.04 * t, 5.0, road_half=4.0)
+        a.rid, b.rid, side.rid = 1, 2, 3
+        plans = [("a", a), ("b", b), ("side", side)]
+        specs = [types.SimpleNamespace(cls="primary", kmh=None) for _p in plans]
+        # (a cut along the roundabout: its ceiling over both pieces, or at them, as _apply_shapes left them)
+        cut = {"a": a.z + ceiling_m, "b": b.z + ceiling_m}
+
+        def shape_at(line, pts, fid, modes):
+            n = len(np.asarray(pts).reshape(-1, 2))
+            if fid not in cut:
+                return np.full(n, np.nan), [None] * n
+            return np.array(cut[fid], np.float64), ["cut"] * n
+        g = types.SimpleNamespace(_decks_near=lambda key: [], _shape_at=shape_at, _map_nodes=lambda key: {})
+        bases = [np.array(p.z, np.float64) for _f, p in plans]
+        with unittest.mock.patch.object(grading, "SHAPES_ON", True):
+            with self.assertNoLogs("earthd.grading", level="ERROR"):
+                grading._Planner._road_laws(g, "14/1/1", plans, specs, bases)
+        return a, b, side, cut
+
+    def test_a_cut_over_a_road_holds_nothing_and_its_pieces_meet_with_the_side_road_on_them(self):
+        a, b, side, cut = self.laws(1.7)
+        self.assertAlmostEqual(float(a.z[-1]), float(b.z[0]), delta=0.02, msg="the joint welded")
+        self.assertAlmostEqual(float(side.z[0]), float(a.z[-1]), delta=0.02, msg="the side road on the main")
+        g_side = float(np.diff(side.z[:2])[0] / 4.0)
+        self.assertLessEqual(abs(g_side), 0.09 + 1e-3)
+        for p, f in ((a, "a"), (b, "b")):
+            self.assertLessEqual(float((p.z - cut[f]).max()), 1e-6, "under the cut's ceiling")
+
+    def test_a_cut_at_a_road_holds_it(self):
+        a, b, side, cut = self.laws(0.0, step_m=0.0)
+        np.testing.assert_allclose(a.z, cut["a"], atol=1e-9)
+        np.testing.assert_allclose(b.z, cut["b"], atol=1e-9)
+
+    def test_what_a_shape_sets(self):
+        z = np.array([10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
+        zs = np.array([11.0, 9.0, 9.0, 11.0, 12.0, np.nan, 10.0])
+        modes = ["fill", "fill", "cut", "cut", "set", None, "cut"]
+        h, put = grading.shape_heights(z, zs, modes)
+        self.assertEqual(put.tolist(), [True, False, True, False, True, False, True])
+        np.testing.assert_allclose(h, [11.0, 10.0, 9.0, 10.0, 12.0, 10.0, 10.0])
+
+    def test_a_road_ending_on_a_deck_takes_the_decks_height(self):
+        # a road's end onto a bridge (Plan.abut) is the deck's height: a fill floor under the plan, or a cut ceiling over
+        # it, set nothing along the road, but at its abutment end the deck's height stands whichever side it is
+        z = np.array([10.0, 10.0, 10.0, 10.0])
+        zs = np.array([9.0, 9.0, 11.0, 11.0])
+        modes = ["fill", "fill", "cut", "cut"]
+        h, put = grading.shape_heights(z, zs, modes)
+        self.assertEqual(put.tolist(), [False, False, False, False])
+        h, put = grading.shape_heights(z, zs, modes, (True, True))
+        self.assertEqual(put.tolist(), [True, False, False, True])
+        np.testing.assert_allclose(h, [9.0, 10.0, 10.0, 11.0])
+        h, put = grading.shape_heights(z, zs, modes, (False, False))
+        self.assertEqual(put.tolist(), [False, False, False, False])
+        h, put = grading.shape_heights(z, np.array([np.nan, 9.0, 11.0, np.nan]), [None, "fill", "cut", None], (True, True))
+        self.assertEqual(put.tolist(), [False, False, False, False], "no shape there: nothing to take")
+
+
+class ShapeSolvedOnceTest(unittest.TestCase):
+    """The regions round a system are planned on as many threads, and each found the shapes' cache empty and solved the
+    same system at the same time (Zurich Brunau: its 4 regions solved one 17-piece system 4 times, 6 of the 8 s of its
+    solves). One thread solves it, the others wait for its answer."""
+
+    def test_threads_asking_for_one_system_at_once_solve_it_once(self):
+        import threading
+        import time
+        import mapcells
+        from test_approaches import overpass, flat_elev
+        home = mapcells.cell_of(LAT, LON)
+        real = grading._gsh.solve_shape
+        calls = []
+
+        def slow(*a, **k):
+            calls.append(threading.get_ident())
+            time.sleep(0.4)
+            return real(*a, **k)
+
+        def made():
+            return grading.PlanStore(FakeMD(overpass()), flat_elev).planner_of_cell(home)
+        with unittest.mock.patch.object(grading._gsh, "solve_shape", slow):
+            one = made()
+            one._shape_region_calc(home, "a")
+            systems = len(calls)
+            self.assertGreaterEqual(systems, 1, "the overpass is a system")
+            del calls[:]
+            from ix import owner
+            owner.PROCESS.clear()      # (the process's own copy of what the first one solved)
+            two = made()
+            out = [None, None]
+
+            def ask(n):
+                out[n] = two._shape_region_calc(home, "r%d" % n)
+            threads = [threading.Thread(target=ask, args=(n,)) for n in (0, 1)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(60.0)
+        self.assertEqual(len(calls), systems, "each system solved once, not once a thread")
+        self.assertEqual(sorted(out[0]), sorted(out[1]))
+        for fid in out[0]:
+            for (xa, za, ma), (xb, zb, mb) in zip(out[0][fid], out[1][fid]):
+                self.assertEqual(ma, mb)
+                self.assertEqual(np.asarray(za).tobytes(), np.asarray(zb).tobytes(), "the very heights")
+
+
+
+class LevelWallsTest(unittest.TestCase):
+    def _pair(self, gap=9.3, dz=7.2):
+        """Goeschenen's link road over the exit ramp in its cutting (the ramp's plan: a motorway's 14 m carriageway, core
+        8 m out, rank 118, dug; the link road's: 8.3 m carriageway, core 5.15 m out, rank 116, on the ground 7.2 m up,
+        their centre lines 9.3 m apart, the carriageways overlapping 1.85 m in plan), both along x."""
+        x = np.arange(0.0, 121.0, 4.0)
+        low = grading.Plan(np.c_[x, np.zeros(len(x))], np.zeros(len(x)), 8.0, road_half=7.0)
+        low.rid, low.rank = 1, 118
+        high = grading.Plan(np.c_[x, np.full(len(x), gap)], np.full(len(x), dz), 5.15, road_half=4.15)
+        high.rid, high.rank = 2, 116
+        return [("ramp", low), ("link", high)]
+
+    def test_neither_road_is_moved_by_the_other(self):
+        """Two carriageways overlapping in plan at heights no slope bridges in the room between them meet at one line
+        (as deep in the one as in the other, 6.075 m from the ramp's centre). Each road keeps its own ground on its own
+        side of it: the ramp's lanes up to the face, the link's from the face on to its far edge. Before, the ramp's
+        lanes (and its rank's hold) reached on past the face over the link's carriageway and the link road, on the
+        ground, was dug 7.3 m under itself at its own centre line (the survey's truth replay: 66 per mille of the roads'
+        points dug)."""
+        plans = self._pair()
+        self.assertEqual(grading.level_walls(plans, [None, None]), 2)
+        low, high = plans[0][1], plans[1][1]
+        line = (9.3 + 7.0 - 4.15) / 2
+        np.testing.assert_allclose(np.asarray(low.cut)[:, 0], line)            # (the link on its left)
+        np.testing.assert_allclose(np.asarray(low.cut)[:, 1], 7.2)
+        self.assertTrue(np.isnan(np.asarray(low.cut)[:, 3]).all())
+        np.testing.assert_allclose(np.asarray(high.cut)[:, 3], 9.3 - line)       # (its fall: the same line)
+        self.assertTrue(np.isnan(np.asarray(high.cut)[:, 4]).all())
+        y = np.arange(-6.0, 15.01, 0.25)
+        z = grading.grade_points(np.full(len(y), 60.0), y, np.full(len(y), 7.2), [p for _f, p in plans], lift=0.0)
+        ramp = (y <= line - 0.25) & (y >= -7.0)         # (the ramp's lanes: up to its face)
+        self.assertLess(float(np.abs(z[ramp]).max()), 0.05, np.round(z, 2).tolist())
+        link = (y >= line + 0.75) & (y <= 9.3 + 4.15)   # (the link's lanes from the face on, a yield ramp past it)
+        self.assertLess(float(np.abs(z[link] - 7.2).max()), 0.05, np.round(z, 2).tolist())
+
+    def test_one_level_and_far_apart_unchanged(self):
+        """The link 1.5 m over the ramp (one level: WALL_CUT_M), or 30 m from it (their grounds clear of each other): no
+        line between them, the plans as they were."""
+        for gap, dz in ((9.3, 1.5), (30.0, 7.2)):
+            plans = self._pair(gap, dz)
+            self.assertEqual(grading.level_walls(plans, [None, None]), 0)
+            self.assertIsNone(plans[0][1].cut)
+            self.assertIsNone(plans[1][1].cut)
+
+    def test_the_line_is_the_walls_one(self):
+        """level_boundary, the grading's and the walls' (roads.retaining_walls) one line: from each road's centre, the
+        lower's face and the higher's fall at the same place, nothing at one level or apart."""
+        face, fall = grading.level_boundary(9.3, 7.0, 8.0, 4.15, 5.15, 7.2)
+        self.assertAlmostEqual(float(face), 6.075)
+        self.assertTrue(np.isnan(fall))
+        face, fall = grading.level_boundary(9.3, 4.15, 5.15, 7.0, 8.0, -7.2)
+        self.assertTrue(np.isnan(face))
+        self.assertAlmostEqual(float(fall), 9.3 - 6.075)
+        self.assertTrue(np.isnan(grading.level_boundary(9.3, 7.0, 8.0, 4.15, 5.15, 1.5)).all())
+        self.assertTrue(np.isnan(grading.level_boundary(30.0, 7.0, 8.0, 4.15, 5.15, 7.2)).all())
+
+
+class AbutmentWallsTest(unittest.TestCase):
+    """A deck's end standing on another road's carriageway at another level (Boston's Bowker Overpass over Storrow Drive: the
+    deck's end 6.4 m from the centre line of a road whose carriageway reaches 11 m each side, 10 m under it). The higher-
+    ranked road's hold reached over the approach's core, and the embankment, planned up to the deck's height, fell to the
+    road's level over its last metres: a 4-6 m step against the deck's top at its end."""
+
+    def _plans(self, tilt=0.0, low_z=1.6, gap=6.4):
+        x = np.arange(-60.0, 61.0, 4.0)
+        low = grading.Plan(np.c_[x, np.zeros(len(x))], np.full(len(x), low_z), 12.0, road_half=11.0)
+        low.rid, low.rank = 1, 118
+        y = np.arange(46.0, gap - 0.01, -3.9)
+        y = np.r_[y[y > gap], gap]
+        xy = np.c_[np.zeros(len(y)), y]
+        if tilt:
+            th = np.radians(tilt)
+            rot = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+            xy = (xy - [0.0, gap]) @ rot.T + [0.0, gap]
+        app = grading.Plan(xy, np.linspace(7.5, 11.74, len(y)), 5.7, abut=(False, True), road_half=2.7)
+        app.rid, app.rank = 2, 114
+        return [("approach", app), ("road", low)]
+
+    def _ground(self, xy):
+        return np.full(len(xy), 7.4)        # (the road, at 1.6, in a cutting 5.8 m deep)
+
+    def _at_end(self, plans, back):
+        """The graded ground m back from the deck's end along the approach (negative: under the deck)."""
+        xy = np.asarray(plans[0][1].xy)
+        d = (xy[-1] - xy[-2]) / np.hypot(*(xy[-1] - xy[-2]))
+        pts = xy[-1][None, :] - np.asarray(back, np.float64)[:, None] * d[None, :]
+        return grading.grade_points(pts[:, 0], pts[:, 1], np.full(len(pts), 7.4), [p for _f, p in plans])
+
+    def test_the_ground_meets_the_deck_at_its_end(self):
+        for tilt in (0.0, 20.0):
+            plans = self._plans(tilt)
+            deck_z = float(plans[0][1].z[-1])
+            with unittest.mock.patch.object(grading, "ABUT_WALLS_ON", False):
+                before = self._at_end(plans, [0.0, 1.0])
+            self.assertLess(float(before.max()), deck_z - 3.0, "the road's hold over the approach's last metres")
+            self.assertEqual(grading.abutment_walls(plans, [None, None], self._ground), 1)
+            back = np.array([0.0, 1.0])
+            a = plans[0][1]
+            grade = (a.z[-1] - a.z[-2]) / float(np.hypot(*(np.asarray(a.xy)[-1] - np.asarray(a.xy)[-2])))
+            after = self._at_end(plans, back)            # (the approach's own height back along it, its grade)
+            self.assertLess(float(np.abs(after - (deck_z - grade * back)).max()), 0.35, (tilt, np.round(after, 2).tolist()))
+
+    def test_the_wall_is_the_roads_and_ends_its_lanes_at_the_approach(self):
+        plans = self._plans()
+        grading.abutment_walls(plans, [None, None], self._ground)
+        self.assertIsNone(plans[0][1].cut, "the approach keeps its own ground")
+        cut = np.asarray(plans[1][1].cut)
+        near = np.isfinite(cut[:, 0])           # (the approach is on the road's left: it runs along +x, the approach at y > 0)
+        self.assertTrue(near.any() and not np.isfinite(cut[:, 3]).any())
+        np.testing.assert_allclose(cut[near, 1], plans[0][1].z[-1])        # (its top: the deck's height)
+        self.assertLessEqual(float(cut[near, 0].max()), 6.4 + 5.7 - grading.WALL_FLAT_M)   # (the end's edge nearest the segment)
+        self.assertAlmostEqual(float(cut[near, 0].min()), 6.4 - grading.WALL_FLAT_M)        # (the end line at its nearest, a grid step under the deck)
+
+    def test_one_level_clear_roads_and_off_the_carriageway_are_left_alone(self):
+        for kw in (dict(low_z=10.0), dict(gap=12.0)):      # (one level: WALL_CUT_M; the end past the carriageway's edge)
+            plans = self._plans(**kw)
+            self.assertEqual(grading.abutment_walls(plans, [None, None], self._ground), 0, kw)
+            self.assertIsNone(plans[1][1].cut)
+        plans = self._plans()
+        plans[0][1].abut = (False, False)               # (no deck at its end)
+        self.assertEqual(grading.abutment_walls(plans, [None, None], self._ground), 0)
+        plans = self._plans()                           # (the approach on its ground: a lid's deck over its trench street)
+        self.assertEqual(grading.abutment_walls(plans, [None, None], lambda xy: np.full(len(xy), 11.0)), 0)
+        plans = self._plans(low_z=5.0)                  # (the road 6.7 m under it, but on its ground: no cutting)
+        self.assertEqual(grading.abutment_walls(plans, [None, None], lambda xy: np.full(len(xy), 5.0)), 0)
+        plans = self._plans()
+        plans[1][1].rank = -1                           # (no grade rank: no hold to reach over the approach)
+        self.assertEqual(grading.abutment_walls(plans, [None, None], self._ground), 0)
+
+
+class UnderDeckTest(unittest.TestCase):
+    """A road under a deck may only go down in the road laws (_road_laws' under): under it is beside its line within
+    its half width (+ ROAD_LAWS_DECK_M), not past its ends, where the ground it ends on is."""
+
+    def test_past_a_decks_ends_is_not_under_it(self):
+        # (a 15 m half wide deck from x = 0 to 100 along y = 0, bent at x = 50)
+        segs = grading._deck_segments([(np.array([[0.0, 0.0], [50.0, 0.0], [100.0, 5.0]]), 15.0)],
+                                      grading.ROAD_LAWS_DECK_M)
+        pts = np.array([[50.0, 14.0], [95.0, 18.0], [50.0, 17.0], [115.0, 6.5], [-15.0, 0.0], [-0.5, 10.0], [0.5, 10.0]])
+        self.assertEqual(grading._under_decks(pts, segs).tolist(), [True, True, False, False, False, False, True])
+
+    def test_a_deck_s_end_is_not_over_the_road_it_meets(self):
+        # (Paris 48.9052 N 2.2876 E: a street through the node a bridge ends on, the bridge's end at its ground; only down
+        # from its own plan there, 9 mm under the road the deck's end puts at its ground: no answer for 66 chains)
+        segs = grading._deck_segments([(np.array([[0.0, 0.0], [50.0, 0.0]]), 4.2)], grading.ROAD_LAWS_DECK_M)
+        pts = np.array([[1.0, 0.5], [49.5, -2.0], [3.5, 0.0], [25.0, 0.0], [48.0, 3.0]])
+        self.assertEqual(grading._under_decks(pts, segs).tolist(), [False, False, True, True, True])
+
+
+class BumpsOffRoadSidesTest(unittest.TestCase):
+    """terrain_bumps with a grader: none within BUMP_CLEAR_M of a built road's core (a median's barrier stood module by
+    module on them, jagged: I-40, the user's report 2026-11-16), fading in past it without a ledge, the same value
+    however the points are asked (a block's grid, a few scattered points), and as before far from the roads."""
+
+    def setUp(self):
+        for name, val in (("TERRAIN_BUMPS_ON", True), ("TERRAIN_ROUGH_M", 0.35)):
+            p = unittest.mock.patch.object(grading, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        f = features([[(-400, 20), (400, 20)]], ["residential"])
+        self.g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+
+    def _across(self, ys, x=None):
+        x = np.linspace(-150.0, 150.0, 601) if x is None else x
+        X, Y = np.meshgrid(x, np.asarray(ys, np.float64))
+        la, lo, _ = FRAME.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+        return np.asarray(la), np.asarray(lo), X.shape
+
+    def test_none_beside_the_road_full_far_off(self):
+        half = float(max(p.half for p in self.g.plans(*self._across([20.0])[:2])))
+        la, lo, shape = self._across([20.0, 20.0 + half + 2.0, -60.0, 120.0])
+        got = np.asarray(grading.terrain_bumps(la, lo, self.g)).reshape(shape)
+        plain = np.asarray(grading.terrain_bumps(la, lo)).reshape(shape)
+        self.assertEqual(float(np.abs(got[:2]).max()), 0.0, "on the road and just past its core: no bumps")
+        self.assertGreater(float(plain[:2].std()), 0.1, "(there were bumps there before)")
+        self.assertTrue(np.array_equal(got[2:], plain[2:]), "far off the road: the bumps as before")
+
+    def test_fades_in_without_a_ledge(self):
+        x = np.linspace(-50.0, 50.0, 21)
+        ys = np.arange(20.0, 60.0, 0.25)
+        la, lo, shape = self._across(ys, x)
+        got = np.asarray(grading.terrain_bumps(la, lo, self.g)).reshape(shape)
+        plain = np.asarray(grading.terrain_bumps(la, lo)).reshape(shape)
+        steepest = float(np.abs(np.diff(plain, axis=0)).max())
+        self.assertLessEqual(float(np.abs(np.diff(got, axis=0)).max()), 1.2 * steepest,
+                             "no steeper than the bumps themselves across the band's edge (no ledge)")
+        self.assertEqual(float(np.abs(got[ys <= 30.0]).max()), 0.0, "smooth well past the core")
+        self.assertGreater(float(got[ys >= 50.0].std()), 0.25, "full past the band")
+
+    def test_same_value_however_asked(self):
+        la, lo, _ = self._across(np.arange(10.0, 50.0, 1.0))
+        grid = np.asarray(grading.terrain_bumps(la, lo, self.g))
+        pick = np.arange(0, len(la), 997)
+        lone = np.asarray(grading.terrain_bumps(la[pick], lo[pick], self.g))
+        self.assertTrue(np.array_equal(grid[pick], lone))
+        one = grading.terrain_bumps(la[pick[3]], lo[pick[3]], self.g)
+        self.assertEqual(float(one), float(grid[pick[3]]))
+
+    def test_dirt_roads_keep_them(self):
+        f = features([[(-400, 20), (400, 20)]], ["track"])
+        g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        la, lo, _ = self._across([24.0])
+        self.assertTrue(np.array_equal(np.asarray(grading.terrain_bumps(la, lo, g)),
+                                       np.asarray(grading.terrain_bumps(la, lo))))

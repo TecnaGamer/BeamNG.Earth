@@ -197,6 +197,36 @@ def cache_dir_arg(given, dd=None):
     return path if isinstance(path, str) and path else None
 
 
+def pick_cache_dir(given, extra, dd=None):
+    """The download cache the server will use, without saving anything (cache_dir_arg saves), by the server's own
+    rules (overturepick.cache_dir_of: the last --cache-dir in its options, relative to its folder ROOT), else
+    --cache-dir (given), else the saved folder, else the server's default."""
+    import overturepick
+    default = apppaths.default_cache_dir()
+    if given is not None and given.strip().lower() not in ("", "default"):
+        default = os.path.abspath(os.path.expanduser(given.strip().strip('"')))
+    elif given is None:
+        saved = app_settings(dd).get("cacheDir")
+        if isinstance(saved, str) and saved:
+            default = saved
+    return overturepick.cache_dir_of(extra, default, ROOT)
+
+
+def overture_pick(args):
+    """The map data's Overture release for this app session (server/overturepick.py), decided once: started now, in a
+    thread of its own, while the start goes on; the first server start takes it (waiting overturepick.PICK_S from now
+    at most) and every restart gets the same. None when it cannot be made (the server's own default then)."""
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import overturepick
+        extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
+        return overturepick.Pick(pick_cache_dir(getattr(args, "cache_dir", None), extra),
+                                 offline="--offline" in extra)
+    except Exception as e:              # (never in the way of a start)
+        say(f"(map data release: the build's own: {type(e).__name__}: {e})")
+        return None
+
+
 def clear_cache(extra):
     """--clear-cache (GitHub #1081: deleting the cache's many small files took a player very long): the download cache
     the server is about to use (its --cache-dir in extra, else the default) moved aside at once (cache.clear_all); the
@@ -220,7 +250,7 @@ def clear_cache(extra):
 
 # --- the server -----------------------------------------------------------------------------------
 
-def watch_parent():
+def watch_parent(world_server=False):
     """The server's guard: it ends (with its worker processes) when the launcher that started it is gone, e.g. its
     terminal closed (SIGHUP) or it was killed. A server left behind kept the port, so the next start's server could
     not listen and the game talked to the old one (the user's AppImage, 2026-10-16)."""
@@ -252,7 +282,12 @@ def watch_parent():
                         return True
                 else:
                     try:
-                        result = k32.WaitForSingleObject(h, 0xFFFFFFFF)
+                        if world_server:
+                            result = _srvrestart().wait_parent_or_stop(h)
+                            if result == 1:
+                                return False  # launcher explicitly requested a stop
+                        else:
+                            result = k32.WaitForSingleObject(h, 0xFFFFFFFF)
                         if result == 0:                      # WAIT_OBJECT_0: process exited
                             return True
                         error = ctypes.get_last_error()
@@ -270,9 +305,14 @@ def watch_parent():
         return True
 
     def run():
-        gone()
-        print("[BeamNG.Earth] the launcher is gone: the world server stops", flush=True)
+        if gone():
+            print("[BeamNG.Earth] the launcher is gone: the world server stops", flush=True)
         if IS_WIN:
+            if world_server:
+                cleanup = threading.Thread(target=_srvrestart().drain_before_kill, args=(10,),
+                                           name="server-stop", daemon=True)
+                cleanup.start()
+                cleanup.join(10)  # the existing forced tree cleanup also works with a hung disk
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(os.getpid())], capture_output=True)
         else:
             os.killpg(os.getpgid(0), signal.SIGTERM)
@@ -284,7 +324,7 @@ def watch_parent():
 
 def run_server(argv):
     """In this process: server/earthd.py with argv (the --server mode of the packaged app)."""
-    watch_parent()
+    watch_parent(world_server=True)
     sys.path.insert(0, os.path.join(ROOT, "server"))
     import earthd
     sys.argv = ["earthd"] + argv
@@ -454,7 +494,7 @@ def restart_extra(own, first):
     return (["--cache-dir", cache] if cache else []) + list(own)
 
 
-def start_server(user_dir, extra, log_path, game_running=None, restart_times=()):
+def start_server(user_dir, extra, log_path, game_running=None, restart_times=(), overture_release=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
     if telemetry_on() and "--offline" not in extra:
@@ -484,6 +524,14 @@ def start_server(user_dir, extra, log_path, game_running=None, restart_times=())
             env[k] = v
     # ... and its "Restart world server" (server/srvrestart.py; RestartingServer), from what is applied now
     restart_env(user_dir, env, restart_times)
+    # Prepare with the actual child environment, including server-only flags,
+    # before its workers can stream. Cached maps also cover --keep-mod/restarts.
+    import cliffstock
+    if env.get("BNE_CLIFFS", "off").strip().lower() in {"1", "on", "true"}:
+        env["BNGE_CACHE_DIR"] = pick_cache_dir(None, extra)
+    cliffstock.prepare_enabled(game_install_dir, user_dir, env=env, diagnostic=lambda text: row("Cliffs", text))
+    if overture_release:        # the session's map data release (overture_pick: the same for every start of it)
+        env["BNGE_OVERTURE_RELEASE"] = overture_release
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -666,6 +714,12 @@ def stop_server(proc):
     row("World server", "stopping")
     try:
         if IS_WIN:
+            if _srvrestart().request_stop(proc.pid):
+                try:
+                    proc.wait(15)  # server and workers drain their log listeners
+                    return
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
         else:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -1685,6 +1739,64 @@ def watch_game_log(user_dir, since):
     threading.Thread(target=run, name="watch-game-log", daemon=True).start()
 
 
+# The engine patches' status files (tools/gcpatch: Linux; enginepatch.py / enginepatch_terfast.py: Windows), one line
+# "<unix time> ...: <state>" each, written at the game's start and again whenever the BeamNG.Earth level starts. A patch
+# that does not apply (a game update it does not recognise: BeamNG 0.40.6 dropped terfast and texkeep unseen, 2026-11-22)
+# is said here as a problem, not left in a file nobody reads; the mod says it in the game too (enginepatches.lua).
+ENGINE_PATCHES = {"gcpatch": "grass kept across terrain block moves", "texkeep": "faster ground texture updates",
+                  "terfast": "faster terrain block swaps", "dtsmooth": "steady game speed"}
+PATCH_WATCH_S = 600         # s after the game's start the status files are watched (Windows: the attach waits for the game)
+
+
+def patch_state(text, since=None):
+    """(state, message) of a status file's text: "on", "off", "failed" or "none" (no line, or one from before since);
+    the same rules as the mod's enginepatches.classify."""
+    line = (text or "").splitlines()[0] if (text or "").strip() else ""
+    head, sep, msg = line.partition(":")
+    try:
+        t = int(head.split()[0])
+    except (ValueError, IndexError):
+        return "none", None
+    msg = msg.strip()
+    if not sep or (since is not None and t < since - 3):
+        return "none", None
+    low = msg.lower()
+    if any(k in low for k in ("half applied", "not applied", "could not be patched", "no thread")) or \
+            low.startswith("stopped"):
+        return "failed", msg
+    if low.startswith("off"):
+        return "off", msg
+    if low.startswith(("applied", "ready", "stock", "installed", "already applied")):
+        return "on", msg
+    return "failed", msg
+
+
+def watch_patch_status(user_dir, since, names=tuple(ENGINE_PATCHES)):
+    """In the background: each engine patch's first status line of this game start; a failed one is a problem."""
+    def run():
+        left, t0 = set(names), time.time()
+        while left and time.time() - t0 < PATCH_WATCH_S:
+            time.sleep(2)
+            for name in sorted(left):
+                try:
+                    with open(os.path.join(user_dir, "temp", f"beamngEarth_{name}.txt"), errors="replace") as f:
+                        state, msg = patch_state(f.read(), since)
+                except OSError:
+                    continue
+                if state == "none":
+                    continue
+                left.discard(name)
+                if state == "failed":
+                    problem(f"Engine patch {name} ({ENGINE_PATCHES[name]}) is NOT applied: {msg}",
+                            "The game runs without it (it still works; this part can be slower). This BeamNG.drive "
+                            "version is probably newer than this BeamNG.Earth: an update of BeamNG.Earth brings it "
+                            "back. (Status: temp/beamngEarth_%s.txt in the game's user folder.)" % name)
+                else:
+                    row("Engine patch", f"{name}: {state}")
+
+    threading.Thread(target=run, name="watch-patch-status", daemon=True).start()
+
+
 def game_launcher_running():
     """Windows: BeamNG's own launcher (BeamNG.drive.exe, its renderer / launch options window) is open: the game is
     starting, however long the player takes there."""
@@ -2197,6 +2309,14 @@ def main():
         ensure_ca_certs()
         run_addon(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-numpy":
+        # (the release build's check: numpy imports with its AVX-512 targets held back, warnings as errors:
+        # server/npyguard.py)
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import npyguard
+        ok, msg = npyguard.self_check()
+        print(("ok: " if ok else "FAILED: ") + msg, flush=True)
+        sys.exit(0 if ok else 1)
     if len(sys.argv) > 1 and sys.argv[1] == "--server":
         # (not tee_log: its output goes to server.log already. Teed, every line of the server's log was written a second
         # time into launcher.log, flushed line by line, and the launcher's own lines were trimmed out of it within a
@@ -2206,9 +2326,6 @@ def main():
         return
     tee_log()
     ensure_ca_certs()
-    if len(sys.argv) > 1 and sys.argv[1] == "--world-cache":
-        from tools import world_cache
-        raise SystemExit(world_cache.main(sys.argv[2:]))
     if hand_over():
         return
     prune_old_copies()
@@ -2543,6 +2660,7 @@ def run(args):
     import install
     title(f"BeamNG.Earth {install.version()}")
     support_notice()
+    pick = overture_pick(args)          # (decided while the start goes on; every server of this session gets it)
     if update_at_start(args):           # the new copy runs now (in its own window)
         return
     memory_notice()                     # (8 GB or less: what to expect; never stops the start)
@@ -2636,10 +2754,14 @@ def run(args):
 
     def start():                # (again for the settings page's "Restart world server": the game runs then)
         starts.append(True)
+        rel = pick.release() if pick is not None else None      # (decided at the first start; the same after it)
         if len(starts) == 1:
-            return start_server(user_dir, extra, log_path, game_running=bool(running), restart_times=limiter.times)
+            if rel:
+                row("Map data", f"Overture {rel} ({pick.why})")
+            return start_server(user_dir, extra, log_path, game_running=bool(running), restart_times=limiter.times,
+                                overture_release=rel)
         return start_server(user_dir, restart_extra(own_extra, extra), log_path, game_running=True,
-                            restart_times=limiter.times)
+                            restart_times=limiter.times, overture_release=rel)
     server = RestartingServer(start, port, log_path, limiter=limiter)
     beammp = None
     try:
@@ -2693,8 +2815,12 @@ def run(args):
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
             clear_level_flag(user_dir)
+            started_at = time.time()
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args,
                               meanwhile=follow_server if early else None, launch=launch)
+            if user_dir and not args.no_gcpatch:
+                # (Linux: the preload library's four; Windows: the launcher's two, attached below)
+                watch_patch_status(user_dir, started_at, ("dtsmooth", "terfast") if IS_WIN else tuple(ENGINE_PATCHES))
         if IS_WIN and not args.no_gcpatch:
             # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off
             # with BNGEARTH_DTSMOOTH_WIN=0 or BNGEARTH_DTSMOOTH_OFF=1)

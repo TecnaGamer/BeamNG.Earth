@@ -785,7 +785,7 @@ class BuildTileTest(unittest.TestCase):
         for c in stops:                         # on the approach half, beyond the crosswalk
             a, b = np.array(c["n"][0][:2]), np.array(c["n"][-1][:2])
             self.assertLess(np.hypot(*(b - a)), w)
-        fills = [c for c in chunks if c.get("poly")]
+        fills = [c for c in chunks if c.get("poly") and not c.get("puddle")]     # (not the puddles: roadwear)
         self.assertEqual(len(fills), 4, "the corner asphalt")
         for c in corners:                       # the arc keeps RADIUS from its centre, between the curbs
             arc = c["arc"]
@@ -1168,7 +1168,17 @@ class TrackerTest(unittest.TestCase):
 
     def test_at_speed_the_path_ahead_is_built_and_kept(self):
         conn = FakeConn()
-        tr = roads.Tracker()
+        # The tracker ranks by its measured build time (an average of wall-clock builds): under load the fake's
+        # instant builds measured long and the car's own tile ranked after the next one (gate 304, the mini PC's
+        # lane: (1, 0) first). This test is about the path order, so the estimate is pinned (updates ignored).
+        class Pinned(roads.Tracker):
+            build_s = property(lambda self: 0.05, lambda self, v: None)
+        tr = Pinned()
+        # Builds run on BUILD_PER_POSE worker threads and the fake records a build when a worker runs it, so the
+        # order recorded was the workers' race under load (gate 311: (0, 1) first). One worker runs them in the
+        # order the tracker dispatched them, which is what this test checks.
+        import runtimeprofiler
+        tr.pool = runtimeprofiler.TileJobs(1, "roads-tile-test")
         built = []
 
         def build(aid, tx, ty):
@@ -1344,7 +1354,7 @@ class PaintRoadsTest(unittest.TestCase):
         out = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f], 2.0)
         self.assertEqual(int(out[64, 10]), sf.COBBLE)
         self.assertEqual(sf.MATERIALS[sf.COBBLE][1], "COBBLESTONE")
-        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 1, "dirt still last")
+        self.assertEqual(sf.DIRT, 15, "dirt keeps its persisted index (layers after it are appended)")
 
     def test_a_tunnels_open_section_painted(self):
         # a 'tunnel' in the map lying open (grading.Grader.open_tunnels): road, not grass (Central Park, 2026-10-17)
@@ -1588,6 +1598,21 @@ class NamelessCarriagewaysTest(unittest.TestCase):
 
 
 class MedianTest(unittest.TestCase):
+    def test_v3_measures_a_divided_street_across_its_overlapping_length(self):
+        import lanegraph
+        # A three-lane approach and its short continuation meet end to end.
+        # The opposing carriageway follows the approach on the other side of the median.
+        f = features([[(46, 1), (8, .2), (0, 0)], [(0, 0), (-18, 0)], [(-18, -26), (86, -26)]],
+                     ["trunk"] * 3)
+        f.attrs["name"] = np.array(["Avenue"] * 3, dtype=object)
+        sp = roads.Spec(11.4, "paved", True, "trunk", True, 2.5, 1, 70., lanes=3)
+        with mock.patch.object(lanegraph, "MODE", "off"):
+            self.assertLess(roads.dual_carriageways(f, [sp] * 3)[0].width, 5.)
+        with mock.patch.object(lanegraph, "MODE", "surface"):
+            result = roads.dual_carriageways(f, [sp] * 3)[0]
+            self.assertEqual(result.width, sp.width)
+            self.assertGreater(result.median, 25.)
+
     def test_divided_road_has_a_median(self):
         # report #48 (Boston Street): the carriageways' inner sides a curbed band and lawn, not two sidewalks
         sp = roads.Spec(7.0, "paved", True, "secondary", True, 2.5, 1, None, None, 19.0)
@@ -1657,27 +1682,49 @@ class ViewOrderTest(unittest.TestCase):
 class ChainResolveTest(unittest.TestCase):
     """BridgeProfiles._resolve: a cell loaded at a loose end can put a longer copy of a part already in the chain into
     the pool (its ends then new); the chain is followed on instead of failing (KeyError, a Chicago road tile,
-    2026-10-24), whatever order the set of keys comes in."""
+    2026-10-24), whatever order the set of keys comes in, with the cells read in their own order (CANON_LOAD) or as
+    reached; and a part no loaded cell gives (a read short this time) is never lost from the chain."""
 
-    def test_part_grown_by_a_loaded_cell(self):
+    def _grown(self, canon):
         spec = type("Spec", (), {"width": 8.0})()
 
-        def part(x0, x1):
-            xy = np.array([[x0, 0.0], [x1, 0.0]])
-            return (spec, xy, LAT, 1.0, 2)
+        def part(x0, x1, n):
+            return (spec, np.array([[x0, 0.0], [x1, 0.0]]), LAT, 1.0, n)
 
         class Grown(roads.BridgeProfiles):
-            def _load(self, key, pool, ground):
-                if pool[("b", 0)][1][-1][0] < 300:
-                    pool[("b", 0)] = (spec, np.array([[100.0, 0.0], [300.0, 0.0]]), LAT, 1.0, 9)
+            CANON_LOAD = canon
 
-        for first in (("a", 0), ("b", 0)):
-            res = Grown(FRAME, lambda key: None, lambda la, lo: np.zeros(np.shape(la)))
-            pool = {("a", 0): part(0.0, 100.0), ("b", 0): part(100.0, 200.0)}
-            if first == ("b", 0):
-                pool = {("b", 0): pool[("b", 0)], ("a", 0): pool[("a", 0)]}
-            self.assertEqual(res._resolve(("a", 0), pool, {}, set()), [("a", 0), ("b", 0)])
-            self.assertEqual(float(pool[("b", 0)][1][-1][0]), 300.0)
+            def _cell_entries(self, key):       # (every loaded cell: a, and b's longer copy)
+                return [(("a", 0), part(0.0, 100.0, 2)), (("b", 0), part(100.0, 300.0, 9))], []
+        return Grown, part
+
+    def test_part_grown_by_a_loaded_cell(self):
+        for canon in (False, True):
+            Grown, part = self._grown(canon)
+            for first in (("a", 0), ("b", 0)):
+                res = Grown(FRAME, lambda key: None, lambda la, lo: np.zeros(np.shape(la)))
+                pool = {("a", 0): part(0.0, 100.0, 2), ("b", 0): part(100.0, 200.0, 2)}
+                if first == ("b", 0):
+                    pool = {("b", 0): pool[("b", 0)], ("a", 0): pool[("a", 0)]}
+                self.assertEqual(res._resolve(("a", 0), pool, {}, set()), [("a", 0), ("b", 0)], (canon, first))
+                self.assertEqual(float(pool[("b", 0)][1][-1][0]), 300.0, (canon, first))
+
+    def test_a_part_no_loaded_cell_gives_stays(self):
+        """CANON_LOAD rebuilds the pool from the loaded cells on each pass: a part they do not give (here the start
+        itself, in no cell: as after a read that came back short) stays in the chain, no KeyError."""
+        spec = type("Spec", (), {"width": 8.0})()
+
+        class Empty(roads.BridgeProfiles):
+            CANON_LOAD = True
+
+            def _cell_entries(self, key):
+                return [], []
+        res = Empty(FRAME, lambda key: None, lambda la, lo: np.zeros(np.shape(la)))
+        pool = {("a", 0): (spec, np.array([[0.0, 0.0], [100.0, 0.0]]), LAT, 1.0, 2)}
+        ground = {("r", "g"): [np.array([[50.0, -50.0], [50.0, 50.0]])]}
+        self.assertEqual(res._resolve(("a", 0), pool, ground, set()), [("a", 0)])
+        self.assertIn(("a", 0), pool)
+        self.assertIn(("r", "g"), ground)
 
 
 class TunnelReachTest(unittest.TestCase):
@@ -1805,6 +1852,38 @@ class RetainingWallTest(unittest.TestCase):
         self.assertGreater(float(w["back_top"][mid]), float(w["top"][mid]) + 0.5)
         self.assertGreaterEqual(float(w["thick"][mid]), grading.WALL_FLAT_M + grading.WALL_T_M)
 
+    def test_a_wall_where_two_roads_at_other_levels_meet(self):
+        """A primary dug 6 m beside a residential street whose line runs 6.3 m from its own (Popoli's SR17 and Via
+        Edoardo Corti, their carriageways overlapping in plan): the wall's face on the line the grading puts between
+        them (grading.level_boundary), on the primary's painted carriageway, its top at the street's level (its edge on
+        it: no 4 m cap, concrete behind the coping) over the band and the climb behind. Before: none, its face past the
+        primary's own edge stood on the street's carriageway, "another road comes in"."""
+        import grading
+        prim = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["primary"]), None)[0]
+        res = roads.road_specs(features([[(0.0, 6.3), (200.0, 6.3)]], ["residential"]), None)[0]
+        rh, h = grading.plan_halves(prim)
+        rh_o, h_o = grading.plan_halves(res)
+        line = float(grading.level_boundary(6.3, rh, h, rh_o, h_o, 6.0)[0])
+        self.assertLess(line, rh)           # (the carriageways overlap: the face on the primary's)
+        x = np.arange(0.0, 201.0, 5.0)
+        pts = np.c_[x, np.zeros(len(x)), np.zeros(len(x))]
+        pts_r = np.c_[x, np.full(len(x), 6.3), np.full(len(x), 6.0)]
+        climb = line + grading.WALL_FLAT_M
+
+        def elev(la, lo):           # (the grading's ground: the primary's, flat on behind the line, then the street's)
+            _e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return np.clip((np.asarray(n) - climb) / grading.WALL_T_M, 0.0, 1.0) * 6.0
+        ws = [w for w in roads.retaining_walls(FRAME, [("p", prim, pts, LON), ("r", res, pts_r, LON)], elev,
+                                               (0.0, -128.0, 256.0, 128.0)) if "base" in w]
+        mine = [w for w in ws if (np.asarray(w["base"])[:, 1] > 0).all() and (np.asarray(w["toward"])[:, 1] < 0).all()]
+        self.assertTrue(mine, "a wall on the primary's street side")
+        w = max(mine, key=lambda w: len(w["base"]))
+        mid = len(w["base"]) // 2
+        self.assertAlmostEqual(float(w["base"][mid, 1]), line, delta=0.05)
+        self.assertGreaterEqual(float(w["top"][mid]), 6.0)
+        self.assertGreaterEqual(float(w["thick"][mid]), grading.WALL_FLAT_M + grading.WALL_T_M)
+        self.assertTrue(w.get("carries"))
+
     def test_a_cutting_under_a_deck_is_walled_up_to_its_underside(self):
         """A road in a cutting 8 m deep with a deck across it 8 m over the road (Assaku: Tartu mnt over Jarve tee, whose
         cutting had bare earth slopes under the deck): the walls stand under the deck too, rising to its underside
@@ -1839,6 +1918,39 @@ class RetainingWallTest(unittest.TestCase):
         self.assertFalse(under(walls(12.5)), "a deck 2.5 m over the road: no wall under it")
         with mock.patch.object(roads, "WALL_UNDER_DECK_ON", False):
             self.assertFalse(under(walls(18.0)), "off: none under the deck")
+
+    def test_a_cutting_under_a_rail_deck_is_walled_up_to_its_underside(self):
+        """The same cutting under a railway's bridge (railways.tile_decks: its line is the bed plus its ballast, it
+        reaches DECK_D under it, not a road deck's WALL_DECK_UNDER_M): the walls stop at its underside, as under a road's
+        deck. Vienna's Erzherzog-Karl-Strasse: its walls (the tunnel mesh) rose through the rail bridges over the busway
+        and the carriageways, the eval's 11 crossings of a track and a tube; the rail decks were not among the decks the
+        walls were told of."""
+        import grading
+        import railways
+        rh = roads.carriageway("primary", "paved", True, None, False) / 2
+        edge = rh + grading.shoulder(roads.Spec(2 * rh, "paved", False, "primary")) + grading.WALL_FLAT_M
+        spec = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["primary"]), None)[0]
+        pts = np.c_[np.arange(0.0, 201.0, 5.0), np.zeros(41), np.full(41, 10.0)]
+
+        def elev(la, lo):
+            _e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return 10.0 + np.clip((np.abs(n) - edge) / 0.8, 0.0, 1.0) * 8.0
+        bed = 17.0
+        deck = {"n": np.array([[100.0, -40.0, bed + railways.BALLAST_H], [100.0, 40.0, bed + railways.BALLAST_H]]),
+                "w": 2 * railways.DECK_HALF_M, "under": railways.DECK_D}
+        underside = bed + railways.BALLAST_H - railways.DECK_D
+
+        def tops(decks):
+            ws = [w for w in roads.retaining_walls(FRAME, [("r", spec, pts, LON)], elev, (0.0, -128.0, 256.0, 128.0),
+                                                   decks=decks) if "base" in w]
+            return [max(float(t), float(bt)) for w in ws for x, t, bt in zip(w["base"][:, 0], w["top"], w["back_top"])
+                    if abs(x - 100.0) < 2.0]
+        got = tops([deck])
+        self.assertTrue(got, "walls under the deck")
+        self.assertLessEqual(max(got), underside + 1e-6, "not through the rail deck")
+        self.assertGreater(max(got), underside - 0.5, "up to its underside, not the road decks' 2.2 m under it")
+        asroad = tops([{k: v for k, v in deck.items() if k != "under"}])
+        self.assertLess(max(asroad), max(got), "a road deck's depth would leave a gap under it")
 
     def test_walls_under_a_deck_are_concrete_on_a_minor_road_too(self):
         """Assaku's Jarve tee is a minor road: its cutting is walled in stone, but under the deck the wall is the
@@ -2227,6 +2339,90 @@ class GravelTest(unittest.TestCase):
         from unittest import mock
         with mock.patch.object(roads, "REGIONAL_ON", False):
             self.assertEqual(roads.road_specs(self.roads(4, "gravel"))[-1].kind, "paved")
+
+
+class MergedSurfaceTest(unittest.TestCase):
+    """A segment Overture merged from several OpenStreetMap ways (src_ways): the joined way's surface does not hold
+    for all of it where the rest is mostly of another look (osm_surface_column, merged_surface; Sulzburg's Herrenweg,
+    2026-11-20: a gravel track drawn as grass after the grass track merged before it)."""
+
+    # Herrenweg's segment as Overture 2026 has it: six ways, the grass track w3 the longest (35 %), so the joined one
+    HERRENWEG_WAYS = [("w1@1", 0.0, 0.0625), ("w2@1", 0.0625, 0.077), ("w3@10", 0.077, 0.4293),
+                      ("w4@17", 0.4293, 0.7453), ("w5@1", 0.7453, 0.7591), ("w6@1", 0.7591, 1.0)]
+    HERRENWEG_SURFACES = [(0, "unpaved", 0.0, 0.0625), (0, "paved", 0.0625, 0.077), (0, "unpaved", 0.077, 0.4293),
+                          (0, "gravel", 0.4293, 0.7453), (0, "paved", 0.7453, 0.7591), (0, "gravel", 0.7591, 1.0)]
+
+    def segment(self, osm, ways, surfaces, record=None, cls="track"):
+        f = features([[(-300.0, 0.0), (300.0, 0.0)]], [cls], surfaces=surfaces)
+        f.attrs["osm_surface"] = np.array([osm])
+        f.attrs["src_record"] = np.array([record or max(ways, key=lambda w: w[2] - w[1])[0]])
+        f.rules["src_ways"] = rules([(0, w, a, b) for w, a, b in ways])
+        return f
+
+    def test_herrenweg(self):
+        f = self.segment("grass", self.HERRENWEG_WAYS, self.HERRENWEG_SURFACES)
+        self.assertEqual(f.attrs["src_record"][0], "w3@10")
+        self.assertEqual(roads._surface_value(f, 0), "gravel")
+        sp = roads.road_specs(f)[0]
+        self.assertEqual((sp.kind, roads.terrain_surface(sp)), ("gravel", None), "no grass road")
+        # the cell next to it, whose tags did not hold w3 (osmtags.join took the same-named gravel way): the same road
+        g = self.segment("gravel", self.HERRENWEG_WAYS, self.HERRENWEG_SURFACES)
+        self.assertEqual(roads._surface_value(g, 0), "gravel")
+
+    def test_joined_way_mostly_holds(self):
+        # a paved village street merged with a short gravel stretch: OSM's own value stays (and its detail with it)
+        f = self.segment("asphalt", [("w1@1", 0.0, 0.8), ("w2@1", 0.8, 1.0)],
+                         [(0, "paved", 0.0, 0.8), (0, "gravel", 0.8, 1.0)], cls="residential")
+        self.assertEqual(roads._surface_value(f, 0), "asphalt")
+        # OSM's compacted over Overture's unpaved on the same way: one look (gravel), OSM's value kept
+        g = self.segment("compacted", [("w1@1", 0.0, 0.4), ("w2@1", 0.4, 1.0)],
+                         [(0, "unpaved", 0.0, 1.0)], record="w1@1", cls="unclassified")
+        self.assertEqual(roads._surface_value(g, 0), "compacted")
+
+    def test_a_tie_keeps_the_joined_way(self):
+        f = self.segment("asphalt", [("w1@1", 0.0, 0.5), ("w2@1", 0.5, 1.0)],
+                         [(0, "paved", 0.0, 0.5), (0, "gravel", 0.5, 1.0)], record="w1@1", cls="unclassified")
+        self.assertEqual(roads._surface_value(f, 0), "asphalt")
+
+    def test_untouched_without_several_ways_or_rules(self):
+        # one way (no src_ways rows): the way's value, however Overture's rules run
+        f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["track"],
+                     surfaces=[(0, "gravel", 0.0, 0.7), (0, "unpaved", 0.7, 1.0)])
+        f.attrs["osm_surface"] = np.array(["grass"])
+        f.attrs["src_record"] = np.array(["w1@1"])
+        self.assertIs(roads.osm_surface_column(f), f.attrs["osm_surface"])
+        self.assertEqual(roads._surface_value(f, 0), "grass")
+        # no OSM value: Overture's rule covering the most, as before
+        g = self.segment("", self.HERRENWEG_WAYS, self.HERRENWEG_SURFACES)
+        self.assertIs(roads.osm_surface_column(g), g.attrs["osm_surface"])
+        self.assertEqual(roads._surface_value(g, 0), "unpaved")
+
+    def test_merged_surface_weighs_the_rest(self):
+        own = [(0.0, 0.4)]
+        # the joined way's own range is never counted twice: Overture's rule over it is left out (grass 0.6 of the
+        # segment against dirt's 0.4 outside it; counted over the whole, dirt's 1.0 would have won)
+        self.assertEqual(roads.merged_surface("track", "grass", [(0.0, 0.6)], [("dirt", 0.0, 1.0)]), "grass")
+        self.assertEqual(roads.merged_surface("track", "grass", own, [("dirt", 0.0, 1.0)]), "dirt")
+        # Overture's generic unpaved is never against an unpaved joined way (OSM's grass folded into it) ...
+        self.assertEqual(roads.merged_surface("track", "grass", own, [("unpaved", 0.0, 1.0)]), "grass")
+        # ... but is against a paved one (a track: dirt)
+        self.assertEqual(roads.merged_surface("track", "asphalt", own, [("unpaved", 0.0, 1.0)]), "unpaved")
+        # Overture's "unknown" is no surface: never a look of its own (a path near Casagranda, 2026-11-20)
+        self.assertEqual(roads.merged_surface("path", "ground", [(0.5, 1.0)], [("unknown", 0.0, 0.5)]), "ground")
+        self.assertEqual(roads.merged_surface("track", "grass", own,
+                                              [("gravel", 0.0, 0.4), ("gravel", 0.4, 0.9), ("paved", 0.9, 1.0)]),
+                         "gravel")
+        # the look with the most share wins, its longest value is taken
+        self.assertEqual(roads.merged_surface("track", "grass", [(0.0, 0.3)],
+                                              [("compacted", 0.3, 0.5), ("fine_gravel", 0.5, 0.8),
+                                               ("asphalt", 0.8, 1.0)]), "fine_gravel")
+
+    def test_kept_with_the_layer(self):
+        f = self.segment("grass", self.HERRENWEG_WAYS, self.HERRENWEG_SURFACES)
+        col = roads.osm_surface_column(f)
+        self.assertIs(roads.osm_surface_column(f), col)
+        self.assertEqual(str(col[0]), "gravel")
+        self.assertEqual(str(f.attrs["osm_surface"][0]), "grass", "the layer's own column unchanged")
 
 
 if __name__ == "__main__":

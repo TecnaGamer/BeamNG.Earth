@@ -49,6 +49,10 @@ class LimitTest(unittest.TestCase):
         self.assertIsNone(budget.desktop_sizes(0))
         dem, md, shed, rot, road, far = budget.desktop_sizes(16384.0)
         self.assertEqual((dem, md, shed, rot), (512, 256, 3000, 4000))
+        # the map data cache goes on growing with the limit past 16 GB (a 48 GB PC's Auto, 24 GB: a dense city's road
+        # tiles decoded their cells' layers again and again in 256 MB)
+        self.assertEqual(budget.desktop_sizes(24576.0)[1], 384)
+        self.assertEqual(budget.desktop_sizes(20480.0)[1], 320)
         small = budget.desktop_sizes(budget.limit_mb(24.0))
         self.assertLess(small[0], 512)
         self.assertGreaterEqual(small[4], 3)
@@ -141,6 +145,38 @@ class WatchTest(unittest.TestCase):
         memwatch._state.clear()
         memwatch._state.update(self.saved[0])
         budget.OVER, budget.LOW_FREE_GB, budget.LIMIT_MB = self.saved[1:]
+        budget.ROOM_MB, budget.POOL_MB = None, {}
+
+    def test_a_burst_starts_only_where_it_fits(self):
+        """Daytona session 2026-11-19: 7 far-tile burst processes (~0.7 GB each) started at 21-22 GB of a 24 GB limit
+        took the server to 27.3 GB. The watchdog leaves the room and each pool's process size for the burst's check
+        (pools.burst_fits), and the summary says where the memory is (by_pool)."""
+        import pools
+        far = _Pool([11, 12])
+        far.name = "far tile"
+        road = _Pool([13])
+        road.name = "road tile"
+        mbs = {1: 900, 11: 600, 12: 700, 13: 1000}
+        memwatch._state["setting"] = 4.0            # (the player's own Max RAM: the room under it)
+        self.assertEqual(self.w.step(mbs, 3200, 8000, [far, road]), "ok")
+        self.assertEqual((budget.ROOM_MB, budget.POOL_MB), (800.0, {"far tile": 700, "road tile": 1000}))
+        self.assertTrue(pools.burst_fits("far tile", 1))
+        self.assertFalse(pools.burst_fits("far tile", 2), "two more of 700 MB: not in 800 MB")
+        self.assertTrue(pools.burst_fits("bldfar", 7), "a pool not measured yet: as before")
+        line = memwatch.by_pool(mbs, [far, road])
+        self.assertEqual(line, "far tile 2 x 700 max = 1300, road tile 1000, other 900")   # (pid 1: not this process)
+        self.assertEqual(memwatch.by_pool({os.getpid(): 1500, 13: 1000}, [road]), "main 1500, road tile 1000")
+        memwatch._state["setting"] = 0.0            # (Auto: what the system has free counts too, wg1126)
+        self.w.step(mbs, 3200, 8000, [far, road])
+        reserve = budget.LOW_FREE_GB * 1e9 / 2 ** 20
+        self.assertAlmostEqual(budget.ROOM_MB, 8000 - reserve - 4096.0)
+        self.assertTrue(pools.burst_fits("far tile", 3))
+        self.w.step(mbs, 3200, 3000, [far, road])
+        self.assertEqual(budget.ROOM_MB, 800.0, "the system short: the limit's room")
+        memwatch._state["limit"] = 0.0
+        self.w.step(mbs, 3200, 8000, [far, road])
+        self.assertIsNone(budget.ROOM_MB)
+        self.assertTrue(pools.burst_fits("far tile", 7), "no limit: no check")
 
     def test_under_soft_nothing(self):
         a, b = _Pool([11]), _Pool([12])
@@ -152,6 +188,7 @@ class WatchTest(unittest.TestCase):
         a, b, busy = _Pool([11]), _Pool([12, 13], workers=2), _Pool([14], inflight=5)
         mbs = {1: 1500, 11: 800, 12: 900, 13: 1200, 14: 2000}
         total = sum(mbs.values())
+        memwatch._state["setting"] = 4.0            # (Auto would let a burst use the system's free memory)
         self.assertEqual(self.w.step(mbs, total, 8000, [a, b, busy]), "shed")
         self.assertTrue(budget.OVER)
         self.assertAlmostEqual(self.asks[0], memwatch.SHED_SHARE * 4000 / 5)
@@ -214,3 +251,23 @@ class WatchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OlderModuleTest(unittest.TestCase):
+    """(Gemini on 01df0d0f) a module older than earthfast 637 loaded by a tool or test: the ceilings count swap whole,
+    and an off watchdog asks nothing of the module."""
+
+    def test_counted_whole_without_the_kernel(self):
+        import fast
+        with mock.patch.object(fast, "_ef", object()):
+            self.assertEqual(budget.counted_mb(1000.0, 500.0), 1500.0)
+            mb = budget.memory_mb()
+            if sys.platform.startswith("linux"):
+                self.assertGreater(mb, 1.0)
+
+    def test_off_watchdog_never_requires_the_kernel(self):
+        import fast
+        with mock.patch.object(memwatch, "ON", False), \
+                mock.patch.object(fast, "require", side_effect=AssertionError("required")):
+            self.assertFalse(memwatch.start(4096.0))
+            self.assertFalse(memwatch.start(0.0))

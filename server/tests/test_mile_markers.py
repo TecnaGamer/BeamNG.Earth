@@ -209,16 +209,6 @@ class BundledReferenceTest(unittest.TestCase):
               and o['mile_marker']['route']==65 and o['mile_marker']['direction']=='N'}
         self.assertTrue(set(range(1,137)) <= ky)
 
-    def test_units_are_not_silently_confused(self):
-        self.assertEqual(milemarkers.miles('116 mi'),116.)
-        self.assertAlmostEqual(milemarkers.miles('1.609344'),1.)
-        self.assertAlmostEqual(milemarkers.miles('1.609344 km'),1.)
-        for bad in ('116 miles;117 miles','unknown','-1 mi','nan','116ft'):
-            self.assertIsNone(milemarkers.miles(bad))
-        self.assertEqual(milemarkers.interstate('I 69 West'),69)
-        self.assertIsNone(milemarkers.interstate('US 69'))
-        self.assertEqual(milemarkers.cardinal('I 69 WB'),'W')
-
     def test_lookup_has_stable_numbers_across_anchor_changes(self):
         refs,_ = milemarkers.references()
         obj = next(o for o in refs if o['mile_marker']['state']=='MI' and

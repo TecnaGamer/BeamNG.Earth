@@ -1,6 +1,6 @@
 """Protocol 4 agreement between the server (earthd.py) and the mod (core.lua, farfield.lua,
-lattice.lua, follow.lua, ...), checked from both sides against one table (docs/V1_3_SPEC.md E over
-docs/V1_2_DESIGN.md §7 as amended by §12; server/README.md documents the same table):
+lattice.lua, follow.lua, ...), checked from both sides against one table, the data file server/protocol_table.json
+(docs/V1_3_SPEC.md E over docs/V1_2_DESIGN.md §7 as amended by §12; server/README.md documents the same table):
 
   - every message the mod builds (net.send constructors in core.lua) has exactly the table's
     fields, and every field the server reads exists in the table;
@@ -77,439 +77,69 @@ import deshadow as deshadowmod  # noqa: E402
 import gravity as gravitymod  # noqa: E402
 import test_weather  # noqa: E402
 import weather  # noqa: E402
+import snow as snowmod  # noqa: E402
 
 NUM = (int, float)
 OPT = "optional"            # may be absent
 NULL = "nullable"           # may be JSON null
+
+# The table itself is a data file both sides' tooling reads (the Rust host will generate its message types from it:
+# the port plan's section 2.3): server/protocol_table.json. Here it becomes message type -> {field: (types, flags)};
+# "type" itself is implied.
+TABLE_PATH = Path(__file__).resolve().parents[1] / "protocol_table.json"
+TYPE_NAMES = {"int": (int,), "float": (float,), "num": NUM, "str": (str,), "bool": (bool,), "list": (list,),
+              "dict": (dict,)}
+FLAG_KEYS = {"optional": OPT, "nullable": NULL}
 
 
 def F(types, *flags):
     return (types if isinstance(types, tuple) else (types,), set(flags))
 
 
-# message type -> {field: F(types, flags)}; "type" itself is implied.
-MOD_TO_SERVER = {
-    # sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a
-    # restarted server keeps an earlier run's folder named here, docs/ROADMAP.md "Robustness" 3)
-    "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "release": F(str, OPT),
-              "sessions": F((list, dict), OPT),
-              "waterguard": F(int, OPT),  # required for world generation when the server enables water
-              # a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session
-              "slotSession": F(str, OPT), "slotsHeld": F((list, dict), OPT),
-              "streamLease": F(int, OPT), "leaseId": F(str, OPT), "leaseSession": F(str, OPT),
-              "held": F((list, dict), OPT),
-              # the mod reads a vegetation tile as one flat array (veg_tile's data: {groups, stride, flat}; trees.lua)
-              "vegFlat": F(bool, OPT),
-              # the mod places geotiles itself (geotile.lua's zoom: 17): the server sends their content once, kept
-              # across rebases (geotiles.py, --geo-tiles on)
-              "geoTiles": F(int, OPT),
-              "trafficVisuals": F(int, OPT),
-              # ... the road tiles too (roads.lua ROAD_GEO: content kept, a skin per anchor; roads.GeoTracker)
-              "roadGeo": F(int, OPT),
-              # ... a generation swap's commit barrier (roads.lua swapCommit; earthd Connection.stale_swap)
-              "swapGen": F(int, OPT),
-              # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
-              "farGeo": F(int, OPT),
-              "farPack": F(int, OPT),           # far building packs past buildings.PACK_INNER_M (hello.farPack)
-              "farHz": F(int, OPT),             # the horizon ring's tall buildings (bldhz.PROTO)
-              # mapped turbine landmarks reuse the geotile tracker, independently of buildings/roads
-              "turbineGeo": F(int, OPT),
-              # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
-              "globalFar": F(int, OPT),
-              # it takes a built block near its target (follow.preferReady: 'terrain_ready_set')
-              "readySet": F(int, OPT),
-              # the game's own user folder (FS:getUserPath: Server.check_user_dir, GitHub #770)
-              "userPath": F(str, OPT),
-              # it slows the car before a bridge whose road tile has not come (deckguard.lua PROTO: 'deck_spans')
-              "deckGuard": F(int, OPT)},
-    "traffic_visuals": {"enabled": F(bool), "reset": F(bool, OPT)},
-    "prepare_anchor": {"requestId": F(int), "lat": F(NUM), "lon": F(NUM), "cx": F(NUM, OPT), "cy": F(NUM, OPT),
-                       # 2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)
-                       "px": F(NUM, OPT), "py": F(NUM, OPT),
-                       # 2026-10-25: 'teleport' (a declared teleport: provisional first block, boost) or 'rebase'
-                       "purpose": F(str, OPT)},
-    "commit_anchor": {"anchorId": F(int)},
-    "prepare_terrain": {"requestId": F(int), "anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
-    "commit_terrain": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
-    # a generation swap committed (ok) or given up by the mod (core.lua _swapStep; earthd Connection.stale_swap)
-    "swap_done": {"gen": F(int), "ok": F(bool), "why": F(str, OPT)},
-    "pose": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "z": F(NUM), "vx": F(NUM), "vy": F(NUM), "lat": F(NUM),
-             "lon": F(NUM), "speed": F(NUM), "cam": F(dict, OPT),
-             "follow": F(bool, OPT),        # false: the altitude rule holds the block (no prefetch)
-             "view": F(bool, OPT),          # true: the 3D map's view frame (earthd Conn.map_view)
-             "map": F(bool, OPT),           # true: the 3D map open (earthd Conn.map_open)
-             # previous anchors whose tile objects the mod still has (an empty Lua table may encode as {})
-             "held": F((list, dict), OPT),
-             # the session folders in use, as in hello: an earlier run's one no longer named is released
-             "sessions": F((list, dict), OPT),
-             # pooled far-tile slots whose far_tile's object is gone: [[slot, serial], ...] (matslots.py)
-             "slotsGone": F((list, dict), OPT),
-             # other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)
-             "foci": F((list, dict), OPT),
-             # the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)
-             "guardHold": F(bool, OPT),
-             # the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)
-             "deckWait": F((list, dict), OPT)},
-    # the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or
-    # neither (fresh usage numbers); always answered with a 'cache'
-    "cache": {"capGb": F(NUM, OPT), "clear": F(bool, OPT)},
-    # the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or
-    # nothing (fresh numbers); always answered with a 'memory'
-    "memory": {"limitGb": F(NUM, OPT)},
-    # 2026-11-15: the settings page's "Restart world server" (srvrestart.lua; server srvrestart.py): the server stops
-    # cleanly and its launcher starts it again; always answered with a 'server_restart'. key: the capability the server
-    # wrote in the game's temp/beamngEarth folder (srvrestart.write_key; core.restartKey)
-    "server_restart": {"key": F(str)},
-    # 2026-11-12: the in-game reports (report.lua / reportsend.lua; server reportsend.py): the moment's server part
-    # (where the camera, the centre's aim point and the car are), the mod's files written (scrubbed), and the
-    # player's "Send to the developers" (only the folder's name: never a path)
-    "report_context": {"folder": F(str), "camera": F(dict, OPT), "aim": F(dict, OPT), "player": F(dict, OPT)},
-    "report_saved": {"folder": F(str)},
-    "report_send": {"folder": F(str)},
-    # 2026-10-25: the settings page's cache folder / BeamMP launcher (apppaths.py): chosen in a window or typed
-    "app_path": {"what": F(str, OPT), "pick": F(bool, OPT), "path": F(str, OPT)},
-    # the ground's collision patch under another vehicle's collision island off the block (terrainpatch.lua / .py)
-    "terrain_patch": {"anchorId": F(int), "key": F(str), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM)},
-    # 2026-11-06: the camera far above the clouds: the cloud shell round the point under it (spaceclouds.lua / .py)
-    "space_clouds_req": {"anchorId": F(int), "lat": F(NUM), "lon": F(NUM), "alt": F(NUM),
-                         "sunAz": F(NUM, OPT), "sunEl": F(NUM, OPT)},     # (the game sky's sun seen from there)
-    # the performance log (perflog.lua; additive): lines for the server's log (hitches, drops, minutes, the machine)
-    "runtime_profiler": {"enabled": F(bool), "mode": F(str, OPT), "probe": F(int, OPT)},
-    "perf_log": {"lines": F((list, dict))},
-    # the anonymous performance data (perfsummary.lua, perfstats.py; additive): the setup once a connection, 5-minute windows
-    "perf_setup": {"setup": F(dict)},
-    "perf_summary": {"summary": F(dict)},
-    # BeamMP shared generation (peerwork.py, mpsession.lua): our world server serves our group; the players on our
-    # anchor ({id, host, port, code, weight} each). (Commented out 2026-10-27: shared world building is off.)
-    # "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)
-    # "peers": {"me": F(str), "members": F(list)},
-    # roads (roads.py; additive): the mod removed its roads (switched off and on again): send them again
-    "roads_reset": {},
-    "world_reset": {},                  # the mod's level started again after another level in the same game: forget what was sent
-    # gas stations (gasstations.py; additive): on, sent after every hello
-    "gas_stations": {"on": F(bool)},
-    # highway signs (signstream.py; additive): the settings page's switch, sent after every hello and when changed
-    "highway_signs": {"on": F(bool)},
-    "direction_signs": {"on": F(bool)},
-    "road_signs": {"on": F(bool)},
-    # German junction signs (designs.py; additive): the settings page's switch, sent after every hello and on a change
-    "german_junctions": {"on": F(bool)},
-    # town signs (townentry.py; additive): the settings page's switch, sent after every hello and on a change
-    "town_signs": {"on": F(bool)},
-    # road wear (roadwear.py; additive): the settings page's Road surface detail ('off' / 'basic' / 'full'), sent
-    # after every hello and on a change
-    "road_wear": {"value": F(str)},
-    # the settings page's graphics (Connection.set_graphics; additive): sent after every hello and on a change; the
-    # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px, the
-    # far field's screen-space LOD (lodPx: the largest pop on screen, px; 0: off)
-    "graphics": {"lodScale": F(NUM, OPT), "treeScale": F(NUM, OPT), "buildingScale": F(NUM, OPT),
-                 "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT), "lodPx": F(NUM, OPT)},
-    "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
-    "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "full": F(bool, OPT)},   # the map's search box
-    "stations": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "r_km": F(NUM), "kinds": F(list), "mode": F(str)},   # the station finder
-    # a destination picked on the world map, loaded ahead; hover: one the pointer rests on (the light part)
-    "preload_place": {"lat": F(NUM), "lon": F(NUM), "hover": F(bool, OPT)},
-    # the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation /
-    # imagery / mapdata (world: not asked by the map yet)
-    "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),
-                  "mode": F(str, OPT)},
-    # saved areas (areas.py; additive): a picked box's estimate, a new area, pause / resume / delete one; a saved
-    # route: route "current" (the last planned GPS route) and half (its corridor's half width, m) instead of the box
-    "area_plan": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
-                  "route": F(str, OPT), "half": F(NUM, OPT), "mode": F(str, OPT)},
-    "area_add": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
-                 "route": F(str, OPT), "half": F(NUM, OPT), "name": F(str, OPT), "mode": F(str, OPT),
-                 "fast": F(bool, OPT)},       # (fast: areas.py fast mode, the game paused while it runs)
-    "area_cmd": {"id": F(int), "area": F(str), "op": F(str)},     # op: pause, resume, delete, fast, slow
-    "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
-              "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
-              "download": F(str, OPT),   # the "Download along route" setting: off / ahead / route (route_download)
-              "via": F(list, OPT)},      # [[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)
-    "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
-    # the 3D map's labels by zoom (map3d.lua; maplabels.py)
-    "map_labels": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "zoom": F(NUM), "radius": F(NUM)},
-    # the modding API's places round a point (api.lua places / buildings; places.py)
-    "places": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "radius": F(NUM, OPT), "categories": F(list, OPT),
-               "limit": F(NUM, OPT), "cursor": F(str, OPT), "buildings": F(bool), "minConfidence": F(NUM, OPT),
-               "cachedOnly": F(bool)},      # only the cells on disk, a wide radius then allowed (places.py)
-    # the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)
-    "map_focus": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "eye": F(NUM), "seconds": F(NUM)},
-    "globe_req": {"anchorId": F(int)},     # the 3D map's whole-earth globe for an anchor (globe.lua / globe.py)
-    "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
-    # BeamMP shared world generation v2 (mpsession.lua <-> mpshare.py): our share code asked once a session, the
-    # plugin's messages and groups passed through untouched
-    "share_hello": {},
-    "share_in": {"d": F(str)},
-    "share_group": {"d": F(str)},
-    # the update notice's button: the server opens the releases page (updates.open_page; additive)
-    "open_page": {"url": F(str)},
-    "update_now": {},                   # the update notice's "Update now" (selfupdate.py)
-    # the Add-ons page (addons.lua <-> addons.py; additive): the list, one add-on's page, Install / Update (consent: the
-    # player agreed to its notice; mp: a BeamMP session, refused), and the mod's answer after the game's mod manager
-    # took the file or enabled / disabled / removed the mod
-    "addons_list": {"refresh": F(bool, OPT)},
-    "addon_detail": {"id": F(str), "refresh": F(bool, OPT)},
-    "addon_install": {"id": F(str), "consent": F(bool), "mp": F(bool, OPT)},
-    "addon_applied": {"id": F(str), "op": F(str), "ok": F(bool), "error": F(str, OPT)},
-    "addon_run": {"id": F(str), "op": F(str)},     # a program beside the game: start / stop / uninstall / autostart
-    "addon_add": {"repo": F(str)},                  # Add from GitHub: the pasted repository
-    "addon_forget": {"id": F(str)},                 # an add-on the player added, taken off the list
-    "addon_options": {"id": F(str), "values": F(dict)},     # its Options tab saved
-    # the level select's "Random location" (randomplace.py; additive)
-    "random_place": {"id": F(int)},
-    # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
-    "place_previews": {"places": F((list, dict))},
-}
-CAM = {"x", "y", "z", "fx", "fy", "fz", "fovDeg", "h"}     # h: the screen height px (screen-space LOD)
-TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squareSize": F(NUM),
-           "zBase": F(NUM), "maxHeight": F(NUM), "q": F(NUM),
-           "layers": F(list, OPT), "materials": F(list, OPT),     # --surface on (surface.py)
-           "base": F(str, OPT), "baseSize": F(NUM, OPT),           # --near-visual detail: the block's photo
-           "ter": F(str, OPT)}                                     # the block as a .ter (swapped in, no import)
-SERVER_TO_MOD = {
-    "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
-    "share_info": {"code": F(str), "weight": F(NUM)},     # BeamMP sharing v2: our share code for the poses
-    "share_out": {"to": F(str), "d": F(str)},             # ... a message for the plugin ("S") or a player
-    "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT), "text": F(str, OPT)},   # geocode.py
-    "stations_result": {"id": F(int), "items": F(list), "partial": F(bool), "error": F(str, OPT)},   # stationindex.py
-    # covermap.py: w x h levels (base64, north row first) for the asked box, clipped to the world; gen changes with
-    # the index; ready: false while the index is being built
-    "cache_map_result": {"id": F(int), "z": F(int), "x0": F(int), "y0": F(int), "w": F(int), "h": F(int),
-                         "cells": F(str), "gen": F(int), "ready": F(bool, OPT), "error": F(str, OPT)},
-    # areas.py: a picked box's estimate (sizes in bytes, the time in s, days of the hosts' daily limits)
-    "area_plan_result": {"id": F(int), "ok": F(bool), "km2": F(NUM, OPT), "items": F(int, OPT),
-                         "missing": F(int, OPT), "downloadBytes": F(int, OPT), "diskBytes": F(int, OPT),
-                         "seconds": F(int, OPT), "days": F(NUM, OPT), "hosts": F(list, OPT),
-                         "excluded": F(list, OPT), "km": F(NUM, OPT), "worldTiles": F(int, OPT),
-                         "worldMissing": F(int, OPT), "error": F(str, OPT)},
-    # the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode, route?}] after hello, a change and while one downloads
-    # (at most every areas.STATUS_S); result: the answer to an area_add / area_cmd
-    "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT),
-              "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
-    "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
-                      "elev": F((list, dict), OPT),   # OSRM; elev: the map's profile (routing.resample, dem.sample)
-                      "legs": F(list, OPT),           # with via: [[dist_m, dur_s], ...] per leg
-                      "steps": F(list, OPT)},         # OSRM maneuvers (routing.parse; the API's gpsRoute().steps)
-    "route_download": {"total": F(int), "done": F(int), "active": F(bool)},
-    # the blocks built already round the player (follow.preferReady takes one instead of its own target)
-    "terrain_ready_set": {"anchorId": F(int), "centres": F(list)},  # routeahead.py: the route's corridor
-    "update": {"current": F(str), "latest": F(str), "url": F(str),   # a newer version on GitHub (updates.py)
-               "dev": F(bool, OPT)},        # (a development build's check: whether the newer one is one too)
-    "update_status": {"state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT),
-                      "version": F(str, OPT)},      # the "Update now" download (selfupdate.py)
-    # the Add-ons page (addons.py): the cards; one add-on's README and changelog as safe HTML (fast.md_html); a
-    # download's progress; the checked file for the game's mod manager (addons.lua hands it over)
-    "addons": {"addons": F(list), "error": F(str, OPT)},
-    "addon_detail": {"id": F(str), "card": F(dict, OPT), "readme": F(str), "readmeLinks": F(list), "releases": F(list),
-                     "error": F(str)},
-    "addon_status": {"id": F(str), "state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT)},
-    "addon_added": {"ok": F(bool), "id": F(str, OPT), "error": F(str, OPT)},     # Add from GitHub's answer
-    "addon_apply": {"id": F(str), "op": F(str), "file": F(str), "tmp": F(str), "old": F(list), "tag": F(str),
-                    "active": F(bool), "uiApps": F(list), "code": F(dict), "oldCode": F(dict, OPT)},
-    "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
-                     "country": F(str, OPT)},   # the status bar's location
-    "map_labels_result": {"id": F(int), "rows": F(list)},   # the 3D map's labels: maplabels.py rows
-    # ... the modding API's places (places.py rows; buildings asked only, next while more pages follow)
-    "places_result": {"id": F(int), "places": F(list), "complete": F(bool), "pending": F(bool),
-                      "buildings": F(list, OPT), "next": F(str, OPT), "truncated": F(bool, OPT),
-                      "error": F(str, OPT)},
-    "globe": {"anchorId": F(int), "shape": F(str), "texture": F(str), "material": F(str),  # the 3D map's globe
-              "miniShape": F(str), "miniScale": F(NUM)},                     # ... and its small copy (far out)
-    "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
-    "place_previews_ready": {"keys": F(list)},
-    "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
-    "runtime_profiler_pong": {"probe": F(int)},
-    "runtime_profiler": {"profile": F(dict)},
-    "hello": {"runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
-              "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
-              "streamLease": F(int, OPT), "leaseId": F(str, OPT),
-              "memoryTier": F(str, OPT), "memoryNote": F(str, OPT),   # low-memory machines only (budget.TIER lean / emergency)
-              # the start-time values of the settings read only at a start (srvrestart.start_view: {id: value}) and
-              # whether a supervisor starts the server again (srvrestart.ENV): the settings page's restart button
-              "startSettings": F(dict, OPT), "restartable": F(bool, OPT),
-              "startFixed": F((list, dict), OPT),   # ... the ids set by hand there (never pending: srvrestart.lua)
-              "farFormat": F(str), "material": F(str),
-              "nearVisual": F(str), "attribution": F(str),          # protocol 4
-              "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
-              "blockSize": F(int),              # the terrain block: samples per edge (always since 2026-11-01) ...
-              "squareSize": F(NUM),             # ... and their spacing, m (1 m; without both the mod takes 1024 x 2 m)
-              "horizon": F(bool, OPT),          # v1.4 M1h: true with --horizon only
-              "geoTiles": F(int, OPT),          # geotiles: the zoom of the tiles it sends (hello.geoTiles, --geo-tiles on)
-              "trafficVisuals": F(int, OPT),    # visual roads, independent of the AI graph's physics window
-              "roadGeo": F(int, OPT),           # road tiles as geotiles (hello.roadGeo, the road processes on)
-              "farGeo": F(int, OPT),            # far buildings / skyline / far bridges as geotiles (hello.farGeo)
-              "farPack": F(int, OPT),           # ... and the far buildings past PACK_INNER_M as packs (hello.farPack)
-              "farHz": F(int, OPT),             # ... and the horizon ring (hello.farHz, BNE_BLDHZ_DIR)
-              "turbineGeo": F(int, OPT),        # mapped turbine geotiles (zoom 15; native stock shapes)
-              "globalFar": F(int, OPT),         # far levels >= 3 as global tiles (hello.globalFar, --global-far)
-              "deshadow": F(str, OPT),          # --deshadow lambert|full only (the settings page shows it)
-              "colormatch": F(str, OPT),        # --colormatch s2 only (likewise)
-              "season": F(str, OPT),           # --season auto / fall (seasonlook.lua tints the leaves)
-              "mapPort": F(int, OPT),           # the world map's tile endpoint on 127.0.0.1 (maptiles.py)
-              "prewarm": F(str, OPT),           # the shape listing our shapes' materials (prewarm.py; with map data)
-              # the world map's credits for its view: [[credit, w, s, e, n] or [credit]] per imagery source, and
-              # the rest (weather, elevation); with imagery on only
-              "imageryCredits": F(list, OPT), "otherCredits": F(str, OPT)},
-    "catchup": {"on": F(bool)},             # the catch-up boost on / off (the mod tags slow frames: perfsummary.lua)
-    "status": {"text": F(str),
-               "backlog": F(int),           # v1.4 M0: desired - shown far tiles of the current anchor
-               "radius": F(NUM, OPT)},      # v1.4 M1h: the far-field radius (m), --horizon only
-    "anchor_ready": {"requestId": F(int), "anchorId": F(int), "lat": F(NUM), "lon": F(NUM),
-                     "groundZ": F(NUM, NULL), "terrain": F(dict),
-                     "floorZ": F(NUM, NULL, OPT),          # 2026-10-17: in a tunnel, its floor (core.floorCheck)
-                     "anchorKey": F(str, OPT),             # phase 5 (lattice anchors): not sent yet
-                     "provisional": F(bool, OPT),          # 2026-10-22: a teleport's ungraded first block
-                     "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT),     # the prepare_anchor's spot, echoed
-                     "fuelShapes": F(list, OPT)},          # 2026-10-23: the region's gas station shapes (--gas-stations)
-    "anchor_progress": {"requestId": F(int, NULL), "stage": F(str), "elapsed": F(NUM)},
-    "anchor_error": {"requestId": F(int, NULL), "error": F(str), "stage": F(str, OPT)},
-    # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world
-    # building, commented out 2026-10-27)
-    "terrain_ready": {"requestId": F(int), "anchorId": F(int), **TERRAIN},
-    # the graded block in place of the provisional one; swap: a generation swap's block, held by the mod until the
-    # swap's skins are staged and committed with them
-    "terrain_refresh": {"anchorId": F(int), "swap": F(int, OPT), **TERRAIN},
-    # a generation swap (earthd Connection.stale_swap): what follows with `swap = gen` is staged; all of it sent; given up
-    "swap_begin": {"anchorId": F(int), "gen": F(int)},
-    "swap_end": {"anchorId": F(int), "gen": F(int), "skins": F(int)},
-    "swap_abort": {"anchorId": F(int), "gen": F(int)},
-    "terrain_error": {"requestId": F(int, NULL), "anchorId": F(int, NULL), "error": F(str)},
-    "far_tile": {"anchorId": F(int), "key": F(str), "level": F(int), "shape": F(str), "pos": F(list),
-                 "err": F(NUM), "skirt": F(NUM), "sink": F(NUM, OPT), "state": F(str),   # sink: exactly on L0
-                 # protocol 4, satellite imagery: the tile's own material (all three, or none)
-                 "material": F(str, OPT), "texture": F(str, OPT), "detail": F(bool, OPT),
-                 "tex": F(int, OPT),            # v1.4 M1: texture px (FORMAT 4, with the material)
-                 "slotSerial": F(int, OPT),     # a pooled shape file's send serial (matslots.py; pose.slotsGone)
-                 # geotiles phase 3b (hello.globalFar): a global tile's frame [lat, lon] (pos then {0, 0, pivot} in
-                 # it), and a global tile's / a piece's footprint (flat x, y: its quad / polygon in the anchor's world)
-                 "frame": F(list, OPT), "poly": F(list, OPT)},
-    "far_swap": {"anchorId": F(int), "id": F(int), "add": F(list), "remove": F(list), "dIn": F(NUM),
-                 "dOut": F(NUM)},
-    "far_remove": {"anchorId": F(int), "key": F(str)},
-    "far_done": {"anchorId": F(int), "count": F(int)},
-    # --colormatch / --deshadow: a shown (or held) tile's texture rendered again under a new name
-    # (additive, protocol 4; exercised by RetexMessagesTest, a session whose colour-match regions turn ready)
-    "far_retex": {"anchorId": F(int), "key": F(str), "texture": F(str)},
-    # real weather at the player (weather.py; additive, protocol 4)
-    "weather": {"v": F(int), "t": F(int), "lat": F(NUM), "lon": F(NUM), "code": F(int), "isDay": F(bool),
-                "cover": F(dict), "baseM": F(NUM), "baseAglM": F(NUM), "rainMmH": F(NUM), "snowCmH": F(NUM),
-                "visM": F(NUM, NULL), "fog": F(bool), "thunder": F(bool), "wind": F(dict),
-                "aloft": F(dict, OPT), "tempC": F(NUM), "dewC": F(NUM), "elevM": F(NUM), "slTempC": F(NUM),
-                "pressureHpa": F(NUM), "utcOffsetS": F(int, OPT), "tz": F(str, OPT), "credit": F(str)},
-    # real gravity at the player (gravity.py; additive, protocol 4): |g| in m/s^2 at (lat, lon, h m MSL)
-    "gravity": {"v": F(int), "g": F(NUM), "lat": F(NUM), "lon": F(NUM), "h": F(NUM), "source": F(str)},
-    # detail mode: a block's base photo rendered again once its NAIP tiles arrived (earthd base_refresh)
-    "block_base": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "base": F(str), "baseSize": F(NUM)},
-    # the highest ground near the player's path (groundahead.py; the mod's altitude rule), z in the anchor's frame
-    "ground_ahead": {"anchorId": F(int), "z": F(NUM)},
-    # the bridges round the car (deckspans.py; the mod's deck guard, hello.deckGuard): spans [[x0, y0, x1, y1, ...]] in
-    # the anchor's world, abut [bits] (1 the first end on the ground, 2 the last), for the disc (cx, cy) r
-    "deck_spans": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "r": F(NUM), "spans": F(list), "abut": F(list)},
-    # the water near the player (--sea on): tiles [key, x, y, z, size, nx, ny] (seatiles.py), rivers
-    # [key, kind, flow m/s, [[x, y, z, width, depth], ...]] (riverlines.py)
-    "sea": {"anchorId": F(int), "tiles": F(list), "rivers": F(list)},
-    # data credits for the tiles around the player (credits.py; additive, protocol 4, --credits on)
-    "credits": {"v": F(int), "near": F(str), "far": F(str), "ids": F(list), "farIds": F(list)},
-    # the loading line's counts (Connection.send_progress, the mod's loadprogress.lua): [done, wanted] each
-    # the server writes where the game does not look (Server.check_user_dir, GitHub #770)
-    "user_dir_mismatch": {"game": F(str), "server": F(str)},
-    "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list),
-                      "net": F(list)},     # (the downloads in flight: loadprogress.downloadText)
-    # road tiles near the player (roads.py; additive, with map data only): a JSON file of DecalRoad chunks
-    "roads_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
-                   "data": F(dict, OPT),       # the file's JSON, so the game need not open it (staging.inline_json)
-                   "slots": F(dict, OPT),      # {what: [pooled shape path, serial]} (matslots.py; pose.slotsGone)
-                   # a road geotile (key "g17_x_y", hello.roadGeo): its content in the frame [lat, lon] of its centre,
-                   # each part {shape, pos, pivot, relief} in data, h its content hash (kept across a server restart),
-                   # exact {what: shape}: the parts this anchor shows as their exact variants (slots "x:<what>")
-                   "frame": F(list, OPT), "h": F(str, OPT), "exact": F(dict, OPT)},
-    # a road geotile's draped surfaces for an anchor (road mesh, plazas, sidewalks; their colliders), a JSON file
-    "roads_skin": {"anchorId": F(int), "key": F(str), "path": F(str), "data": F(dict, OPT), "slots": F(dict, OPT),
-                   "swap": F(int, OPT)},
-    # a road geotile's parts shown as their exact variant for an anchor ({what: shape}; false: the base shape again)
-    "roads_exact": {"anchorId": F(int), "key": F(str), "parts": F(dict), "slots": F(dict, OPT)},
-    "roads_drop": {"anchorId": F(int), "key": F(str)},
-    # trees, bushes and rocks of a tile (vegetation.py, --trees on): a JSON file of items
-    # (a geotile, key "g17_x_y": frame [lat, lon] of its centre and pivot, m in that frame: the mod places it,
-    # geotile.lua, and keeps it across rebases)
-    "veg_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
-                 "frame": F(list, OPT), "pivot": F(NUM, OPT)},
-    "veg_drop": {"anchorId": F(int), "key": F(str)},
-    "traffic_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
-                     "frame": F(list), "pivot": F(NUM)},
-    "traffic_drop": {"anchorId": F(int), "key": F(str)},
-    "traffic_far_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
-                         "frame": F(list), "pivot": F(NUM)},
-    "traffic_far_drop": {"anchorId": F(int), "key": F(str)},
-    "turbines_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
-                      "data": F(dict, OPT), "frame": F(list), "pivot": F(NUM)},
-    "turbines_drop": {"anchorId": F(int), "key": F(str)},
-    # far buildings (buildings.far_tile, --buildings on): a JSON file naming a render-only mesh
-    # (a geotile, key "g17_x_y", hello.farGeo: frame [lat, lon] of its centre and pivot, m in that frame: the mod
-    # places it and keeps it across rebases; the skyline's and far bridges' keys "g15_x_y")
-    "bldfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
-                    "slots": F(dict, OPT),     # {"shape": [pooled shape path, serial]}
-                    "frame": F(list, OPT), "pivot": F(NUM, OPT)},
-    "bldfar_drop": {"anchorId": F(int), "key": F(str)},
-    # the skyline past them (buildings.skyline_tile): the same, one per SKY_UNIT x SKY_UNIT road tiles
-    "bldsky_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
-                    "slots": F(dict, OPT), "frame": F(list, OPT), "pivot": F(NUM, OPT)},
-    "bldsky_drop": {"anchorId": F(int), "key": F(str)},
-    # the bridges past the road tiles (buildings.far_bridge_tile): the same, a road tile's square of decks
-    "brfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
-                   "slots": F(dict, OPT),      # (a geotile's: {road geotile key: [pooled shape path, serial]})
-                   "frame": F(list, OPT), "pivot": F(NUM, OPT)},
-    "brfar_drop": {"anchorId": F(int), "key": F(str)},
-    # the far buildings of a whole skyline square past buildings.PACK_INNER_M as one shape (hello.farPack, key "g15_x_y")
-    "bldpack_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
-                     "slots": F(dict, OPT), "frame": F(list, OPT), "pivot": F(NUM, OPT)},
-    "bldpack_drop": {"anchorId": F(int), "key": F(str)},
-    # the horizon ring's tall buildings, a piece per skyline square under a zoom-12 geotile (hello.farHz, bldhz.py)
-    "bldhz_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
-                   "slots": F(dict, OPT), "frame": F(list, OPT), "pivot": F(NUM, OPT)},
-    "bldhz_drop": {"anchorId": F(int), "key": F(str)},
-    # the AI road graph around the player (navgraph.py, --traffic on): a JSON file of nodes and edges
-    "navgraph": {"anchorId": F(int), "path": F(str), "cx": F(NUM), "cy": F(NUM), "nodes": F(int), "edges": F(int),
-                 "serial": F(int)},
-    # the download cache's usage (cache.py; additive, with a Cache only): after hello and every mod 'cache'
-    # ... its answer: the patch's shape and centre, or an error (the mod asks again later)
-    "terrain_patch": {"anchorId": F(int), "key": F(str), "parts": F(list, OPT),     # [{path, x, y}]: small meshes
-                      "tris": F(int, OPT), "error": F(str, OPT)},
-    # ... its answer: the shell's shape, colour and opacity DDS (game paths), the material's name, where it is round
-    # a teleport's spot in a tunnel: its floor, after anchor_ready (core.floorCheck: down onto it once the tube collides)
-    "tunnel_floor": {"anchorId": F(int), "floorZ": F(NUM), "x": F(NUM), "y": F(NUM)},
-    "space_clouds": {"anchorId": F(int), "shape": F(str), "color": F(str), "opacity": F(str), "material": F(str),
-                     "lat": F(NUM), "lon": F(NUM), "radius": F(NUM),
-                     # ... and the night side's city lights over the ground (none: none could be had)
-                     "lightsShape": F(str, OPT), "lights": F(str, OPT), "lightsMaterial": F(str, OPT)},
-    "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
-    # the in-game reports (reportsend.py): a send's state (queued / sending / retry / sent / failed, the collector's
-    # report id once sent) and the server's part of a report written
-    "report_status": {"folder": F(str), "state": F(str), "id": F(str, OPT), "text": F(str, OPT), "tries": F(int, OPT),
-                      "next": F(NUM, OPT)},
-    "report_context_done": {"folder": F(str), "ok": F(bool)},
-    # the server's memory and its limit (memwatch.status), for the settings page: after every mod 'memory'
-    "memory": {"usedMB": F(NUM), "limitMB": F(NUM), "effMB": F(NUM), "autoMB": F(NUM), "setting": F(NUM),
-               "tier": F(str), "processes": F(int), "sheds": F(int), "rotations": F(int), "peakMB": F(NUM),
-               "availMB": F(NUM, OPT), "restart": F(bool),
-               "tooLow": F(bool)},    # (over Max RAM for minutes: memwatch.too_low, the settings line says so)
-    # the answer to 'server_restart': ok, the server stops now and is started again; else why not (error)
-    "server_restart": {"ok": F(bool), "error": F(str, OPT)},
-    "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
-              "managed": F(bool), "clearedBytes": F(int, OPT),
-              "pinnedBytes": F(int, OPT)},     # the saved areas' files (areas.py; kept by a clear)
-}
-WEATHER_NESTED = {"cover": {"total", "low", "mid", "high"}, "wind": {"ms", "fromDeg", "gustMs"},
-                  "aloft": {"ms", "fromDeg"}}
+def table_spec(spec):
+    """one field's {type, optional?, nullable?} as F(types, flags)"""
+    names = spec["type"] if isinstance(spec["type"], list) else [spec["type"]]
+    unknown = set(spec) - {"type", "doc"} - set(FLAG_KEYS)
+    if unknown or not names:
+        raise ValueError(f"protocol_table.json: a field spec {spec}")
+    types = tuple(t for n in names for t in TYPE_NAMES[n])
+    return F(types, *(flag for key, flag in FLAG_KEYS.items() if spec.get(key)))
+
+
+def table_fields(message, shapes):
+    """a message's fields, then its included shapes' (in that order, as {**shape} would)"""
+    fields = {name: table_spec(spec) for name, spec in message["fields"].items()}
+    for shape in message.get("include", ()):
+        fields.update(shapes[shape])
+    return fields
+
+
+def load_table(path=TABLE_PATH):
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    shapes = {name: table_fields(s, {}) for name, s in doc["shapes"].items()}
+    m2s = {kind: table_fields(m, shapes) for kind, m in doc["mod_to_server"].items()}
+    s2m = {kind: table_fields(m, shapes) for kind, m in doc["server_to_mod"].items()}
+    nested = {name: set(keys) for name, keys in doc["nested"].items()}
+    return doc, shapes, m2s, s2m, nested
+
+
+TABLE, SHAPES, MOD_TO_SERVER, SERVER_TO_MOD, NESTED = load_table()
+CAM = NESTED["pose.cam"]                # h: the screen height px (screen-space LOD)
+TERRAIN = SHAPES["terrain"]
+WEATHER_NESTED = {name.split(".", 1)[1]: keys for name, keys in NESTED.items() if name.startswith("weather.")}
 # message types the plain session cannot produce (each has its own session test below)
-EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
+EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises success/error/busy replies
+                     "far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
                        "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
+                       "audio_state",                                # live weather sounds: a weathersynth child (test_liveaudio)
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
                        "swap_begin", "swap_end", "swap_abort",       # a generation swap (test_stale_revisit.StaleSwapTest)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
+                       "snow",                                       # winter's live state (BNE_WINTER: test_snowcover)
                        "catchup",                                    # the catch-up boost: a driving player behind (test_catchup)
                        "where_result",                               # the status bar: asked by the mod while driving
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
@@ -545,13 +175,16 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "share_info", "share_out"}                    # only in a BeamMP session (test_mpshare)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}
+# fields the mod sets on its OWN copy of a server message (not on the wire): weather.lua scaleMsg marks a copy scaled
+# below THUNDER_MIN_K with noThunder (the thunder class reads it)
+MOD_MARKS = {"noThunder"}
 
 LUA = modsim.MOD_DIR
 GRAVITY_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "egm2008_n36.npz"     # degree 36 (test_gravity)
 # levels down to -2 (mesh mode); a textured tile's shape is its material name's pooled file (matslots.py)
 # (geotiles phase 3b: a piece's key has a _c<z>_<x>_<y> suffix, a global tile's file is far_0_m<z>_<x>_<y>)
 SHAPE_RE = r"^/temp/beamngEarth/[^/]+/(far_\d+_(-?\d+_-?\d+_-?\d+(_c\d+_\d+_\d+)?|m\d+_\d+_\d+)|slot_\d{5})\.cdae$"
-HM_RE = r"^/temp/beamngEarth/[^/]+/hm_\d+_-?\d+_-?\d+\.png$"
+HM_RE = r"^/temp/beamngEarth/[^/]+/hm_\d+_-?\d+_-?\d+_\d+\.png$"
 
 
 def code_only(text, mark):
@@ -597,8 +230,8 @@ def mod_sends():
     (core hands them net.send)."""
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
-                              "addons.lua", "api.lua"), r"net(?:'\))?\.send\(\{"),
-                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
+                              "addons.lua", "api.lua", "terrainfiles.lua", "winterlook.lua"), r"net(?:'\))?\.send\(\{"),
+                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua", "liveaudio.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
@@ -613,8 +246,8 @@ def mod_sends():
 def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
-    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
-                 "addons.lua", "api.lua", "reportsend.lua"):
+    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "winter.lua", "credits.lua", "roads.lua", "mpsession.lua",
+                 "addons.lua", "api.lua", "reportsend.lua", "terrainfiles.lua", "liveaudio.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}
@@ -655,9 +288,20 @@ class AgreementTableTest(unittest.TestCase):
     def test_mod_reads_are_in_table(self):
         sent = {f for spec in SERVER_TO_MOD.values() for f in spec} | {"type"}
         sent |= {f for spec in MOD_INTERNAL.values() for f in spec}
+        sent |= MOD_MARKS
         sent |= {"terrain." + f for f in TERRAIN}
         unknown = mod_reads() - sent
         self.assertFalse(unknown, f"the mod reads fields no server message has: {sorted(unknown)}")
+
+    def test_table_file(self):
+        """server/protocol_table.json is the protocol the server speaks, and every spec in it is well formed (an
+        unknown type name, flag or shape fails loading: table_spec / table_fields)"""
+        self.assertEqual(TABLE["protocol"], earthd.PROTOCOL)
+        for side in ("mod_to_server", "server_to_mod"):
+            for kind, message in TABLE[side].items():
+                self.assertLessEqual(set(message), {"doc", "fields", "include"}, (side, kind))
+                self.assertLessEqual(set(message.get("include", ())), set(SHAPES), (side, kind))
+        self.assertTrue({"pose.cam", "weather.cover", "weather.wind", "weather.aloft"} <= set(NESTED))
 
 
 class SessionsAgreementTest(test_server.ServerHarness):
@@ -673,13 +317,13 @@ class SessionsAgreementTest(test_server.ServerHarness):
         for kind in ("hello", "pose"):
             t = next(lua_tables(core, m.end() - 1) for m in re.finditer(r"net\.send\(\{", core)
                      if f"type = '{kind}'" in lua_tables(core, m.end() - 1))
-            self.assertIn("sessions = roads.allHeldSessions()", t, kind)
+            self.assertIn("sessions = M._terrainFiles.sessions(roads.allHeldSessions())", t, kind)
         # (the far field's folders and the road tiles' kept across a server restart: their buildings, 2026-10-31)
         self.assertIn("require('beamngEarth/farfield').heldSessions(), M.heldSessions()", roads_lua)
         self.assertIn("'^/temp/beamngEarth/([^/]+)/'", far)
         self.assertEqual(self.server.vfs_dir, f"/temp/beamngEarth/{self.server.sid}")
         self.assertEqual(modsim.folder_of(self.server.vfs_dir + "/far_1_0_0_0.cdae"), self.server.sid)
-        self.assertEqual(modsim.folder_of(self.server.hm_vfs((1, 0, 0))), self.server.sid)
+        self.assertEqual(modsim.folder_of(self.server.vfs_dir + "/" + self.server.block_names((1, 0, 0))[0]), self.server.sid)
         self.assertIsNone(modsim.folder_of("/levels/beamng_earth/x.cdae"))
         self.assertIn("sessions", server_reads())
 
@@ -811,7 +455,8 @@ class ConstantsTest(unittest.TestCase):
                 # the SW corner of a block on its grid is an even lattice index (Torque diagonal parity)
                 self.assertEqual((t["GRID"] - t["HALF"]) / heightmap.SQUARE % 2, 0)
         self.assertEqual(modsim.XO["CELLS"], ff.V131.cells)             # without hello.cells (FORMAT 3)
-        self.assertLess(modsim.FAR["EDGE_BAND"], ff.BASE)                   # the edge ring is one L0 tile deep
+        # the strip past the collidable width lies inside the N/E ring of covered tiles, its under-floor (farfield.lua 'edge')
+        self.assertLess(2 * heightmap.half_extent(ff.TERRAIN_BLOCK) - heightmap.valid(ff.TERRAIN_BLOCK), ff.BASE)
 
     def test_exact_level(self):
         """The mod's exactMiss metric (farfield.lua, V1_4_SPEC 3.0 M0): the exact level is the finest
@@ -1053,6 +698,7 @@ class ServerMessagesTest(test_server.ServerHarness):
     def setUp(self):
         super().setUp()
         self.server.weather = weather.Service(fetch=test_weather.FakeFetch())     # no network
+        self.server.snow = snowmod.Service(mode="light")       # winter W1 (BNE_WINTER): a preset, no network either
         self.server.gravity = gravitymod.Provider(model=gravitymod.GravityModel.from_npz(GRAVITY_FIXTURE),
                                                   download=False)               # no network either
         self.server.credits = creditsmod.Credits(interval=0.1)
@@ -1128,6 +774,10 @@ class ServerMessagesTest(test_server.ServerHarness):
                     self.assertEqual(set(m[k]), fields, (k, m))
                     self.assertTrue(all(isinstance(v, NUM) for v in m[k].values()), (k, m))
             self.assertEqual((m["v"], m["credit"]), (weather.VERSION, weather.CREDIT))
+        if kind == "snowstate":
+            self.assertEqual((m["v"], m["src"]), (snowmod.VERSION, "light"))
+            self.assertEqual((len(m["ground"]), len(m["roads"]), len(m["bridges"]), len(m["bands"])), (7, 5, 5, 8))
+            self.assertTrue(all(len(r) == 7 and isinstance(r[0], str) for r in m["roads"] + m["bridges"]), m)
         if kind == "gravity":
             self.assertEqual((m["v"], m["source"]), (gravitymod.MSG_VERSION, "egm2008"))
             self.assertTrue(9.75 < m["g"] < 9.85, m)
@@ -1154,6 +804,9 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.assertEqual(m["shape"].rsplit("/", 1)[1], f"slot_{m['material'].rsplit('_', 1)[1]}.cdae")
             self.assertIs(m["detail"], True)
         if kind == "hello":
+            if "cliffs" in m:
+                self.assertEqual(set(m["cliffs"]), {"available", "natural", "roadCuts", "debug"})
+                self.assertTrue(all(type(v) is bool for v in m["cliffs"].values()))
             self.assertIn(m["nearVisual"], ("mesh", "terrain"))
             self.assertEqual(m["format"], self.server.layout.format)
             self.assertIn(m["format"], modsim.CORE["FORMATS"])
@@ -1264,9 +917,11 @@ class ServerMessagesTest(test_server.ServerHarness):
             data = f.read()
         w, h, mips, fourcc, sizes = imagery.read_dds_info(data)
         # (the size the message says: its level's, or the far PVS's / the screen's, farpvs.UP_ON)
-        self.assertEqual((w, h, fourcc), (m.get("tex") or self.server.tex_size(m["level"]),) * 2 + (b"DXT1",))
+        # (DXT1 tagged sRGB under a DX10 header: imagery.FAR_SRGB, the mod's v1.5 far material)
+        tag = b"DX10" if imagery.FAR_SRGB else b"DXT1"
+        self.assertEqual((w, h, fourcc), (m.get("tex") or self.server.tex_size(m["level"]),) * 2 + (tag,))
         self.assertEqual(mips, w.bit_length())                 # full chain down to 1 x 1
-        self.assertEqual(len(data), imagery.DDS_HEADER + sum(sizes))
+        self.assertEqual(len(data), imagery.DDS_HEADER + (20 if imagery.FAR_SRGB else 0) + sum(sizes))
 
 
 class DeshadowHelloTest(test_server.ServerHarness):

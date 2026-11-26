@@ -28,6 +28,7 @@ import numpy as np
 import dmath
 
 import netfetch
+import pagesdata
 import railtags
 from polygon import Path
 
@@ -121,6 +122,9 @@ class Source:
             s = self.sites.get(folder)
             if s is None:
                 s = self.sites[folder] = railtags.Shards(self.cache_dir, self.fetcher, folder)
+                # (the shards are kept without a build and are in no tile's key: Pages' files whatever build it has, as
+                # before; not the weekly datasets' build check, which would only drop roofs)
+                s.manifest.any_build = True
             return s
 
     def shard(self, x, y, folder="lod2"):
@@ -147,6 +151,7 @@ class Source:
         """The shard's bytes from the disk cache or the site (b"": the site has none), None: not had now."""
         d = os.path.join(self.cache_dir, "pagesdata", folder) if self.cache_dir else None
         path = os.path.join(d, f"{x}_{y}.npz") if d else None
+        stale_miss = False
         if path and os.path.exists(path):
             try:
                 # (a shard the site didn't have, kept as an empty file, is asked again after MISS_TTL_S: before the
@@ -157,25 +162,26 @@ class Source:
                         return fh.read()
             except OSError:
                 pass
+        # (a "none there" answer past MISS_TTL_S stays the answer while the site cannot be asked: stale-if-error, its
+        # failure faults no build, netfetch.stale_ok)
         if self.fetcher is None or time.time() - self.down_at < RETRY_S:
-            return None
+            return b"" if stale_miss else None
         try:
             # (the folder's manifest names the host of its shards, data_url: R2 behind the CDN; none had (offline,
             # an old manifest): Pages, as before)
             site = self._site(folder)
-            site.version()
-            body = site.get(f"{x}/{y}.npz")
+            with netfetch.stale_ok(stale_miss):
+                site.version()
+                body = site.get(f"{x}/{y}.npz")
         except netfetch.NotFound:
             body = b""
         except Exception as e:      # (offline, or not published: the predicted roofs)
             log.debug("lod2 shard %s %s %s: %s: %s", folder, x, y, type(e).__name__, e)
             self.down_at = time.time()
-            return None
+            return b"" if stale_miss else None
         if path:
             os.makedirs(d, exist_ok=True)
-            with open(path + ".part", "wb") as fh:
-                fh.write(body)
-            os.replace(path + ".part", path)
+            pagesdata.write_atomic(path, body)      # (a name of this process and thread's own)
         return body
 
     def tile(self, frame, x0, y0, x1, y1):

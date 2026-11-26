@@ -89,7 +89,32 @@ def fast_build():
     print("built", dst, "(FAST development build: rebuild without --fast before committing)")
 
 
+def _zig_on_path():
+    """zig from the main checkout's .claude/devtools/ziglang put on PATH when none is (a git worktree, such as an
+    agent's, has no .claude/devtools of its own: found through the common git dir)."""
+    if shutil.which("zig"):
+        return
+    try:
+        common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=ROOT,
+                                capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return
+    zdir = os.path.join(os.path.dirname(common), ".claude", "devtools", "ziglang")
+    if os.path.isfile(os.path.join(zdir, "zig")):
+        os.environ["PATH"] = zdir + os.pathsep + os.environ.get("PATH", "")
+
+
+def _host_glibc():
+    """This machine's glibc as (major, minor); (0, 0) when unknown (a non-glibc libc: nothing to refuse)."""
+    try:
+        ver = os.confstr("CS_GNU_LIBC_VERSION").split()[-1]
+        return tuple(int(p) for p in ver.split(".")[:2])
+    except (AttributeError, ValueError, OSError, IndexError):
+        return (0, 0)
+
+
 def main():
+    _zig_on_path()
     if "--fast" in sys.argv[1:]:
         fast_build()
         return
@@ -98,6 +123,19 @@ def main():
         return
     if os.path.exists(FAST_MARK):
         os.remove(FAST_MARK)
+    if sys.platform.startswith("linux") and not (shutil.which("cargo-zigbuild") and shutil.which("zig")) \
+            and "--host-glibc" not in sys.argv[1:] and _host_glibc() > tuple(map(int, LINUX_GLIBC.split("."))):
+        # (a host no newer than LINUX_GLIBC, such as CI's and the release's ubuntu-22.04 (2.35), builds as before)
+        # (a release module built against this rolling distro's glibc (2.44) fails to load on older systems; an agent
+        # worktree has no .claude/devtools, so a $PWD zig path came up empty and the build fell through silently,
+        # 2026-11-18: refuse instead; --host-glibc for a local-only module)
+        msg = ("build_native: no zig / cargo-zigbuild on PATH: the Linux module would need this machine's glibc. "
+               "Put .claude/devtools/ziglang (the main checkout's) on PATH, or pass --host-glibc for a local build.")
+        if os.environ.get("CI") != "true":
+            sys.exit(msg)
+        # (a CI job builds a module only for itself, e.g. the data repo's BNWT builders on ubuntu-26.04 (2026-11-19:
+        # refused, every shard failed); the release ships from ubuntu-22.04, whose glibc passes the check above)
+        print("warning: " + msg + " (CI: built for this runner only)", file=sys.stderr)
     if sys.platform.startswith("linux") and shutil.which("cargo-zigbuild") and shutil.which("zig"):
         # against glibc LINUX_GLIBC (cargo-zigbuild), not this machine's: built on a rolling distro, the module asked
         # for glibc 2.43 / 2.44 and failed to load on a Steam Deck (2.43 without the 2.44 symbols) and would on every
@@ -108,7 +146,11 @@ def main():
                 os.path.join(ROOT, "server", "earthfast.abi3.so"))
         print("built", os.path.join(ROOT, "server", "earthfast.abi3.so"), f"(glibc {LINUX_GLIBC})")
         return
-    subprocess.run(["cargo", "build", "--release"], cwd=CRATE, check=True)
+    env = None
+    if sys.platform == "darwin":    # (a Python extension on macOS leaves Python's symbols to the interpreter that loads
+        env = dict(os.environ)      # it; without this the link fails on every _Py* symbol: the M1 build, 2026-11-18)
+        env["RUSTFLAGS"] = (env.get("RUSTFLAGS", "") + " -C link-arg=-undefined -C link-arg=dynamic_lookup").strip()
+    subprocess.run(["cargo", "build", "--release"], cwd=CRATE, check=True, env=env)
     rel = os.path.join(CRATE, "target", "release")
     if sys.platform == "win32":
         src, dst = os.path.join(rel, "earthfast.dll"), os.path.join(ROOT, "server", "earthfast.pyd")

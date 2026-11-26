@@ -21,7 +21,7 @@ complete the [modernization roadmap](PLATFORM_STATUS.md) or add runtime acceptan
 | Cached rail/lane releases were invisible during pin validation | Read bounded cached manifest metadata without downloads, and clean up resources on failed startup compatibility checks. |
 
 Older hash-only export markers needed regeneration for fork 1.8.1. This affects the experimental bundle
-export workflow; ordinary gameplay does not require a bundle. See [shared-plan setup](SHARED_WORLD.md).
+export workflow; ordinary gameplay does not require a bundle. (The bundles were removed on 2026-11-16.)
 
 The provenance/integration review passed 176 focused cases with four existing skips. A two-iteration
 [generation/export/transfer fixture](research/2026-11-02-release-1.8.1-world-bundle.json) confirmed equal

@@ -67,16 +67,31 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
-def plan(sources=SOURCES, entries=None):
-    """{DDS path in the mod: dict(entry, path=its source file, key=its key)}. Raises TexturesError for a missing source."""
+def plan(sources=SOURCES, entries=None, *, env=None):
+    """Plan enabled textures, skipping opt-in sources before any file access.
+
+    An entry's optional requires_any lists startup flags; at least one must be
+    explicitly enabled. Shared maps therefore encode once for either category.
+    Missing enabled sources raise TexturesError. env defaults to this process.
+    """
     entries = manifest(os.path.join(sources, "textures.json")) if entries is None else entries
+    env = os.environ if env is None else env
+    entries = {rel: e for rel, e in entries.items() if not e.get("requires_any") or any(
+        env.get(flag, "off").strip().lower() in {"1", "on", "true"} for flag in e["requires_any"])}
     if not entries:
         return {}
     texdds = native().TEXDDS_ID
+    overrides = {}
+    if any("/cliff/" in rel for rel in entries):
+        import clifftextures
+        from cliffsettings import CliffSettings
+        if not CliffSettings.from_env(env).enabled:
+            entries = {rel: e for rel, e in entries.items() if "/cliff/" not in rel}
+        overrides = clifftextures.source_overrides(entries, env)
     hashes = {}
     out = {}
     for rel, e in sorted(entries.items()):
-        src = os.path.join(sources, *e["source"].split("/"))
+        src = overrides.get(e["source"]) or os.path.join(sources, *e["source"].split("/"))
         if src not in hashes:
             try:
                 hashes[src] = _sha256_file(src)
@@ -85,6 +100,11 @@ def plan(sources=SOURCES, entries=None):
         key = hashlib.sha256("\0".join((texdds, e["format"], e["role"], e.get("derive", ""), hashes[src]))
                              .encode()).hexdigest()
         out[rel] = dict(e, path=src, key=key)
+        if e["source"] in overrides:
+            fallback = os.path.join(sources, *e["source"].split("/"))
+            fallback_key = hashlib.sha256("\0".join((texdds, e["format"], e["role"], e.get("derive", ""),
+                                                    _sha256_file(fallback))).encode()).hexdigest()
+            out[rel]["fallback"] = dict(path=fallback, key=fallback_key)
     return out
 
 
@@ -141,6 +161,16 @@ def build(mod_dir, todo, keep=(), threads=0, cache_dir=None):
         names.append(rel)
     if jobs:
         errs = native().texture_dds_files(jobs, int(threads or os.cpu_count() or 4))
+        # Optional sources must not make an otherwise valid bundled install fail.
+        # Retry only failed optional cliff maps, and stamp the actual fallback.
+        for i, (name, err) in enumerate(zip(names, errs)):
+            fallback = todo[name].get("fallback")
+            if err and fallback:
+                src, dst, fmt, role, derive = jobs[i]
+                print(f"Cliffs: optional {name} could not be encoded; using bundled texture.")
+                errs[i] = native().texture_dds_files([(fallback["path"], dst, fmt, role, derive)], 1)[0]
+                if not errs[i]:
+                    todo[name].update(fallback)
         bad = [f"{n}: {err}" for n, err in zip(names, errs) if err]
         if bad:
             raise TexturesError("could not make the textures:\n  " + "\n  ".join(bad[:10]))

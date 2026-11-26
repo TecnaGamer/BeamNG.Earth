@@ -7,7 +7,14 @@
 --  * nothing runs with traffic off (a standing bus is deleted once), and nothing within UPDATE_S of the last pass;
 --  * a pass is a loop over the few rows kept (a station sends at most BUSES_PER_STATION of them), no frame work;
 --  * at most one spawn per pass, a bus the player left behind is moved to a new bay (not deleted and spawned again);
---  * every bus is deleted at a teleport / a new anchor / the end of the level (a rebase moves vehicles with the world).
+--  * every bus is deleted at a teleport / the end of the level; a rebase keeps it (rebase.lua moves vehicles with the
+--    world, its place is read again);
+--  * a bus left beyond DESPAWN_M is parked inactive (no physics, no ground needed under it) until it is moved to the
+--    next bay: a spawn costs a ~1 s frame (the citybus and its destination display; 1,133 ms measured on the PC),
+--    a move or setActive ~15 ms. (Discord report 2026-11-24, "spawning a bus at every bus stop I pass": the bus was
+--    counted as a player's car, so farcars.lua saved and deleted it 2.5 km away and the next station spawned a new one;
+--    collisionfoci.lua now counts it as parked: M.isOurs);
+--  * the player's setting stationBuses (Traffic: "Buses at bus stations") off: none.
 local M = {}
 
 M.MAX_BUSES = 1         -- buses standing at once (the user 2026-11-09: three in a row closed a lane: one, off the lanes)
@@ -33,6 +40,16 @@ end
 
 function M.dropKey(key)
   rowsByKey[key] = nil
+end
+
+-- Is vehicle id one of our parked buses? (collisionfoci.lua: parked, not a player's car)
+function M.isOurs(id) return buses[id] ~= nil end
+
+-- The player's setting (default on).
+function M.settingOn()
+  local s = package.loaded['beamngEarth/settings']
+  local ok, v = pcall(function() return s and s.get and s.get('stationBuses') end)
+  return not (ok and v == false)
 end
 
 -- Pure: the bay key of a row.
@@ -93,6 +110,10 @@ local function deleteAll()
   for id in pairs(buses) do deleteBus(id) end
 end
 
+local function setActive(veh, on)
+  pcall(function() veh:setActive(on and 1 or 0) end)
+end
+
 local function place(veh, r)
   local h = math.rad(r[4] or 0)
   local dir = vec3(math.cos(h), math.sin(h), 0)
@@ -122,13 +143,18 @@ end
 -- Every pass: player {x, y, z}; now: a clock (seconds); gov the frame governor (optional).
 function M.update(aid, player, now, gov)
   if aid ~= anchorId then
-    deleteAll()
+    -- a rebase moved the buses with the world: kept, their places read again (a teleport deleted them: onTeleport)
+    for id, b in pairs(buses) do
+      local o = be:getObjectByID(id)
+      local p = o and o:getPosition()
+      if p then b.x, b.y = p.x, p.y else buses[id] = nil end
+    end
     anchorId = aid
   end
   if now - lastPass < M.UPDATE_S then return end
   lastPass = now
   local nav = require('beamngEarth/navgraph')
-  if not player or failed or not M.trafficOn(rawget(_G, 'gameplay_traffic'), nav.choice) then
+  if not player or failed or not M.settingOn() or not M.trafficOn(rawget(_G, 'gameplay_traffic'), nav.choice) then
     if next(buses) then deleteAll() end
     return
   end
@@ -145,6 +171,13 @@ function M.update(aid, player, now, gov)
       if dx * dx + dy * dy <= M.DESPAWN_M * M.DESPAWN_M then
         held[b.bay] = true
         standing = standing + 1
+        if b.parked then          -- the player came back to it: physics on again
+          setActive(o, true)
+          b.parked = nil
+        end
+      elseif not b.parked then
+        setActive(o, false)       -- left behind: no physics until it is moved to the next bay
+        b.parked = true
       end
     end
   end
@@ -164,6 +197,7 @@ function M.update(aid, player, now, gov)
   end
   if mover then
     local o = be:getObjectByID(mover)
+    if o then setActive(o, true) end
     if o and place(o, c.row) then
       buses[mover] = { bay = c.key, x = c.row[1], y = c.row[2] }
     else

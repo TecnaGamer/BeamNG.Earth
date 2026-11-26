@@ -259,6 +259,16 @@ local function median(t, n)
   return 0.5 * (s[n / 2] + s[n / 2 + 1])
 end
 
+-- The frames' wall times since the last call: mean, max (ms), or nil without a frame; the window starts again (the
+-- pose's frameMs / frameMaxMs: the world server's v2 scheduler lowers its CPU share when the game's frames slow down).
+function Gov:frameWindow()
+  local n = self.winN or 0
+  if n == 0 then return nil, nil end
+  local mean, mx = self.winSum / n, self.winMax
+  self.winSum, self.winN, self.winMax = 0, 0, 0
+  return mean, mx
+end
+
 -- Call once per frame, first thing in onUpdate. wallMs: duration of the previous frame (nil =
 -- measure with the clock). hasWork: streaming work is waiting.
 function Gov:beginFrame(hasWork, wallMs)
@@ -291,6 +301,9 @@ function Gov:beginFrame(hasWork, wallMs)
       self.base = median(self.hist, min(self.histN, M.BASE_FRAMES))
     end
     self.w1, self.w2 = wallMs, self.w1
+    -- (the pose's frameMs / frameMaxMs: the server's CPU share follows the game's frame time, frameWindow)
+    self.winSum, self.winN = (self.winSum or 0) + wallMs, (self.winN or 0) + 1
+    self.winMax = max(self.winMax or 0, wallMs)
   end
   self.prevHeavy = false
   self.frameSpent, self.frameUnits = 0, 0

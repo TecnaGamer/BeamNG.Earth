@@ -167,6 +167,29 @@ class GermanRoutesTest(unittest.TestCase):
             self.assertEqual(bool(pool), want, (at, on))
 
 
+class MappedLampsTest(unittest.TestCase):
+    """The mapped street lamps worldprops.tile_props makes reach roads.build_tile (97d0bcf2 had dropped them from the
+    call: the road builder then guessed lamps along every mapped street and drew the mapped ones beside them)."""
+
+    def test_road_tile_gets_the_mapped_lamps(self):
+        import worldprops
+        from unittest import mock
+        row = ["streetlight", 10.0, 20.0, 0.0, 90.0, 1.0, 9.0, 0.0]
+        got = []
+        blockworker._s = SimpleNamespace(md=FakeMapData(None, None), dem=FakeDem(), widths=None, surface=None,
+                                         airports=None, sea=None, lock=threading.Lock(), cache_dir=tmp_cache(self),
+                                         bridges={}, anchor=lambda aid, lat, lon: (None, None))
+
+        def props(frame, tx, ty, md, elev, lamps=None, **kw):
+            lamps.append(row)
+            return [], set()
+        with mock.patch.object(worldprops, "tile_props", props), \
+                mock.patch.object(roads, "build_tile", side_effect=lambda *p, **k: got.append(k.get("mapped_lamps")) or []), \
+                tempfile.TemporaryDirectory() as out:
+            blockworker.roads_tile(1, LAT, LON, 15, 0, 0, out, "/temp/x", False, 0.0, buildings=True)
+        self.assertEqual(got, [[row]])
+
+
 class NavgraphTest(unittest.TestCase):
     """blockworker.navgraph: the graph built in a road process is the one navgraph.build makes with the same inputs
     (the server's way), its file written and the rules passed through."""
@@ -419,7 +442,7 @@ class FarTileTest(unittest.TestCase):
             rgb, used = im.render(FRAME, *sq, px)
             g = np.asarray(built.grid)
             rgb = rockface.rock(rgb, FRAME, *sq, g, x0, y0, tile.size / (g.shape[1] - 1))
-            n = imagery.write_dds(os.path.join(out, "server.dds"), rgb)
+            n = imagery.write_dds(os.path.join(out, "server.dds"), rgb, imagery.FAR_SRGB)
             built2, got = blockworker.far_tile(1, LAT, LON, tile, 12, None, 11, True, layout, tex)
             self.assertIsNotNone(got, "the tiles on disk now")
             self.assertEqual(got[0], n)
@@ -642,6 +665,27 @@ class FirstCellsTest(unittest.TestCase):
         self.assertEqual(blockworker._warm_next([(g, "k")], False), (g, "k"))
         src = Path(blockworker.__file__).read_text()
         self.assertIn("job = None if _FIRST[0] > 0 else", src)
+
+    def test_a_cell_a_teleport_left_is_dropped_quietly(self):
+        """pools.Abandoned from planning ahead is a teleport's cancel, not a fault: no error logged, the cell dropped."""
+        import threading as th
+        import pools as poolsmod
+
+        def give_up(_k):
+            raise poolsmod.Abandoned()
+        g = SimpleNamespace(warm=give_up)
+        old = getattr(blockworker, "_s", None)
+        blockworker._s = SimpleNamespace(cv=th.Condition(), want=[(g, "k"), (g, "other")])
+        self.addCleanup(setattr, blockworker, "_s", old)
+        with self.assertNoLogs("earthd.blockworker", level="WARNING"):
+            blockworker._warm_one((g, "k"))
+        self.assertEqual([k for _g, k in blockworker._s.want], ["other"])
+
+        def fails(_k):
+            raise ValueError("a real fault")
+        with self.assertLogs("earthd.blockworker", level="ERROR"):
+            blockworker._warm_one((SimpleNamespace(warm=fails), "other"))
+        self.assertEqual(blockworker._s.want, [])
 
     def server(self, pools, road=None, cpus=16):
         import earthd

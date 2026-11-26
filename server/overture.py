@@ -47,11 +47,29 @@ import staging
 
 log = logging.getLogger("earthd.mapdata")
 
-# The pinned Overture release (update path: docs/ARCHITECTURE.md "Map data"; `mapdata.py --latest`
-# prints the newest one). Overture removes old releases from the buckets after some months: a
-# pinned release that is gone raises ReleaseGone for cells not cached yet.
-RELEASE = "2026-10-21.0"
-STAC_ROOT = "https://stac.overturemaps.org"
+# The build's own Overture release (overturepick.RELEASE: the fallback and the default; update path:
+# docs/ARCHITECTURE.md "Map data"; `mapdata.py --latest` prints the newest one). The release this process reads is
+# effective(): the one its supervisor picked for the app session (overturepick.Pick: the project's switch file, checked
+# against Overture's STAC catalogue), handed down in RELEASE_ENV, frozen per process at its first ask.
+from overturepick import RELEASE, RELEASE_ENV, RELEASE_RE, STAC_ROOT, SUPPORTED_SCHEMAS  # noqa: E402,F401
+import overturepick  # noqa: E402
+_EFFECTIVE = None
+_EFFECTIVE_LOCK = threading.Lock()
+
+
+def effective():
+    """The Overture release this process reads: RELEASE_ENV when it is a release id (its supervisor's pick; the
+    process's workers inherit it), else RELEASE. Frozen at the first call: a process never changes release (its
+    cells, plans, tiles and keys are of one release). Nothing sets RELEASE_ENV inside a server process."""
+    global _EFFECTIVE
+    if _EFFECTIVE is None:
+        with _EFFECTIVE_LOCK:
+            if _EFFECTIVE is None:
+                env = (os.environ.get("BNGE_OVERTURE_RELEASE") or "").strip()     # (RELEASE_ENV, by its name)
+                if env and not overturepick.valid(env):
+                    log.warning("overture: %s=%r is not a release id: %s", RELEASE_ENV, env, RELEASE)
+                _EFFECTIVE = env if overturepick.valid(env) else RELEASE
+    return _EFFECTIVE
 # DuckDB worker threads per query (the server is niced; the game comes first). One: the server runs many queries side
 # by side on its few cores, where a query's second thread only cost CPU (a fresh place's 60 road cells on one core:
 # 7.0 -> 4.8 CPU-s, 2026-11-04). BNGE_DUCKDB_THREADS=2: as before
@@ -72,9 +90,10 @@ FETCH_THREADS = 8               # parallel range requests per Reader (Overture's
 FOOTER_GUESS = 256 * 1024       # bytes read from a file's end first for its footer (one block)
 FOOTER_MAX = 4 * 1024 * 1024    # (a learned footer size is used up to this)
 FOOTER_HINTS = "footers.json"   # the largest footer seen per theme/type (Reader._footer_guess), under raw/overture
-# (the footers of release 2026-10-21.0's files, the first guess before one is seen: bytes)
+# (the footers of release 2026-10-21.0's files, the first guess before one is seen: bytes; release 2026-11-18.0's
+# largest footers per type are within 1 % of 2026-10-21.0's, except division_area's: 267,787 -> 549,486 bytes)
 FOOTER_KNOWN = {"base/infrastructure": 1_320_000, "base/water": 600_000, "base/land_use": 615_000,
-                "divisions/division_area": 267_000}
+                "divisions/division_area": 550_000}
 MERGE_GAP = 64 * 1024           # column chunks closer than this are fetched in one range
 BASE_COLUMNS = {"id", "geometry", "bbox", "sources", "version"}
 _PLAN = threading.local()           # (_plan's last: the top-level columns its matched row groups hold, for tolerant)
@@ -170,6 +189,12 @@ _OWN = "coalesce(list_filter(sources, lambda s: coalesce(s.property, '') = '')[1
 _SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
+# the land layer's tags: only the keys natural.py reads (a Paris cell's mapped trees carry survey dates, cadastre refs,
+# names in French ...: 158 kB of its CIP section, most of it tags nothing reads)
+LAND_TAG_KEYS = ("natural", "genus", "species", "taxon", "genus:la", "species:la", "leaf_type", "leaf_cycle", "height",
+                 "circumference", "diameter_crown", "wetland", "surface")
+_LAND_TAGS = ("CAST(to_json(map_from_entries(list_filter(map_entries(source_tags), e -> e.key IN ("
+              + ", ".join(f"'{k}'" for k in LAND_TAG_KEYS) + ")))) AS VARCHAR) AS tags")
 DIVISION_LANGS = ("en", "de", "fr", "it")
 # the regional languages of France whose names a town sign may add under the French one (townsigns.REGIONAL: Catalan,
 # Occitan, Basque, Breton, Corsican, Alsatian, West Flemish), each a column name_<code> (names.common's, by its
@@ -239,6 +264,20 @@ LAYERS = {
                      cols=f"subtype, class, {_NAME}, {_SRC}, level, surface, elevation, {_TAGS}",
                      text=("subtype", "class", "name", "src_dataset", "src_record", "surface", "tags"),
                      float=("level", "elevation")),
+    # OpenStreetMap's natural=* features (natural.py, BNE_NATURAL_*; read only while one of those is on): mapped single
+    # trees and tree rows (their genus / species / leaf_type / height / crown in the tags), forests' leaf type, cliffs,
+    # rock, scree, sand, beaches, dunes, glaciers, wetlands. Not the global land polygons (class land, island ...):
+    # the classes the generator uses (natural.LAND_CLASSES)
+    "land": dict(theme="base", type="land", clip=True,
+                 cols=f"subtype, class, {_SRC}, level, surface, elevation, {_LAND_TAGS}",
+                 text=("subtype", "class", "src_dataset", "src_record", "surface", "tags"),
+                 float=("level", "elevation"),
+                 where="class IN ('tree', 'tree_row', 'forest', 'wood', 'cliff', 'rock', 'bare_rock', 'stone', "
+                       "'scree', 'shingle', 'sand', 'beach', 'dune', 'glacier', 'wetland')"),
+    # depth polygons below the water's surface (CC0: ETOPO / GLOBathy; natural.py, BNE_NATURAL_BATHY): lake and sea
+    # floors where NOAA's sea floor is missing and for the lakes, which have none
+    "bathymetry": dict(theme="base", type="bathymetry", clip=True, cols=f"{_SRC}, depth",
+                       text=("src_dataset", "src_record"), float=("depth",)),
     "infrastructure": dict(theme="base", type="infrastructure", clip=False,
                            cols=f"subtype, class, {_NAME}, {_SRC}, level, height, surface, {_TAGS}",
                            text=("subtype", "class", "name", "src_dataset", "src_record", "surface", "tags"),
@@ -366,7 +405,19 @@ class OvertureError(IOError):
 
 
 class ReleaseGone(OvertureError):
-    """The pinned release's STAC index is no longer published (bump overture.RELEASE)."""
+    """The release's STAC index or files are no longer published (404 / 410): logged once a process, loudly."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        if not _GONE_LOGGED:
+            _GONE_LOGGED.append(True)
+            log.error("overture: the map data's release %s is no longer published by Overture (%s): places not "
+                      "visited before get no roads or buildings. %s", effective(), args[0] if args else "",
+                      "This build's own release is gone: update BeamNG.Earth." if effective() == RELEASE else
+                      f"The switch file's release is gone: this build's own is {RELEASE}.")
+
+
+_GONE_LOGGED = []
 
 
 class DuckDbMissing(OvertureError):
@@ -395,15 +446,193 @@ def intersects(b, bounds):
 BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overture_stac_{release}.json.gz")
 
 
-def _bundle(release):
-    """{"theme/type": {"license", "files": [[name, bbox, urls, size], ...]}} of the release's shipped index, or {}."""
+def _bundle(release, cache_dir=None):
+    """{"theme/type": {"license", "files": [[name, bbox, urls, size], ...]}} of the release's shipped index, else of
+    the one kept on this machine under cache_dir (keep_local_bundle: a release the switch file moved to), or {}."""
+    got = overturepick.read_bundle(BUNDLED.format(release=release), release)     # (a truncated gzip: none)
+    if not got and cache_dir:
+        got = overturepick.read_bundle(overturepick.local_bundle_path(cache_dir, release), release)
+    return got
+
+
+def _cache_of(raw_dir):
+    """The cache folder of a raw_dir <cache>/mapdata/raw (where a local bundle is kept), else None."""
+    raw = os.path.normpath(raw_dir)
+    parent = os.path.dirname(raw)
+    if os.path.basename(raw) == "raw" and os.path.basename(parent) == "mapdata":
+        return os.path.dirname(parent)
+    return None
+
+
+def _stac_pairs():
+    return sorted({(v["theme"], v["type"]) for v in LAYERS.values()})
+
+
+def bundle_rows(index, kind="background"):
+    """The release's whole STAC index read through a StacIndex (every collection of LAYERS, every item), as the
+    bundle's {"theme/type": {"license", "files": [[name, bbox, urls, size], ...]}} (tools/build_stac_index.py: the
+    shipped one; keep_local_bundle)."""
+    out = {}
+    for theme, typ in _stac_pairs():
+        c = index.collection(theme, typ, kind=kind)
+        rows = []
+        for (name, urls, size), bb in zip(index.files(theme, typ, (-180.0, -90.0, 180.0, 90.0), kind=kind),
+                                          c["bboxes"]):
+            rows.append([name, [float(v) for v in bb], urls, size])
+        out[f"{theme}/{typ}"] = {"license": c.get("license"), "files": rows}
+    return out
+
+
+def write_bundle(path, release, collections):
+    """A bundle file written whole (a unique .tmp, then replaced), gzip without name or time (the same bytes each run)."""
     import gzip
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     try:
-        with gzip.open(BUNDLED.format(release=release), "rt", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data.get("collections", {}) if data.get("release") == release else {}
+        with open(tmp, "wb") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb", filename="", mtime=0) as f:
+            f.write(json.dumps({"release": release, "collections": collections}, separators=(",", ":")).encode("utf-8"))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def bundle_complete(collections):
+    """Does a bundle's {"theme/type": ...} hold every collection this build reads (_stac_pairs)?"""
+    return bool(collections) and all(f"{t}/{y}" in collections for t, y in _stac_pairs())
+
+
+def keep_local_bundle(release, cache_dir, fetcher, kind="background"):
+    """A release other than the shipped one: its whole STAC index kept in cache_dir's cdn folder (not under the
+    cache's cap), so a later start can take it while Overture's STAC host does not answer (overturepick.fallback)
+    and its cells need no STAC request. Returns the release's schema (its catalogue's), or None when not kept."""
+    cat = json.loads(fetcher.get(f"{STAC_ROOT}/{release}/catalog.json", kind=kind).body)
+    if not isinstance(cat, dict) or cat.get("release:version") != release:
+        return None
+    schema = str(cat.get("schema:version"))
+    if schema not in SUPPORTED_SCHEMAS:
+        return None
+    path = overturepick.local_bundle_path(cache_dir, release)
+    if not bundle_complete(overturepick.read_bundle(path, release)):
+        index = StacIndex(release, os.path.join(cache_dir, "mapdata", "raw"), fetcher)
+        index._bundled = {}         # (from Overture's own index, never a bundle)
+        write_bundle(path, release, bundle_rows(index, kind))
+    return schema
+
+
+def note_session(cache_dir, fetcher):
+    """A game session started on this process's release (earthd, once, in the background): its whole STAC index kept
+    here when it is not the shipped one (keep_local_bundle), then noted as this machine's last session's release
+    (overturepick.write_last; overturepick.fallback reads it). The schema noted, or None (not noted)."""
+    rel = effective()
+    schema = SUPPORTED_SCHEMAS[0] if rel == RELEASE else keep_local_bundle(rel, cache_dir, fetcher)
+    if schema and overturepick.write_last(cache_dir, rel, schema):
+        return schema
+    return None
+
+
+# The session's bundle prep (prepare_session): Overture's STAC host is rate limited (netfetch: 5/s, a bucket of 10) and
+# a background request is deferred (netfetch.Deferred, not queued) while the bucket is low, as it is every few requests
+# of a crawl of every item (~800) on a healthy network: each deferral waits and asks again, each failed pass (a network
+# error, a timeout) is tried again after a backoff, within one bound on the whole job's effort. A pass resumes from
+# what the passes before saved (StacIndex keeps each collection and item file it read).
+PREP_DEFER_S = 0.5              # s a deferred request waits before it asks again (the bucket refills 5 tokens a s)
+PREP_RETRIES = 6                # failed passes tried again (the next one gives up for this process)
+PREP_BACKOFF_S = (5.0, 300.0)   # s after the first failed pass, doubled each time, at most the second
+PREP_MAX_S = 3600.0             # the whole job's effort (deferrals, passes, backoffs): past it the job gives up
+class PrepOutOfTime(OvertureError):
+    """The session's bundle prep past its bound (PREP_MAX_S): no request started, nothing noted after it."""
+
+
+# answers asking again will not change in this process: the release gone, the day's budget used up, --offline, a
+# policy that forbids it, a STAC index that contradicts itself, the job's bound (PrepOutOfTime)
+_PREP_FINAL = (netfetch.NotFound, netfetch.BudgetExceeded, netfetch.PolicyDenied, netfetch.Offline, OvertureError)
+
+
+class _Patient:
+    """A fetcher whose deferred requests wait PREP_DEFER_S (or the host's own retry_after) and ask again, until the
+    deadline (the job's bound): then the Deferred is raised. No request starts past the deadline (PrepOutOfTime; one
+    already asked ends within its host's own timeout)."""
+
+    def __init__(self, fetcher, deadline, clock, sleep):
+        self.fetcher, self.deadline, self.clock, self.sleep = fetcher, deadline, clock, sleep
+        self.deferred = 0
+
+    def check(self):
+        if self.clock() > self.deadline:
+            raise PrepOutOfTime(f"session's STAC index prep past its {PREP_MAX_S:.0f} s")
+
+    def get(self, url, kind="background", **kw):
+        while True:
+            self.check()
+            try:
+                return self.fetcher.get(url, kind=kind, **kw)
+            except netfetch.Deferred as e:
+                wait = max(PREP_DEFER_S, float(e.retry_after or 0.0))
+                if self.clock() + wait > self.deadline:
+                    raise
+                self.deferred += 1
+                self.sleep(wait)
+
+
+def prepare_session(cache_dir, fetcher, clock=time.monotonic, sleep=time.sleep, max_s=PREP_MAX_S,
+                    retries=PREP_RETRIES):
+    """note_session, patient: deferrals waited out, failed passes tried again after a backoff, each pass resuming from
+    what the earlier ones saved, all within max_s. The schema noted, or None (not noted: another schema, not kept);
+    raises the last error when it gives up (an answer that will not change, PREP_RETRIES failed passes, max_s)."""
+    deadline = clock() + max_s
+    patient = _Patient(fetcher, deadline, clock, sleep)
+    failures = 0
+    rel = effective()
+    while True:
+        try:
+            # (note_session's steps: the note only after the whole bundle is on disk, and within the bound)
+            schema = SUPPORTED_SCHEMAS[0] if rel == RELEASE else keep_local_bundle(rel, cache_dir, patient)
+            if not schema:
+                return None
+            patient.check()
+            if not overturepick.write_last(cache_dir, rel, schema):
+                raise OSError("the session's note not written")     # (a pass again: the bundle kept, no request)
+            return schema
+        except _PREP_FINAL:
+            raise
+        except (netfetch.FetchError, OSError, ValueError) as e:     # (a network error, a timeout, a portal's page)
+            failures += 1
+            wait = max(min(PREP_BACKOFF_S[1], PREP_BACKOFF_S[0] * 2 ** (failures - 1)),
+                       float(getattr(e, "retry_after", 0.0) or 0.0))
+            if failures > retries or clock() + wait > deadline:
+                raise
+            log.info("overture: session's STAC index pass %d failed (%s: %s); again in %.0f s (%d deferrals so far)",
+                     failures, type(e).__name__, e, wait, patient.deferred)
+            sleep(wait)
+
+
+_PREP = {"thread": None}
+_PREP_LOCK = threading.Lock()
+
+
+def start_session_prep(cache_dir, fetcher, done=None):
+    """prepare_session in a background thread of its own, once a process: a later call (another game's hello) while
+    it runs or after it ended starts nothing. Never waits. done(schema or None, error or None) when it ends. The
+    thread started, or None."""
+    with _PREP_LOCK:
+        if _PREP["thread"] is not None:
+            return None
+
+        def run():
+            schema = err = None
+            try:
+                schema = prepare_session(cache_dir, fetcher)
+            except Exception as e:      # (a later start then decides without it)
+                err = e
+            if done is not None:
+                done(schema, err)
+        t = _PREP["thread"] = threading.Thread(target=run, name="overture-session", daemon=True)
+    t.start()
+    return t
 
 
 class StacIndex:
@@ -413,7 +642,7 @@ class StacIndex:
         self.release, self.raw_dir, self.fetcher = release, raw_dir, fetcher
         self._coll = {}
         self._lock = threading.Lock()
-        self._bundled = _bundle(release)
+        self._bundled = _bundle(release, _cache_of(raw_dir))
 
     def _json(self, url, path, kind):
         try:
@@ -494,6 +723,56 @@ def _q(path):
     return str(path).replace("'", "''")
 
 
+SIMPLIFIED_MB = 64             # simplified whole polygons kept per process (_simplified)
+_SIMPLIFIED = OrderedDict()
+_SIMPLIFIED_BYTES = [0]
+_SIMPLIFIED_LOCK = threading.Lock()
+
+
+def _simplified(wkb, parts):
+    """mg.simplify_polygon_parts(parts, SIMPLIFY_DEG) of the polygon parsed from wkb (unclipped: the parts are wkb's
+    alone), kept by wkb's hash: a territory's or a region's outline is the same in each of its thousands of cells, and
+    simplifying it again in every one was ~0.3 CPU-s a cell in the Yukon (77 of a z10 unit's 94 CPU-s in
+    tools/build_cip.py). Copies of the kept rings (the callers' arrays are their own). Pure, as the simplification."""
+    if wkb is None:
+        return mg.simplify_polygon_parts(parts, SIMPLIFY_DEG)
+    h = hashlib.blake2b(bytes(wkb), digest_size=20).digest()
+    with _SIMPLIFIED_LOCK:
+        kept = _SIMPLIFIED.get(h)
+        if kept is not None:
+            _SIMPLIFIED.move_to_end(h)
+    if kept is None:
+        got = mg.simplify_polygon_parts(parts, SIMPLIFY_DEG)
+        n = sum(np.asarray(r).nbytes for rings in got for r in rings) + 200
+        if n <= SIMPLIFIED_MB * 1e6 / 8:
+            with _SIMPLIFIED_LOCK:
+                if h not in _SIMPLIFIED:
+                    _SIMPLIFIED[h] = ([[np.array(r, copy=True) for r in rings] for rings in got], n)
+                    _SIMPLIFIED_BYTES[0] += n
+                while _SIMPLIFIED_BYTES[0] > SIMPLIFIED_MB * 1e6 and len(_SIMPLIFIED) > 1:
+                    _, (_, m) = _SIMPLIFIED.popitem(last=False)
+                    _SIMPLIFIED_BYTES[0] -= m
+        return got
+    return [[np.array(r, copy=True) for r in rings] for rings in kept[0]]
+
+
+class _LazyCon:
+    """A DuckDB connection made at its first statement (Reader._connect(lazy=True)); close() without one is a no-op."""
+
+    def __init__(self, make):
+        self._make, self._con = make, None
+
+    def execute(self, *a, **kw):
+        if self._con is None:
+            self._con = self._make()
+        return self._con.execute(*a, **kw)
+
+    def close(self):
+        if self._con is not None:
+            self._con.close()
+            self._con = None
+
+
 def _number_rows(con, dedup_if_repeated=None):
     """Temp table t from s (Reader._run): one row per id (its highest version), numbered fi in id order. The window
     dedup only where an id repeats (DEDUP_IF_REPEATED): none did in a fresh place's 60 road cells, and the window was
@@ -514,7 +793,8 @@ def _number_rows(con, dedup_if_repeated=None):
 class Reader:
     """Overture layers per cell (see the module docstring). threads: DuckDB threads per query."""
 
-    def __init__(self, raw_dir, fetcher, release=RELEASE, threads=DUCKDB_THREADS):
+    def __init__(self, raw_dir, fetcher, release=None, threads=DUCKDB_THREADS):
+        release = release or effective()        # (the process's release: never the constant on its own)
         self.raw_dir, self.fetcher, self.release, self.threads = raw_dir, fetcher, release, threads
         self.index = StacIndex(release, raw_dir, fetcher)
         self._remotes = OrderedDict()
@@ -623,10 +903,12 @@ class Reader:
                 _, old = self._boxes.popitem(last=False)
                 self._box_rows -= len(old[0])
 
-    def _connect(self, files, kind):
+    def _connect(self, files, kind, lazy=False):
         """A DuckDB connection whose filesystem serves `files` ({path: RemoteFile}) with `kind`. (Not one database a
         process with DuckDB's parquet_metadata_cache: it saved ~0.3 CPU-s of a route shield query's 0.65-1.05 s, the
-        OSM tags footer parsed once, but held ~150 MB more in every process using it, 2026-11-11.)"""
+        OSM tags footer parsed once, but held ~150 MB more in every process using it, 2026-11-11.) lazy: connected at
+        its first statement (query(): a cell whose row groups' cached boxes rule it out runs none; the connection was
+        ~6 ms of each such cell's layer, most of an open-sea cell's build in tools/build_cip.py)."""
         duckdb = _duckdb()
         errors = []
 
@@ -649,12 +931,15 @@ class Reader:
             f._fetch_range = guarded
             return f
         fs._open = _open
-        con = duckdb.connect(config={"threads": self.threads, "autoinstall_known_extensions": False,
-                                     "autoload_known_extensions": False})
-        for k, v in PARQUET_CONFIG.items():
-            con.execute(f"SET {k} = {str(v).lower()}")
-        con.register_filesystem(fs)
-        return con, fs.protocol, errors
+
+        def make():
+            con = duckdb.connect(config={"threads": self.threads, "autoinstall_known_extensions": False,
+                                         "autoload_known_extensions": False})
+            for k, v in PARQUET_CONFIG.items():
+                con.execute(f"SET {k} = {str(v).lower()}")
+            con.register_filesystem(fs)
+            return con
+        return (_LazyCon(make) if lazy else make()), fs.protocol, errors
 
     def query(self, layer, cell, kind="demand"):
         """The layer's Features of one cell (lon/lat only; mapdata localises and marks `own`), and
@@ -668,7 +953,7 @@ class Reader:
             return empty(layer), {}
         files = {f"{spec['theme']}/{spec['type']}/{name}": self._remote(spec["theme"], spec["type"], name, urls, size)
                  for name, urls, size in hits}
-        con, proto, errors = self._connect(files, kind)
+        con, proto, errors = self._connect(files, kind, lazy=True)
         try:
             paths = sorted(files)
             rows = self._plan(con, proto, paths, files, spec, bounds, kind)
@@ -983,7 +1268,8 @@ class Reader:
             whole = spec.get("whole", ())
             for i, r in enumerate(rows):
                 if r[at[col]] in values and geoms[i][0] == mg.POLYGON and r[at["country"]] not in whole:
-                    geoms[i] = (mg.POLYGON, mg.simplify_polygon_parts(geoms[i][1], SIMPLIFY_DEG))
+                    geoms[i] = (mg.POLYGON, _simplified(r[at["wkb"]], geoms[i][1]) if not spec["clip"] else
+                                mg.simplify_polygon_parts(geoms[i][1], SIMPLIFY_DEG))
         feats = mg.build(layer, ids[keep], [g for g, k in zip(geoms, keep) if k])
         feats.clipped = clipped[keep]
         fmap = np.cumsum(keep) - 1          # old feature index -> new (rows dropped by clipping: unused)

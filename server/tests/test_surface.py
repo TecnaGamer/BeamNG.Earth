@@ -4,6 +4,7 @@ rows as the heightmap's), the cached land cover that never waits for the network
 writing the masks next to the heightmap and naming them in the terrain message."""
 import os
 import sys
+import struct
 import tempfile
 import unittest
 
@@ -24,10 +25,65 @@ class ClassifyTest(unittest.TestCase):
     def test_classes_map_to_materials(self):
         classes = np.array([[0, 10, 20, 30], [40, 50, 60, 70], [80, 90, 95, 100]], np.uint8)
         idx = sf.classify(classes, np.zeros(classes.shape), 2.0)
-        self.assertEqual(idx.tolist(), [[sf.DIRT, sf.GRASS, sf.DUSTY, sf.GRASS], [sf.DIRT, sf.DIRT, sf.LOOSE, sf.SNOW],
+        self.assertEqual(idx.tolist(), [[sf.DIRT, sf.FOREST, sf.DUSTY, sf.GRASS], [sf.CROP, sf.DIRT, sf.LOOSE, sf.SNOW],
                                         [sf.MUD, sf.MUD, sf.MUD, sf.GRASS]])
+
+    def test_arid_grassland_is_dry_grass(self):
+        """Grassland in Koppen B (arid) is dry grass, elsewhere grass (2026-11-16); without positions, grass."""
+        classes = np.full((2, 2), 30, np.uint8)
+        lat = np.array([[36.1, 36.1], [52.0, 52.0]])      # Las Vegas valley (BWh), the Netherlands (Cfb)
+        lon = np.array([[-115.2, -115.2], [5.0, 5.0]])
+        idx = sf.classify(classes, np.zeros(classes.shape), 2.0, lat, lon)
+        self.assertEqual(idx.tolist(), [[sf.DRYGRASS, sf.DRYGRASS], [sf.GRASS, sf.GRASS]])
+        self.assertEqual(sf.classify(classes, np.zeros(classes.shape), 2.0).tolist(), [[sf.GRASS] * 2] * 2)
+
+    def test_new_layers_fold_like_their_kin(self):
+        """Forest floor, dry grass, crop soil and sand fold like the land cover they replaced; the look-alike merges
+        keep one ground model per pair."""
+        for m in (sf.FOREST, sf.DRYGRASS, sf.CROP, sf.SAND):
+            self.assertIn(m, sf.FOLD_FROM)
+        for a, b in sf.LOOKALIKE:
+            self.assertEqual(sf.MATERIALS[a][1], sf.MATERIALS[b][1], (sf.MATERIALS[a], sf.MATERIALS[b]))
         self.assertEqual(sf.MATERIALS[sf.DIRT], ("beamngEarthDirt", "DIRT"))
-        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 1, "the default material goes last (ties pick the later layer)")
+
+    # MATERIALS as of 899a9f75 (before the layers of 2026-11-16): the indices blockcache kept blocks under
+    OLD_MATERIALS = (("bngEarthGroundAsphalt", "ASPHALT_OLD"), ("bngEarthGroundGrass", "GRASS"),
+                     ("bngEarthGroundDusty", "DIRT_DUSTY"), ("bngEarthGroundLoose", "DIRT_DUSTY_LOOSE"),
+                     ("bngEarthGroundRock", "ROCK"), ("bngEarthGroundSnow", "SNOW"), ("bngEarthGroundMud", "MUD"),
+                     ("bngEarthGroundCobble", "COBBLESTONE"), ("bngEarthGroundLawn", "GRASS"),
+                     ("bngEarthGroundGolfRough", "GRASS"), ("bngEarthGroundGolfFairway", "GRASS"),
+                     ("bngEarthGroundGolfGreen", "GRASS"), ("bngEarthGroundGolfBunker", "SAND"),
+                     ("bngEarthGroundPavers", "ASPHALT_OLD"), ("bngEarthGroundBrick", "COBBLESTONE"),
+                     ("beamngEarthDirt", "DIRT"))
+
+    def test_persisted_indices_keep_their_materials(self):
+        """A block kept before new layers (blockcache: its material index map; a stale generation is shown after an
+        update) means the same materials now: every old index names the same material and ground model, in the
+        block's .ter (write_ter's material list) and its masks (Codex review 2026-11-16: index 15, dirt, had become
+        the forest floor)."""
+        self.assertEqual(sf.MATERIALS[:len(self.OLD_MATERIALS)], self.OLD_MATERIALS)
+        old = np.arange(64 * 64, dtype=np.int64).reshape(64, 64) % len(self.OLD_MATERIALS)
+        idx = old.astype(np.uint8)
+        with tempfile.TemporaryDirectory() as d:
+            name, used = sf.write_ter(d, "old.ter", np.zeros((64, 64), np.uint16), idx)
+            data = open(os.path.join(d, name), "rb").read()
+            n = struct.unpack_from("<I", data, 1)[0]
+            off = 5 + 2 * n * n
+            lay = np.frombuffer(data[off:off + n * n], np.uint8).reshape(n, n)
+            o, names = off + n * n + 4, []
+            for _ in range(struct.unpack_from("<I", data, off + n * n)[0]):
+                names.append(data[o + 1:o + 1 + data[o]].decode())
+                o += 1 + data[o]
+            self.assertEqual(names[-1], "beamngEarthDirt", "the listing ends with the default dirt")
+            kept = lay != heightmap.TER_HOLE            # (write_ter's edge holes)
+            self.assertGreater(int(kept.sum()), 60 * 60)
+            got = np.array(names, object)[lay[kept]]
+            want = np.array([m for m, _ in self.OLD_MATERIALS], object)[old[kept]]
+            self.assertTrue((got == want).all(), "every sample its old material")
+            masks = sf.write_masks(idx, d, "old")
+            for i, (m, _) in enumerate(self.OLD_MATERIALS):
+                mk = np.array(Image.open(os.path.join(d, masks[i])))
+                self.assertTrue(np.array_equal(mk == 255, old == i), m)
 
     def test_unknown_class_is_dirt(self):
         self.assertEqual(sf.classify(np.array([[7, 255]], np.uint8), np.zeros((1, 2)), 2.0).tolist(), [[sf.DIRT, sf.DIRT]])
@@ -399,7 +455,7 @@ class ServerSurfaceTest(unittest.TestCase):
     class NorthGrass:
         def classes(self, lat, lon):
             lat = np.asarray(lat)
-            return np.where(lat > LAT, 30, 40).astype(np.uint8), True
+            return np.where(lat > LAT, 30, 0).astype(np.uint8), True     # (0: no data, the dirt)
 
         def block_classes(self, frame, cx, cy, lat, lon):
             return self.classes(lat, lon)
@@ -460,7 +516,7 @@ class ServerSurfaceTest(unittest.TestCase):
         s = self.make(surface=self.NorthGrass())
         a = s.new_anchor(LAT, LON)
         info = s.make_heightmap(a, 0.0, 0.0, None)
-        self.assertEqual(info["layers"], sf.mask_names(s.hm_name((a.id, 0.0, 0.0))[:-4]))
+        self.assertEqual(info["layers"], sf.mask_names(info["heightmap"][:-4]))
         self.assertTrue(info["surfaceComplete"])
         grass = np.array(Image.open(os.path.join(s.out_dir, info["layers"][sf.GRASS])))
         dirt = np.array(Image.open(os.path.join(s.out_dir, info["layers"][sf.DIRT])))
@@ -474,6 +530,74 @@ class ServerSurfaceTest(unittest.TestCase):
         self.assertEqual(info["mats"], [sf.GRASS, sf.DIRT])
         self.assertEqual(msg["layers"], [f"{s.vfs_dir}/{info['layers'][i]}" for i in (sf.GRASS, sf.DIRT)])
         self.assertEqual(msg["materials"], [list(sf.MATERIALS[i]) for i in (sf.GRASS, sf.DIRT)])
+
+    def test_late_provisional_cannot_replace_graded_files(self):
+        import asyncio
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        from pathlib import Path
+
+        started, release = threading.Event(), threading.Event()
+        provisional = threading.local()
+
+        class Surface(self.NorthGrass):
+            def classes(self, lat, lon):
+                classes, ready = super().classes(lat, lon)
+                return (classes[::-1] if getattr(provisional, "active", False) else classes), ready
+
+        s = self.make(surface=Surface())
+        a = s.new_anchor(LAT, LON)
+        key = (a.id, 128., 0.)
+        s.anchor_q(a)
+        sample = s.dem.sample
+
+        def heights(*args):
+            z = sample(*args)
+            if getattr(provisional, "active", False):
+                started.set()
+                if not release.wait(30):
+                    raise TimeoutError("graded worker never released provisional")
+                return z + 1
+            return z
+        s.dem.sample = heights
+
+        def stand_in():
+            provisional.active = True
+            return s.make_provisional_follow(a, *key[1:])
+
+        c = earthd.Connection.__new__(earthd.Connection)
+        c.s = s
+
+        def files(msg):
+            names = [msg["heightmap"], msg["ter"], *msg["layers"]]
+            return {n: Path(s.out_dir, os.path.basename(n)).read_bytes() for n in names}
+
+        with ThreadPoolExecutor(1) as pool:
+            late = pool.submit(stand_in)
+            try:
+                self.assertTrue(started.wait(30))
+                graded = asyncio.run(s.terrain(a, *key[1:]))
+                first = files(c.terrain_msg(key, graded))
+            finally:
+                release.set()
+            stand = files(c.terrain_msg(key, late.result()))
+        asyncio.run(s.terrain(a, 256., 0.))
+        returned = asyncio.run(s.terrain(a, *key[1:]))
+        again = files(c.terrain_msg(key, returned))
+        self.assertEqual([n for n in first if first[n] != again[n]], [], "graded files changed on return")
+        with Image.open(os.path.join(s.out_dir, returned["heightmap"])) as im:
+            png = np.asarray(im)[::-1]
+        with open(os.path.join(s.out_dir, returned["ter"]), "rb") as terrain:
+            version, size = struct.unpack("<BI", terrain.read(5))
+            self.assertEqual((version, size), (heightmap.TER_VERSION, png.shape[0]))
+            native = np.frombuffer(terrain.read(size * size * 2), "<u2").reshape(size, size)
+            materials = np.frombuffer(terrain.read(size * size), np.uint8).reshape(size, size)
+        np.testing.assert_array_equal(native, png)
+        solid = materials != heightmap.TER_HOLE  # the terrain cuts holes after the import masks are painted
+        for slot, material in enumerate(returned["mats"]):
+            with Image.open(os.path.join(s.out_dir, returned["layers"][material])) as mask:
+                np.testing.assert_array_equal(np.asarray(mask)[::-1][solid], (materials[solid] == slot) * 255)
+        self.assertTrue(first.keys().isdisjoint(stand), "each build owns all its files")
 
     def test_default_server_sends_no_layers(self):
         s = self.make()
@@ -881,7 +1005,7 @@ class FuelPadTest(unittest.TestCase):
 
 
 class FieldTest(unittest.TestCase):
-    def test_farmland_is_dirt(self):
+    def test_farmland_is_crop_soil(self):
         lat0, lon0 = 40.0, -76.0
         lat = lat0 + np.arange(50)[:, None] * 2e-5 + np.zeros((1, 50))
         lon = lon0 + np.arange(50)[None, :] * 2.6e-5 + np.zeros((50, 1))
@@ -900,7 +1024,7 @@ class FieldTest(unittest.TestCase):
                 return [[ring]]
         idx = np.full((50, 50), sf.GRASS, np.uint8)
         out = sf.paint_fields(idx, lat, lon, [Fields()])
-        self.assertEqual(out[15, 15], sf.DIRT)
+        self.assertEqual(out[15, 15], sf.CROP)
         self.assertEqual(out[40, 40], sf.GRASS)
         self.assertTrue(np.array_equal(idx, np.full((50, 50), sf.GRASS, np.uint8)))
 

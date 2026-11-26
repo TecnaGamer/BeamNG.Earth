@@ -11,9 +11,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// A polyline's rows (k, c), c >= 2.
-struct Line<'a> {
-    v: &'a [f64],
-    c: usize,
+pub(crate) struct Line<'a> {
+    pub(crate) v: &'a [f64],
+    pub(crate) c: usize,
 }
 
 impl Line<'_> {
@@ -24,7 +24,7 @@ impl Line<'_> {
         self.v[i * self.c + j]
     }
     /// _arclen: [0, cumsum(hypot(diff))].
-    fn arclen(&self) -> Vec<f64> {
+    pub(crate) fn arclen(&self) -> Vec<f64> {
         let n = self.n();
         let mut s = Vec::with_capacity(n);
         s.push(0.0);
@@ -85,7 +85,7 @@ fn project(line: &Line, ss: &[f64], qx: f64, qy: f64) -> f64 {
 }
 
 /// _at(line, s) for one arc length: (the point (c,), the unit direction (2,)).
-fn at(line: &Line, ss: &[f64], s: f64, p: &mut Vec<f64>) -> (f64, f64) {
+pub(crate) fn at(line: &Line, ss: &[f64], s: f64, p: &mut Vec<f64>) -> (f64, f64) {
     let n = line.n();
     let s = clip(s, 0., ss[n - 1]);
     // searchsorted(ss, s, "right") - 1, clipped to [0, n - 2]

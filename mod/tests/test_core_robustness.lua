@@ -193,7 +193,7 @@ T.check(pumpUntil(function() return #received('hello') == 1 end, 60), 'connected
 local h = received('hello')[1]
 T.check(type(h.sessions) == 'table' and #h.sessions == 0, 'hello.sessions: none yet (no server files in use)')
 T.check(banner.current().id == 'starting', 'connected, waiting for the server\'s hello')
-serverSend({ type = 'hello', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == 1 end, 10), 'auto-teleport requested')
 T.check(core.banner().id == 'recovered' and shown() == 'BeamNG.Earth server connected', 'the server came: "BeamNG.Earth server connected"')
@@ -279,7 +279,7 @@ server.down = false
 T.check(pumpUntil(function() return #received('hello') == 2 end, 60), 'reconnected: hello')
 T.check(has(last('hello').sessions, 's1'), 'hello.sessions names the old session (its tiles are on screen)')
 local nA = #received('prepare_anchor')
-serverSend({ type = 'hello', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,     -- (6b: the settings page's restart)
   startSettings = { groundGrid = '1', expAiTunnels = false, serverCores = 'auto' } })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nA + 1 end, 10), 'resync requested')
@@ -347,11 +347,15 @@ local nPt = #received('prepare_terrain')
 T.check(pumpUntil(function() return #received('prepare_terrain') > nPt end, 40), 'terrain-follow asks')
 frames(20)
 T.check(st().guard.mode == 'off', 'just asked: the guard waits (the server may be slow)')
+T.check(core.autodriveReady(), 'pending optional terrain alone does not stop Autodrive well inside loaded ground')
+T.check(pumpUntil(function() return st().guard.mode == 'warn' end, 60 * 20), 'late terrain reaches the loaded-edge warning')
+T.check(not core.autodriveReady(), 'Autodrive brakes at the late-ground warning before the common guard pauses')
 for _ = 1, 60 * 20 do frame() end
 T.check(veh.pos.x <= ex1 - edgeguard.STOP_M + 0.5 and simTimeAuthority.paused,
   string.format('unanswered for STUCK_S: paused %.1f m inside the edge', ex1 - veh.pos.x))
 T.check(shown() == 'Paused at the edge of the loaded ground until the BeamNG.Earth server answers terrain requests again (resume to drive back)',
   'banner: the server does not answer terrain requests')
+T.check(not core.autodriveReady(), 'a guard-owned pause never permits Autodrive recovery toward the edge')
 pt = last('prepare_terrain')
 serverSend({ type = 'terrain_ready', requestId = pt.requestId, anchorId = 1, cx = pt.cx, cy = pt.cy,
   heightmap = '/temp/beamngEarth/s2/hm_1_f.png', size = 1024, squareSize = 2, zBase = 0, maxHeight = 1024, q = 1 / 64 })
@@ -359,6 +363,14 @@ T.check(pumpUntil(function() return st().block.cx == pt.cx end, 100), 'the answe
 setGround(pt.cx, pt.cy)
 frames(2)
 T.check(st().guard.mode ~= 'hold' and not st().guard.pausedByUs and not shown(), 'answered: the guard holds nothing, the banner hidden')
+T.check(core.autodriveReady(), 'committed terrain releases the Autodrive warning hold')
+do
+  local g = st().guard
+  local mode, healthy = g.mode, g.healthy
+  g.mode, g.healthy = 'warn', true
+  T.check(core.autodriveReady(), 'a healthy following block does not create unnecessary warning braking')
+  g.mode, g.healthy = mode, healthy
+end
 -- a terrain_error: held for ERROR_HOLD_S
 veh.vel = vec3(0, 0, 0)
 b = st().block
@@ -442,7 +454,7 @@ do
   frames(60)
   server.down = false
   T.check(pumpUntil(function() return #received('hello') == nHello + 1 end, 80), 'reconnected after the restart: hello')
-  serverSend({ type = 'hello', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's3', farFormat = 'cdae',
+  serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's3', farFormat = 'cdae',
     material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,
     startSettings = { groundGrid = '1', expAiTunnels = true, serverCores = 'auto' } })
   T.check(pumpUntil(function() return #received('prepare_anchor') == nA6 + 1 end, 10), 'the new server: resync requested')
@@ -466,7 +478,7 @@ do
   T.check(pumpUntil(function() return core._restart.phase == nil end, 60 * 10), 'the line goes after a few seconds')
   setGround(rs6.cx, rs6.cy)
   -- a refusal (an older or hand-started server): said, the car never held
-  serverSend({ type = 'hello', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's3', farFormat = 'cdae',
+  serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's3', farFormat = 'cdae',
     material = 'bngEarthFar_v3', nearVisual = 'mesh' })
   frames(3)
   local okR, whyR = core.restartServer()
@@ -474,6 +486,87 @@ do
   T.check(core.restartState(mine, order).restartable == false, '... and no button')
   roadsM.readyAround = readyAround0
   readFile = readFile0
+end
+
+------------------------------------------------------------------------------------------
+-- 6c. the map data's release of the level's world (releasepin.lua; server overturepick.py: the app's supervisor picks
+-- it once a session). Codex's scenarios on the earlier design: a level loaded while no server is connected is pinned
+-- by the next server's hello, never by the gone one's; a server of another release, or one too old to say after a
+-- known one, streams nothing into the level (no anchor, no resync, no teleport) and nothing restarts by itself; the
+-- level's release back: the resync goes on
+
+do
+  local A, B = '2026-11-18.0', '2099-01-16.0'
+  local roadsM = require('beamngEarth/roads')
+  local readyAround0 = roadsM.readyAround
+  roadsM.readyAround = function() return true end
+  local function reconnect(hello)
+    local n = #received('hello')
+    server.failErr, server.down = 'closed', true
+    frames(3)
+    server.down = false
+    T.check(pumpUntil(function() return #received('hello') == n + 1 end, 80), '6c: reconnected: hello')
+    serverSend(hello)
+    frames(10)
+  end
+  local function hello(sid, rel)
+    return { type = 'hello', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = sid, farFormat = 'cdae',
+      material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true, overtureRelease = rel }
+  end
+  local nR = #received('server_restart')
+  -- (the level so far: servers of A)
+  T.check(core._relpin.pinned(core._relpinState) == A, '6c: pinned to the level\'s servers\' release')
+  local nA = #received('prepare_anchor')
+  reconnect(hello('r1', B))
+  T.check(#received('prepare_anchor') == nA and st().releaseHold == true and st().resync == true,
+    '6c: a server of another release: held, no resync')
+  local sA = st().anchor
+  core.teleport(sA.lat + 0.01, sA.lon)
+  frames(3)
+  T.check(#received('prepare_anchor') == nA, '6c: a teleport while held: nothing asked')
+  T.check(#received('server_restart') == nR, '6c: nothing restarts by itself')
+  -- the level loaded again while no server is connected (Codex high 1): the next server's release is the level's
+  server.failErr, server.down = 'closed', true
+  frames(3)
+  core.onClientEndMission()
+  core.onClientStartMission()
+  T.check(core._relpin.pinned(core._relpinState) == nil, '6c: a level started while disconnected: not pinned yet')
+  local n = #received('hello')
+  server.down = false
+  T.check(pumpUntil(function() return #received('hello') == n + 1 end, 80), '6c: the new server: hello')
+  serverSend(hello('r2', B))
+  T.check(pumpUntil(function() return #received('prepare_anchor') == nA + 1 end, 20),
+    '6c: the fresh level is pinned by the live server\'s hello: its start teleport asked')
+  T.check(st().releaseHold == nil and core._relpin.pinned(core._relpinState) == B, '6c: pinned to the new release')
+  local rq = last('prepare_anchor')
+  serverSend({ type = 'anchor_ready', requestId = rq.requestId, anchorId = 1, lat = rq.lat, lon = rq.lon, groundZ = 0,
+    terrain = { cx = rq.cx, cy = rq.cy, heightmap = '/temp/beamngEarth/r2/hm_1_0_0.png', size = 1024, squareSize = 2,
+      zBase = 0, maxHeight = 1024, q = 1 / 64 } })
+  local nC = #received('commit_anchor')
+  T.check(pumpUntil(function() return #received('commit_anchor') == nC + 1 end, 40), '6c: the start commits')
+  setGround(rq.cx, rq.cy)
+  frames(5)
+  -- a server too old to say its release after a known pin (Codex high 2): held
+  nA = #received('prepare_anchor')
+  reconnect(hello('r3', nil))
+  T.check(#received('prepare_anchor') == nA and st().releaseHold == true, '6c: an older server after a known pin: held')
+  for _ = 1, 60 * 3 do frame() end
+  T.check(#received('prepare_anchor') == nA, '6c: held: the resync retry asks nothing')
+  -- another release: held as well
+  reconnect(hello('r4', A))
+  T.check(#received('prepare_anchor') == nA and st().releaseHold == true, '6c: another release: held')
+  -- the level's release back: the resync goes on
+  reconnect(hello('r5', B))
+  T.check(#received('prepare_anchor') == nA + 1 and st().releaseHold == nil, '6c: the level\'s release back: resync')
+  local rs = last('prepare_anchor')
+  serverSend({ type = 'anchor_ready', requestId = rs.requestId, anchorId = 1, lat = rs.lat, lon = rs.lon, groundZ = 0,
+    terrain = { cx = rs.cx, cy = rs.cy, heightmap = '/temp/beamngEarth/r5/hm_1_r.png', size = 1024, squareSize = 2,
+      zBase = 0, maxHeight = 1024, q = 1 / 64 } })
+  nC = #received('commit_anchor')
+  T.check(pumpUntil(function() return #received('commit_anchor') == nC + 1 end, 40), '6c: the resync commits')
+  T.check(#received('server_restart') == nR, '6c: no restart asked by itself in all of it')
+  setGround(rs.cx, rs.cy)
+  roadsM.readyAround = readyAround0
 end
 
 ------------------------------------------------------------------------------------------

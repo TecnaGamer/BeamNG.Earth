@@ -14,6 +14,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dem as demmod  # noqa: E402
 
 
+class TerrariumDecodeTest(unittest.TestCase):
+    def test_truncated_lossless_webp_is_rejected(self):
+        # A one-pixel sea-level tile. Its odd VP8L chunk requires a final RIFF pad.
+        data = bytes.fromhex("524946461c000000574542505650384c0f0000002f000000000710058cfe0722a2ff0100")
+        self.assertEqual(demmod.decode_terrarium(data, 1).item(), 0.0)
+        with self.assertRaises(OSError):
+            demmod.decode_terrarium(data[:-1], 1)
+
+
 class FlakyDem(demmod.Dem):
     """No network: the first load of every tile fails, later loads succeed."""
 
@@ -219,6 +228,113 @@ class CoverageTest(unittest.TestCase):
             demmod._coverage.clear()
             demmod._coverage.update(saved)
 
+
+    def test_stale_list_kept_when_refresh_fails(self):
+        """A list on disk older than COVERAGE_MAX_AGE_S is still used when the refresh fails (offline, the host down, a
+        frozen test cache): plans don't change with whether one download worked."""
+        import json
+
+        class Down(LidarDepthFetcher):
+            def get(self, url, *, kind="demand", headers=None):
+                if url == demmod.COVERAGE_URL:
+                    self.calls.append(url)
+                    raise OSError("offline")
+                return super().get(url, kind=kind, headers=headers)
+        saved = dict(demmod._coverage)
+        demmod._coverage.update(index=None, at=-1e18, failed=False)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "mapterhorn", "download_urls.json")
+                os.makedirs(os.path.dirname(path))
+                with open(path, "w") as fh:
+                    json.dump(CoverageTest.DOC, fh)
+                old = time.time() - demmod.COVERAGE_MAX_AGE_S - 86400
+                os.utime(path, (old, old))
+                f = Down()
+                dem = demmod.Dem(d, fetcher=f)
+                self.assertEqual(dem._coverage(), {(10, 22): 16, (11, 22): 13}, "the stale list, not none")
+                self.assertEqual(f.calls, [demmod.COVERAGE_URL], "a refresh was tried")
+                self.assertEqual(dem._coverage(), {(10, 22): 16, (11, 22): 13})
+                self.assertEqual(len(f.calls), 1, "not asked again before COVERAGE_RETRY_S")
+                self.assertIsNone(dem._download(demmod.MAPTERHORN, 16, (12 << 10) + 5, 22 << 10), "unlisted z6 tile")
+        finally:
+            demmod._coverage.clear()
+            demmod._coverage.update(saved)
+
+    def test_stale_list_refresh_faults_no_build(self):
+        """The stale list's refresh failing as the real Fetcher fails (a netfetch error, offline at once; a malformed
+        answer): no build that read the list is short (2026-11-24: every corpus plan offline was, through dem._coverage),
+        asked again after COVERAGE_RETRY_S, then twice as long; an answer replaces the copy on disk. No list at all and
+        a failure: the build is short, as before."""
+        import json
+        import netfetch
+        import revisit
+
+        class Site(LidarDepthFetcher):
+            answer = netfetch.Offline
+
+            def get(self, url, *, kind="demand", headers=None):
+                if url == demmod.COVERAGE_URL:
+                    self.calls.append(url)
+                    a = self.answer
+                    if isinstance(a, type):
+                        raise a(f"offline: {url}", url, "download.mapterhorn.com")
+
+                    class R:
+                        body = a
+                    return R()
+                return super().get(url, kind=kind, headers=headers)
+        saved = dict(demmod._coverage)
+        cov = demmod._coverage
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "mapterhorn", "download_urls.json")
+                os.makedirs(os.path.dirname(path))
+                with open(path, "w") as fh:
+                    json.dump(CoverageTest.DOC, fh)
+                old = time.time() - demmod.COVERAGE_MAX_AGE_S - 86400
+                os.utime(path, (old, old))
+                for answer in (netfetch.Offline, netfetch.FetchFailed, b"<html>", b'{"items": []}'):
+                    cov.clear()
+                    cov.update(index=None, at=-1e18, failed=False, lock=saved["lock"])
+                    f = Site()
+                    f.answer = answer
+                    dem = demmod.Dem(d, fetcher=f)
+                    f0 = revisit.faults()
+                    with revisit.scope() as b:
+                        self.assertEqual(dem._coverage(), {(10, 22): 16, (11, 22): 13}, "the stale list")
+                    self.assertEqual(f.calls, [demmod.COVERAGE_URL], "a refresh was tried")
+                    self.assertTrue(b.complete, f"{answer}: the build is complete ({b.why_not()})")
+                    self.assertEqual(revisit.faults(), f0, f"{answer}: no fault")
+                    self.assertAlmostEqual(cov["at"] + demmod.COVERAGE_MAX_AGE_S - time.time(),
+                                           demmod.COVERAGE_RETRY_S, delta=5, msg="asked again after COVERAGE_RETRY_S")
+                # the backoff: once COVERAGE_RETRY_S passed, asked again; then twice as long
+                cov["at"] -= demmod.COVERAGE_RETRY_S + 1
+                f.answer = netfetch.Offline
+                self.assertEqual(dem._coverage(), {(10, 22): 16, (11, 22): 13})
+                self.assertEqual(len(f.calls), 2, "asked again")
+                self.assertAlmostEqual(cov["at"] + demmod.COVERAGE_MAX_AGE_S - time.time(),
+                                       2 * demmod.COVERAGE_RETRY_S, delta=5, msg="then after twice as long")
+                self.assertEqual(dem._coverage(), {(10, 22): 16, (11, 22): 13})
+                self.assertEqual(len(f.calls), 2, "not before")
+                # back online: the answer replaces the copy and the backoff starts over
+                cov["at"] -= 2 * demmod.COVERAGE_RETRY_S + 1
+                f.answer = json.dumps({"items": CoverageTest.DOC["items"][:2]}).encode()
+                self.assertEqual(dem._coverage(), {(10, 22): 16})
+                self.assertEqual(len(f.calls), 3)
+                self.assertLess(time.time() - os.path.getmtime(path), 60, "the fresh list kept on disk")
+                self.assertEqual(cov["backoff"].failures, 0)
+                # no list at all: a failure is a missing input (a fault in the build), every tile asked
+                os.remove(path)
+                cov.clear()
+                cov.update(index=None, at=-1e18, failed=False, lock=saved["lock"])
+                f.answer = netfetch.Offline
+                with revisit.scope() as b:
+                    self.assertIsNone(dem._coverage())
+                self.assertFalse(b.complete, "no list: short, as before")
+        finally:
+            cov.clear()
+            cov.update(saved)
 
 class FillHolesTest(unittest.TestCase):
     def test_small_hole_filled_sea_kept(self):
