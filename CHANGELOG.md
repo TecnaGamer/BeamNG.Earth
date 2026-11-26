@@ -34,6 +34,9 @@ What changed in each release of BeamNG.Earth, newest first.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed
+- Reduced the chance of the game's terrain texture cache (`temp/art/terrainmaterialcache` in BeamNG's user folder)
+  filling up with old ground photos: they now go with their session, and a one-time clean-up at the next start removes
+  the ones earlier versions left behind (several GB on long-time test machines).
 - Rain particles now stop above the cloud base. Rain audio no longer uses the particle emitter's name.
 - Reduced the chance of rain or snow showing in tunnels, parking structures and under bridges: they now fade out there.
 - Snow should now be visible: it used a texture made for the main menu that drew tiny dots; it now has its own flakes,
