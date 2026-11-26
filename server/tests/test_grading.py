@@ -1170,6 +1170,40 @@ class OverTunnels(unittest.TestCase):
         self.assertIsNone(grading.Grader._over_tunnels(g, np.array([50.0]), np.array([30.0])))
 
 
+class OpenTunnelsOrderTest(unittest.TestCase):
+    """_Planner.open_tunnels: one open section is in every cell its tunnel part reaches, each with its own copy's Spec
+    (CA-1's Malibu tunnel: 10 m in one cell, 8.6 m in the next). The block's paint takes the points' own cells' in
+    their keys' order, whatever order the cells were planned in and whatever other cells are planned already (two
+    builds of the tunnel corpus's Malibu S painted the mouth 1.4 m apart, 2026-11-26)."""
+
+    def planner(self, order, own):
+        g = grading._Planner(FRAME, FakeMD(None), lambda la, lo: np.zeros(np.shape(la)))
+        g._cell_plans = lambda key: []           # (planned already: the opens below)
+        xy = np.array([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]])
+        for key in order:
+            g.opens[key] = [(xy.copy(), own[key])]
+        return g
+
+    def test_the_same_spec_whatever_order_the_cells_were_planned_in(self):
+        lat = np.array([LAT, LAT + 0.0005])
+        lon = np.array([LON, LON])
+        mine = sorted(set(mapcells.cells_for_points(lat, lon)))
+        if len(mine) == 1:          # (the points in two cells: the one next to it north or south)
+            lat = np.array([LAT, LAT - 0.03])
+            mine = sorted(set(mapcells.cells_for_points(lat, lon)))
+        self.assertGreaterEqual(len(mine), 2)
+        far = mapcells.cell_of(LAT + 1.0, LON + 1.0)
+        a, b = mine[0], mine[1]
+        own = {a: roads.Spec(10.0, "paved", False, "primary"), b: roads.Spec(8.6, "paved", False, "primary"),
+               far: roads.Spec(12.0, "paved", False, "primary")}
+        widths = set()
+        for order in ((a, b), (b, a), (far, b, a), (far, a, b), (b, far, a)):
+            got = self.planner(order, own).open_tunnels(lat, lon)
+            self.assertEqual(len(got), 1)
+            widths.add(got[0][2].width)
+        self.assertEqual(widths, {10.0}, "the first of the points' own cells by key, every time")
+
+
 class WallHeightTest(unittest.TestCase):
     def test_city_concrete_walls_full_height(self):
         """A major road's cutting in town keeps a full-height concrete wall (McGraw-Graben); stone walls elsewhere
