@@ -916,8 +916,26 @@ class CeilTest(unittest.TestCase):
             st.parts_todo([(("w1", 0), None, 0)], part_ids=True)
             self.assertEqual(asked, [("w1", 0)], "the other readers ask it again as before")
 
+    def test_the_ceiling_keeps_every_drawn_railways_ground(self):
+        """(M5 r5) _ceil_rails: the floors' railways and every line railways draws on the ground (its "ground"
+        pieces: a short tunnel mapped under a road bridge is drawn there with its collider; 0bff's 19 lips)."""
+        import railways
+        import roads
+        import roadsys
+
+        class Fe(list):
+            pass
+        f = Fe([1, 2, 3])
+        floor = np.array([[0.0, 0.0], [1.0, 0.0]])
+        short = [np.array([[0.0, 1.0], [0.0, 2.0]])]
+        with mock.patch.object(roadsys, "_rails", lambda feats: [("r0", floor, 5.0)]), \
+                mock.patch.object(roads, "_rail_drawn", lambda feats, i: i != 1), \
+                mock.patch.object(railways, "_pieces", lambda feats, i: [("ground", short), ("bridge", [floor + i])]):
+            got = roadsys._ceil_rails(f)
+        self.assertEqual([g.tolist() for g in got], [floor.tolist(), short[0].tolist(), short[0].tolist()])
+
     def test_keyed_and_wired(self):
-        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 7)
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 8)
         self.assertGreaterEqual(fast.MIN_VERSION, 632)
         bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
         self.assertIn("_roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1)", bw)

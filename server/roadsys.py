@@ -1539,15 +1539,32 @@ def _ceil_inputs(frame, cell_fn, keys, reg, view):
     return decks, rails
 
 
+def _ceil_rails(feats):
+    """[lon / lat (n, 2)] the railways whose ground a ceiling keeps: the floors' (_rails) and every railway the rail
+    tiles draw on the ground (railways.drawn's lines, their "ground" pieces: a short tunnel mapped under a road
+    bridge too, which railways draws on the ground with its collider while tag_level_ranges calls it a tunnel: the
+    ceiling cut the ground under 0bff's rail colliders, 19 lips up to 14 cm; M5 r5)."""
+    import railways
+    import roads
+    out = [ll for _fid, ll, _clear in _rails(feats)]
+    for i in range(len(feats)):
+        if not roads._rail_drawn(feats, i):
+            continue
+        for kind, rings in railways._pieces(feats, i):
+            if kind == "ground":
+                out += [np.asarray(r, np.float64)[:, :2] for r in rings if len(r) >= 2]
+    return out
+
+
 def _rails_in(feats, frame):
-    """[(n, 2)] a cell's railways at ground level (_rails) in frame, memoised on the cell's features per frame (each
-    ceiling's box reads its 3 x 3 cells again)."""
+    """[(n, 2)] a cell's railways at ground level (_ceil_rails) in frame, memoised on the cell's features per frame
+    (each ceiling's box reads its 3 x 3 cells again)."""
     memo = feats.__dict__.setdefault("_roadsys_rails_xy", {})
     fk = _frame_key(frame)
     got = memo.get(fk)
     if got is None:
         got = []
-        for _fid, ll, _clear in _rails(feats):
+        for ll in _ceil_rails(feats):
             e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
             xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
             if len(xy) >= 2:
