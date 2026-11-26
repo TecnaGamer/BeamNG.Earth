@@ -6833,7 +6833,7 @@ class _Planner:
         rows = []
         if lines:
             import fast
-            fast.require(637, "landing_ends")
+            fast.require(638, "landing_ends")
             rows = fast._ef.landing_ends(np.concatenate(lines), [0] + np.cumsum([len(x) for x in lines]).tolist(),
                                          cls, list(FAST_GAP_CLASSES), FAST_GAP_JOIN_M, roadsmod.TURN_LOOK_M,
                                          bool(roadsmod.MAPPED_RANGES()))
@@ -6868,7 +6868,7 @@ class _Planner:
         if lines:
             # (landings.rs landing_chain: the lines each once, the chain walked, the approach and the roads round it)
             import fast
-            fast.require(637, "landing_chain")
+            fast.require(638, "landing_chain")
             got = fast._ef.landing_chain(
                 (ex, ey), (vx, vy), np.concatenate(lines), [0] + np.cumsum([len(x) for x in lines]).tolist(), cand,
                 np.arange(0.0, FAST_GAP_FAR_M + 1e-6, PROFILE_STEP),

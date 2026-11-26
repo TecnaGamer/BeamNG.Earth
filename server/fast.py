@@ -40,7 +40,7 @@ def _exit_hook():
 if _ef is not None and sys.version_info < (3, 14):
     import atexit
     atexit.register(_exit_hook)
-MIN_VERSION = 637 # the newest kernel signature the server calls (earthd checks it at start) ...
+MIN_VERSION = 638 # the newest kernel signature the server calls (earthd checks it at start) ...
 if os.environ.get("BNE_BATTER", "off") == "vanilla":
     # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
     # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)
