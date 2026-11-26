@@ -711,8 +711,13 @@ class MapDataTest(Base):
                 md.layer_arrays(other, "buildings")
             self.assertGreater(revisit.faults(), before)
         self.assertEqual(builds.count((str(other), "buildings")), 1)
-        with self.assertRaises(netfetch.Offline):
+        with self.assertRaises(netfetch.Offline) as raised:
             md.cell(other, ("buildings",))
+        kept = md._stand_ins[md.path(other, "buildings")][2]
+        self.assertIsNot(raised.exception, kept)
+        self.assertEqual((str(kept), kept.url, kept.host), ("offline: parquet", "u", "h"))
+        # (no traceback kept: it held the last reader's frames, and through them its whole stack's locals)
+        self.assertEqual((kept.__traceback__, kept.__context__, kept.__cause__), (None, None, None))
         self.assertEqual(builds.count((str(other), "buildings")), 1)
         # a kind that never falls back is not served the fallback's outcome (its own answer, the tiles' refusal)
         with self.assertRaises(mapdata.DEFERRED):

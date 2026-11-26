@@ -430,6 +430,17 @@ def _resident(arrays):
     return sum(v.nbytes for v in arrays.values() if getattr(v, "flags", None) is not None and v.flags.writeable)
 
 
+def _bare_error(e):
+    """A copy of exception e without its traceback, cause or context (its class, args and attributes; __init__ not
+    run): a kept fallback's error, and each one raised from it. A raised exception's traceback holds its frames and,
+    through them, its callers' frames and locals: the kept one never holds a reader's stack, and no two readers raise
+    the same object (concurrent raises would rewrite one traceback)."""
+    out = type(e).__new__(type(e), *e.args)
+    out.args = e.args
+    out.__dict__.update(e.__dict__)
+    return out
+
+
 def _fresh(arrays, since):
     """A StandIn of kept arrays as a load gives them: the writable ones (in memory) copied, so no caller changes the
     kept ones; the mirror's read-only mapped views shared, as every load of the mirror maps the same pages."""
@@ -1578,7 +1589,7 @@ class MapData:
                     arrays = self._build(key, layer, kind)
                 except Exception as e:
                     if _fell.on and kind in _FALLBACK_KINDS and not executor_closed(e):
-                        self._stand_in_put(path, None, e)      # (the fallback failed too: not asked again either)
+                        self._stand_in_put(path, None, _bare_error(e))     # (the fallback failed too: kept too)
                     raise
                 finally:
                     fell, _fell.on = _fell.on, False
@@ -1617,7 +1628,7 @@ class MapData:
             self._cell_stats["stand_in_hits"] = self._cell_stats.get("stand_in_hits", 0) + 1
         revisit.fault()
         if got[2] is not None:
-            raise got[2].with_traceback(None)
+            raise _bare_error(got[2])
         return _fresh(got[1], got[0])
 
     def _stand_in_put(self, path, arrays, err):
