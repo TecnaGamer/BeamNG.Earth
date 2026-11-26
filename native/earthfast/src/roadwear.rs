@@ -912,6 +912,7 @@ const SAG_MIN_MOTORWAY_M: f64 = 0.08;   // (a motorway's drainage: only marked s
 const GUTTER_EVERY: (f64, f64) = (8.0, 22.0);
 const RUT_EVERY: (f64, f64) = (12.0, 40.0);
 const WHEEL_M: f64 = 0.85;          // m from a lane's centre to a wheel path
+const FIT_TRIES: usize = 4;         // a puddle shrunk this many times to stay on the carriageway (road_puddles)
 
 /// Puddles of the road's sags: (distance along, depth m) of every low point of the centre line's profile within the
 /// windows (both sides SAG_RISE_M long within the line: a sag at its end is unknown, its next road decides).
@@ -957,9 +958,42 @@ fn road_puddles(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], gutter
     };
     let win = windows(ln, &ctx.bx, hw + 8.0);
     if win.is_empty() { return; }
-    let quad = |out: &mut Out, s: f64, d: f64, along: f64, across: f64, turn: f64, kind: i64, cell: i64| {
-        let (x, y, z, tx, ty) = ln.at(s);
-        emit_quad(ctx, out, r, (x - ty * d, y + tx * d, z), (tx, ty), turn, along, across, kind, cell);
+    // A puddle quad kept on the carriageway: each corner (emit_quad's, turned by `turn`) within hw of the centre line,
+    // measured at the corner's own distance along it (a turned or long quad on a bend reached past the edge: the sag
+    // puddles of a 7 m road out to 3.8 m). edge (side, inset): the quad hugs that edge, its offset taken again from
+    // its width as it shrinks. Too big: shorter and narrower (FIT_TRIES steps), then the turn dropped; never fits:
+    // none.
+    let fits = |s: f64, d: f64, along: f64, across: f64, turn: f64| -> bool {
+        let (x, y, _z, tx, ty) = ln.at(s);
+        let (cx, cy) = (x - ty * d, y + tx * d);
+        let (cs, sn) = (turn.dcos(), turn.dsin());
+        let (ux, uy) = (tx * cs - ty * sn, tx * sn + ty * cs);
+        let (vx, vy) = (-uy, ux);
+        let (a, b) = (along / 2.0, across / 2.0);
+        [(a, b), (a, -b), (-a, -b), (-a, b)].iter().all(|&(fa, fb)| {
+            let (px, py) = (cx + ux * fa + vx * fb, cy + uy * fa + vy * fb);
+            let sa = (s + (px - x) * tx + (py - y) * ty).clamp(0.0, len);
+            let (qx, qy, _qz, qtx, qty) = ln.at(sa);
+            ((px - qx) * -qty + (py - qy) * qtx).abs() <= hw + 1e-9
+        })
+    };
+    let quad = |out: &mut Out, s: f64, d: f64, along: f64, across: f64, turn: f64, kind: i64, cell: i64,
+                edge: Option<(f64, f64)>| {
+        let (mut along, mut across, mut turn) = (along, across, turn);
+        let offset = |across: f64| match edge { Some((side, inset)) => side * (hw - across / 2.0 - inset), None => d };
+        for k in 0..=FIT_TRIES {
+            if k == FIT_TRIES { turn = 0.0; }
+            let dd = offset(across);
+            if fits(s, dd, along, across, turn) {
+                let (x, y, z, tx, ty) = ln.at(s);
+                emit_quad(ctx, out, r, (x - ty * dd, y + tx * dd, z), (tx, ty), turn, along, across, kind, cell);
+                return;
+            }
+            if k < FIT_TRIES {
+                along *= 0.8;
+                across *= 0.85;
+            }
+        }
     };
     // sags: along the edges the crown drains to (a one-way road's cross-fall: its right edge; a two-way crown both),
     // bigger with the sag's depth; a deep one on a narrow road across its middle too
@@ -972,11 +1006,11 @@ fn road_puddles(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], gutter
         for &side in sides {
             let d = side * (hw - across / 2.0 - 0.1);
             quad(out, s + rng.range(-1.5, 1.5), d, along, across, rng.range(-0.06, 0.06), K_PUDDLE_SAG,
-                 rng.pick(4) as i64);
+                 rng.pick(4) as i64, Some((side, 0.1)));
         }
         if depth >= 0.15 && hw < 4.0 {
             quad(out, s, doff, along * 0.8, (2.0 * hw - 2.0 * across).max(1.0), rng.range(-0.05, 0.05), K_PUDDLE_SAG,
-                 rng.pick(4) as i64);
+                 rng.pick(4) as i64, None);
         }
     }
     // gutters: by a kerb, between the drains, more on a worn surface
@@ -990,7 +1024,8 @@ fn road_puddles(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], gutter
                 let across = rng.range(0.6, 1.2).min(0.5 * hw);
                 let (turn, cell, keep) = (rng.range(-0.08, 0.08), rng.pick(4) as i64, rng.f());
                 if keep < (0.6 * (1.3 - cond)).clamp(0.3, 0.75) && overlaps(&win, s - along, s + along) {
-                    quad(out, s, side * (hw - across / 2.0 - 0.05), along, across, turn, K_PUDDLE_GUTTER, 4 + cell);
+                    quad(out, s, side * (hw - across / 2.0 - 0.05), along, across, turn, K_PUDDLE_GUTTER, 4 + cell,
+                         Some((*side, 0.05)));
                 }
                 s += rng.range(GUTTER_EVERY.0, GUTTER_EVERY.1);
             }
@@ -1010,7 +1045,7 @@ fn road_puddles(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], gutter
                     let (turn, cell, keep) = (rng.range(-0.04, 0.04), rng.pick(4) as i64, rng.f());
                     let row = if cond < 0.5 { 8 } else { 12 };
                     if keep < (0.25 + 0.55 * (1.0 - cond)) && overlaps(&win, s - along, s + along) {
-                        quad(out, s, c + w, along, across, turn, K_PUDDLE_RUT, row + cell);
+                        quad(out, s, c + w, along, across, turn, K_PUDDLE_RUT, row + cell, None);
                     }
                     s += rng.range(RUT_EVERY.0, RUT_EVERY.1) / (1.3 - cond).max(0.5);
                 }
@@ -1277,6 +1312,28 @@ mod tests {
             let q = &part.pts[part.off[k] as usize..part.off[k + 1] as usize];
             assert!((0..p1.attrs.len()).any(|j| p1.attrs[j] == part.attrs[k]
                 && p1.pts[p1.off[j] as usize..p1.off[j + 1] as usize] == *q), "a part tile's puddle is the whole road's");
+        }
+    }
+
+    #[test]
+    fn puddles_stay_on_a_bending_carriageway() {
+        // a worn kerbed street round a 40 m radius bend, dipping in the middle: every corner of every puddle within
+        // the half width of the centre line (its distance to the arc)
+        let (rad, n) = (40.0f64, 160usize);
+        let pts: Vec<(f64, f64, f64)> = (0..=n).map(|i| {
+            let t = i as f64 / n as f64 * 2.0;          // 2 rad of arc, 80 m
+            ((t.dcos()) * rad, (t.dsin()) * rad, (t - 1.0).abs() * 0.4)
+        }).collect();
+        let ln = Line::new(pts.iter().map(|p| p.0).collect(), pts.iter().map(|p| p.1).collect(),
+                           pts.iter().map(|p| p.2).collect());
+        let mut a = attrs_row(3.5, 2.0, 5.0, 31337.0);
+        a[A_COND] = 0.15;
+        let out = puddles(&ln, &a, [-60.0, -60.0, 60.0, 60.0], true);
+        assert!(out.attrs.len() > 5, "puddles laid: {}", out.attrs.len());
+        assert!(out.attrs.iter().any(|q| q[0] as i64 == K_PUDDLE_SAG), "the dip's sag puddles");
+        for p in &out.pts {
+            let r = p[0].dhypot(p[1]);
+            assert!((r - rad).abs() <= 3.5 + 1e-6, "a corner {:.3} m off the centre line", (r - rad).abs());
         }
     }
 
