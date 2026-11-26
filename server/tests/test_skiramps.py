@@ -1031,6 +1031,59 @@ class PinBatch(unittest.TestCase):
         self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 9, "the surface plans keyed apart from round 6's")
 
 
+class LandingHomeCopy(unittest.TestCase):
+    """BNE_ROADSYS=surface (roads.MAPPED_RANGES), M5 round 7: a deck end's landing is the copy of the cell the end lies
+    in, whichever cells were read round the points asked. A motorway deck ends 50 m inside one cell and runs on into
+    its east neighbour, which has its own copy 2e-5 m off: the plans of points 400 m into either cell (neither reading
+    the other's cell) took each its own cell's copy, so the two cells' plans met apart at their seam."""
+
+    def test_both_sides_take_the_home_copy(self):
+        import geodesy
+        import mapcells
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(54.0, 12.6)
+        a = mapcells.cell_of(54.0, 12.6)
+        lon0, lat0, lon1, lat1 = a.bounds()
+        ee, _n, _ = g.frame.geodetic_to_enu(np.array([54.0]), np.array([lon1]), 0.0)
+        edge = float(np.asarray(ee)[0])
+        end = np.array([edge - 50.0, 0.0])
+        deck = np.array([end, end + [200.0, 0.0]])
+        road = np.array([end, end - [300.0, 0.0]])
+        b = mapcells.cell_of(54.0, lon1 + 1e-6)
+        self.assertNotEqual(str(a), str(b))
+        shift = {str(a): np.zeros(2), str(b): np.array([2e-5, -2e-5])}
+
+        def raw(self_, k):
+            s = shift.get(str(k))
+            if s is None:
+                return {"bridges": [], "ground": []}
+            return {"bridges": [(deck + s, "motorway", False)], "ground": [(road + s, "motorway", False, True, "road")]}
+        def sides(mapped):
+            got = []
+            g.__dict__.pop("_landings_in_memo", None)
+            g.__dict__.pop("_landing_memo", None)
+            with mock.patch.object(grading._Planner, "_raw_lines", raw), \
+                    mock.patch.object(roads, "MAPPED_RANGES", lambda: mapped):
+                for x in (edge - 400.0, edge + 400.0):
+                    la, lo, _ = g.frame.enu_to_geodetic(np.array([x]), np.array([0.0]), 0.0)
+                    cells = {str(k) for k in g._gap_cells(la, lo, grading.FAST_GAP_CHAIN_M + grading.FAST_GAP_FAR_M)}
+                    self.assertEqual((str(a) in cells, str(b) in cells), (x < edge, x > edge), "one cell's copy read")
+                    lands = g._fast_landings(la, lo)
+                    self.assertEqual(len(lands), 1)
+                    got.append([(r[0].tolist(), r[1], r[5].tolist()) for r in lands])
+            return got
+        got = sides(True)
+        self.assertEqual(repr(got[1]), repr(got[0]), "the same landing from either side")
+        self.assertEqual(got[0][0][0][0], end.tolist(), "the home cell's copy")
+        # (off: each side its own cell's copy, as before; the landings kept per cell set, _landings_in: the east
+        # side's read never answered with the west side's kept one)
+        off = sides(False)
+        self.assertEqual(off[0][0][0][0], end.tolist())
+        self.assertEqual(off[1][0][0][0], (end + shift[str(b)]).tolist())
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 10)
+
+
 class UnderSpeed(unittest.TestCase):
     """A lone 1 m dip on 6 % cosine ramps bends at 2 g^2 / d: 0.95 g at 130 km/h. A motorway's: within its radius."""
 
