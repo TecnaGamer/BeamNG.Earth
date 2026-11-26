@@ -330,23 +330,18 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False, game_running=False):
         if dry_run:
             say(f"(dry run) would replace {dest}")
             return None
-        old_times = _unchanged_times(dest, MOD_SRC)
         # the textures made before that would be made the same now stay (an update encodes only the changed ones)
         keep = modtextures.reusable(dest, todo)
-        for rel in keep:
-            full = os.path.join(dest, *rel.split("/"))
-            st = os.stat(full)
-            old_times[os.path.relpath(full, dest)] = (st.st_atime, st.st_mtime)
-        _clear_tree(dest, keep)
+        _sync_tree_in_place(MOD_SRC, dest, keep | set(GENERATED))
         status = "updated"
     elif dry_run:
         say(f"(dry run) would copy the mod to {dest}")
         return None
     else:
         status = "installed"
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    shutil.copytree(MOD_SRC, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
-                    dirs_exist_ok=True)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copytree(MOD_SRC, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+                        dirs_exist_ok=True)
     if len(keep) < len(todo):
         say(f"Mod: making its textures ({len(todo) - len(keep)} of {len(todo)}; once per update) ...")
     try:
@@ -355,26 +350,73 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False, game_running=False):
         fail(f"the mod's textures could not be made: {e}")
     if encoded:
         note(f"Mod: {encoded} textures made in {secs:.1f} s ({reused} kept)")
-    if status == "updated":
-        _stamp_times(dest, old_times)
     note(f"Mod: installed to {dest}")
     return status
 
 
-def _clear_tree(dest, keep):
-    """Remove every file of the installed copy but `keep` (paths relative to it, '/'-separated), and the folders left
-    empty."""
+def _sync_tree_in_place(src, dest, keep=()):
+    """Update dest in place without deleting unchanged files (shutil.rmtree briefly removed
+    levels/beamng_earth/main.level.json while a running game watched its user folder, causing
+    core_levels to drop beamng_earth and break the pause menu/map). Preserves `keep`
+    ('/'-separated paths relative to dest) and exact (atime_ns, mtime_ns) on unchanged files."""
+    import filecmp
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
+    keep_set = set(keep)
+    want_files = set()
+    want_dirs = set()
+    for dirpath, dirnames, filenames in os.walk(src):
+        skipped = ignore(dirpath, dirnames + filenames)
+        dirnames[:] = [d for d in dirnames if d not in skipped]
+        rel_dir = os.path.relpath(dirpath, src)
+        if rel_dir != ".":
+            want_dirs.add(rel_dir)
+            os.makedirs(os.path.join(dest, rel_dir), exist_ok=True)
+        for name in filenames:
+            if name in skipped:
+                continue
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            rel_posix = rel.replace(os.sep, "/")
+            want_files.add(rel_posix)
+            s_path = os.path.join(src, rel)
+            d_path = os.path.join(dest, rel)
+            try:
+                if os.path.isfile(d_path) and not os.path.islink(d_path):
+                    st = os.stat(d_path)
+                    if filecmp.cmp(s_path, d_path, shallow=False):
+                        st_after = os.stat(d_path)
+                        if (st_after.st_atime_ns, st_after.st_mtime_ns) != (st.st_atime_ns, st.st_mtime_ns):
+                            os.utime(d_path, ns=(st.st_atime_ns, st.st_mtime_ns))
+                        continue
+            except OSError:
+                pass
+            os.makedirs(os.path.dirname(d_path), exist_ok=True)
+            tmp = d_path + ".bnge-tmp"
+            shutil.copyfile(s_path, tmp)
+            os.utime(tmp, None)
+            os.replace(tmp, d_path)
+    keep_all = want_files | keep_set
     for dirpath, dirnames, filenames in os.walk(dest, topdown=False):
+        rel_dir = os.path.relpath(dirpath, dest)
         for name in filenames:
             full = os.path.join(dirpath, name)
-            if os.path.relpath(full, dest).replace(os.sep, "/") not in keep:
-                os.remove(full)
+            rel_posix = (name if rel_dir == "." else os.path.join(rel_dir, name)).replace(os.sep, "/")
+            if rel_posix not in keep_all:
+                try:
+                    os.remove(full)
+                except OSError:
+                    pass
         for name in dirnames:
             full = os.path.join(dirpath, name)
             if os.path.islink(full):
-                os.remove(full)
-            elif not os.listdir(full):
-                os.rmdir(full)
+                try:
+                    os.remove(full)
+                except OSError:
+                    pass
+        if rel_dir != "." and rel_dir not in want_dirs:
+            try:
+                os.rmdir(dirpath)
+            except OSError:
+                pass
 
 
 # The game packs a terrain material's textures into its own cache (temp/art/terrainMaterialCache) and packs them again,
