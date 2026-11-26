@@ -3149,7 +3149,8 @@ def _deck_handover(blob, pos, tile, frame, piv, aid, lat, lon, zoom, q):
         zq = np.rint(np.asarray(u, np.float64) * (1.0 / q)) * q
         if roadsys.CEIL:        # (M5: a node the ceiling lowers is the deck's as a dropped one is)
             dr = roadsys.ground_lowering(fr, cell_fn, keep["lat"], keep["lon"],
-                                         pre(np.asarray(keep["lat"], np.float64), np.asarray(keep["lon"], np.float64)))
+                                         pre(np.asarray(keep["lat"], np.float64), np.asarray(keep["lon"], np.float64)),
+                                         (gx0, gy0, gx1, gy1))
         else:
             dr = roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])
         zg[b0:b1 + 1, a0:a1 + 1] = zq

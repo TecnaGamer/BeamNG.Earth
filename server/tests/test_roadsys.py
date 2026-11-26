@@ -228,7 +228,7 @@ class SquareTest(unittest.TestCase):
             ids.append(fid_); texts.append(t); nums.append(n); ints.append(i)
             lls.append(np.column_stack((np.asarray(lo), np.asarray(la)))); cons.append(list(c)); rng.append(list(r))
         tab = dict(ids=ids, texts=texts, nums=nums, ints=ints, ll=lls, cons=cons, rng=rng, cell=str(home))
-        roadsys._cells_of[id(fake_table)] = (fake_table, cc)
+        roadsys._cells_of[roadsys._reads_of(fake_table)[0]] = (roadsys._reads_of(fake_table)[1], cc)
         store = type("S", (), {})()
         store.frame = geotiles.WorldFrame(lat0, lon0)
         store.cell_fn = fake_table
@@ -298,7 +298,7 @@ class SquareTest(unittest.TestCase):
         def solve(order):
             roadsys._squares.clear()
             roadsys._short_sq.clear()
-            roadsys._cells_of[id(fake_table)] = (fake_table, cc)
+            roadsys._cells_of[roadsys._reads_of(fake_table)[0]] = (roadsys._reads_of(fake_table)[1], cc)
             out = {}
             for c in order:
                 got = roadsys.chain_heights(store, chains[c][0], chains[c][1], g_ll)
@@ -597,7 +597,7 @@ class StructuresTest(unittest.TestCase):
         applied; the exact deck reads its nodes through heightmap.surface and the same drop."""
         src = (HERE / "roads.py").read_text(encoding="utf-8")
         i = src.index("def block_arch_raise(")
-        self.assertIn("roadsys.ground_cut(frame, cell_fn, la, lo, z)", src[i:i + 1500])
+        self.assertIn("roadsys.ground_cut(frame, cell_fn, la, lo, z, box)", src[i:i + 1500])
         bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
         for caller in ("def gen(la, lo):", "def drawn(la, lo):"):
             j = bw.index(caller)
@@ -886,6 +886,73 @@ class CeilTest(unittest.TestCase):
                 roadsys.ceil_of_cell(F(), None, key)
             self.assertEqual(len(calls), 2, "read again once its time is up")
         roadsys._ceil_memo.clear()
+
+    def test_a_jobs_box_reads_one_ceiling_for_all_its_queries(self):
+        """(wg1126) ground_cut with the job's box (a block's, a road tile's): every query's points inside it read the
+        same ceiling, one per cell for the job, not one per query."""
+        import mapcells
+        import roadsys
+        e, _c = self.ceil([self.low()])
+        regs = []
+
+        def inputs(frame, cell_fn, keys, reg, view):
+            regs.append(reg)
+            return [], []
+
+        class F:
+            lat0 = lon0 = 0.0
+
+            def geodetic_to_enu(self, la, lo, h):
+                return np.asarray(lo, np.float64) * 1e5, np.asarray(la, np.float64) * 1e5, np.zeros(np.shape(la))
+        key = mapcells.CellKey(mapcells.ZOOM, 1 << (mapcells.ZOOM - 1), (1 << (mapcells.ZOOM - 1)) - 1)
+        la0, lo0, la1, lo1 = roadsys._cell_bounds(key)
+        roadsys._ceil_memo.clear()
+        try:
+            with mock.patch.dict(os.environ, {"BNE_ROADSYS": "surface"}):
+                importlib.reload(roadsys)
+                roadsys._ceil_memo.clear()
+                with mock.patch.object(roadsys, "ends_of_cell", lambda f, cf, k: e), \
+                        mock.patch.object(roadsys, "_decks_view", lambda f: object()), \
+                        mock.patch.object(roadsys, "ceil_reach", lambda cf, keys: 50.0), \
+                        mock.patch.object(roadsys, "_ceil_inputs", inputs):
+                    mid = (la0 + la1) / 2
+                    box = (lo0 * 1e5 + 1.0, mid * 1e5 - 300.0, lo0 * 1e5 + 400.0, mid * 1e5 + 300.0)
+                    for d in (2e-5, 5e-4, 1e-3):        # (three queries, their points far apart inside the box)
+                        roadsys.ground_cut(F(), None, np.array([mid, mid + 1e-5]), np.array([lo0 + d, lo0 + d + 1e-5]),
+                                           np.full(2, 5.0), box)
+                    self.assertEqual(len(regs), 1, "one ceiling for the job's box")
+                    roadsys.ground_cut(F(), None, np.array([mid, mid]), np.array([lo0 + 2e-5, lo0 + 6e-3]),
+                                       np.full(2, 5.0), box)
+                    self.assertEqual(len(regs), 2, "a point outside the box widens it: another read")
+        finally:
+            importlib.reload(roadsys)
+            roadsys._ceil_memo.clear()
+
+    def test_the_same_lambda_made_again_shares_its_tables(self):
+        """(wg1126) _cells_for: each job's own `lambda key: md.cell(...)` reads the same store: one _Cells for them
+        all (its tables converted once a process); another function or other closed-over values: its own."""
+        import roadsys
+        roadsys._cells_of.clear()
+        stores = [object(), object()]
+
+        def make(st):
+            return lambda key: (st, key)
+        a, b, c = make(stores[0]), make(stores[0]), make(stores[1])
+        self.assertIs(roadsys._cells_for(a), roadsys._cells_for(b))
+        self.assertIsNot(roadsys._cells_for(a), roadsys._cells_for(c))
+        self.assertIsNot(roadsys._cells_for(a), roadsys._cells_for(lambda key: (stores[0], key)))
+        roadsys._cells_of.clear()
+
+    def test_projecting_many_lines_at_once_is_each_ones_projection(self):
+        import geodesy
+        import roadsys
+        fr = geodesy.EnuFrame(39.28, -76.59)
+        rng = np.random.default_rng(3)
+        lls = [np.c_[-76.59 + rng.normal(0, 0.01, n), 39.28 + rng.normal(0, 0.01, n)] for n in (2, 7, 1, 40)]
+        got = roadsys._to_frame_many(fr, lls)
+        for ll, xy in zip(lls, got):
+            e, n, _u = fr.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+            self.assertEqual(xy.tobytes(), np.ascontiguousarray(np.column_stack((e, n)), np.float64).tobytes())
 
     def test_a_ceiling_reads_the_decks_near_the_points_asked(self):
         """(M5 r5) ground_cut asks each cell's ceiling for its points' box snapped out to CEIL_SNAP_M; the decks are

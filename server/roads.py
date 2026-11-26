@@ -11280,7 +11280,7 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     z = _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box)
     if roadsys.STRUCTURES:
         try:
-            z = roadsys.ground_cut(frame, cell_fn, la, lo, z)
+            z = roadsys.ground_cut(frame, cell_fn, la, lo, z, box)
         except Exception as ex:     # no drop rather than no ground (nothing built with it kept)
             (log.debug if isinstance(ex, OSError) else log.warning)("deck ends' hand-over: %s: %s", type(ex).__name__, ex)
             import revisit

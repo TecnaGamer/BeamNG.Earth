@@ -166,6 +166,7 @@ class _Cells:
         self._fn = cell_fn
         self.memo = {}
         self.rows = {}
+        self.xext = {}          # (_xsec_extents per cell: a pure function of its table, by the table's stamp)
         self.lock = threading.Lock()
 
     def cell_fn(self, key):
@@ -667,13 +668,28 @@ LEGACY_REACH_M = 250.0      # (636, T1) m along its stroke a line's nearest tunn
                             # past HAND_MAX_M and TUNNEL_FADE_M, the reach of a mouth's dig and of the old fade)
 
 
+def _reads_of(cell_fn):
+    """(key, what it holds) of what cell_fn reads: the same lambda made again (each road tile, block and skin makes its
+    own `lambda key: md.cell(...)`) is the same code over the same globals and closed-over values, so it reads the same
+    store and shares its tables: before, each tile's new lambda had a _Cells of its own and converted every map cell
+    of its reads again (roadsys._table: 27 cells a road geotile, 2.7 s of its ~6 s under BNE_ROADSYS=surface,
+    Baltimore 2026-11-26). The values it closes over are held with the key (no id taken again by another object)."""
+    code = getattr(cell_fn, "__code__", None)
+    if code is None:
+        return ("id", id(cell_fn)), (cell_fn,)
+    held = tuple(c.cell_contents for c in (cell_fn.__closure__ or ()))
+    return ("fn", code, id(cell_fn.__globals__), tuple(id(v) for v in held),
+            id(cell_fn.__defaults__) if cell_fn.__defaults__ else None), (cell_fn.__globals__, cell_fn.__defaults__) + held
+
+
 def _cells_for(cell_fn):
     if isinstance(cell_fn, _Cells):         # (the shadow thread's own tables)
         return cell_fn
+    key, held = _reads_of(cell_fn)
     with _memo_lock:
-        got = _cells_of.get(id(cell_fn))
-        if got is None or got[0] is not cell_fn:
-            got = _cells_of[id(cell_fn)] = (cell_fn, _Cells(cell_fn=cell_fn))
+        got = _cells_of.get(key)
+        if got is None:
+            got = _cells_of[key] = (held, _Cells(cell_fn=cell_fn))
             while len(_cells_of) > 8:
                 _cells_of.pop(next(iter(_cells_of)))
         return got[1]
@@ -1255,6 +1271,25 @@ def _frame_key(frame):
     return (type(frame).__name__, float(frame.lat0), float(frame.lon0))
 
 
+def _to_frame_many(frame, lls):
+    """[(n, 2) x / y in frame] of lon / lat polylines lls: one projection for all of them (the kernel works point by
+    point, so the numbers are each line's own projection's; one call a line was 280,000 calls and ~9 s of a Baltimore
+    drive's hand-over reads, 2026-11-26)."""
+    if not lls:
+        return []
+    arr = [np.asarray(ll, np.float64)[:, :2] for ll in lls]
+    allll = np.concatenate(arr) if len(arr) > 1 else arr[0]
+    e, nn, _u = frame.geodetic_to_enu(np.ascontiguousarray(allll[:, 1]), np.ascontiguousarray(allll[:, 0]),
+                                      np.zeros(len(allll)))
+    e, nn = np.asarray(e, np.float64), np.asarray(nn, np.float64)
+    out, a = [], 0
+    for ll in arr:
+        b = a + len(ll)
+        out.append(np.ascontiguousarray(np.column_stack((e[a:b], nn[a:b])), np.float64))
+        a = b
+    return out
+
+
 def _ends_from(frame, cell_fn, keys, reg):
     """earthfast.RoadsysEnds of the road parts of map cells keys (in frame) coming within the frame box reg; None when
     a cell cannot be read."""
@@ -1292,19 +1327,14 @@ def _ends_from(frame, cell_fn, keys, reg):
                 revisit.fault()
                 return None
             for kind, lines in ((1, [r[1] for r in rails]), (3, waters)):
-                for ll in lines:
-                    e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-                    xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
+                for xy in _to_frame_many(frame, [ll for ll in lines if len(ll)]):
                     if len(xy) >= 2 and not (xy[:, 0].max() < reg[0] or xy[:, 0].min() > reg[2] or xy[:, 1].max() < reg[1]
                                              or xy[:, 1].min() > reg[3]):
                         crossed.append((kind, xy))
         crossed.sort(key=lambda c: (c[0], c[1].tobytes()))       # (one order whatever the cells' order)
-    for (kind, fid, j) in sorted(rows):
-        ll, hw = rows[(kind, fid, j)]
-        if len(ll) < 2:
-            continue
-        e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-        xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))), np.float64)
+    order = [k for k in sorted(rows) if len(rows[k][0]) >= 2]
+    for (kind, fid, j), xy in zip(order, _to_frame_many(frame, [rows[k][0] for k in order])):
+        hw = rows[(kind, fid, j)][1]
         if xy[:, 0].max() < reg[0] or xy[:, 0].min() > reg[2] or xy[:, 1].max() < reg[1] or xy[:, 1].min() > reg[3]:
             continue
         if kind == "b":
@@ -1376,10 +1406,16 @@ def _xsec_extents(cell_fn, key):
     whose cross-section shapes them (earthfast.roadsys_xsec_half_extent: the deck faces' own width), the widest copy."""
     import fast
     fast.require(XSEC_KERNEL, "roadsys_xsec_half_extent")
-    tab = _cells_for(cell_fn).table(key)
-    out = {}
+    cc = _cells_for(cell_fn)
+    tab = cc.table(key)
     if tab is None:
-        return out
+        return {}
+    stamp = cc.rows.get(str(key), (None,))[0]
+    with cc.lock:
+        got = cc.xext.get(str(key))
+    if got is not None and got[0] == stamp and got[1] is tab:
+        return dict(got[2])
+    out = {}
     for k, texts, nums, ints, x in zip(tab["ids"], tab["texts"], tab["nums"], tab["ints"], tab["xsec"]):
         if not x:
             continue
@@ -1387,6 +1423,10 @@ def _xsec_extents(cell_fn, key):
         if e is not None:
             f = feature(k.split("|", 1)[0])
             out[f] = max(out.get(f, 0.0), float(e))
+    with cc.lock:
+        cc.xext[str(key)] = (stamp, tab, dict(out))
+        while len(cc.xext) > 512:
+            cc.xext.pop(next(iter(cc.xext)))
     return out
 
 
@@ -1687,10 +1727,15 @@ def ceil_of_cell(frame, cell_fn, key, box=None):
     return c
 
 
-def ground_cut(frame, cell_fn, la, lo, z):
+def ground_cut(frame, cell_fn, la, lo, z, box=None):
     """The physics ground at the points (la, lo) from its ground z there (geodetic m), in frame: lowered under the first
     metres of the decks' ground ends (BNE_ROADSYS=structures: handover_drop) and, under surface, nowhere over a deck's
-    soffit less 0.3 m (ceil_of_cell); z itself in any other mode. Each point by its own map cell's neighbourhood."""
+    soffit less 0.3 m (ceil_of_cell); z itself in any other mode. Each point by its own map cell's neighbourhood.
+    box (frame x0, y0, x1, y1): the extent every query of the caller's job lies in (a block's, a road tile's), the
+    ceilings' read box with the points': one ceiling per cell for the whole job instead of one per query's points
+    (a road geotile's ~25 ground queries built ~7 ceilings, each its own read of the bridge chains: 0.5 s apiece,
+    Baltimore 2026-11-26). A ceiling's value at a point is the same whichever box read it (ceil_of_cell), so the
+    ground is too (shown byte for byte with whole-cell boxes, wg1126)."""
     z = np.asarray(z, np.float64)
     if not STRUCTURES or not z.size:
         return z
@@ -1713,7 +1758,12 @@ def ground_cut(frame, cell_fn, la, lo, z):
     cut = 0
     for k in sorted(groups, key=str):
         idx = np.asarray(groups[k], np.int64)
-        c = ceil_of_cell(frame, cell_fn, k, _snap_box(e[idx], n[idx]))
+        if box is None:
+            c = ceil_of_cell(frame, cell_fn, k, _snap_box(e[idx], n[idx]))
+        else:
+            c = ceil_of_cell(frame, cell_fn, k, _snap_box(
+                np.array([float(np.min(e[idx])), float(np.max(e[idx])), float(box[0]), float(box[2])]),
+                np.array([float(np.min(n[idx])), float(np.max(n[idx])), float(box[1]), float(box[3])])))
         if c is None:
             continue
         before = zf[idx]
@@ -1725,13 +1775,13 @@ def ground_cut(frame, cell_fn, la, lo, z):
     return zf.reshape(shape)
 
 
-def ground_lowering(frame, cell_fn, la, lo, z):
+def ground_lowering(frame, cell_fn, la, lo, z, box=None):
     """m ground_cut lowers the ground z at the points (la, lo) by (the hand-over's lattice: a node lowered by the drop
-    or the ceiling is the deck's there, roadsys handover.rs zone)."""
+    or the ceiling is the deck's there, roadsys handover.rs zone). box: ground_cut's."""
     z = np.asarray(z, np.float64)
     if not CEIL:
         return handover_drop(frame, cell_fn, la, lo).reshape(z.shape) if z.size else z * 0.0
-    return z - ground_cut(frame, cell_fn, la, lo, z)
+    return z - ground_cut(frame, cell_fn, la, lo, z, box)
 
 
 # ------------------------------------------------------------------------- M4 surface: decks from the road faces
