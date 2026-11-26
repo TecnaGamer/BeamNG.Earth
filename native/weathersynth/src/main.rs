@@ -24,6 +24,10 @@ mod grainbank;
 mod live;
 mod loudness;
 mod m;
+#[allow(dead_code)]
+mod nprng;
+#[allow(dead_code)]
+mod npzig;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod outbus;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
