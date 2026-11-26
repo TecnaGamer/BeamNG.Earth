@@ -305,7 +305,7 @@ def main(argv=None):
             if (a.system and not any(k_.startswith(a.system) for k_ in keys)) or not lo_x <= n_x <= hi_x:
                 skipped.append("%s(%d)" % (keys[0][:8], n_x))
                 return {"key": ik, "roads": {}, "failed": None, "pieces": 0, "crossings": 0, "relaxed": 0, "owner": "-",
-                        "pid": os.getpid(), "secs": 0.0}
+                        "pid": os.getpid(), "secs": 0.0, "rank": owner.rank_of(planner, net, ix.sysm)}
             return real(planner, ik, hk, clock, net, ix, others)
         owner.made = only
 

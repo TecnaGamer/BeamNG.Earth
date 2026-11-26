@@ -1,5 +1,5 @@
-"""gradeshapes.Net.near through its grid is the linear box scan's answer, for any pad: the grid only narrows the boxes
-compared."""
+"""gradeshapes.Net.near is the linear box scan's answer, for any pad; the line network's near pairs (the solve's
+relations) are among the boxes' and leave out nothing that has a joint or a crossing."""
 import os
 import sys
 import unittest
@@ -39,20 +39,21 @@ def random_net(seed, n, span):
 
 
 class NearIndexTest(unittest.TestCase):
-    def test_the_grid_gives_the_linear_scans_answer(self):
+    def test_near_gives_the_linear_scans_answer(self):
         for seed, n, span in ((1, 300, 3000.0), (2, 120, 300.0), (3, 700, 20000.0)):
             net = random_net(seed, n, span)
             for pad in (0.0, 3.0, 17.5, 400.0):
                 for i in range(len(net.m)):
                     self.assertEqual(net.near(i, pad), linear_near(net, i, pad), (seed, pad, i))
 
-    def test_along_is_near_without_the_members_off_the_line(self):
+    def test_the_network_pairs_are_near_without_the_members_off_the_line(self):
         net = random_net(4, 400, 4000.0)
         pad = gs.JOIN_M + 0.5
         for i in range(len(net.m)):
-            along, box = net.near_along(i, pad), net.near(i, pad)
+            at = {q: js for q, js in net.ln_at.items()}
+            along = sorted(j for q in net.network.ln.near(net.ln_ids[i]) for j in at.get(q, ()))
+            box = net.near(i, pad)
             self.assertTrue(set(along) <= set(box), i)
-            self.assertEqual(along, sorted(along))
             # (what it leaves out has no joint or crossing with i: the relations are the same through either)
             for j in set(box) - set(along):
                 self.assertEqual(gs._pair_relations(net, i, j), [], (i, j))

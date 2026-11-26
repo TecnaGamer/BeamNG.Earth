@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The line network (server/linenet.py, earthfast.LineNet) against gradeshapes on a real place: the members of a block of
+"""The line network (server/linenet.py, earthfast.LineNet) against the Python geometry on a real place: the members of a block of
 map cells, as an interchange's growth reads them, and every seed's relations (the decks' and short tunnels', what the
 find asks) from both, compared to the bit; with the seconds of each.
 
@@ -66,26 +66,33 @@ def main():
     t_read = time.perf_counter() - t
 
     t = time.perf_counter()
-    net = gsh.Net(members)
+    net = gsh.Net(members, linenet.Network())
     t_net = time.perf_counter() - t
     seeds = [i for i in range(len(members)) if len(net.lines[i]) >= 2 and gsh._is_seed(net, i)]
     ask = list(seeds)
     if a.all:
         ask += [i for i in range(0, len(members), a.all) if len(net.lines[i]) >= 2 and not gsh._is_seed(net, i)]
 
-    gsh._PAIR_REL.clear()
+    # (the Python geometry, no network: each member against those whose boxes come within the pad of its own)
     t = time.perf_counter()
-    want = {i: gsh._relations(net, i) for i in ask}
+    bx, pad = net.box, gsh.JOIN_M + 0.5
+    want = {}
+    for i in ask:
+        b = bx[i]
+        near = np.flatnonzero((bx[:, 0] <= b[2] + pad) & (bx[:, 2] >= b[0] - pad) & (bx[:, 1] <= b[3] + pad)
+                              & (bx[:, 3] >= b[1] - pad))
+        want[i] = [(j,) + r_ for j in near.tolist() if j != i and len(net.lines[j]) >= 2
+                   for r_ in gsh._pair_relations(net, i, j)]
     t_py = time.perf_counter() - t
 
     t = time.perf_counter()
-    lines = linenet.Lines(net)
-    t_build = time.perf_counter() - t
-    t = time.perf_counter()
-    got = {i: lines.relations(i) for i in ask}
+    got = {i: gsh._relations(net, i) for i in ask}
     t_nat = time.perf_counter() - t
     t = time.perf_counter()
-    n_geo = sum(len(lines.ln.contacts(i, gsh.CROSS_END_M, gsh.JOIN_M)) for i in range(len(members)))
+    again = gsh.Net(members, net.network)
+    t_again = time.perf_counter() - t
+    t = time.perf_counter()
+    n_geo = sum(len(net.network.ln.contacts(q, gsh.CROSS_END_M, gsh.JOIN_M)) for q in range(len(net.network.ln)))
     t_every = time.perf_counter() - t
 
     bad = [i for i in ask if not same(got[i], want[i])]
@@ -94,13 +101,15 @@ def main():
           sum(len(l_) for l_ in net.lines), len(seeds), t_read))
     print("relations asked of %d members, %d relations: %s" % (len(ask), n_rel,
           "the same to the bit" if not bad else "%d DIFFER: %s" % (len(bad), bad[:10])))
-    print("gradeshapes: Net %.2f s + _relations %.2f s = %.2f s" % (t_net, t_py, t_net + t_py))
-    print("LineNet:     every line added and paired %.2f s (%d near pairs) + relations %.2f s = %.2f s"
-          % (t_build, lines.ln.pairs, t_nat, t_build + t_nat))
-    print("LineNet:     the geometry of every member with everything it touches: %.2f s (%d touching pairs)"
+    print("Python geometry (box candidates, _pair_relations): %.2f s" % t_py)
+    print("line network: a Net of every member, its lines added and paired %.2f s (%d near pairs), the same Net again "
+          "%.2f s; relations %.2f s" % (t_net, net.network.ln.pairs, t_again, t_nat))
+    print("line network: the geometry of every line with everything it touches: %.2f s (%d touching pairs)"
           % (t_every, n_geo))
     for i in bad[:3]:
-        print("  member %d %r\n    gradeshapes %r\n    linenet     %r" % (i, members[i].key, want[i][:4], got[i][:4]))
+        print("  member %d %r" % (i, members[i].key))
+        print("    python  %r" % (want[i][:4],))
+        print("    network %r" % (got[i][:4],))
     return 1 if bad else 0
 
 

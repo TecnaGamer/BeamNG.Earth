@@ -278,93 +278,28 @@ def at_s(line, s, sq):
     return np.array([dnp.interp(sq, s, line[:, 0]), dnp.interp(sq, s, line[:, 1])])
 
 
-GRID_MIN_M, GRID_MAX_M = 32.0, 256.0    # m: the bounds of the index's cell (twice the members' median box side between)
-GRID_LONG_CELLS = 64                    # a member whose box spans more cells than this is kept in a list every query reads
-NEAR_CHUNK_M = 64.0                     # m of a line near_along asks the grid about at a time
-
-
 class Net:
-    """The members' geometry, made once: lines, arc lengths, boxes, and (built on the first near()) a grid over the
-    boxes."""
+    """The members' geometry: their lines, and their arc lengths and boxes from the process's line network (linenet:
+    every line the solve reads in one index, each added once), which holds their joints and crossings too
+    (_relations)."""
 
-    def __init__(self, members, geo=None):
-        """geo (a growth's Scan.geo): {line id: (arc lengths, box)} of the members the rounds before had, their lines
-        being the same arrays: a round's net of 60,000 members made its own again, a second and a half each (Yokohama)."""
+    def __init__(self, members, network=None):
+        """network: a linenet.Network (a growth's, for all its rounds: Scan.network), else the process's."""
+        import linenet
         self.m = members
         self.lines = [np.asarray(m.line, np.float64)[:, :2] for m in members]
-        if geo is None:
-            self.s = [arclen(l_) for l_ in self.lines]
-            self.box = np.array([np.r_[l_.min(0), l_.max(0)] for l_ in self.lines]) if members else np.zeros((0, 4))
-        else:
-            self.s, boxes = [], []
-            for i, l_ in enumerate(self.lines):
-                got = geo.get(_line_id(self, i))
-                if got is None or len(got[0]) != len(l_):
-                    got = (arclen(l_), np.r_[l_.min(0), l_.max(0)])
-                    geo[_line_id(self, i)] = got
-                self.s.append(got[0])
-                boxes.append(got[1])
-            self.box = np.array(boxes) if boxes else np.zeros((0, 4))
+        self.network = network if network is not None else linenet.current()
+        self.ln_ids, self.ln_at = self.network.bind(self)
+        self.s = self.network.ln.arclens(self.ln_ids)
+        self.box = self.network.ln.boxes(self.ln_ids)
         self.L = [float(s[-1]) for s in self.s]
-        self._grid = None
-
-    def _index(self):
-        """(cell side, {(ix, iy): [member ...]}, [long members]): every member in the grid cells its box covers (a box
-        covering more than GRID_LONG_CELLS cells, a long road, in the list instead: it is checked on every query)."""
-        bx = self.box
-        side = float(np.clip(2.0 * np.median(np.maximum(bx[:, 2] - bx[:, 0], bx[:, 3] - bx[:, 1])), GRID_MIN_M,
-                             GRID_MAX_M)) if len(bx) else GRID_MIN_M
-        cells, long_ = {}, []
-        c0 = np.floor(bx[:, :2] / side).astype(np.int64)
-        c1 = np.floor(bx[:, 2:] / side).astype(np.int64)
-        for i in range(len(bx)):
-            (x0, y0), (x1, y1) = c0[i].tolist(), c1[i].tolist()
-            if (x1 - x0 + 1) * (y1 - y0 + 1) > GRID_LONG_CELLS:
-                long_.append(i)
-                continue
-            for x in range(x0, x1 + 1):
-                for y in range(y0, y1 + 1):
-                    cells.setdefault((x, y), []).append(i)
-        self._grid = (side, cells, long_)
-        return self._grid
-
-    def _near_box(self, lo, hi, pad):
-        """The members (ascending, an array) whose boxes come within pad of the box lo..hi. The grid only narrows what
-        the boxes are compared on (a member sharing no cell with the box grown by pad is not within it); the comparison
-        is the whole answer."""
-        bx = self.box
-        side, cells, long_ = self._grid or self._index()
-        x0, y0 = (int(v) for v in np.floor((lo - pad) / side))
-        x1, y1 = (int(v) for v in np.floor((hi + pad) / side))
-        if (x1 - x0 + 1) * (y1 - y0 + 1) > len(bx):         # (a query over more cells than members: all of them)
-            cand = np.arange(len(bx))
-        else:
-            got = set(long_)
-            for x in range(x0, x1 + 1):
-                for y in range(y0, y1 + 1):
-                    got.update(cells.get((x, y), ()))
-            cand = np.array(sorted(got), np.int64)
-        c = bx[cand]
-        hit = (c[:, 0] <= hi[0] + pad) & (c[:, 2] >= lo[0] - pad) & (c[:, 1] <= hi[1] + pad) & (c[:, 3] >= lo[1] - pad)
-        return cand[hit]
 
     def near(self, i, pad):
-        """The members other than i whose boxes come within pad of i's, in index order."""
-        b = self.box[i]
-        return [int(j) for j in self._near_box(b[:2], b[2:], pad) if j != i]
-
-    def near_along(self, i, pad):
-        """The members other than i with a part of their box within pad of a part of i's line, in index order: the line cut
-        every NEAR_CHUNK_M m, the members whose boxes come within pad of a piece's own box. A subset of near(i, pad) with
-        every member that has a segment within pad of a segment of i: a long road's box holds a city, its line only what
-        it passes."""
-        line, s = self.lines[i], self.s[i]
-        k = np.floor(s / NEAR_CHUNK_M).astype(np.int64)
-        starts = np.r_[0, np.flatnonzero(np.diff(k)) + 1]
-        ends = np.r_[starts[1:], len(line) - 1]
-        got = np.unique(np.concatenate([self._near_box(line[a:e + 1].min(0), line[a:e + 1].max(0), pad)
-                                        for a, e in zip(starts.tolist(), ends.tolist())]))
-        return [int(j) for j in got if j != i]
+        """The members other than i whose boxes come within pad of i's, ascending: the audits' and the staged
+        pipeline's question (the solve's is _relations, the line network's)."""
+        b, bx = self.box[i], self.box
+        hit = (bx[:, 0] <= b[2] + pad) & (bx[:, 2] >= b[0] - pad) & (bx[:, 1] <= b[3] + pad) & (bx[:, 3] >= b[1] - pad)
+        return [int(j) for j in np.flatnonzero(hit) if j != i]
 
 
 def _is_seed(net, i):
@@ -383,13 +318,6 @@ def _tunnel_network(net, j):
     Avenue de Neuilly decks ended over the 349 m Tunnel Grand-Maillot and rose 6.2 m over the square to clear a dip at
     37.3 m that was never drawn (the bore at 34 m), the street between their ends and its ramps on a 6 m fill."""
     return net.m[j].kind == "tunnel" and net.L[j] > TUNNEL_MAX_M
-
-
-_PAIR_REL = {}
-_PAIR_REL_MAX = 200000
-PAIRS_MAX_SEEDS = 100000       # seeds the process's pair index holds (PAIRS): ~450 B one (its line id, its entry), and
-PAIRS_MAX_PAIRS = 200000       # ~350 B a pair (its relations with a neighbour): ~115 MB at most together, plus the one
-                               # net that goes past the caps (a giant interchange's: 10,000 seeds, kept whole)
 
 
 _LINE_ID = {}              # (repr(key), len(line)) -> a member's line id: a growth's rounds each make a new net, and
@@ -421,154 +349,28 @@ def _line_id(net, i):
     return got
 
 
-def _pair(net, i, j):
-    """Member i's relations with member j, from a cache by the two members' keys and lines."""
-    _t0 = time.perf_counter()
-    key = (_line_id(net, i), _line_id(net, j))
-    got = _PAIR_REL.get(key)
-    P = _PROF.__dict__
-    if got is None:
-        P["pair_miss"] = P.get("pair_miss", 0) + 1
-        P["pair_pts"] = P.get("pair_pts", 0) + len(net.lines[i]) * len(net.lines[j])
-        _t = time.perf_counter()
-        got = _pair_relations(net, i, j)
-        P["pair_s"] = P.get("pair_s", 0.0) + time.perf_counter() - _t
-        if len(_PAIR_REL) >= _PAIR_REL_MAX:
-            _PAIR_REL.clear()
-        _PAIR_REL[key] = got
-    else:
-        P["pair_hit"] = P.get("pair_hit", 0) + 1
-        P["pair_hit_s"] = P.get("pair_hit_s", 0.0) + time.perf_counter() - _t0
-    return got
-
-
 def _relations(net, i):
-    """Member i's joints and crossings with the members near it: [(j, "join"|"cross", s on i, s on j, q)]. Each
-    pair's from a cache by the two members' keys and lines (a region grown cell by cell meets the same pairs again)."""
+    """Member i's joints and crossings with the members near it: [(j, "join"|"cross", s on i, s on j, q)], j ascending.
+    The pairs' geometry is the process's line network's (linenet: the lines near each other paired once, as they are
+    added), what each contact is _pair_from's on this net's members. A member of fewer than two points has none (no
+    segment: no line to meet; the pairs' own geometry cannot project onto it)."""
+    if len(net.lines[i]) < 2:
+        return []
+    import linenet
     out = []
-    for j in net.near_along(i, JOIN_M + 0.5):
-        if len(net.lines[j]) < 2:
-            continue
-        out.extend((j,) + r_ for r_ in _pair(net, i, j))
+    for j, hits, ends in linenet.geometry(net, i):
+        out.extend((j,) + r_ for r_ in _pair_from(net, i, j, hits, ends))
     return out
 
 
-class _Pairs:
-    """The process's pair index: pairs {line id: {line id: relations}} (a seed's relations with the members near it, as
-    _pair gives them; a member that is no seed has no entry), n the pairs counted (the caps', PAIRS_MAX_*). Rebound for
-    a new one when full: a growth reading the old one goes on with it, whole."""
-
-    __slots__ = ("pairs", "n")
-
-    def __init__(self):
-        self.pairs = {}
-        self.n = 0
-
-    def full(self):
-        return len(self.pairs) >= PAIRS_MAX_SEEDS or self.n >= PAIRS_MAX_PAIRS
-
-
-PAIRS = _Pairs()
-
-
 class Scan:
-    """What a growth's rounds keep (find_interchanges scan=): the process's pair index (PAIRS: the relations of the
-    seeds with the members near them, made by the first growth over a district and read by every round and growth after
-    it, a region's planner's), the ramps' memo (_ramp_reaches' memo across the rounds: _Ramper.memo), the rounds' nets'
-    members' arc lengths and boxes (Net(geo=)) and `scanned`: the seeds each round scanned or asked (the count of them)."""
+    """What a growth's rounds keep (find_interchanges scan=): the ramps' memo (_ramp_reaches' across the rounds and
+    growths: _Ramper.memo) and the line network their nets are bound to (one for the whole growth)."""
 
     def __init__(self):
-        self.ramps = _RAMPS     # (_ramp_reaches' memo across the rounds and growths: _Ramper.memo)
-        self.geo = {}           # (the rounds' nets' members' arc lengths and boxes: Net(geo=))
-        self.scanned = []
-        self.ix = PAIRS
-        self.fresh = 0
-        self.ids, self.at = [], {}
-
-    def add(self, net):
-        """This round's net into the index. A seed the index has not seen is scanned against the members near it (its
-        line, every NEAR_CHUNK_M: near_along), each pair both ways where a side is a seed. A seed the index has is asked
-        for the members near it (its box: near, which holds every member a relation needs) that its entry lacks, and
-        paired with those: this net's new members, and a member it met in no net it was scanned in (the same part read
-        from another cell is another member, kept in this net in place of the copy the last net kept: one_part, so a
-        seed's neighbours are not the same from one net to the next). A member that is no seed is never asked: it has
-        no relations of its own, and every seed near it is. So a seed's entry names every member near it in the net,
-        whichever growth indexed each: relations() is _relations()."""
-        global PAIRS
-        ids = [_line_id(net, i) for i in range(len(net.m))]
-        seeds = [i for i in range(len(net.m)) if len(net.lines[i]) >= 2 and _is_seed(net, i)]
-        ix = PAIRS
-        if ix.full():
-            # (full: the index holds this net's seeds only; the other growths' districts are scanned again when met)
-            keep = _Pairs()
-            for i in seeds:
-                if ids[i] in ix.pairs:
-                    keep.pairs[ids[i]] = ix.pairs[ids[i]]
-                    keep.n += len(ix.pairs[ids[i]])
-            PAIRS = ix = keep
-        pairs = ix.pairs
-        P = _PROF.__dict__ if os.environ.get("BNE_IX_PROFILE") else None
-        if P is not None:
-            P["near_s"] = P.get("near_s", 0.0)
-            P["near_n"] = P.get("near_n", 0)
-            P["check_s"] = P.get("check_s", 0.0)
-            P["check_n"] = P.get("check_n", 0)
-        new = [i for i in seeds if ids[i] not in pairs]
-        for i in new:
-            pairs[ids[i]] = {}
-        asked = len(new)
-
-        def pair(i, j):
-            """The pair of the seed i with the member j both ways where a side is a seed (i's side if it lacks j)."""
-            rel = pairs[ids[i]]
-            if ids[j] not in rel:
-                got = _pair(net, i, j)
-                rel[ids[j]] = got
-                ix.n += bool(got)
-            rj = pairs.get(ids[j])
-            if rj is not None and ids[i] not in rj:
-                got = _pair(net, j, i)
-                rj[ids[i]] = got
-                ix.n += bool(got)
-
-        for i in new:
-            _t = time.perf_counter()
-            near = net.near_along(i, JOIN_M + 0.5)
-            if P is not None:
-                P["near_s"] += time.perf_counter() - _t
-                P["near_n"] += 1
-            for j in near:
-                if len(net.lines[j]) >= 2:
-                    pair(i, j)
-        new_set = set(new)
-        for i in seeds:
-            if i in new_set:
-                continue
-            _t = time.perf_counter()
-            near = net.near(i, JOIN_M + 0.5)
-            if P is not None:
-                P["check_s"] += time.perf_counter() - _t
-                P["check_n"] += 1
-            rel = pairs[ids[i]]
-            lacking = [j for j in near if ids[j] not in rel]
-            if lacking:
-                asked += 1
-                for j in lacking:
-                    if len(net.lines[j]) >= 2:
-                        pair(i, j)
-                    else:
-                        rel[ids[j]] = []       # (a member of one point: nothing to relate, not asked for again)
-        self.ix = ix
-        self.scanned.append(asked)
-        self.fresh = len(new)
-        self.ids = ids
-        self.at = {k: j for j, k in enumerate(ids)}
-
-    def relations(self, net, i):
-        """_relations(net, i) from what the index kept: in index order of the neighbours, the same list."""
-        at = self.at
-        got = sorted((at[k], rels) for k, rels in self.ix.pairs.get(self.ids[i], {}).items() if k in at)
-        return [(j,) + r_ for j, rels in got for r_ in rels]
+        import linenet
+        self.ramps = _RAMPS
+        self.network = linenet.current()
 
 
 def _tangent(line, s, sq):
@@ -926,8 +728,8 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
     one road among themselves. want(net,
     seeds) -> bool: whether an interchange is asked for; one that is not is found (it may merge others) but not closed.
     skip(net, i) -> bool: member i is a piece of an interchange already solved: it is not a seed here, nor scanned for
-    relations (it stays a member: what others cross). scan (a Scan): the relations are those kept by the rounds before (this round's net scanned into it: only the members
-    it adds are scanned). reach: True, the ramps' reaches are computed (_ramp_reaches: the interchange's one growth, whose
+    relations (it stays a member: what others cross). scan (a Scan): a growth's, whose rounds' nets are bound to one line network (only the lines a round
+    brings are added and paired) and lay ramps from one memo. reach: True, the ramps' reaches are computed (_ramp_reaches: the interchange's one growth, whose
     result is stored with its extent); False, none: the systems alone, as a region's find needs them; a list of sets of
     member keys (str), the reaches as that growth stored them: the seeds of a set are one interchange. reader(net) ->
     (ground, fixed): the
@@ -936,7 +738,7 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
     crossing of two seeds, detail (kind, s on a, s on b); "dip": two seeds over one road they dig, detail None), with the
     seeds; nothing else about the answer. "ramp": two seeds whose ramps meet on a road on the ground (detail the road): they
     stay systems of their own, in one interchange."""
-    net = Net(members, None if scan is None else scan.geo)
+    net = Net(members, None if scan is None else scan.network)
     n = len(members)
     prof = {} if os.environ.get("BNE_IX_PROFILE") else None
     tp = [time.perf_counter()]
@@ -954,31 +756,14 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
     lap()
     t_rel = {}
     rel = {}
-    check = scan is not None and bool(os.environ.get("BNE_IX_PAIRS_CHECK"))     # (the index against a full scan)
-    if scan is not None:
-        t0 = time.perf_counter()
-        scan.add(net)
-        t_scan = time.perf_counter() - t0
-        _PHASE[0] = "scan"
-        lap()
     import xproc
     _PHASE[0] = "relations"
     for k_, i in enumerate(cand):
         if not k_ % 32:
             xproc.check_cancel()        # (the growth's step time limit, ix/limits.py, and a place a teleport left)
         t0 = time.perf_counter()
-        if scan is None:
-            rel[i] = [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])]
-        else:
-            rel[i] = [r_ for r_ in scan.relations(net, i) if not _tunnel_network(net, r_[0])]
-            if check:
-                whole = [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])]
-                _PROF.__dict__["pairs_checked"] = _PROF.__dict__.get("pairs_checked", 0) + 1
-                if rel[i] != whole:
-                    _PROF.__dict__["pairs_bad"] = _PROF.__dict__.get("pairs_bad", 0) + 1
-                    log.warning("ix profile: PAIRS CHECK: seed %d of %d members: the index's %d relations are not the "
-                                "scan's %d", i, n, len(rel[i]), len(whole))
-        t_rel[i] = time.perf_counter() - t0 + (t_scan / len(cand) if scan is not None else 0.0)
+        rel[i] = [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])]
+        t_rel[i] = time.perf_counter() - t0
     # a deck chain is part of an interchange only if one of its decks crosses a road, a track or a tunnel (over or
     # under): a bridge over a river or a valley alone is the bridges' own (roads.py), not a grade separation's
     _PHASE[0] = "net"
@@ -1093,28 +878,11 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
     lap()
     if prof is not None:
         big = max((len(x.parts or (x,)) for x in found), default=0)
-        log.warning("ix profile: find of %d members, %d seeds, %d interchanges (the largest %d systems): %s s; pairs "
-                    "%d missed (%d point pairs), %d kept%s", n, len(cand), len(found), big,
-                    ", ".join("%s %.2f" % (k, prof[k]) for k in ("net", "scan", "relations", "verdicts", "dips",
-                                                "reach", "close", "rest") if k in prof),
-                    _PROF.__dict__.get("pair_miss", 0), _PROF.__dict__.get("pair_pts", 0), _PROF.__dict__.get("pair_hit", 0),
-                    "" if scan is not None else " (no scan: every member scanned)")
-    if prof is not None and scan is not None:
-        log.warning("ix profile:   scan: of %d members %d seeds: %d new scanned (near_along %.2f s), %d old asked for the "
-                    "neighbours they lack (near %.2f s, %d asks); pairs missed %d in %.2f s, kept %d in %.2f s; index %d "
-                    "seeds, %d pairs%s", n, len(cand), scan.fresh, _PROF.__dict__.get("near_s", 0.0),
-                    scan.scanned[-1] - scan.fresh, _PROF.__dict__.get("check_s", 0.0), _PROF.__dict__.get("check_n", 0),
-                    _PROF.__dict__.get("pair_miss", 0), _PROF.__dict__.get("pair_s", 0.0),
-                    _PROF.__dict__.get("pair_hit", 0), _PROF.__dict__.get("pair_hit_s", 0.0),
-                    len(scan.ix.pairs), scan.ix.n,
-                    ("; CHECK: %d of %d seeds differ from a full scan" % (_PROF.__dict__.get("pairs_bad", 0),
-                                                                         _PROF.__dict__.get("pairs_checked", 0)))
-                    if check else "")
-        for k in ("pair_s", "pair_hit_s", "near_s", "near_n", "check_s", "check_n"):
-            _PROF.__dict__.pop(k, None)
-    _PROF.__dict__.pop("pair_miss", None)
-    _PROF.__dict__.pop("pair_hit", None)
-    _PROF.__dict__.pop("pair_pts", None)
+        log.warning("ix profile: find of %d members, %d seeds, %d interchanges (the largest %d systems): %s s; line "
+                    "network %d lines, %d points, %d near pairs", n, len(cand), len(found), big,
+                    ", ".join("%s %.2f" % (k, prof[k]) for k in ("net", "relations", "verdicts", "dips", "reach",
+                                                                 "close", "rest") if k in prof),
+                    len(net.network.ln), net.network.ln.points, net.network.ln.pairs)
     return net, found
 
 

@@ -279,7 +279,7 @@ def _grow(planner, net, ix, cid, pt, adopt, hint, seen):
     looked at for every piece the growth takes in, before the next round: an interchange another process has found
     meanwhile is taken as it is ((key, None, None, None)), and one a growth from a lower road id is running on is that
     growth's (GiveWay). hint: the interchange's extent record (extent_of), found already: its one round, with the reaches
-    as the growth stored them, is the last, not the growth again. A growth's rounds scan only the members they add (gradeshapes.Scan). The Interchange returned carries the seconds this took (its paths: the members
+    as the growth stored them, is the last, not the growth again. A growth's rounds add only the lines they bring to the line network (linenet, gradeshapes.Scan.network). The Interchange returned carries the seconds this took (its paths: the members
     read, its relations; its extent: the finding), for the steps' lines."""
     import grading
     import xproc
@@ -291,8 +291,8 @@ def _grow(planner, net, ix, cid, pt, adopt, hint, seen):
     checked = {cid}
     box = None
     reach = True
-    scan = _gsh.Scan()         # (its rounds scan into the process's pair index: a district's pairs are made by the first
-    prev = None             # growth over it; the last round's find and its members' keys: the same members, a skipped round)
+    scan = _gsh.Scan()         # (its rounds' nets on one line network: a line is added once, by the first net that has it,
+    prev = None             # and paired there; the last round's find and its members' keys: the same members, a skipped round)
     if hint is not None:
         b = hint["box"]
         e, n, _ = planner.frame.geodetic_to_enu(np.array([b[0], b[0], b[2], b[2]]), np.array([b[1], b[3], b[1], b[3]]), 0.0)

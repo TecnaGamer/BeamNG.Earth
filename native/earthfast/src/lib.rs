@@ -7880,6 +7880,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 641: LineNet (linenet.rs: one index of every line the interchange solve reads, its near pairs found once as lines
     // are added, the pairs' geometry gradeshapes._pair_relations' to the bit)
     m.add_class::<linenet::LineNet>()?;
-    m.add("VERSION", 641)?;
+    // 642: LineNet shared by the process's threads (a lock inside: lines only ever added), arclens / boxes / points
+    m.add("VERSION", 642)?;
     Ok(())
 }

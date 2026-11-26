@@ -45,6 +45,5 @@ def _no_interchanges_remembered():
     from ix import owner
     for table in (owner.PROCESS, owner.INDEX, owner.FLIGHTS):
         table.clear()
-    import gradeshapes
-    gradeshapes.PAIRS = gradeshapes._Pairs()       # (the process's pair index: a growth of an earlier test's district)
-    gradeshapes._PAIR_REL.clear()
+    import linenet
+    linenet.reset()             # (the process's line network: an earlier test's lines)

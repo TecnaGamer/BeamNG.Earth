@@ -23,26 +23,30 @@ def _same(a, b):
     return a == b
 
 
+def _reference(net, i):
+    """Member i's relations made in Python with no index: every other member of two points or more, ascending, through
+    _pair_relations (gradeshapes' own geometry)."""
+    out = []
+    for j in range(len(net.m)):
+        if j != i and len(net.lines[j]) >= 2:
+            out.extend((j,) + r_ for r_ in gsh._pair_relations(net, i, j))
+    return out
+
+
 def _check(members):
-    """Every member's relations from the network against gradeshapes': the same, to the bit; and every pair with a
-    contact among the network's near pairs."""
+    """Every member's relations from the network (gradeshapes._relations) against the Python made with no index: the
+    same, to the bit; arc lengths and boxes as gradeshapes made them."""
     net = gsh.Net(members)
-    lines = linenet.Lines(net)
-    n = len(members)
-    for i in range(n):
+    for i in range(len(members)):
+        assert _same(net.s[i], gsh.arclen(net.lines[i])), i
+        assert _same(net.box[i], np.r_[net.lines[i].min(0), net.lines[i].max(0)]), i
         if len(net.lines[i]) < 2:
+            assert gsh._relations(net, i) == []
             continue
-        want = gsh._relations(net, i)
-        got = lines.relations(i)
+        want = _reference(net, i)
+        got = gsh._relations(net, i)
         assert _same(got, want), (i, got, want)
-        near = set(lines.near(i))
-        for j in range(n):
-            if j == i or len(net.lines[j]) < 2:
-                continue
-            hits, ends = gsh._pair_geometry(net, i, j)
-            if hits or ends:
-                assert j in near, (i, j)
-    return net, lines
+    return net
 
 
 def _line(x0, y0, x1, y1, n=10):
@@ -54,8 +58,8 @@ def test_a_deck_over_a_road_and_the_roads_it_joins():
          Member("deck", _line(0, -30, 0, 30, 13), "deck", "secondary", 60, 1, 5.0, None),
          Member("south", _line(0, -300, 0, -30), "ground", "secondary", 60, 0, 5.0, None),
          Member("north", _line(0, 30, 0, 300), "ground", "secondary", 60, 0, 5.0, None)]
-    net, lines = _check(m)
-    kinds = sorted((j, r) for j, r, *_ in lines.relations(1))
+    net = _check(m)
+    kinds = sorted((j, r) for j, r, *_ in gsh._relations(net, 1))
     assert kinds == [(0, "cross"), (2, "join"), (3, "join")]
 
 
@@ -85,13 +89,34 @@ def test_random_networks():
         _check(m)
 
 
+def test_two_members_of_one_line_and_a_point():
+    line = _line(0, 0, 50, 0, 6)
+    m = [Member("a", line, "deck", "primary", 50, 1, 4.0, None),
+         Member("b", line.copy(), "deck", "primary", 50, 2, 4.0, None),          # (another key on the same line)
+         Member("p", np.array([[20.0, 1.0]]), "ground", "residential", 30, 0, 3.0, None),
+         Member("c", _line(25, -20, 25, 20, 5), "ground", "residential", 30, 0, 3.0, None)]
+    net = _check(m)
+    assert 1 in {r_[0] for r_ in gsh._relations(net, 0)}           # (the deck on its twin)
+
+
+def test_nets_share_the_process_network_and_add_a_line_once():
+    linenet.reset()
+    m = [Member("a", _line(0, 0, 50, 0), "deck", "primary", 50, 1, 4.0, None),
+         Member("b", _line(25, -20, 25, 20), "ground", "residential", 30, 0, 3.0, None)]
+    one = gsh.Net(m)
+    two = gsh.Net(m[::-1] + [Member("c", _line(0, 5, 50, 5), "ground", "residential", 30, 0, 3.0, None)])
+    assert one.network is two.network and len(one.network.ln) == 3
+    assert two.ln_ids[:2] == one.ln_ids[::-1]
+    assert _same(gsh._relations(two, 1), _reference(two, 1))
+
+
 def test_lines_added_in_batches_pair_as_added_at_once():
     import fast
     rng = np.random.default_rng(7)
     lines = [np.cumsum(rng.normal(0.0, 20.0, (6, 2)), axis=0) for _ in range(80)]
-    one = fast._ef.LineNet(linenet.PAD_M)
+    one = fast._ef.LineNet(gsh.JOIN_M + 0.5)
     one.add(lines)
-    two = fast._ef.LineNet(linenet.PAD_M)
+    two = fast._ef.LineNet(gsh.JOIN_M + 0.5)
     assert two.add(lines[:30]) == 0
     assert two.add(lines[30:]) == 30
     assert len(two) == 80 and one.pairs == two.pairs
