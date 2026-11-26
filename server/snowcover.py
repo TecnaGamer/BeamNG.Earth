@@ -370,7 +370,7 @@ def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
     U = np.ascontiguousarray(np.asarray(U, np.float64))
     if U.ndim != 2 or min(U.shape) < 2:
         return None
-    fast.require(638, "SnowLook")      # (638: the road mask by (class, zone): 15 slots)
+    fast.require(640, "SnowLook")      # (640: the road mask by (class, zone): 15 slots)
     t = np.linspace(0.0, 1.0, GEO_N)
     e, n = np.meshgrid(x0 + t * size, y0 + size - t * size)       # row 0 north
     lat, lon, h = frame.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)

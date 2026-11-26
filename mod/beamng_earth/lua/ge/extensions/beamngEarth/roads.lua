@@ -64,6 +64,7 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',   -- dirt / gravel strips (roads.DIRT_LOOK)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadwear.materials.json',   -- road wear and spots (server roadwear.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/puddles.materials.json',    -- puddles (server roadwear.puddle_chunks, wetlook.lua)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json',
@@ -522,6 +523,7 @@ local function dropTile(key)
   end
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
+  if t.puddle then deleteQ[#deleteQ + 1] = t.puddle end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
   for _, w in ipairs(withCliffs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' })) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
@@ -866,7 +868,7 @@ local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
 M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
-M.SKIN_WHATS = { 'road', 'walk', 'walkcol', 'bank' }   -- (bank: winter W3's snowbanks, render only; with winter on)
+M.SKIN_WHATS = { 'road', 'walk', 'walkcol', 'puddle', 'bank' }     -- (puddle: shown only while wet, M.setPuddles; bank: winter W3's snowbanks, render only, with winter on)
 
 local swapState = nil        -- a generation swap being staged: { gen, parts, tiles } (M.swapBegin)
 local swapBack = nil         -- a rollback's collision still to come: { reloaded, frames } (M.swapUndo)
@@ -1237,7 +1239,7 @@ function M.onSkin(msg, currentAnchor)
       if sl then w = { shape = sl.path, pos = w.pos }; t.slots[what] = sl end
       t.skin[what] = { shape = w.shape, pos = w.pos }
       local q = { key = geoKey(msg.key), walk = w, what = what, tile = t, skin = true,
-        renderOnly = (M._cliffsOn and M.isCliffStrip(what)) or what == 'road' or what == 'bank' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
+        renderOnly = (M._cliffsOn and M.isCliffStrip(what)) or what == 'road' or what == 'puddle' or what == 'bank' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
       if not q.renderOnly then t.colWant[what] = true end
       t.skin.pending = t.skin.pending + 1
       if stage then swapState.expect = swapState.expect + 1 end
@@ -1321,7 +1323,7 @@ function M.swapCommit(gen)
     local o = scenetree.findObjectById(p.id)
     if o then
       if p.collide then o:setField('collisionType', 0, p.collide) end
-      o:setHidden(false)
+      o:setHidden(p.what == 'puddle' and not M.puddlesShown)
     end
     if p.collide and p.t[p.what] == p.id then
       markTileCollider(p.t)
@@ -1389,7 +1391,7 @@ function M.swapUndo(gen)
     if t.oldSkin then
       for _, w in ipairs(M.SKIN_WHATS) do
         local o = t.oldSkin[w] and scenetree.findObjectById(t.oldSkin[w])
-        if o then o:setField('collisionType', 0, oldCollide(t, w)); o:setHidden(false) end
+        if o then o:setField('collisionType', 0, oldCollide(t, w)); o:setHidden(w == 'puddle' and not M.puddlesShown) end
       end
     end
   end
@@ -1399,6 +1401,43 @@ function M.swapUndo(gen)
   -- swapRolledBack says when it is in effect)
   swapBack = { reloaded = false, frames = 0 }
   return true
+end
+
+-- Puddles (the skins' "puddle" part, server roadwear.puddle_chunks): drawn only while the ground is wet (wetlook.lua
+-- calls this at its step changes, never per frame); dry, every puddle object is hidden: no draw at all. A part made
+-- later takes the state as it is made.
+M.puddlesShown = false
+M.puddleFlips = 0
+function M.setPuddles(on)
+  on = on and true or false
+  if on == M.puddlesShown then return 0 end
+  M.puddlesShown = on
+  local n = 0
+  for _, t in pairs(tiles) do
+    -- (a generation swap's staged part stays hidden until its commit, which takes the state then)
+    local staged = swapState ~= nil and not swapState.committed and swapState.tiles[t] ~= nil
+    for _, id in ipairs({ not staged and t.puddle or false, t.oldSkin and t.oldSkin.puddle or false }) do
+      local o = id and scenetree.findObjectById(id)
+      if o then o:setHidden(not on); n = n + 1 end
+    end
+  end
+  M.puddleFlips = M.puddleFlips + 1
+  return n
+end
+
+-- (probes) tiles whose skin has a puddle part, those made, and the made ones shown; one made object's id and shape
+function M.puddleStats()
+  local parts, made, shown, any = 0, 0, 0, nil
+  for _, t in pairs(tiles) do
+    if t.skin and t.skin.puddle then parts = parts + 1 end
+    local o = t.puddle and scenetree.findObjectById(t.puddle)
+    if o then
+      made = made + 1
+      if not o:isHidden() then shown = shown + 1 end
+      any = any or { id = t.puddle, shape = o:getField('shapeName', 0) }
+    end
+  end
+  return { parts = parts, made = made, shown = shown, any = any }
 end
 
 -- Is the collision of the last rollback (swapUndo) in effect: its rebuild ran, and a frame has passed? True when no
@@ -2527,7 +2566,7 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
+local WHATS = { 'walk', 'road', 'puddle', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
   'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
 
 -- hello's cliffs ({available, natural, roadCuts}; core.lua): the cliff parts join WHATS, CONTENT_WHATS and SKIN_WHATS
@@ -2832,6 +2871,10 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol' or (M._cliffsOn and M.isCliffCollider(q.what))) and 'Collision Mesh' or not isRoad
       local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
+      if ok and q.what == 'puddle' and not M.puddlesShown then          -- (dry: drawn not at all, M.setPuddles)
+        local o = scenetree.findObjectById(id)
+        if o then o:setHidden(true) end
+      end
       if staged and not ok then                    -- (a shape that cannot be made: the swap must not commit)
         swapState.failed = 'staged ' .. tostring(q.what) .. ': ' .. tostring(id)
       end

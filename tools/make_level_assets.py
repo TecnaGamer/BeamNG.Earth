@@ -125,14 +125,17 @@ lines(os.path.join(L, "main/MissionGroup/Weather/items.level.json"), [
     {"name": "bngEarthClouds", "class": "CloudLayer", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c21", "__parent": "Weather",
      "texture": "art/skies/clouds/clouds_normal_displacement.png", "coverage": 0.5, "cirrusCoverage": 0.3, "exposure": 1.45,
      "windSpeed": 0.1, "baseColor": [0.99, 0.99, 0.99, 0.9], "altitudeKm": 1.5},
+    # doCollision off (the 2026-11-26 playtest: a storm's 5200 colliding drops cost the frame rate; rain off gave it
+    # back): each colliding drop casts rays against the level. The shelter check (weather.lua shelterCheck: three rays
+    # four times a second) fades the rain out under roofs and decks and in tunnels instead.
     {"name": "bngEarthRain", "class": "Precipitation", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c22", "__parent": "Weather",
      "dataBlock": "bngEarthRainDrop", "numDrops": 0, "boxWidth": 36, "boxHeight": 24, "dropSize": 0.14, "splashSize": 0,
-     "fadeDist": 2, "fadeDistEnd": 17, "followCam": True, "useWind": True, "useTurbulence": False, "doCollision": True,
+     "fadeDist": 2, "fadeDistEnd": 17, "followCam": True, "useWind": True, "useTurbulence": False, "doCollision": False,
      "hitVehicles": False, "rotateWithCamVel": False},
     {"name": "bngEarthSnow", "class": "Precipitation", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c23", "__parent": "Weather",
      "dataBlock": "bngEarthSnowflake", "numDrops": 0, "boxWidth": 30, "boxHeight": 20, "dropSize": 0.08, "splashSize": 0,
      "minSpeed": 0.7, "maxSpeed": 1.1, "fadeDist": 2, "fadeDistEnd": 14, "followCam": True, "useWind": True,
-     "useTurbulence": True, "maxTurbulence": 0.45, "turbulenceSpeed": 0.2, "doCollision": True, "hitVehicles": False,
+     "useTurbulence": True, "maxTurbulence": 0.45, "turbulenceSpeed": 0.2, "doCollision": False, "hitVehicles": False,
      "rotateWithCamVel": False},
     {"name": "bngEarthWind", "class": "ForestWindEmitter", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c24", "__parent": "Weather",
      "position": [0, 0, 0], "strength": 0.5},

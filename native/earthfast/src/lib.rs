@@ -79,6 +79,7 @@ mod power;
 mod underpass;
 mod coarseease;
 mod junctionsnap;
+mod landings;
 mod tunnelcover;
 mod tunnelchain;
 mod tunnelrec;
@@ -7616,6 +7617,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 500: enu_rings and enu_bounds (mapgeom.enu_rings / enu_bounds: many rings' frame conversion in one call, the
     // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like)
     m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_atlas_px, m)?)?;
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
     // where the ground bulges inside it: no dip under its lift). 495-498 are other branches'
@@ -7816,7 +7819,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
     // W2 snow on the ground photos, server/snowcover.py)
     snow::py::register(m)?;
-    // 638 (W3, see the end): snowroad.rs, server/snowroad.py
+    // 640 (W3, see the end): snowroad.rs, server/snowroad.py
     snowroad::py::register(m)?;
     // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
@@ -7835,8 +7838,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 636 (the tunnel branch's 633 renumbered over dev's 635): tunnel plan T1 round 3, the tunnel record's lids under
     // a road crossing over the tube kept (tunnel.rs StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as
     // without the record: roadsys.pins_near legacy)
-    // 638 (637 taken on dev by the world-gen speed work): winter W3 (snowroad.rs: snowroad_classes / zones / class_at /
-    // banks / look / walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
-    m.add("VERSION", 638)?;
+    // 638: landing_ends / landing_chain (landings.rs: FAST_GAP's deck-end landings and their approaches, ported from
+    // grading._Planner._landings_in / _landing_chain)
+    m.add_function(wrap_pyfunction!(landings::landing_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(landings::landing_chain, m)?)?;
+    // 639: roadwear::puddle_plan (a tile's puddles: sags, gutters, ruts) and
+    // puddle_atlas_px (their masks)
+    // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
+    // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
+    m.add("VERSION", 640)?;
     Ok(())
 }

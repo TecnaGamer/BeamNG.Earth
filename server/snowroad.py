@@ -21,7 +21,7 @@ import numpy as np
 
 import fast
 
-NATIVE = 638
+NATIVE = 640
 _W = os.environ.get("BNE_WINTER", "").strip().lower()
 ON = _W in ("on", "1", "yes", "true", "real", "light", "heavy", "ice") \
     and os.environ.get("BNE_WINTER_ROADS", "on").strip().lower() not in ("off", "0", "no", "false")
