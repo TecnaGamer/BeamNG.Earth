@@ -668,6 +668,20 @@ LEGACY_REACH_M = 250.0      # (636, T1) m along its stroke a line's nearest tunn
                             # past HAND_MAX_M and TUNNEL_FADE_M, the reach of a mouth's dig and of the old fade)
 
 
+def clear_memory():
+    """This process's road system memos let go (budget.register_shed): the cells' tables, the ceilings, the deck ends,
+    the profile squares (read again from DISK) and their pins. None was dropped by a shed before: a Baltimore road
+    process held ~230 MB of them after 80 geotiles (the ceilings 146 MB, the tables 47, the ends 25; 2026-11-26)."""
+    with _memo_lock:
+        _cells_of.clear()
+        _squares.clear()
+        _short_sq.clear()
+        _pins.clear()
+    with _ends_lock:
+        _ceil_memo.clear()
+        _ends_memo.clear()
+
+
 def _reads_of(cell_fn):
     """(key, what it holds) of what cell_fn reads: the same lambda made again (each road tile, block and skin makes its
     own `lambda key: md.cell(...)`) is the same code over the same globals and closed-over values, so it reads the same

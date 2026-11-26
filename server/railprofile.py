@@ -118,6 +118,13 @@ def _find(node, fid, kind, cm):
     return packed.find(g, np.ascontiguousarray(cm, np.int64))
 
 
+def clear_memory():
+    """The kept nodes let go (budget.register_shed; up to NODE_MEMO_POINTS: ~44 MB of a Baltimore road process)."""
+    with _NODES_LOCK:
+        _NODES.clear()
+        _NODES_PTS[0] = 0
+
+
 def _points(node):
     return 0 if node[1] is None else len(node[1])
 

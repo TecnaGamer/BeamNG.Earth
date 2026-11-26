@@ -132,6 +132,14 @@ class _State:
         budget.register_shed(self._clear_chunks)
         import rangeread            # (the remote files' block LRU, up to rangeread.MEM_BYTES: kept by a shed before)
         budget.register_shed(rangeread.clear_memory)
+        # (the memos that hold map features or native objects past the map data's own drop: a shed left a Baltimore
+        # road process's floor rising 0.8 -> 1.8 GB over 110 jobs, the playtest's 1.6 -> 3.7 GB in 25 minutes,
+        # 2026-11-26: the placements, the road system's tables / ceilings / ends / squares, the rail nodes)
+        budget.register_shed(_roads.clear_placements)
+        import roadsys
+        budget.register_shed(roadsys.clear_memory)
+        import railprofile
+        budget.register_shed(railprofile.clear_memory)
 
     def _clear_chunks(self):
         with self.lock:

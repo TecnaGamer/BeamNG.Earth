@@ -1917,6 +1917,10 @@ class MapData:
             self._mem_bytes = 0
             self._slim.clear()
             self._slim_bytes = 0
+        kept = self.__dict__.get("_lane_context")      # (the neighbour cells' raw layers the lane decode keeps)
+        if kept is not None:
+            with self._lock:
+                kept.clear()
         # (the OSM tag shards: ~20 MB each; the station shards too, Codex on #1111, 2026-11-10)
         for tags in (self.rail_tags, self.lane_tags, getattr(self, "station_tags", None),
                      getattr(self, "osm_shards", None)):
