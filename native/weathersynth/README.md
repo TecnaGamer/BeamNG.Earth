@@ -232,6 +232,30 @@ clean stretches ("blocks"), not events.
   22.3 / 24.0 dB louder at 0.7 / 5 / 35 mm/h than the loop the mod plays at the same volume, and it had no `rainVol`.
   The bus limiter crushed it.
 
+## Rain method B: the physical drop model (src/rainb.rs, rainb_live.rs; not shipped yet)
+
+This is the rain counterpart of thunder method B. It renders drop by drop:
+- **Drops:** a gamma drop-size distribution that carries exactly the rain rate (Marshall-Palmer D0, blending to Joss
+  thunderstorm), falling at terminal speed.
+- **Impact:** each impact is its force pulse (Gordillo et al. 2018) radiated as a vertical dipole.
+- **Surfaces:**
+  - wet roads splash above Cossali's crown threshold;
+  - puddles ring with Minnaert bubbles by Medwin/Nystuen size class;
+  - leaves ring their bending modes;
+  - metal panels ring their plate modes.
+- **Distance:** air absorption and ground scattering. The rate flickers at 0.5-8 Hz (rain is clustered).
+- **Scenes:** open road, next to the car, inside the car (the roof's modes, headliner, windscreen, body) and under an
+  open shelter.
+- **Sources:** the parameters, sources and real-take comparison are in
+  `~/bnge-tests/weather/rain_research/PARAMS.md`.
+
+Commands:
+- `rainb` / `rainb-set` render 30 s seamless loops at the current loops' loudness.
+- `rainb-stats` prints the drop statistics by rate.
+- `rainb-live-bench` times the live engine (rainb_live.rs). That engine uses a grain bank of the same drop events,
+  1/3-octave distance bins and RainCap, and does nothing when dry. It is not wired into live-serve: the user decides
+  by ear first.
+
 ## Audio rules (src/audio.rs)
 
 - **Output streams only.** On WASAPI, an input stream opened on an output device is loopback capture of the system's

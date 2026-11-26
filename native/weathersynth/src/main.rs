@@ -23,6 +23,10 @@
 //!   weathersynth tex-set --bank BIN --out DIR [--seed N] [--ogg] [--prefix P] [--only a,b]   the recorded loops
 //!   weathersynth livetex-bench --bank BIN --out DIR [--block N]   live recorded rain / wind, offline, timed
 //!   weathersynth tex-check FILE.wav ...              loudness, true peak, loop seam and texture statistics
+//!   weathersynth rainb --kind K --seed N [--secs S] --out F.wav   method B rain: the physical drop model (rainb.rs)
+//!   weathersynth rainb-set --out DIR [--seed N] [--ogg] [--only a,b]   its reference loops (bne_rainb_<kind>)
+//!   weathersynth rainb-stats | rainb-phys            drop statistics per rain rate; unlevelled loudness by rate
+//!   weathersynth rainb-live-bench [--seconds S] [--block N] [--wav F]   method B live engine timed (rainb_live.rs)
 
 mod analyze;
 #[cfg(feature = "audio")]
@@ -52,6 +56,8 @@ mod prio;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod proto;
 mod rain;
+mod rainb;
+mod rainb_live;
 mod rng;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod serve;
@@ -515,6 +521,19 @@ fn run() -> Result<(), String> {
         "texbank-pack" => texbuild::run_pack(&args)?,
         "tex-set" => texmix::run_set(&args)?,
         "tex-check" => texmix::run_check(&args)?,
+        "rainb" => rainb::run_one(&args)?,
+        "rainb-set" => rainb::run_set(&args)?,
+        "rainb-stats" => print!("{}", rainb::stats()),
+        "rainb-live-bench" => {
+            let secs: f64 = arg(&args, "--seconds").unwrap_or("70".into()).parse().map_err(|_| "bad --seconds")?;
+            let block: usize = arg(&args, "--block").unwrap_or("512".into()).parse().map_err(|_| "bad --block")?;
+            print!("{}", rainb_live::bench(secs, block, arg(&args, "--wav").as_deref()));
+        }
+        "rainb-phys" => {
+            for r in [0.7, 5.0, 35.0] {
+                println!("rate {r} mm/h: physical loudness {:.1} LUFS (unlevelled)", rainb::physical_lufs(r, 1, 10.0));
+            }
+        }
         "livetex-bench" => {
             // the live recorded rain / wind through fixed conditions, no device: --bank BIN --out DIR [--block N]
             let bank = std::sync::Arc::new(texbuild::Bank::load(&arg(&args, "--bank").ok_or("--bank BIN")?)?);
