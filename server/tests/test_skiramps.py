@@ -961,6 +961,76 @@ class GapLandingCells(unittest.TestCase):
         self.assertLess(lift, 0.5)
 
 
+class PinBatch(unittest.TestCase):
+    """BNE_ROADSYS=surface (roads.MAPPED_RANGES), M5 round 7: a cell's pin heights (_stronger_zs) planned in one batch
+    are each the pin's own: the same bytes as planned alone (_stronger_z), and as planned again in another batch after
+    the kept ones are evicted (_strong_memo cleared, as at 4096 entries or a road stage made again). Each map cell has
+    its own copy of a deck (~1e-5 m from the others'; here each fixture cell's bridges moved by a few 1e-5 m): the
+    batch's landings were the union round all its parts, the least copy of each deck end taken, so a part took another
+    cell's copy than its own: Castlegar's 0a58d21e 5e-6 m apart, batch against alone."""
+
+    SITE = "castlegar_939"
+
+    def grader(self):
+        from types import SimpleNamespace
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import drivability as dv
+        import interchanges
+        site = interchanges.load(self.SITE, "interchange", keep_m=dv.KEEP_M_SITE.get(self.SITE, dv.KEEP_M))
+        md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}),
+                             dem=SimpleNamespace(sample=site.sample))
+        dv._hook_cells(site, md, self.SITE)
+        store = grading.PlanStore(md, site.sample)
+        store.frame_of = lambda region: site.frame
+        return site, grading.Grader(site.frame, md, site.sample, store=store)
+
+    def test_batch_alone_and_evicted(self):
+        import zlib
+        import roadsurf
+        raw = grading._Planner._raw_lines
+
+        def copies(self_, k):               # (each cell's own copy of its decks)
+            out = raw(self_, k)
+            h = zlib.crc32(str(k).encode()) % 97
+            off = np.array([1e-5 * (h % 7 + 1), -1e-5 * (h % 5 + 1)])
+            memo = self_.__dict__.setdefault("_test_copies", {})
+            if str(k) not in memo:
+                memo[str(k)] = {"bridges": [(np.asarray(b, np.float64) + off,) + tuple(r) for b, *r in out["bridges"]],
+                                "ground": out["ground"]}
+            return memo[str(k)]
+        with mock.patch.object(grading, "FAST_GAP", True), mock.patch.object(roads, "RANGE_OWNERS", True), \
+                mock.patch.object(roads, "MAPPED_RANGES", lambda: True), \
+                mock.patch.object(grading._Planner, "_raw_lines", copies), \
+                mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", 1), \
+                mock.patch.object(roadsurf, "ON", False):
+            site, g = self.grader()
+            import mapcells
+            key = mapcells.CellKey(14, 2837, 5605)
+            pl = g.store.planner_of_cell(key)
+            asks = [(c, last) for c in pl._chain_cands(key) for last in (False, True)]
+            self.assertGreater(len(asks), 20)
+            batch = pl._stronger_zs(asks, key)
+            self.assertTrue(any(z is not None for z in batch))
+            self.assertTrue(any(pl._landings_of([(pl._strong_part(c, last)[0], c[4])]) for c, last in asks),
+                            "a fast road's landings in play")
+            # (evicted: planned again in other batches, the second half first, then the first half)
+            pl.__dict__["_strong_memo"].clear()
+            half = len(asks) // 2
+            again = pl._stronger_zs(asks[half:], key)
+            again = pl._stronger_zs(asks[:half], key) + again
+            # (alone: each on its own, from a fresh grader, nothing kept between)
+            _s, g2 = self.grader()
+            pl2 = g2.store.planner_of_cell(key)
+            alone = []
+            for c, last in [(c, last) for c in pl2._chain_cands(key) for last in (False, True)]:
+                pl2.__dict__.pop("_strong_memo", None)
+                alone.append(pl2._stronger_z(c, last, key))
+        for n, (c, last) in enumerate(asks):
+            self.assertEqual(repr(batch[n]), repr(alone[n]), (str(key), c[5], last, "batch against alone"))
+            self.assertEqual(repr(again[n]), repr(batch[n]), (str(key), c[5], last, "evicted against fresh"))
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 9, "the surface plans keyed apart from round 6's")
+
+
 class UnderSpeed(unittest.TestCase):
     """A lone 1 m dip on 6 % cosine ramps bends at 2 g^2 / d: 0.95 g at 130 km/h. A motorway's: within its radius."""
 
