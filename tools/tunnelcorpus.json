@@ -456,7 +456,7 @@
   "r": 400.0,
   "issue": null,
   "kind": "tunnel",
-  "note": "B31 Kappler Tunnel east portals, Tachy's in-game report 2026-11-23 (\"the southern tube far too high\"): the eastbound 36926434's mouth at 47.97949, 7.90731 took the DEM over the mouth as its road's height, 5.3 m over the road 5 m out (portal_high \"dem\"); the westbound 10042282 starts at 47.97956, 7.90777"
+  "note": "B31 Kappler Tunnel east portals, Tachy's in-game report 2026-11-23 (\"the southern tube far too high\"): the eastbound 36926434's mouth at 47.97949, 7.90731 took the DEM over the mouth as its road's height, 5.3 m over the road 5 m out (portal_high \"dem\"); the westbound 10042282 starts at 47.97956, 7.90777; with BNE_ROADSYS_TUNNELS=on worse than without (Tachy's in-game report 2026-11-26, dev 59367b3f, seen from the eastbound approach at 47.97954, 7.90823): the approach is not dug down to the floor (it stays high up to the mouth), concrete walls close the mouth, and ground is raised further up beside the cut (a concrete ramp over the westbound side). The roof on posts over the mouth was a wrong OSM roof, already deleted there; it goes once Overture takes the change"
  },
  {
   "name": "gotthard_north",
