@@ -52,10 +52,13 @@ impl ThunderRenderer for BySet {
         format!("generated={} recorded={}", self.generated.name(), self.recorded.name())
     }
     fn render(&mut self, spec: &Spec) -> Vec<f32> {
+        self.render_timed(spec).0
+    }
+    fn render_timed(&mut self, spec: &Spec) -> (Vec<f32>, f64) {
         if spec.rec {
-            self.recorded.render(spec)
+            self.recorded.render_timed(spec)
         } else {
-            self.generated.render(spec)
+            self.generated.render_timed(spec)
         }
     }
 }
@@ -122,6 +125,52 @@ pub fn duck_envelope(k: &Duck, t: f64) -> (f64, bool) {
 pub trait ThunderRenderer: Send {
     fn name(&self) -> String;
     fn render(&mut self, spec: &Spec) -> Vec<f32>;
+    /// The render and where its crack (the first arrival) is, in s from its start: the bus starts it that much before
+    /// the thunder's `at`, so the crack lands on the time the rain ducks to. 0 for renders that start at the crack.
+    fn render_timed(&mut self, spec: &Spec) -> (Vec<f32>, f64) {
+        (self.render(spec), 0.0)
+    }
+}
+
+/// Method B live (the Generated set): strikes and closes rendered by methodb's fast path on one thread (deterministic
+/// per seed and distance: the same thunder on every machine), cut to start CRACK_LEAD_S before their crack (found in
+/// the render, not assumed); mid and far render nothing, so the mod plays its files for them.
+pub struct MethodB;
+
+pub const CRACK_LEAD_S: f64 = 0.010;
+
+/// The first arrival of a render: the first sample at a quarter of the peak of its first 1.5 s (the crack's
+/// leading edge; methodb puts the first arrival near 0.5 s, the files' FILE_ONSET_S).
+pub fn crack_index(y: &[f64]) -> usize {
+    let n = y.len().min((1.5 * crate::npx::SR) as usize);
+    let pk = y[..n].iter().fold(0.0f64, |a, v| a.max(v.abs()));
+    if pk <= 0.0 {
+        return 0;
+    }
+    y[..n].iter().position(|v| v.abs() >= 0.25 * pk).unwrap_or(0)
+}
+
+impl ThunderRenderer for MethodB {
+    fn name(&self) -> String {
+        "methodb".into()
+    }
+    fn render(&mut self, spec: &Spec) -> Vec<f32> {
+        self.render_timed(spec).0
+    }
+    fn render_timed(&mut self, spec: &Spec) -> (Vec<f32>, f64) {
+        let class = match spec.kind {
+            Kind::Strike => crate::methodb::BClass::Strike,
+            Kind::Close => crate::methodb::BClass::Close,
+            _ => return (Vec::new(), 0.0),
+        };
+        let mut set = crate::methodb::settings(class);
+        set.fast = true;
+        set.threads = 1;
+        let (y, _) = crate::methodb::render(spec.seed as u64, spec.d.max(30.0), &set, false);
+        let c = crack_index(&y);
+        let start = c.saturating_sub((CRACK_LEAD_S * crate::npx::SR) as usize);
+        (y[start..].iter().map(|v| *v as f32).collect(), (c - start) as f64 / crate::npx::SR)
+    }
 }
 
 /// thunder.rs's physical model (render_live), set to the kind's loudness target with its peak under the ceiling.
@@ -215,6 +264,9 @@ pub fn renderer(choice: &str) -> Result<Box<dyn ThunderRenderer>, String> {
     if choice == "none" {
         return Ok(Box::new(NoThunder));
     }
+    if choice == "methodb" {
+        return Ok(Box::new(MethodB));
+    }
     if choice == "procedural" {
         let micro_min = std::env::var("WEATHERSYNTH_MICRO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.06);
         return Ok(Box::new(Procedural { micro_min, length_s: 14.0 }));
@@ -242,8 +294,18 @@ struct Entry {
     gain: f64,
     fin: bool,
     samples: Option<Arc<Vec<f32>>>,
+    /// the crack's offset in the render (s): the voice starts that much before `at`
+    crack_s: f64,
     rendering: bool,
     started: bool,
+}
+
+/// A hint's distance may move this much (relative) before its render is redone; the mod takes a ready render for a
+/// final within the same margin.
+pub const READY_REL_D: f64 = 0.15;
+
+fn d_moved(a: f64, b: f64) -> bool {
+    (a - b).abs() > READY_REL_D * a.max(1.0)
 }
 
 struct Voice {
@@ -293,6 +355,14 @@ impl Bus {
                 st.ducks.push(Duck { from: now.min(th.at), t0: th.at, depth_db: duck_depth_db(th.d) });
             }
         }
+        // a final the game plays from its file: no voice here (only the duck above, at the file's crack)
+        if th.fin && !th.play {
+            if st.entries.get(&th.id).is_some_and(|e| !e.started) {
+                st.entries.remove(&th.id);
+            }
+            self.cv.notify_all();
+            return;
+        }
         match st.entries.get_mut(&th.id) {
             Some(e) => {
                 if th.fin {
@@ -303,6 +373,14 @@ impl Bus {
                     e.fin = true;
                     e.at = th.at;
                     e.gain = th.gain;
+                } else if !e.fin && !e.started {
+                    // a hint again (the listener moved): a new kind or a distance moved past the margin renders again
+                    if e.spec.kind != th.kind || d_moved(e.spec.d, th.d) {
+                        e.samples = None;
+                        e.spec = spec;
+                    }
+                    e.at = th.at;
+                    e.gain = th.gain;
                 }
             }
             None => {
@@ -311,7 +389,8 @@ impl Bus {
                 }
                 st.entries.insert(
                     th.id.clone(),
-                    Entry { spec, at: th.at, gain: th.gain, fin: th.fin, samples: None, rendering: false, started: false },
+                    Entry { spec, at: th.at, gain: th.gain, fin: th.fin, samples: None, crack_s: 0.0, rendering: false,
+                        started: false },
                 );
             }
         }
@@ -351,21 +430,36 @@ impl Bus {
     /// (render thread) a finished render (for the spec it was asked: a kind changed meanwhile renders again)
     #[cfg(test)]
     pub fn done(&self, id: &str, spec: Spec, samples: Vec<f32>) {
-        self.done_timed(id, spec, samples, 0.0)
+        self.done_timed(id, spec, samples, 0.0, 0.0)
     }
 
-    pub fn done_timed(&self, id: &str, spec: Spec, samples: Vec<f32>, ms: f64) {
+    pub fn done_timed(&self, id: &str, spec: Spec, samples: Vec<f32>, ms: f64, crack_s: f64) {
         let mut st = self.st.lock().unwrap();
         st.rendered += 1;
         st.render_ms_last = ms;
         st.render_ms_max = st.render_ms_max.max(ms);
         if let Some(e) = st.entries.get_mut(id) {
             e.rendering = false;
-            if e.spec.kind == spec.kind {
+            if e.spec.kind == spec.kind && e.spec.d == spec.d {
                 e.samples = Some(Arc::new(samples));
+                e.crack_s = crack_s;
             }
         }
         self.cv.notify_all();
+    }
+
+    /// The thunders rendered and waiting (not started, not empty): (id, the distance rendered for), at most 24, the
+    /// soonest first. The mod plays a final through the synth only when it was listed here (within READY_REL_D).
+    pub fn ready(&self) -> Vec<(String, f64)> {
+        let st = self.st.lock().unwrap();
+        let mut v: Vec<(f64, String, f64)> = st
+            .entries
+            .iter()
+            .filter(|(_, e)| !e.started && e.samples.as_ref().is_some_and(|s| !s.is_empty()))
+            .map(|(k, e)| (e.at, k.clone(), e.spec.d))
+            .collect();
+        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
+        v.into_iter().take(24).map(|(_, k, d)| (k, d)).collect()
     }
 
     /// (synth worker) start the finals due by t_out (the UTC time the next block will be heard); forget stale ones.
@@ -378,7 +472,7 @@ impl Bus {
             if e.started {
                 return t_out < e.at + 60.0;
             }
-            if e.fin && e.at <= t_out {
+            if e.fin && e.at - e.crack_s <= t_out {
                 if t_out - e.at > LATE_MAX_S {
                     dropped += 1;
                     return false;
@@ -458,8 +552,8 @@ pub fn render_loop(bus: Arc<Bus>, mut r: Box<dyn ThunderRenderer>, now: fn() -> 
     while !bus.stopped() {
         if let Some((id, spec)) = bus.next_job(now, 0.25) {
             let t0 = std::time::Instant::now();
-            let s = cap_peak(r.render(&spec));
-            bus.done_timed(&id, spec, s, t0.elapsed().as_secs_f64() * 1000.0);
+            let (s, crack_s) = r.render_timed(&spec);
+            bus.done_timed(&id, spec, cap_peak(s), t0.elapsed().as_secs_f64() * 1000.0, crack_s);
         }
     }
 }
@@ -474,7 +568,7 @@ mod tests {
     use super::*;
 
     fn th(id: &str, at: f64, kind: Kind, fin: bool) -> Thunder {
-        Thunder { id: id.into(), at, d: 1000.0, kind, gain: 0.5, seed: 3, fin, rec: false }
+        Thunder { id: id.into(), at, d: 1000.0, kind, gain: 0.5, seed: 3, fin, rec: false, play: true }
     }
 
     fn files() -> Files {
@@ -566,6 +660,75 @@ mod tests {
             bus.offer(&th(&format!("x{i}"), 60.0, Kind::Far, false));
         }
         assert!(bus.st.lock().unwrap().entries.len() <= MAX_ENTRIES);
+    }
+
+    #[test]
+    fn ready_list_play_flag_and_moved_hints() {
+        let bus = Bus::new();
+        let mut r = files();
+        bus.offer(&th("a", 50.0, Kind::Close, false));
+        assert!(bus.ready().is_empty(), "not rendered yet");
+        let (id, spec) = bus.next_job(|| 20.0, 0.0).unwrap();
+        bus.done_timed(&id, spec, r.render(&spec), 1.0, 0.25);
+        assert_eq!(bus.ready(), vec![("a".to_string(), 1000.0)]);
+        // the listener moved 10 %: kept; 30 %: rendered again (and not ready meanwhile)
+        let mut h = th("a", 50.0, Kind::Close, false);
+        h.d = 1100.0;
+        bus.offer(&h);
+        assert_eq!(bus.ready().len(), 1, "within the margin: kept");
+        h.d = 1400.0;
+        bus.offer(&h);
+        assert!(bus.ready().is_empty(), "moved: rendered again");
+        let (id, spec) = bus.next_job(|| 20.0, 0.0).unwrap();
+        assert_eq!(spec.d, 1400.0);
+        // a render for an older spec is not kept
+        bus.done_timed(&id, Spec { d: 1000.0, ..spec }, vec![1.0; 4], 1.0, 0.0);
+        assert!(bus.ready().is_empty(), "stale render dropped");
+        bus.done_timed(&id, spec, vec![1.0; 4], 1.0, 0.25);
+        // the final: the voice starts crack_s before at
+        let mut f = th("a", 50.0, Kind::Close, true);
+        f.d = 1400.0;
+        bus.offer(&f);
+        bus.start_due(49.70);
+        assert_eq!(bus.counts().3, 0, "not yet");
+        bus.start_due(49.75);
+        assert_eq!(bus.counts().3, 1, "started 0.25 s early: the crack lands on at");
+        // a final the game plays (play = false): no voice, but a strike still ducks the rain at its at
+        bus.offer(&th("b", 60.0, Kind::Strike, false));
+        let mut g = th("b", 60.5, Kind::Strike, true);
+        g.play = false;
+        g.d = 60.0;
+        bus.offer_at(&g, 60.0);
+        assert!(bus.next_job(|| 59.0, 0.0).is_none() && bus.ready().is_empty(), "nothing to render or play");
+        assert!((bus.duck_gain(60.6) - crate::m::undb(-10.0)).abs() < 1e-9, "the rain ducks at the file's crack");
+    }
+
+    /// (a real fast-path render, a few seconds: run with --ignored)
+    #[test]
+    #[ignore]
+    fn methodb_live_strike_starts_at_its_crack() {
+        let mut r = MethodB;
+        let spec = Spec { seed: 11, d: 122.5, kind: Kind::Strike, rec: false };
+        let (y, crack_s) = r.render_timed(&spec);
+        assert!((crack_s - CRACK_LEAD_S).abs() < 1e-9, "cut {CRACK_LEAD_S} s before the crack");
+        let full = 14.0 * crate::npx::SR;
+        let cut_s = (full - y.len() as f64) / crate::npx::SR;
+        assert!((0.35..0.7).contains(&(cut_s + crack_s)), "the crack was {:.3} s into the render", cut_s + crack_s);
+        let c = crack_index(&y.iter().map(|v| *v as f64).collect::<Vec<_>>());
+        assert_eq!(c, (CRACK_LEAD_S * crate::npx::SR) as usize);
+        assert!(r.render_timed(&Spec { kind: Kind::Mid, ..spec }).0.is_empty(), "mid: the files");
+        let (y2, _) = r.render_timed(&spec);
+        assert_eq!(y, y2, "deterministic");
+    }
+
+    #[test]
+    fn crack_index_finds_the_leading_edge() {
+        let mut y = vec![0.0f64; 44100];
+        y[22050] = 0.3;
+        y[22051] = -1.0;
+        y[30000] = 0.5;
+        assert_eq!(crack_index(&y), 22050);
+        assert_eq!(crack_index(&[0.0; 10]), 0);
     }
 
     #[test]

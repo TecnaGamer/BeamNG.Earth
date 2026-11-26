@@ -102,6 +102,11 @@ pub fn state_line(latency_ms: f64, underruns: u64, renderer: &str, counts: (u64,
     )
 }
 
+/// The ready thunders for the state line: [[id, d], ...].
+pub fn ready_json(r: &[(String, f64)]) -> String {
+    format!("[{}]", r.iter().map(|(id, d)| format!("[{},{:.1}]", crate::proto::quote(id), d)).collect::<Vec<_>>().join(","))
+}
+
 pub fn failed_line(reason: &str) -> String {
     format!("{{\"state\":\"failed\",\"reason\":{}}}", crate::proto::quote(reason))
 }
@@ -174,7 +179,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     }
                 };
             sets.sort();
-            (Box::new(thunderlive::BySet { generated: Box::new(thunderlive::NoThunder), recorded }), sets)
+            // the generated set live: method B's strikes and closes rendered ahead (the mod plays the files for
+            // the rest, and for any strike not ready in time: readyThunders)
+            sets.push("generated");
+            sets.sort();
+            (Box::new(thunderlive::BySet { generated: Box::new(thunderlive::MethodB), recorded }), sets)
         }
     };
     let sets_json = format!("[{}]", sets.iter().map(|v| crate::proto::quote(v)).collect::<Vec<_>>().join(","));
@@ -310,8 +319,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let buf = (ld(&out.callback_frames), ld(&out.target_frames), out.fixed_frames.is_some());
             let line = state_line(out.latency_ms(), underruns_before + u - base_underruns.unwrap_or(u), &rname, bus.counts(), buf);
             let (rl, rm) = bus.render_ms();
+            let ready = ready_json(&bus.ready());
             let line = format!(
-                "{},\"reopens\":{reopens},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0},\"limited\":{},\"thunderSets\":{sets_json}}}",
+                "{},\"reopens\":{reopens},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0},\"limited\":{},\"thunderSets\":{sets_json},\"readyThunders\":{ready}}}",
                 &line[..line.len() - 1],
                 out.limited.load(std::sync::atomic::Ordering::Relaxed)
             );
