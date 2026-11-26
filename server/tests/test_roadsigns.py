@@ -21,6 +21,12 @@ class Tables(unittest.TestCase):
         self.assertEqual(len(by_id), len(roles["roles"]))
         self.assertLessEqual(len(by_id), roles["cols"] * roles["rows"])
 
+    def test_every_role_has_a_cell_of_its_own(self):
+        roles, _, by_id = roadsigns.tables()
+        cells = [c for c, _ in by_id.values()] + [c for v in roles["variant_cells"].values() for c in v.values()]
+        self.assertEqual(len(cells), len(set(cells)))
+        self.assertTrue(all(0 <= c < roles["cols"] * roles["rows"] for c in cells))
+
     def test_every_shape_is_known(self):
         for role in roadsigns.tables()[0]["roles"]:
             self.assertIn(role["shape"], roadsigns.SHAPES)
@@ -197,7 +203,8 @@ class Poles(unittest.TestCase):
         self.assertEqual(int(cz[0, 6]), by_id["warn.signals"][0])
         self.assertEqual(int(pl[1, 6]), int(cz[1, 6]))
         self.assertEqual(int(pl[1, 6]), by_id["reg.no_entry"][0])
-        self.assertTrue(all(len(roles["roles"]) <= c < roles["cols"] * roles["rows"] for c in yellow.values()))
+        own = {c for c, _ in by_id.values()}
+        self.assertTrue(all(c not in own and c < roles["cols"] * roles["rows"] for c in yellow.values()))
         self.assertEqual(len(set(yellow.values())), len(yellow))
 
     def test_a_tile_of_roads_gives_signs_with_pole_and_slot(self):
@@ -363,6 +370,97 @@ class Mesh(unittest.TestCase):
         face = uv[t[mi == 0].ravel()]
         self.assertTrue(((face[:, 0] >= 6 / 8) & (face[:, 0] <= 7 / 8)).all())
         self.assertTrue(((face[:, 1] >= 7 / 8) & (face[:, 1] <= 1.0)).all())
+
+
+class Poland(unittest.TestCase):
+    """Poland's own signs (2026-11-19, Dz.U. 2019 poz. 2311 zał. 1): D-6 at the crossings, A-7 on yellow, its sizes."""
+    rule = staticmethod(lambda name: float(roadsigns.tables()[1]["rules"].index(name)))
+
+    def table(self, rule, size=0, urban=1, country="PL"):
+        sign = np.array([[0, 0, 1, 0, self.rule(rule), size, 0, 0, urban, 0, 0]], float)
+        return roadsigns.table(sign, np.zeros(1), np.zeros(1), roadsigns.system(country))[0]
+
+    def test_d6_is_polands_crossing_sign(self):
+        _, _, by_id = roadsigns.tables()
+        pl, cz = self.table("info.crossing_right"), self.table("info.crossing_right", country="CZ")
+        self.assertEqual(int(pl[6]), by_id["info.crossing_pl"][0])
+        self.assertEqual(int(pl[6]), 92)
+        self.assertEqual(int(cz[6]), by_id["info.crossing_right"][0])
+        self.assertEqual(int(pl[7]), roadsigns.SHAPES["square"])
+
+    def test_a7_is_yellow_in_poland_only(self):
+        roles, _, by_id = roadsigns.tables()
+        self.assertEqual(int(self.table("prio.give_way")[6]), roles["variant_cells"]["yellow"]["prio.give_way"])
+        self.assertEqual(int(self.table("prio.give_way", country="CZ")[6]), by_id["prio.give_way"][0])
+
+    def test_polish_sizes(self):
+        """Tabela 1.1: A-7 never below S (0.9 m), D-6 M / S 0.6 m and D 0.9 m; other countries keep the shared ones."""
+        self.assertAlmostEqual(self.table("prio.give_way", 0)[8], 0.9)
+        self.assertAlmostEqual(self.table("prio.give_way", 2)[8], 1.05)
+        self.assertAlmostEqual(self.table("info.crossing_right", 1)[8], 0.6)
+        self.assertAlmostEqual(self.table("info.crossing_right", 2)[8], 0.9)
+        self.assertAlmostEqual(self.table("prio.give_way", 0, country="CZ")[8], 0.75)
+        self.assertAlmostEqual(self.table("info.crossing_right", 0)[9], 2.2, msg="2.2 m over a town's sidewalk")
+        self.assertAlmostEqual(self.table("info.crossing_right", 0, urban=0)[9], 2.0)
+
+    def test_d6_at_every_marked_crossing(self):
+        tags = lambda **t: json.dumps(t)        # noqa: E731
+        for t, want in ((tags(highway="crossing", crossing="uncontrolled"), True),
+                        (tags(highway="crossing", crossing="traffic_signals"), True),
+                        (tags(highway="crossing", **{"crossing:markings": "zebra", "crossing:signals": "yes"}), True),
+                        (tags(highway="traffic_signals", crossing="traffic_signals"), True),
+                        (tags(highway="traffic_signals"), False),
+                        (tags(highway="crossing", crossing="unmarked"), False),
+                        (tags(highway="crossing", **{"crossing:markings": "ladder:skewed"}), True),
+                        (tags(highway="crossing", **{"crossing:markings": "lines"}), False),
+                        (tags(highway="crossing", crossing="uncontrolled", foot="no"), False)):
+            self.assertEqual(roadsigns.is_crossing_with_markings(t), want, t)
+        self.assertFalse(roadsigns.is_marked_crossing(tags(highway="crossing", crossing="traffic_signals")),
+                         "elsewhere a signalled crossing has no crossing sign")
+        self.assertEqual(roadsigns.system("PL")["crossings"], "all_marked")
+        self.assertNotIn("crossings", roadsigns.system("CZ"))
+
+    def test_d6_repeated_left_of_a_one_way_road(self):
+        cross, other = self.rule("info.crossing_right"), self.rule("prio.give_way")
+        signs = np.array([[5.0, -4.0, 1, 0, cross, 0, 5.0, 0.0, 1, 0, 0],       # on the one-way road (y = 0)
+                          [5.0, 46.0, 1, 0, cross, 0, 5.0, 50.0, 1, 1, 0],      # on the two-way one (y = 50)
+                          [9.0, -4.0, 1, 0, other, 0, 9.0, 0.0, 1, 2, 0]])
+        rows = {"1": (None, np.array([[0.0, 0.0], [20.0, 0.0]]), [3.0, 1, 1, 1, 0]),
+                "2": (None, np.array([[0.0, 50.0], [20.0, 50.0]]), [3.0, 0, 1, 1, 0])}
+        got = roadsigns.crossing_left(signs, rows)
+        self.assertEqual(len(got), 4)
+        np.testing.assert_allclose(got[3, :2], [5.0, 4.0])
+        np.testing.assert_allclose(got[3, 2:9], signs[0, 2:9], err_msg="facing the same traffic, the same sign")
+        self.assertEqual(got[3, 9], 3.0, "a pole of its own")
+        self.assertEqual(got[3, 10], 0.0)
+        two_way = signs[1:]
+        self.assertIs(roadsigns.crossing_left(two_way, rows), two_way, "none on a two-way road")
+
+    def test_the_shipped_atlas_has_the_polish_cells(self):
+        """tools/build_sign_atlas.py --paint drew them into the shipped source (mod/texture_sources)."""
+        from PIL import Image
+        roles, _, by_id = roadsigns.tables()
+        path = os.path.join(TOOLS, "..", "mod", "texture_sources", "levels", "beamng_earth", "art", "shapes",
+                            "beamngEarth", "bne_signs_vienna.color.webp")
+        sheet = np.asarray(Image.open(path).convert("RGB")).astype(int)
+        px, cols = roles["cell_px"], roles["cols"]
+        cell = lambda k: sheet[(k // cols) * px:(k // cols + 1) * px, (k % cols) * px:(k % cols + 1) * px]  # noqa: E731
+        share = lambda c, test: float(test(c[..., 0], c[..., 1], c[..., 2]).mean())                     # noqa: E731
+        blue = lambda r, g, b: (b > 120) & (r < 60)                    # noqa: E731
+        yellow = lambda r, g, b: (r > 220) & (g > 170) & (b < 60)      # noqa: E731
+        red = lambda r, g, b: (r > 160) & (g < 60) & (b < 70)          # noqa: E731
+        black = lambda r, g, b: (r < 60) & (g < 60) & (b < 60)         # noqa: E731
+        d6 = cell(by_id["info.crossing_pl"][0])
+        self.assertGreater(share(d6, blue), 0.3)
+        self.assertGreater(share(d6, black), 0.03)
+        self.assertGreater(share(cell(roles["variant_cells"]["yellow"]["prio.give_way"]), yellow), 0.08)
+        faces = set()
+        for v in range(20, 150, 10):
+            c = cell(by_id["speed.pl_%d" % v][0])
+            self.assertGreater(share(c, red), 0.2, v)
+            self.assertGreater(share(c, black), 0.04, v)
+            faces.add(c.tobytes())
+        self.assertEqual(len(faces), 13)
 
 
 if __name__ == "__main__":

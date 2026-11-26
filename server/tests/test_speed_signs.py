@@ -248,6 +248,56 @@ class GlueTest(unittest.TestCase):
 
 
 
+class PolandTest(unittest.TestCase):
+    """B-33 (2026-11-19): to 10 km/h from 20 to 140, the road sign atlas's cells in the regulation's digits, the disc
+    by the road (Dz.U. 2019 poz. 2311 zał. 1 tabela 1.1)."""
+    def test_style_and_posted(self):
+        self.assertEqual(speedsigns.style("pl", False), speedsigns.STYLE_POLAND)
+        self.assertEqual(speedsigns._kernel_style(speedsigns.STYLE_POLAND), speedsigns.STYLE_VIENNA)
+        posted = lambda kmh: speedsigns.posted(kmh / 1.609344, False, speedsigns.STYLE_POLAND)  # noqa: E731
+        self.assertEqual([posted(v) for v in (10, 20, 34, 35, 50, 90, 140, 150)],
+                         [0.0, 20.0, 30.0, 40.0, 50.0, 90.0, 140.0, 140.0])
+
+    def test_disc_by_the_road(self):
+        d = speedsigns.b33_diameter
+        R = speedsigns.RANK
+        self.assertEqual(d(140, 3, R["motorway"], False), 1.0)
+        self.assertEqual(d(120, 2, R["trunk"], False), 0.9)
+        self.assertEqual(d(90, 1, R["primary"], False), 0.9)
+        self.assertEqual(d(50, 1, R["primary"], True), 0.8)
+        self.assertEqual(d(70, 1, R["primary"], True), 0.9)
+        self.assertEqual(d(50, 0, R["secondary"], True), 0.8)
+        self.assertEqual(d(30, 0, R["residential"], True), 0.6)
+
+    def test_table_takes_the_atlas_cells(self):
+        import roadsigns
+        _, _, by_id = roadsigns.tables()
+        table = np.array([[0.0, 0.0, 10.0, 10.5, 0.0, 1.0, 70.0, 0, 1.0],
+                          [9.0, 0.0, 10.0, 10.5, 0.0, 1.0, 120.0, 3, 0.0],
+                          [9.0, 0.0, 10.0, 10.5, 0.0, 1.0, 0.0, 0, 0.0]])
+        rows = speedsigns.poland_table(table, np.array([1.0, 7.0, 1.0]))
+        self.assertEqual(rows.shape, (2, 10), "no sign for no limit")
+        self.assertEqual([int(c) for c in rows[:, 6]], [by_id["speed.pl_70"][0], by_id["speed.pl_120"][0]])
+        self.assertEqual(list(rows[:, 7]), [roadsigns.SHAPES["circle"]] * 2)
+        self.assertEqual(list(rows[:, 8]), [0.6, 1.0])
+        self.assertEqual(list(rows[:, 9]), [2.2, 2.0])
+
+    @unittest.skipUnless(hasattr(fast._ef, "road_sign_mesh"), "earthfast with the road sign kernels")
+    def test_b33_mesh(self):
+        class Frame:
+            enu_to_geodetic = staticmethod(lambda x, y, z: (y, x, x * 0))
+            geodetic_to_enu = staticmethod(lambda la, lo, h: (lo, la, h))
+        sign = np.array([[0.0, 0.0, 0.0, 1.0, 50.0, 0, 5.0, 0.0, 1.0, 0, 0, 1.0]])
+        with mock.patch.object(speedsigns, "place", return_value=sign):
+            p, t, uv, mats, mi = speedsigns.build_tile(Frame, 0, 0, lambda la, lo: la * 0, None,
+                                                       face=speedsigns.STYLE_POLAND)
+        self.assertEqual(mats, ["bne_signs_vienna_y", "bne_exit_metal"])
+        self.assertEqual(set(mi.tolist()), {0, 1})
+        face = p[np.unique(t[mi == 0])]
+        self.assertAlmostEqual(face[:, 0].max() - face[:, 0].min(), 0.6, delta=0.01)
+        self.assertAlmostEqual(face[:, 2].min(), 2.2, delta=0.01)
+
+
 class ClassTest(unittest.TestCase):
     def test_tracks_are_never_signed(self):
         """Tracks are in the AI's graph (navgraph.DRIVE, GitHub #756) but get no speed signs."""

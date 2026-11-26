@@ -1,11 +1,11 @@
 {
-  "_": "What a road sign means, whatever it looks like (task 017). The index of a role in `roles` is its atlas cell, in every system, but where variant_cells gives a system's field colour its own drawing of a role (the warning triangles' yellow field: one atlas, bne_signs_<atlas>.color, for both systems since 2026-11-13): tools/build_sign_atlas.py draws them, native roadsigns.rs cuts `shape` out of the cell.",
+  "_": "What a road sign means, whatever it looks like (task 017). The index of a role in `roles` is its atlas cell, in every system, but where variant_cells gives a system's field colour its own drawing of a role (the warning triangles' yellow field: one atlas, bne_signs_<atlas>.color, for both systems since 2026-11-13): tools/build_sign_atlas.py draws them, native roadsigns.rs cuts `shape` out of the cell. A role added after the variant cells names its own `cell` (Poland's D-6 and B-33 faces, 2026-11-19: the sheet's other cells keep their pixels). The `speed` group is never placed by the road sign rules: speedsigns.py draws Poland's B-33 from those cells (B-33 is a speed-limit sign).",
   "cell_px": 256,
   "cols": 8,
   "rows": 16,
   "systems": {"vienna_w": "white", "vienna_y": "yellow"},
   "atlas": "vienna",
-  "variant_cells": {"yellow": {"warn.curve_right": 68, "warn.curve_left": 69, "warn.double_right": 70, "warn.double_left": 71, "warn.crossroads": 72, "warn.side_right": 73, "warn.side_left": 74, "warn.roundabout": 75, "warn.signals": 76, "warn.level_gate": 77, "warn.level_nogate": 78, "warn.steep_down": 79, "warn.steep_up": 80, "warn.narrow_both": 81, "warn.narrow_right": 82, "warn.narrow_left": 83, "warn.bump": 84, "warn.slippery": 85, "warn.pedestrians": 86, "warn.children": 87, "warn.cyclists": 88, "warn.animals": 89, "warn.roadworks": 90, "warn.danger": 91}},
+  "variant_cells": {"yellow": {"warn.curve_right": 68, "warn.curve_left": 69, "warn.double_right": 70, "warn.double_left": 71, "warn.crossroads": 72, "warn.side_right": 73, "warn.side_left": 74, "warn.roundabout": 75, "warn.signals": 76, "warn.level_gate": 77, "warn.level_nogate": 78, "warn.steep_down": 79, "warn.steep_up": 80, "warn.narrow_both": 81, "warn.narrow_right": 82, "warn.narrow_left": 83, "warn.bump": 84, "warn.slippery": 85, "warn.pedestrians": 86, "warn.children": 87, "warn.cyclists": 88, "warn.animals": 89, "warn.roadworks": 90, "warn.danger": 91, "prio.give_way": 93}},
   "roles": [
     {"id": "prio.main_road", "group": "priority", "shape": "diamond"},
     {"id": "prio.main_road_end", "group": "priority", "shape": "diamond"},
@@ -74,6 +74,20 @@
     {"id": "warn.chevron_right", "group": "board", "shape": "rect"},
     {"id": "warn.chevron_left", "group": "board", "shape": "rect"},
     {"id": "info.bus_stop_cz", "group": "local", "shape": "circle"},
-    {"id": "info.bus_stop_de", "group": "local", "shape": "circle"}
+    {"id": "info.bus_stop_de", "group": "local", "shape": "circle"},
+    {"id": "info.crossing_pl", "group": "information", "shape": "square", "cell": 92},
+    {"id": "speed.pl_20", "group": "speed", "shape": "circle", "cell": 94},
+    {"id": "speed.pl_30", "group": "speed", "shape": "circle", "cell": 95},
+    {"id": "speed.pl_40", "group": "speed", "shape": "circle", "cell": 96},
+    {"id": "speed.pl_50", "group": "speed", "shape": "circle", "cell": 97},
+    {"id": "speed.pl_60", "group": "speed", "shape": "circle", "cell": 98},
+    {"id": "speed.pl_70", "group": "speed", "shape": "circle", "cell": 99},
+    {"id": "speed.pl_80", "group": "speed", "shape": "circle", "cell": 100},
+    {"id": "speed.pl_90", "group": "speed", "shape": "circle", "cell": 101},
+    {"id": "speed.pl_100", "group": "speed", "shape": "circle", "cell": 102},
+    {"id": "speed.pl_110", "group": "speed", "shape": "circle", "cell": 103},
+    {"id": "speed.pl_120", "group": "speed", "shape": "circle", "cell": 104},
+    {"id": "speed.pl_130", "group": "speed", "shape": "circle", "cell": 105},
+    {"id": "speed.pl_140", "group": "speed", "shape": "circle", "cell": 106}
   ]
 }
