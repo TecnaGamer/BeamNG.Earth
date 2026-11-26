@@ -197,6 +197,10 @@ impl SnowField {
     fn at(&self, lat: f64, lon: f64, h: f64) -> (f64, f64, f64, [f64; RD]) {
         let (nj, ni) = (self.idx.shape()[0] as i64, self.idx.shape()[1] as i64);
         let u = (lon + 180.0) / self.res - 0.5 - self.ci0 as f64;
+        let period = 360.0 / self.res;
+        let mid = (ni - 1) as f64 * 0.5;
+        let u = if u - mid < -period * 0.5 { u + period }
+                else if u - mid > period * 0.5 { u - period } else { u };
         let v = (90.0 - lat) / self.res - 0.5 - self.cj0 as f64;
         let (u0, v0) = (u.floor(), v.floor());
         let (fu, fv) = (u - u0, v - v0);
@@ -226,6 +230,13 @@ impl SnowField {
             }
         }
         if wr > 0.0 {
+            // A cell contributes at least a quarter of the bilinear weight anywhere
+            // inside its footprint, including at a corner. Only unsupported space
+            // farther away should fade. Observed bare cells still supply their weight.
+            let support = smooth(wr, 0.0, 0.25) / wr;
+            c *= support;
+            d *= support;
+            g *= support;
             for r in rd.iter_mut() {
                 *r /= wr;
             }
@@ -519,13 +530,20 @@ pub fn snow_perm_possible(kop: PyReadonlyArray2<'_, u8>, res: f64, south: f64, w
 /// Bilinear sample of a grid g at fractional (row fy, column fx), clamped inside.
 #[inline]
 fn bil(g: &ArrayView2<f64>, fy: f64, fx: f64) -> f64 {
+    bil_mapped(g, fy, fx, |v| v)
+}
+
+#[inline]
+fn bil_mapped(g: &ArrayView2<f64>, fy: f64, fx: f64, map: impl Fn(f64) -> f64) -> f64 {
     let (ny, nx) = (g.shape()[0], g.shape()[1]);
     let fy = fy.clamp(0.0, (ny - 1) as f64);
     let fx = fx.clamp(0.0, (nx - 1) as f64);
     let (j0, i0) = ((fy.floor() as usize).min(ny.saturating_sub(2)), (fx.floor() as usize).min(nx.saturating_sub(2)));
     let (wy, wx) = (fy - j0 as f64, fx - i0 as f64);
     let (j1, i1) = ((j0 + 1).min(ny - 1), (i0 + 1).min(nx - 1));
-    (g[[j0, i0]] * (1.0 - wx) + g[[j0, i1]] * wx) * (1.0 - wy) + (g[[j1, i0]] * (1.0 - wx) + g[[j1, i1]] * wx) * wy
+    let a = map(g[[j0, i0]]) * (1.0 - wx) + map(g[[j0, i1]]) * wx;
+    let b = map(g[[j1, i0]]) * (1.0 - wx) + map(g[[j1, i1]]) * wx;
+    a * (1.0 - wy) + b * wy
 }
 
 /// Everything a texture's snow needs: its square in the frame, the height grid, the geodetic grid over the square,
@@ -546,6 +564,7 @@ pub struct SnowLook {
     trees: Option<PackGrid>,        // ... and its tree cover (a stand the photo cannot show: a leaf-off photo's forest)
     wsh: Option<PackGrid>,          // the water share pack (JRC GSW: lakes and rivers the photo cannot tell)
     water: Option<Array2<u8>>,      // the mapped water per texel (WATER_*), when known
+    wind: Option<PackGrid>,         // signed shelter, encoded around the pack scale
 }
 
 /// The mapped water mask's values (snowcover.water_classes): land, moving water (rivers, canals, streams: open), still
@@ -560,6 +579,7 @@ struct Coarse {
     s: usize,
     nk: usize,
     c: Vec<f64>,        // cover (before the slope taper)
+    undrifted: Option<(Vec<f64>, Vec<f64>)>, // cover and opacity for paved roads and mapped water
     st: Vec<f64>,       // the slope taper (1 flat, 0 a wall)
     h: Vec<f64>,        // geodetic height
     fl: Vec<f64>,       // the largest geodetic height step to a neighbour node, per m (0 on a flattened lake)
@@ -578,6 +598,7 @@ struct Coarse {
 
 struct Pt {
     c: f64,             // cover before the slope taper
+    undrifted: (f64, f64), // cover, depth before wind
     steep: f64,         // the slope taper
     d: f64,
     g: f64,
@@ -606,7 +627,13 @@ impl SnowLook {
         let gn = (self.geo[0].shape()[0] - 1) as f64;
         let (fy, fx) = ((y0 + size - y) / size * gn, (x - x0) / size * gn);
         let lat = bil(&self.geo[0].view(), fy, fx);
-        let lon = bil(&self.geo[1].view(), fy, fx);
+        // Put the four longitudes on the frame's branch before blending. Near the
+        // antimeridian, averaging signed longitudes can otherwise sample the opposite hemisphere.
+        let lon = bil_mapped(&self.geo[1].view(), fy, fx, |v| {
+            let d = v - self.origin.1;
+            if d < -180.0 { v + 360.0 } else if d > 180.0 { v - 360.0 } else { v }
+        });
+        let lon = if lon < -180.0 { lon + 360.0 } else if lon >= 180.0 { lon - 360.0 } else { lon };
         let zoff = bil(&self.geo[2].view(), fy, fx);
         let ela = bil(&self.geo[3].view(), fy, fx);
         let ever_climate = bil(&self.geo[4].view(), fy, fx);
@@ -624,14 +651,18 @@ impl SnowLook {
             Some(f) => f.at(lat, lon, he),
             None => (0.0, 0.0, 0.0, [0.0; RD]),
         };
-        if ela < NO_ELA * 0.5 {
-            let pc = smooth(he, ela - self.p.perm_band.0, ela + self.p.perm_band.1);
-            if pc > c {
-                g = g + (self.p.perm_age - g) * ((pc - c) / pc.max(1e-9));
-                c = pc;
-            }
-            d = d.max(self.p.perm_depth * pc);
+        let permanent = if ela < NO_ELA * 0.5 {
+            smooth(he, ela - self.p.perm_band.0, ela + self.p.perm_band.1)
+        } else { 0.0 };
+        let freshness = (1.0 - g / 3.0).clamp(0.0, 1.0);
+        let seasonal = c;
+        if permanent > c {
+            g += (self.p.perm_age - g) * ((permanent - c) / permanent.max(1e-9));
+            c = permanent;
         }
+        let minimum_depth = self.p.perm_depth * permanent;
+        d = d.max(minimum_depth);
+        let undrifted = (c, d);
         let steep = 1.0 - smooth(tan2.sqrt(), self.p.steep_tan.0, self.p.steep_tan.1);
         let tl = treeline_lat(lat);
         let tree = 1.0 - smooth(h, tl - 0.5 * self.p.treeline_band, tl + 0.5 * self.p.treeline_band);
@@ -648,7 +679,21 @@ impl SnowLook {
         let trees = self.trees.as_ref().and_then(|t| t.at(lat, lon)).map(|(v, _)| v).filter(|v| v.is_finite())
             .unwrap_or(-1.0);
         let wnear = self.wsh.as_ref().and_then(|w| w.near_at(lat, lon)).unwrap_or(0.0);
-        Pt { c, steep, d, g, rd, slope: tan2.sqrt(), tree, h, ever, wsh, wsea, wwide, trees, wnear }
+        if let Some(wind) = self.wind.as_ref().filter(|_| seasonal > 0.0 && freshness > 0.0) {
+            let centre = wind.west + wind.res * wind.v.shape()[1] as f64 * 0.5;
+            let o = lon + ((centre - lon) / 360.0).round() * 360.0;
+            if let Some((v, _)) = wind.at(lat, o) {
+                let open = 1.0 - trees.clamp(0.0, 1.0);
+                let shift = (v - 1.0) * freshness * open;
+                // Wind can move loose seasonal snow. It cannot remove the permanent floor or
+                // whiten snow-free terrain, and its depth effect is bounded to one bin.
+                let moveable = if shift < 0.0 { seasonal } else { seasonal.min(1.0 - seasonal) };
+                c = (seasonal + shift * moveable).max(permanent);
+                let depth_shift = shift * (d - minimum_depth).clamp(0.0, 1.0);
+                d = (d + depth_shift).clamp(minimum_depth, 6.0);
+            }
+        }
+        Pt { c, undrifted, steep, d, g, rd, slope: tan2.sqrt(), tree, h, ever, wsh, wsea, wwide, trees, wnear }
     }
 
     fn opacity(&self, d: f64) -> f64 {
@@ -676,6 +721,7 @@ impl SnowLook {
         let (mut wsh, mut wsea, mut wwide, mut trees) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]);
         let mut wnear = vec![0.0; n];
         let mut any = false;
+        let mut undrifted = self.wind.as_ref().map(|_| (vec![0.0; n], vec![0.0; n]));
         for r in 0..nk {
             let y = y0 + size - ((r * s) as f64 + 0.5) * t;
             for k in 0..nk {
@@ -696,7 +742,11 @@ impl SnowLook {
                 o[q] = self.opacity(pt.d);
                 g[q] = pt.g;
                 rd[q] = pt.rd;
-                if pt.c > 1e-4 {
+                if let Some((ref mut base_cover, ref mut base_opacity)) = undrifted {
+                    base_cover[q] = pt.undrifted.0;
+                    base_opacity[q] = self.opacity(pt.undrifted.1);
+                }
+                if pt.c > 1e-4 || pt.undrifted.0 > 1e-4 {
                     any = true;
                 }
             }
@@ -716,7 +766,8 @@ impl SnowLook {
             }
             m
         }).collect();
-        any.then_some(Coarse { s, nk, c, st, h: hh, fl, ever, wsh, wsea, wwide, trees, wnear, o, g, rd, sl, tree })
+        any.then_some(Coarse { s, nk, c, undrifted, st, h: hh, fl, ever, wsh, wsea, wwide, trees,
+                               wnear, o, g, rd, sl, tree })
     }
 
     /// The photo with its snow (rgb (px, px, 3), row 0 north, covering the square), or None: no snow on it.
@@ -798,13 +849,15 @@ impl SnowLook {
         let inv_sn = 1.0 / sn as f64;
         let mut rn = vec![0.0f64; nn];
         // the coarse fields along this texel row (vertical lerp once a row; horizontal per texel)
-        let mut rows = vec![[0.0f64; 18]; nk];      // c, steep, o, g, slope, tree, vm, water share, height, flat,
+        let mut rows = vec![[0.0f64; 20]; nk];      // c, steep, o, g, slope, tree, vm, water share, height, flat,
                                                     // evergreen share, hue G - R, G - B
         let mut rr = vec![[0.0f64; RD]; nk];
         for i in 0..px {
             let (r0, wy) = (i / s, (i % s) as f64 * inv_s);
             let (a0, a1) = (r0 * nk, (r0 + 1) * nk);
-            if (0..nk).all(|k| cg.c[a0 + k] <= 1e-4 && cg.c[a1 + k] <= 1e-4) {
+            let empty = |q| cg.c[q] <= 1e-4
+                && cg.undrifted.as_ref().is_none_or(|(cover, _)| cover[q] <= 1e-4);
+            if (0..nk).all(|k| empty(a0 + k) && empty(a1 + k)) {
                 continue;
             }
             let lv = |v: &[f64], k: usize| v[a0 + k] * (1.0 - wy) + v[a1 + k] * wy;
@@ -812,7 +865,11 @@ impl SnowLook {
                 rows[k] = [lv(&cg.c, k), lv(&cg.st, k), lv(&cg.o, k), lv(&cg.g, k), lv(&cg.sl, k), lv(&cg.tree, k),
                            lv(&vm, k), lv(&wf, k), lv(&cg.h, k), lv(&cg.fl, k), lv(&cg.ever, k), lv(&hgr, k),
                            lv(&hgb, k), lv(&cg.wsh, k), lv(&cg.wsea, k), lv(&cg.wwide, k), lv(&cg.trees, k),
-                           lv(&cg.wnear, k)];
+                           lv(&cg.wnear, k), 0.0, 0.0];
+                if let Some((cover, opacity)) = &cg.undrifted {
+                    rows[k][18] = lv(cover, k);
+                    rows[k][19] = lv(opacity, k);
+                }
                 for q in 0..RD {
                     rr[k][q] = cg.rd[a0 + k][q] * (1.0 - wy) + cg.rd[a1 + k][q] * wy;
                 }
@@ -826,8 +883,7 @@ impl SnowLook {
             }
             for j in 0..px {
                 let k0 = j / s;
-                if cg.c[a0 + k0] <= 1e-4 && cg.c[a0 + k0 + 1] <= 1e-4 && cg.c[a1 + k0] <= 1e-4
-                    && cg.c[a1 + k0 + 1] <= 1e-4 {
+                if empty(a0 + k0) && empty(a0 + k0 + 1) && empty(a1 + k0) && empty(a1 + k0 + 1) {
                     continue;
                 }
                 let wx = (j % s) as f64 * inv_s;
@@ -845,14 +901,14 @@ impl SnowLook {
                 // steep ground: its darker texels are bare rock, the rest (the photo's snow, firn, light scree) white
                 // (a smooth fade of the cover by the height grid's slope left soft brown smudges a grid cell wide)
                 let rock = 1.0 - smooth(v / vml, p.rock_rel.0, p.rock_rel.1);
-                let mut c = hl(0) * (1.0 - (1.0 - hl(1)) * rock);
-                let mut road_zone: Option<usize> = None;
-                if let Some(rm) = road_s {
-                    let k = rm[i * px + j] as usize;
-                    if (1..=ROAD_SLOTS).contains(&k) {
-                        c *= hr(k - 1);
-                        road_zone = Some((k - 1) / ROAD_CLASSES);
-                    }
+                let k = road_s.map_or(0, |rm| rm[i * px + j] as usize);
+                let road_zone = (1..=ROAD_SLOTS).contains(&k).then(|| (k - 1) / ROAD_CLASSES);
+                let is_mapped_water = wmask.is_some_and(|m| m[i * px + j] != WATER_LAND);
+                let use_base = cg.undrifted.is_some() && (road_zone.is_some() || is_mapped_water);
+                let (cover, opacity) = if use_base { (hl(18), hl(19)) } else { (hl(0), hl(2)) };
+                let mut c = cover * (1.0 - (1.0 - hl(1)) * rock);
+                if road_zone.is_some() {
+                    c *= hr(k - 1);
                 }
                 // partial cover: world-anchored patches where the texel can show them, else an even share (a road's
                 // share is the traffic's, even across it: no grass-tip patches)
@@ -992,7 +1048,7 @@ impl SnowLook {
                 if v > p.white_v.0 {
                     keep_mul *= 1.0 - t_white[mxi] * (1.0 - smooth(sat, p.white_sat, p.white_sat * 2.0));
                 }
-                let amt = a * hl(2) * keep_mul;
+                let amt = a * opacity * keep_mul;
                 // (open water in winter: Sentinel-2 shows open rivers near black between white banks, the low sun and
                 // the dark sky they mirror; the summer photo's is grey-brown)
                 let water_dim = 1.0 - p.open_dark * open_w * c.min(1.0);
@@ -1206,7 +1262,7 @@ impl SnowLook {
     /// class), or None.
     #[new]
     #[pyo3(signature = (area, origin, u, uarea, geo, field, params, road=None, water=None, leaf=None, wsh=None,
-                        trees=None))]
+                        trees=None, wind=None))]
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn new(area: (f64, f64, f64), origin: (f64, f64), u: PyReadonlyArray2<'_, f64>, uarea: (f64, f64, f64),
            geo: (PyReadonlyArray2<'_, f64>, PyReadonlyArray2<'_, f64>, PyReadonlyArray2<'_, f64>,
@@ -1214,7 +1270,8 @@ impl SnowLook {
            field: Option<(f64, i64, i64, PyReadonlyArray2<'_, i32>, PyReadonlyArray3<'_, i32>, PyReadonlyArray2<'_, i32>)>,
            params: PyReadonlyArray1<'_, f64>, road: Option<PyReadonlyArray2<'_, u8>>,
            water: Option<PyReadonlyArray2<'_, u8>>, leaf: Option<PackGridArg<'_>>,
-           wsh: Option<PackGridArg<'_>>, trees: Option<PackGridArg<'_>>) -> PyResult<Self> {
+           wsh: Option<PackGridArg<'_>>, trees: Option<PackGridArg<'_>>,
+           wind: Option<PackGridArg<'_>>) -> PyResult<Self> {
         let p = SnowParams::from_slice(params.as_slice()?)?;
         let u = u.as_array().to_owned();
         let g = [geo.0.as_array().to_owned(), geo.1.as_array().to_owned(), geo.2.as_array().to_owned(),
@@ -1232,7 +1289,8 @@ impl SnowLook {
         let road = road.map(|r| r.as_array().to_owned());
         let water = water.map(|r| r.as_array().to_owned());
         let (leaf, wsh, trees) = (pack_grid(leaf)?, pack_grid(wsh)?, pack_grid(trees)?);
-        Ok(SnowLook { area, origin, u, gx, gy, uarea, geo: g, field, p, road, water, leaf, wsh, trees })
+        let wind = pack_grid(wind)?;
+        Ok(SnowLook { area, origin, u, gx, gy, uarea, geo: g, field, p, road, water, leaf, wsh, trees, wind })
     }
 
     /// The photo with its snow, or None (no texel changed). road: see apply_core.

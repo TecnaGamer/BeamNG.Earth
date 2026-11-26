@@ -4194,7 +4194,8 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
         photo = imagerymod.FarPhoto(np.asarray(photo, np.uint8), None)  # provider RGB already has its seasonal grade
     import snowcover
     n = photo.write(tex["path"], rock, imagerymod.FAR_SRGB,
-                    snow=snowcover.look_from_rock(tex.get("snow"), geotiles.frame(x, y, z), rock))
+                    snow=snowcover.look_from_rock(tex.get("snow"), geotiles.frame(x, y, z), rock,
+                                                   dem=getattr(_s, "dem", None)))
     _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, px, tex.get("keep_fin"), tex["path"])
     return built, (n, used)
 
@@ -4340,7 +4341,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
             road, water = snowcover.masks(frame, x0, y0, size, rgb.shape[0],
                                           getattr(_s, "surface", None) if roadsmod.ROADS_IN_GROUND else None,
                                           _s.widths, getattr(_s, "md", None))
-            rgb = snowcover.apply_kept(tex["snow"], rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1), road, water)
+            rgb = snowcover.apply_kept(tex["snow"], rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1),
+                                       road, water, dem=getattr(_s, "dem", None))
         return rgb
 
     fast.require(564, "terrain base rendering")
@@ -4582,7 +4584,8 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
             road, water = snowcover.masks(frame, *sq, px, _paint_surface() if roadsmod.ROADS_IN_GROUND else None,
                                           _s.widths, getattr(_s, "md", None))
         n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB, paint=paint,
-                      snow=snowcover.look_from_rock(tex.get("snow"), frame, rock, road, water))
+                      snow=snowcover.look_from_rock(tex.get("snow"), frame, rock, road, water,
+                                                   dem=getattr(_s, "dem", None)))
         rgb = None
     elif built.grid is not None:          # (earthd.Server.rock_faces)
         try:

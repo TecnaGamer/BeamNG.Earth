@@ -123,6 +123,69 @@ class KeyTest(unittest.TestCase):
             sc.set_provider(None)
             self.assertIsNone(sc.spec_for_box(*self.box()), "real without W1's state: none")
 
+    def test_live_cover_crosses_the_antimeridian_without_a_seam(self):
+        with winter("real") as sc:
+            table = sc.Table(((0, 8, 4, 0),), sc.NO_ROAD)
+            field = sc.Field(0.1, {(3599, 899): table, (0, 899): table})
+            sc.set_provider(lambda s, w, n, e: field)
+            frame = geodesy.EnuFrame(0.05, 180.0)
+            points = np.linspace(-490.0, 490.0, 153)
+            north = np.full_like(points, 0.0)
+
+            def sample(x0, y0, size, x, y):
+                spec = sc.spec_for_square(frame, x0, y0, size)
+                heights = np.full((33, 33), 250.0)
+                look = sc.look(spec, frame, x0, y0, size, heights, x0, y0, size / 32)
+                return look.sample(x, y)[0].astype(int)
+
+            whole = sample(-500.0, -500.0, 1000.0, points, north)
+            west = points < 0.0
+            split = np.concatenate((
+                sample(-500.0, -250.0, 500.0, points[west], north[west]),
+                sample(0.0, -250.0, 500.0, points[~west], north[~west]),
+            ))
+            self.assertGreater(whole.min(), 240)
+            np.testing.assert_allclose(whole, split, rtol=0, atol=1)
+            # The shared boundary must agree from either tile's own weather window.
+            centre = np.array([0.0])
+            self.assertEqual(sample(-500.0, -250.0, 500.0, centre, centre)[0],
+                             sample(0.0, -250.0, 500.0, centre, centre)[0])
+            sparse = sc._window(sc.Field(0.1, {(0, 899): table}), -80.0, 40.0, 80.0, 220.0)
+            self.assertEqual(sparse[3].shape, (3, 3))
+
+    def test_sparse_weather_respects_a_known_bare_neighbour(self):
+        with winter("real") as sc:
+            frame = geodesy.EnuFrame(40.05, -88.95)
+            wet = sc.Table(((0, 8, 5, 0),), sc.NO_ROAD)
+            dry = sc.Table(((0, 0, 0, 0),), (0,) * 5)
+            ci, cj = int((frame.lon0 + 180) / 0.1), int((90 - frame.lat0) / 0.1)
+            lon = np.array([-88.95, -88.901, -88.880, -88.869, -88.845])
+            lat = np.array([40.05, 40.099, 40.099, 40.099, 40.099])
+            east, north, _ = frame.geodetic_to_enu(lat, lon)
+            heights = np.full((65, 65), 250.0)
+
+            def sample(cells, origin=-10000, size=20000):
+                sc.set_provider(lambda *args: sc.Field(0.1, cells))
+                spec = sc.spec_for_square(frame, origin, origin, size)
+                look = sc.look(spec, frame, origin, origin, size, heights, origin, origin, size / 64)
+                return look.sample(np.ascontiguousarray(east), np.ascontiguousarray(north))
+
+            local, depth = sample({(ci, cj): wet})
+            np.testing.assert_array_equal(local[:2], [255, 255])
+            np.testing.assert_array_equal(depth[:2], [5, 5])
+            self.assertGreater(local[2], local[3])
+            self.assertGreater(local[3], local[4])
+            self.assertEqual(local[4], 0)
+            for box in ((-1000, 12000), (0, 10000)):
+                split, split_depth = sample({(ci, cj): wet}, *box)
+                np.testing.assert_allclose(split, local, atol=1, rtol=0)
+                np.testing.assert_array_equal(split_depth, depth)
+
+            near_dry, _ = sample({(ci, cj): wet, (ci + 1, cj): dry})
+            full, _ = sample({(ci, cj): wet, (ci + 1, cj): dry, (ci, cj - 1): wet, (ci + 1, cj - 1): dry})
+            np.testing.assert_allclose(near_dry, full, atol=1, rtol=0)
+            self.assertLess(near_dry[1], 140)
+
     def test_permanent_snow_only_in_polar_alpine_climates(self):
         with winter("real") as sc:
             self.assertIsNone(sc.spec_for_box(*self.box(PLAINS)))
@@ -403,6 +466,25 @@ class LiveTest(unittest.TestCase):
             self.assertLessEqual(set(sc.hello()), set(table["nested"]["hello.snow"]))
 
 
+class BuildWeatherTest(unittest.TestCase):
+    def test_block_finishing_after_weather_change_loses_its_stale_photo(self):
+        from concurrent.futures import Future
+        from types import SimpleNamespace
+        import earthd
+
+        key = (1, 0.0, 0.0)
+        future = Future()
+        future.set_result(dict(zoom=16, seconds=0.0, zBase=0.0, maxHeight=100.0, q=1/64))
+        server = SimpleNamespace(hm_inflight={key: future}, hm={}, near_visual="detail",
+                                 snow_changes=2, base_stale=set(), roads_rebuild=set(), roads_need={},
+                                 evict_heightmaps=lambda **_: None)
+        earthd.Server._hm_done(server, key, future, snow_generation=1)
+        self.assertIn(key, server.base_stale)
+        server.base_stale.clear()
+        earthd.Server._hm_done(server, key, future, snow_generation=2)
+        self.assertNotIn(key, server.base_stale)
+
+
 class W1ProviderTest(unittest.TestCase):
     def test_w1_service_drives_the_photos(self):
         """W1's snow.Service as snowcover's real provider (BNE_SNOW=real): no state, no spec (today's keys); its state
@@ -480,6 +562,76 @@ class LayersTest(unittest.TestCase):
                         self.assertTrue((lay[land] == sf.SNOW).all())
                     else:
                         self.assertEqual(k, 0, "D2: not deep, the land layers stay")
+
+
+    def test_final_block_gets_snow_while_provisional_revision_is_in_use(self):
+        from concurrent.futures import Future
+        from tempfile import TemporaryDirectory
+        import earthd
+        import surface as sf
+
+        n = 64
+        land = np.full((n, n), sf.GRASS, np.uint8)
+        land[:, 20:24] = sf.ASPHALT
+        photo = np.full((32, 32, 3), 220, np.uint8)
+        key = (1, 0.0, 0.0)
+        anchor = SimpleNamespace(id=1, frame=geodesy.EnuFrame(*PLAINS), hm_zoom=16)
+        with TemporaryDirectory() as directory, winter("heavy"):
+            stages = SimpleNamespace(out_dir=directory, layout=SimpleNamespace(block=n), anchors={1: anchor},
+                                     hm_committed={key}, quick_futs={}, surface=None)
+            q = np.zeros((n, n), np.uint16)
+            sf.write_ter(directory, "provisional.ter", q, land)
+            provisional = Path(directory, "provisional.ter").read_bytes()
+            name, _ = sf.write_ter(directory, "final.ter", q, land)
+            info = dict(ter=name, layers=sf.write_masks(land, directory, "final", south_first=True),
+                        zBase=200, maxHeight=128, stages={})
+            restored = Future()
+            restored.set_result(("cached-base.jpg", [photo], 0.1))
+            got = earthd.Server._finish_heightmap_now(stages, anchor, *key[1:], info, 0., restored)
+            _, _, _, physical, _ = sf._read_ter(Path(directory, name))
+            self.assertEqual(got["base"], "cached-base.jpg")
+            self.assertEqual(Path(directory, "provisional.ter").read_bytes(), provisional)
+            self.assertTrue((physical[1:-1, 4:16] == sf.SNOW).all())
+            self.assertTrue((physical[1:-1, 20:24] == sf.ASPHALT).all())
+            self.assertIsNotNone(got.get("snow_underlay"))
+
+    def test_live_snow_adds_and_removes_only_the_seasonal_layer(self):
+        import tempfile
+        from pathlib import Path
+        import surface as sf
+
+        n = 64
+        land = np.full((n, n), sf.GRASS, np.uint8)
+        land[:, 8:16] = sf.ASPHALT
+        land[20:32, 20:32] = sf.SNOW
+        land[40:48, 20:32] = sf.ROCK
+        frame = geodesy.EnuFrame(*PLAINS)
+        heights = np.full((5, 5), 200.0)
+        with tempfile.TemporaryDirectory() as d, winter("heavy") as sc:
+            name, _ = sf.write_ter(d, "ground.ter", np.zeros((n, n), np.uint16), land)
+            path = Path(d, name)
+            old_bytes = path.read_bytes()
+            _, _, layer_offset, original, _ = sf._read_ter(path)
+            info = dict(ter=name, layers=sf.write_masks(land, d, "ground", south_first=True))
+            spec = sc.spec_for_square(frame, 0.0, 0.0, n)
+            look = sc.look(spec, frame, 0.0, 0.0, n, heights, 0.5, 0.5, 16.0)
+            heavy = sf.snow_revision(d, info, look, 0.0, 0.0, 1.0, 1)
+            self.assertIsNotNone(heavy)
+            new_path = Path(d, heavy["ter"])
+            self.assertEqual(path.read_bytes(), old_bytes)
+            self.assertEqual(new_path.read_bytes()[:layer_offset], old_bytes[:layer_offset])
+            _, _, _, layers, _ = sf._read_ter(new_path)
+            self.assertTrue((layers[np.isin(original, (sf.GRASS, sf.ROCK))] == sf.SNOW).all())
+            self.assertTrue((layers[original == sf.ASPHALT] == sf.ASPHALT).all())
+            self.assertIsNone(sf.snow_revision(d, heavy, look, 0.0, 0.0, 1.0, 2))
+
+            # A block built while deep snow is already present must be reversible too.
+            sf.snow_layers(d, name, info["layers"], look, 0.0, 0.0, 1.0, remember=info)
+            for snowy, rev in ((heavy, 3), (info, 4)):
+                self.assertIsNotNone(snowy["snow_underlay"])
+                melt = sf.snow_revision(d, snowy, None, 0.0, 0.0, 1.0, rev)
+                self.assertIsNone(melt["snow_underlay"])
+                self.assertEqual(Path(d, melt["ter"]).read_bytes(), old_bytes)
 
 
 if __name__ == "__main__":

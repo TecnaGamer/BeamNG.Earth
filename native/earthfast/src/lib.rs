@@ -7846,6 +7846,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // puddle_atlas_px (their masks)
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
-    m.add("VERSION", 640)?;
+    m.add("VERSION", 642)?;
     Ok(())
 }

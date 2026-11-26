@@ -83,10 +83,10 @@ def fetch(lat, lon, net=None):
 
 # The snow kernel's hourly forcing (winter W1, BNE_WINTER: server/snow.py; ~/bnge-tests/winterplan PROBES.md P9: every
 # name valid; past_hours / forecast_hours set the window). snowfall in cm is left out: Open-Meteo makes it
-# with a fixed 7:1 ratio; the kernel takes the water equivalent and its own density. 12 variables count ~1.2 calls.
+# with a fixed 7:1 ratio; the kernel takes the water equivalent and its own density.
 SNOW_HOURLY = ("temperature_2m", "dew_point_2m", "wet_bulb_temperature_2m", "precipitation",
                "snowfall_water_equivalent", "wind_speed_10m", "shortwave_radiation", "soil_temperature_0cm",
-               "freezing_level_height", "snow_depth", "relative_humidity_2m", "cloud_cover")
+               "freezing_level_height", "snow_depth", "relative_humidity_2m", "cloud_cover", "wind_direction_10m")
 
 
 def hourly_url(lat, lon, past_hours=240, forecast_hours=6):

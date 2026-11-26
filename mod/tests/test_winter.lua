@@ -123,6 +123,20 @@ core_environment.groundModels = models()
 W.update(1.0)
 T.check(#calls > n and byName().ASPHALT_OLD.staticFrictionCoefficient == 0.27, 'a reload: applied again')
 
+-- A streamed snow layer owns off-road grip where its samples actually contain snow.
+local terrain = { slots = { 'bngEarthGroundGrass', 'bngEarthGroundSnow' } }
+package.loaded['beamngEarth/terrain'] = terrain
+W.update(1.0)
+m = byName()
+T.check(m.GRASS == core_environment.groundModels.GRASS.cdata and m.DIRT == core_environment.groundModels.DIRT.cdata,
+  'layered terrain: exposed ground keeps its stock contact and grip')
+T.check(m.SNOW.collisiontype == 22 and m.SNOW.defaultDepth > 0.12, 'layered terrain: the snow layer keeps snow sinkage')
+T.check(m.ASPHALT_OLD.collisiontype == 22 and m.ASPHALT.collisiontype == 21,
+  'layered terrain: keep road and deck winter conditions')
+terrain.slots = { 'beamngEarthDirt' }
+W.update(1.0)
+T.check(byName().DIRT.collisiontype == 22, 'single-layer terrain: keep the off-road winter approximation')
+package.loaded['beamngEarth/terrain'] = nil
 -- the road under the car changes class: after the dwell the slots follow the new class's row
 n = #calls
 road.drivability, road.posted = 1.0, 29.06       -- a motorway: P0 dry
