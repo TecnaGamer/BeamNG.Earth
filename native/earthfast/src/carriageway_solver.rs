@@ -1,5 +1,10 @@
 //! Coupled road profiles: the existing banded quadratic objective with hard linear road-design constraints.
 //! An unconstrained banded solve handles already-feasible profiles; Clarabel's native sparse QP handles the rest.
+//!
+//! Soft laws: a chain may also have a comfortable grade and a comfortable vertical curve (Parameters.soft_grade,
+//! soft_k), past which each segment's (window's) excess is a slack variable paid for quadratically (w_grade, w_curve).
+//! Its `grade` and `k` stay the hard ceilings. A problem whose laws contradict is then still feasible within the
+//! ceilings: the excess goes where it costs least, not to an infeasible certificate and a relaxation's solves again.
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::{
     DefaultSettings, DefaultSolver, IPSolver, NonnegativeConeT, SolverStatus, ZeroConeT,
@@ -7,6 +12,9 @@ use clarabel::solver::{
 use std::time::Instant;
 
 const W_MIN: f64 = 1.0e-3;
+/// A soft law's ceiling this loose is none: no hard row (a grade of 100 %, a curve's K of 0.001).
+pub const NO_GRADE_CEILING: f64 = 1.0;
+pub const NO_CURVE_CEILING: f64 = 1.0e-3;
 
 #[derive(Clone, Copy)]
 pub struct Parameters {
@@ -15,6 +23,31 @@ pub struct Parameters {
     pub lam: f64,
     pub step: f64,
     pub length: f64,
+    /// The comfortable grade (rise / run); 0: none (the hard `grade` alone).
+    pub soft_grade: f64,
+    /// The cost of a segment's grade past soft_grade: w_grade (s / h)^2 h / 2 for an excess s (m of height) over a
+    /// segment h m long, i.e. per metre of road, per (excess grade)^2.
+    pub w_grade: f64,
+    /// The comfortable vertical curve's K (m of curve per % of grade change); 0: none (the hard `k` alone).
+    pub soft_k: f64,
+    /// The cost of a window's curve past soft_k: w_curve (s / hm)^2 hm / 2 for an excess s of its curve row (m),
+    /// hm the window's mean spacing.
+    pub w_curve: f64,
+}
+
+impl Parameters {
+    /// The five hard parameters alone (no soft law).
+    pub fn hard(grade: f64, k: f64, lam: f64, step: f64, length: f64) -> Self {
+        Self { grade, k, lam, step, length, soft_grade: 0., w_grade: 0., soft_k: 0., w_curve: 0. }
+    }
+
+    fn soft_grade_on(&self) -> bool {
+        self.soft_grade > 0. && self.w_grade > 0. && self.soft_grade < self.grade
+    }
+
+    fn soft_curve_on(&self) -> bool {
+        self.soft_k > self.k && self.w_curve > 0.
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -29,6 +62,9 @@ pub struct Coupling {
     pub alpha: f64,
     /// An inequality's side: true for <= value, false for >= value.
     pub upper: bool,
+    /// An inequality's softness: 0, hard; > 0, its shortfall s (m) is a slack paid w s^2 / 2 (a clearance OSM's
+    /// layers ask that the joins and the laws contradict: the least shortfall, where it costs least, not no answer).
+    pub soft: f64,
 }
 
 impl Coupling {
@@ -65,10 +101,15 @@ impl Problem {
     /// second difference [1, -2, 1] of heights and step^2 / (100 K), as before (unequal ones carried a grade term
     /// (h1 - h0) s the bound never had room for).
     fn curve_row(&self, chain: usize, i: usize) -> ([f64; 3], f64, f64) {
+        self.curve_row_k(chain, i, self.parameters[chain].k)
+    }
+
+    /// curve_row with the bound of a curve of K = k (the soft law's comfortable one).
+    fn curve_row_k(&self, chain: usize, i: usize, k: f64) -> ([f64; 3], f64, f64) {
         let (h0, h1) = (self.gap(chain, i), self.gap(chain, i + 1));
         let hm = 0.5 * (h0 + h1);
         let (a, c) = (hm / h0, hm / h1);
-        ([a, -(a + c), c], hm * hm / (self.parameters[chain].k * 100.), hm)
+        ([a, -(a + c), c], hm * hm / (k * 100.), hm)
     }
 }
 
@@ -87,6 +128,14 @@ pub struct Diagnostics {
     pub upper_excess: f64,
     pub junction_gap: f64,
     pub clearance_shortfall: f64,
+    /// The largest grade past a soft law's comfortable one (rise / run), and curve past its comfortable one (change of
+    /// grade per metre, as curve_excess), over the chains that have one; and what the soft laws' excess costs in all.
+    pub soft_grade_excess: f64,
+    pub soft_curve_excess: f64,
+    pub soft_cost: f64,
+    /// The largest shortfall of a soft coupling (m).
+    pub soft_clearance_shortfall: f64,
+    pub slack_vars: usize,
     pub elapsed_s: f64,
     pub objective_nnz: usize,
     pub constraint_nnz: usize,
@@ -156,10 +205,19 @@ impl Factor {
 
 #[derive(Clone, Copy)]
 struct Row {
-    index: [usize; 3],
-    coeff: [f64; 3],
+    index: [usize; 4],
+    coeff: [f64; 4],
     len: usize,
     rhs: f64,
+}
+
+impl Row {
+    fn new(index: &[usize], coeff: &[f64]) -> Self {
+        let mut row = Row { index: [0; 4], coeff: [0.; 4], len: index.len(), rhs: 0. };
+        row.index[..index.len()].copy_from_slice(index);
+        row.coeff[..coeff.len()].copy_from_slice(coeff);
+        row
+    }
 }
 
 fn bounds(mut row: Row, lo: f64, hi: f64, equalities: &mut Vec<Row>, inequalities: &mut Vec<Row>) {
@@ -198,6 +256,22 @@ pub fn measure(problem: &Problem, z: &[f64], d: &mut Diagnostics) {
             d.curve_excess = d.curve_excess.max(excess / (hm * hm));
             d.feasible &= excess <= curve * 0.05 + 1e-4;
         }
+        if p.soft_grade_on() {
+            for (k, w) in q.windows(2).enumerate() {
+                let h = problem.gap(i, k);
+                let s = ((w[1] - w[0]).abs() - p.soft_grade * h).max(0.);
+                d.soft_grade_excess = d.soft_grade_excess.max(s / h);
+                d.soft_cost += 0.5 * p.w_grade * s * s / h;
+            }
+        }
+        if p.soft_curve_on() {
+            for (k, w) in q.windows(3).enumerate() {
+                let (row, curve, hm) = problem.curve_row_k(i, k, p.soft_k);
+                let s = ((row[0] * w[0] + row[1] * w[1] + row[2] * w[2]).abs() - curve).max(0.);
+                d.soft_curve_excess = d.soft_curve_excess.max(s / (hm * hm));
+                d.soft_cost += 0.5 * p.w_curve * s * s / hm;
+            }
+        }
     }
     for (i, &v) in z.iter().enumerate() {
         d.lower_shortfall = d.lower_shortfall.max((problem.lower[i] - v).max(0.));
@@ -206,7 +280,11 @@ pub fn measure(problem: &Problem, z: &[f64], d: &mut Diagnostics) {
     }
     for c in &problem.couplings {
         let gap = c.gap(z);
-        if c.inequality {
+        if c.inequality && c.soft > 0. {
+            let short = (if c.upper { gap - c.value } else { c.value - gap }).max(0.);
+            d.soft_clearance_shortfall = d.soft_clearance_shortfall.max(short);
+            d.soft_cost += 0.5 * c.soft * short * short;
+        } else if c.inequality {
             let short = if c.upper { gap - c.value } else { c.value - gap };
             d.clearance_shortfall = d.clearance_shortfall.max(short.max(0.));
         } else {
@@ -238,6 +316,8 @@ pub fn solve(
     let mut q = vec![0.; n];
     let mut z = vec![0.; n];
     let (mut eq, mut ineq) = (Vec::new(), Vec::new());
+    let mut nv = n;                     // (variables: the n heights, then the soft laws' slacks)
+    let mut slack_p: Vec<f64> = Vec::new();
     for (chain, p) in problem.parameters.iter().enumerate() {
         let (a, b) = (problem.offsets[chain], problem.offsets[chain + 1]);
         let count = b - a;
@@ -251,13 +331,11 @@ pub fn solve(
             a0[i] += p.length;
             a0[i + 1] += p.length;
             a1[i] -= p.length;
+            if p.soft_grade_on() && p.grade >= NO_GRADE_CEILING {
+                continue;       // (no ceiling: the soft law alone)
+            }
             bounds(
-                Row {
-                    index: [a + i, a + i + 1, 0],
-                    coeff: [-1., 1., 0.],
-                    len: 2,
-                    rhs: 0.,
-                },
+                Row::new(&[a + i, a + i + 1], &[-1., 1.]),
                 -p.grade * problem.gap(chain, i),
                 p.grade * problem.gap(chain, i),
                 &mut eq,
@@ -272,18 +350,46 @@ pub fn solve(
             a1[i] -= 2. * p.lam;
             a1[i + 1] -= 2. * p.lam;
             a2[i] += p.lam;
+            if p.soft_curve_on() && p.k <= NO_CURVE_CEILING {
+                continue;
+            }
             bounds(
-                Row {
-                    index: [a + i, a + i + 1, a + i + 2],
-                    coeff: row,
-                    len: 3,
-                    rhs: 0.,
-                },
+                Row::new(&[a + i, a + i + 1, a + i + 2], &row),
                 -curve,
                 curve,
                 &mut eq,
                 &mut ineq,
             );
+        }
+        // (the soft laws: a slack per segment past the comfortable grade, per window past the comfortable curve, each
+        // nonnegative and paid for quadratically; the hard rows above stay the ceilings)
+        if p.soft_grade_on() {
+            for i in 0..count.saturating_sub(1) {
+                let h = problem.gap(chain, i);
+                let s = nv;
+                nv += 1;
+                slack_p.push(p.w_grade / h);
+                let rhs = p.soft_grade * h;
+                for sign in [1., -1.] {
+                    let mut row = Row::new(&[a + i, a + i + 1, s], &[-sign, sign, -1.]);
+                    row.rhs = rhs;
+                    ineq.push(row);
+                }
+            }
+        }
+        if p.soft_curve_on() {
+            for i in 0..count.saturating_sub(2) {
+                let (row, curve, hm) = problem.curve_row_k(chain, i, p.soft_k);
+                let s = nv;
+                nv += 1;
+                slack_p.push(p.w_curve / hm);
+                for sign in [1., -1.] {
+                    let mut r = Row::new(&[a + i, a + i + 1, a + i + 2, s],
+                                         &[sign * row[0], sign * row[1], sign * row[2], -1.]);
+                    r.rhs = curve;
+                    ineq.push(r);
+                }
+            }
         }
         for i in 0..count {
             pr.push(a + i);
@@ -303,12 +409,7 @@ pub fn solve(
                 d.infeasible = true;
             } else {
                 bounds(
-                    Row {
-                        index: [a + i, 0, 0],
-                        coeff: [1., 0., 0.],
-                        len: 1,
-                        rhs: 0.,
-                    },
+                    Row::new(&[a + i], &[1.]),
                     problem.lower[a + i],
                     problem.upper[a + i],
                     &mut eq,
@@ -322,21 +423,27 @@ pub fn solve(
     }
     for c in &problem.couplings {
         let row = if c.alpha == 0. || c.c == c.b {
-            Row {
-                index: [c.a, c.b, 0],
-                coeff: [1., -1., 0.],
-                len: 2,
-                rhs: 0.,
-            }
+            Row::new(&[c.a, c.b], &[1., -1.])
         } else {
-            Row {
-                index: [c.a, c.b, c.c],
-                coeff: [1., -(1. - c.alpha), -c.alpha],
-                len: 3,
-                rhs: 0.,
-            }
+            Row::new(&[c.a, c.b, c.c], &[1., -(1. - c.alpha), -c.alpha])
         };
-        if c.inequality && c.upper {
+        if c.inequality && c.soft > 0. {
+            // (row <= value + s, or row >= value - s: the slack the shortfall, nonnegative, paid for)
+            let s = nv;
+            nv += 1;
+            slack_p.push(c.soft);
+            let sign = if c.upper { 1. } else { -1. };
+            let mut r = Row::new(&[], &[]);
+            for j in 0..row.len {
+                r.index[j] = row.index[j];
+                r.coeff[j] = sign * row.coeff[j];
+            }
+            r.index[row.len] = s;
+            r.coeff[row.len] = -1.;
+            r.len = row.len + 1;
+            r.rhs = sign * c.value;
+            ineq.push(r);
+        } else if c.inequality && c.upper {
             bounds(row, f64::NEG_INFINITY, c.value, &mut eq, &mut ineq);
         } else if c.inequality {
             bounds(row, c.value, f64::INFINITY, &mut eq, &mut ineq);
@@ -345,7 +452,11 @@ pub fn solve(
         }
     }
     measure(problem, &z, &mut d);
-    let exact = d.grade_excess <= 1e-10
+    d.slack_vars = nv - n;
+    let exact = d.soft_clearance_shortfall <= 1e-8
+        && d.soft_grade_excess <= 1e-10
+        && d.soft_curve_excess <= 1e-12
+        && d.grade_excess <= 1e-10
         && d.curve_excess <= 1e-12
         && d.lower_shortfall <= 1e-8
         && d.upper_excess <= 1e-8
@@ -368,7 +479,13 @@ pub fn solve(
         d.elapsed_s = start.elapsed().as_secs_f64();
         return Ok((z, d));
     }
-    let pmat = CscMatrix::new_from_triplets(n, n, pr, pc, pv);
+    for (k, &w) in slack_p.iter().enumerate() {
+        pr.push(n + k);
+        pc.push(n + k);
+        pv.push(w);
+    }
+    q.resize(nv, 0.);
+    let pmat = CscMatrix::new_from_triplets(nv, nv, pr, pc, pv);
     let neq = eq.len();
     let nineq = ineq.len();
     let (mut ar, mut ac, mut av) = (Vec::new(), Vec::new(), Vec::new());
@@ -381,7 +498,7 @@ pub fn solve(
             av.push(row.coeff[j]);
         }
     }
-    let amat = CscMatrix::new_from_triplets(rhs.len(), n, ar, ac, av);
+    let amat = CscMatrix::new_from_triplets(rhs.len(), nv, ar, ac, av);
     d.backend = "sparse_qp";
     d.objective_nnz = pmat.nnz();
     d.constraint_nnz = amat.nnz();
@@ -417,7 +534,7 @@ pub fn solve(
     d.factor_nnz = solver.info.linsolver.nnzL;
     // Infeasible statuses return a certificate, not road heights. Never interpret that vector as a profile.
     if !d.infeasible && solver.solution.x.iter().all(|v| v.is_finite()) {
-        z = std::mem::take(&mut solver.solution.x);
+        z = solver.solution.x[..n].to_vec();
     }
     let mut measured = Diagnostics::default();
     measure(problem, &z, &mut measured);
@@ -428,6 +545,10 @@ pub fn solve(
     d.upper_excess = measured.upper_excess;
     d.junction_gap = measured.junction_gap;
     d.clearance_shortfall = measured.clearance_shortfall;
+    d.soft_grade_excess = measured.soft_grade_excess;
+    d.soft_curve_excess = measured.soft_curve_excess;
+    d.soft_cost = measured.soft_cost;
+    d.soft_clearance_shortfall = measured.soft_clearance_shortfall;
     d.converged = matches!(status, SolverStatus::Solved | SolverStatus::AlmostSolved) && d.feasible;
     d.elapsed_s = start.elapsed().as_secs_f64();
     Ok((z, d))
@@ -436,6 +557,97 @@ pub fn solve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One chain of n samples 4 m apart drawn to a ground with a 6 m step at its middle, its ends held (a road meeting
+    /// two levels), with the given laws.
+    fn step_problem(n: usize, p: Parameters) -> Problem {
+        let target: Vec<f64> = (0..n).map(|i| if i < n / 2 { 0. } else { 6. }).collect();
+        let mut lower = vec![f64::NEG_INFINITY; n];
+        let mut upper = vec![f64::INFINITY; n];
+        lower[0] = 0.;
+        upper[0] = 0.;
+        lower[n - 1] = 6.;
+        upper[n - 1] = 6.;
+        Problem {
+            target,
+            weight: vec![1.; n],
+            lower,
+            upper,
+            offsets: vec![0, n],
+            parameters: vec![p],
+            spacing: Vec::new(),
+            couplings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn soft_laws_past_what_the_hard_ones_allow_still_solve_within_the_ceilings() {
+        // (6 m over 40 m: 15 % needed; a hard 8 % law has no answer, a comfortable 8 % with a 20 % ceiling has one)
+        let hard = step_problem(11, Parameters::hard(0.08, 2., 1., 4., 0.));
+        let (_, d) = solve(&hard, 200, 10.).unwrap();
+        assert!(!d.feasible || d.grade_excess > 1e-3, "{:?}", d);
+        let mut p = Parameters::hard(0.20, 2., 1., 4., 0.);
+        p.soft_grade = 0.08;
+        p.w_grade = 1.0e4;
+        let (z, d) = solve(&step_problem(11, p), 200, 10.).unwrap();
+        assert!(d.converged && d.feasible, "{:?}", d);
+        assert!(d.grade_excess < 1e-6, "{:?}", d);
+        assert!(d.soft_grade_excess > 0.01, "the comfortable grade is exceeded: {:?}", d);
+        assert!((z[0] - 0.).abs() < 1e-6 && (z[10] - 6.).abs() < 1e-6);
+        assert!(d.slack_vars == 10);
+    }
+
+    #[test]
+    fn a_costlier_grade_spreads_the_climb() {
+        // (the dearer the excess, the more of the 6 m is taken by the samples away from the step)
+        let run = |w: f64| {
+            let mut p = Parameters::hard(0.5, 0.01, 1., 4., 0.);
+            p.soft_grade = 0.02;
+            p.w_grade = w;
+            let (z, d) = solve(&step_problem(41, p), 300, 10.).unwrap();
+            assert!(d.converged, "{:?}", d);
+            z.windows(2).map(|w| (w[1] - w[0]).abs() / 4.).fold(0., f64::max)
+        };
+        let (cheap, dear) = (run(1.), run(1.0e5));
+        assert!(dear < cheap, "steepest grade {dear} with a dear excess, {cheap} with a cheap one");
+    }
+
+    #[test]
+    fn a_soft_clearance_that_contradicts_a_join_is_short_where_it_costs_least() {
+        // (two flat chains joined at sample 0, the first asked 6 m over the second at sample 1 by a hard grade of 10 %
+        // over 4 m: no answer with the clearance hard; soft, the shortfall is taken and both stay near their ground)
+        let p = Parameters::hard(0.1, 2., 1., 4., 0.);
+        let mk = |soft: f64| Problem {
+            target: vec![0.; 6],
+            weight: vec![1.; 6],
+            lower: vec![f64::NEG_INFINITY; 6],
+            upper: vec![f64::INFINITY; 6],
+            offsets: vec![0, 3, 6],
+            parameters: vec![p, p],
+            spacing: Vec::new(),
+            couplings: vec![
+                Coupling { a: 0, b: 3, inequality: false, value: 0., c: 3, alpha: 0., upper: false, soft: 0. },
+                Coupling { a: 1, b: 4, inequality: true, value: 6., c: 4, alpha: 0., upper: false, soft },
+            ],
+        };
+        let (_, d) = solve(&mk(0.), 200, 10.).unwrap();
+        assert!(!d.converged, "hard: {:?}", d);
+        let (z, d) = solve(&mk(1.0e3), 200, 10.).unwrap();
+        assert!(d.converged && d.feasible, "soft: {:?}", d);
+        assert!(d.soft_clearance_shortfall > 5., "{:?}", d);       // (0.8 m of the 6 at most within the grades)
+        assert!(z[1] - z[4] > 0.5 && z[1] - z[4] <= 0.8 + 1e-6, "{:?}", z);
+    }
+
+    #[test]
+    fn no_soft_law_is_the_hard_solve() {
+        let p = Parameters::hard(0.2, 2., 1., 4., 0.);
+        let (a, _) = solve(&step_problem(11, p), 200, 10.).unwrap();
+        let mut q = p;
+        q.w_grade = 5.;         // (a cost with no comfortable grade: no soft law)
+        let (b, d) = solve(&step_problem(11, q), 200, 10.).unwrap();
+        assert_eq!(d.slack_vars, 0);
+        assert_eq!(a, b);
+    }
 
     #[test]
     fn banded_factor_solves_known_system() {

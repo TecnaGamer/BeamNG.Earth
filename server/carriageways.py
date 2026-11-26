@@ -67,6 +67,7 @@ BUDGET_S = float(os.environ.get("BNE_CW_BUDGET_S", "30"))
 # gets slow where the feasible set is thin), so its budget is its own
 BUDGET_RELAXED_S = float(os.environ.get("BNE_CW_BUDGET_RELAXED_S", "150"))
 RELAXED_ROUNDS = 4 * ROUNDS     # (its iterations too: 5444 roads' 173 where the same laws, not contradicting, take under 60)
+SOFT_KEYS = ("soft_grade", "w_grade", "soft_K", "w_curve")     # a chain's soft laws (solve), in the kernel's order
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
                         # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
@@ -204,15 +205,19 @@ def weights(br, from_end, trust=TRUST_M):
     return np.where(br, 0.0, w)
 
 
-def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
+def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, soft=None):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
     chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length, and optionally ds (n - 1,): the distance
     from each sample to the next (a segment's grade bound and a window's curve bound are then its own spacings'; without
-    it, the chain's one `step`, the closest two samples').
+    it, the chain's one `step`, the closest two samples'). Soft laws, optional (SOFT_KEYS): soft_grade, the comfortable
+    grade, and w_grade, what each metre of road pays per (grade past it)^2; soft_K, the comfortable vertical curve's K,
+    and w_curve, its cost likewise. grade and K are then the hard ceilings past which nothing goes.
     couplings: (chain a, sample i, chain b, sample j, "eq", "ge" or "le", value): z_a - z_b = 0, >= value, <= value;
     or (a, i, b, j, kind, value, chain c, sample k, alpha): the same of z_a - (1 - alpha) z_b - alpha z_c (b's height
     moved alpha of the way to c's: a road's height where another leaves it; roadlaws' landings).
+    soft: one weight per coupling, or None: an inequality with a weight w > 0 is soft, its shortfall s (m) paid w s^2 / 2
+    instead of holding (0, and an equality: hard).
     Negative sample indices address a chain's end as in NumPy. Optional diagnostics receives
     convergence, budget and measured constraint residuals. The returned profiles retain input order.
     """
@@ -234,6 +239,12 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     parameters = np.asarray([(float(c["grade"]), float(c["K"]), float(c.get("lam", LAMBDA)),
                               float(c.get("step", STEP_M)), float(c.get("length", LENGTH_BIAS)))
                              for c in chains], np.float64).reshape(-1, 5)
+    if any(k in c for c in chains for k in SOFT_KEYS):
+        # (the soft laws: past a comfortable grade and curve each segment's and window's excess is paid for, grade and K
+        # staying the hard ceilings; 0 where a chain has none)
+        fast.require(643, "carriageway_profiles soft laws")
+        laws = np.asarray([tuple(float(c.get(k, 0.0)) for k in SOFT_KEYS) for c in chains], np.float64).reshape(-1, 4)
+        parameters = np.ascontiguousarray(np.hstack([parameters, laws]))
     if any(len(c) not in (6, 9) or c[4] not in ("eq", "ge", "le") for c in cp):
         raise ValueError("carriageway coupling kind must be eq, ge or le, with no third sample or one and its alpha")
     kinds = {"eq": 0, "ge": 1, "le": 2}
@@ -267,10 +278,17 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     left = xproc.deadline_left()        # (a pipeline step's time limit is the kernel's too: its own budget never goes past it)
     if left is not None:
         budget = max(0.0, min(budget, left))
+    extra = {} if spacing is None else {"spacing": spacing}
+    if soft is not None:
+        soft = np.ascontiguousarray(np.asarray(soft, np.float64).reshape(-1))
+        if len(soft) != len(cp):
+            raise ValueError("carriageway soft weights must be one per coupling")
+        if (soft > 0.0).any():
+            fast.require(643, "carriageway_profiles soft couplings")
+            extra["coupling_soft"] = soft
     z, info = fast._ef.carriageway_profiles(pack(target), pack(weights_), pack(lower), pack(upper), offsets,
                                            parameters, rows, values, rounds, budget,
-                                           *(() if alpha is None and spacing is None else (alpha,)),
-                                           **({} if spacing is None else {"spacing": spacing}))
+                                           *(() if alpha is None and not extra else (alpha,)), **extra)
     if diagnostics is not None:
         diagnostics.update(info)
     if (not info["converged"] or not info["feasible"]) and not getattr(PROBE, "on", False):
