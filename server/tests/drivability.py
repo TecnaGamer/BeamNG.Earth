@@ -6,6 +6,12 @@
     python server/tests/drivability.py --json [NAME ...]      # one JSON line per site
     python server/tests/drivability.py --update [NAME ...]    # write those sites' measurements to the baseline
     (--jobs N or BNE_DRIVE_JOBS: sites measured at once, each in its own process; default: one per CPU)
+    (--timeout S or BNE_DRIVE_TIMEOUT: the run's limit in seconds, TIMEOUT_S by default; the sites still measuring then
+    are stopped and count as failed)
+The last line is always the run's summary: how many sites were measured, worse than the baseline, better, and failed
+(a site that raised, crashed or ran out of time). The exit code is 1 when any site failed or got worse, else 0, so a
+caller waits for the process to end and reads its last line; nothing has to watch the output for a line that a failed
+run never prints. An all-site run takes minutes.
 
 measure(name) reports, for the roads within RADIUS_M of the place:
   steps   metres of wheel track with a step over its limit
@@ -33,10 +39,12 @@ import argparse
 import hashlib
 import json
 import math
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 import os
 import re
+import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -51,6 +59,11 @@ import dnp  # noqa: E402
 import mapgeom  # noqa: E402
 
 BASELINE = Path(__file__).parent / "fixtures" / "drivability_baseline.json"
+MEASURED_ON = "_measured_on"    # the baseline's key for the commit its sites were measured on (not a site)
+TIMEOUT_S = 1800        # an all-site run at one job per CPU takes a few minutes
+STEPS_TOL = 2           # metres of wheel track over the limit (a sample beside the limit on another platform)
+REL_TOL = 0.05          # of a value already over its limit, when more than the absolute tolerance: a crest of 22 g
+                        # becoming 22.1 g is a road already broken shifting a little, not a new defect
 SITES = {       # name: (fixture prefix, what was reported)
     "torbole_adige_tunnel": ("drive", "Torbole: the mountainside reaching onto the street over the Adige-Garda tunnel"),
     "riva_pontera_tunnel": ("drive", "Riva del Garda, Pontera nuova: a steep hill after a small tunnel"),
@@ -115,11 +128,12 @@ METRICS = {
 }
 
 
-def measure(name, threads=1, approach=None):
+def measure(name, threads=1, approach=None, plans_format=None):
     """The site's drivability (the module's docstring). threads: cells planned at once (grading.PLAN_THREADS); approach:
-    (east, north) m of a place graded first, as a session arriving from there would (test_drivability: neither may
-    change the result)."""
+    (east, north) m of a place graded first, as a session arriving from there would; plans_format: the number the plans'
+    format (plancache.PLANS_FORMAT) is taken to be (test_drivability: none of them may change the result)."""
     import grading
+    import plancache
     import revisit
     import roads
     import roadsurf
@@ -132,7 +146,8 @@ def measure(name, threads=1, approach=None):
     # site (2026-11-12: Vienna's and DC's cells got verdicts from a game session; the gate's test_drivability failed on
     # every commit, its steps 0.26 -> 0.34 m at S1 Rautenweg, while BNE_ROADSURF=off runs passed).
     with mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", threads), \
-            mock.patch.object(roadsurf, "ON", False):
+            mock.patch.object(roadsurf, "ON", False), \
+            mock.patch.object(plancache, "PLANS_FORMAT", plancache.PLANS_FORMAT if plans_format is None else plans_format):
         site = interchanges.load(name, prefix, keep_m=KEEP_M_SITE.get(name, KEEP_M))
         md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}),
                              dem=SimpleNamespace(sample=site.sample))
@@ -153,7 +168,9 @@ def measure(name, threads=1, approach=None):
         box = (-RADIUS_M, -RADIUS_M, RADIUS_M, RADIUS_M)
         tunnels = roads.TunnelProfiles(site.frame, lambda k: site.cells.get(str(k)), elev)
         tunnels.raw = site.sample
-        tunnels.ends = lambda la, lo: grader.apply(la, lo, site.sample(la, lo), grading.ROAD_LIFT, roads_only=True)
+        # (as the game's: the ground read as the road's own level at a portal arrives as `base`, earthd / blockworker)
+        tunnels.ends = lambda la, lo, base=None: grader.apply(la, lo, site.sample(la, lo) if base is None else base,
+                                                               grading.ROAD_LIFT, roads_only=True)
         report = Report()
         _measure_ground(report, cells, site.frame, ground, roads)
         structures = [s for surface, profiles in
@@ -203,6 +220,35 @@ def measure_all(names, jobs=None):
         return
     with ProcessPoolExecutor(jobs) as pool:
         yield from pool.map(measure, names)
+
+
+def measure_guarded(names, jobs=None, timeout=None):
+    """(name, measurement, error) of each site in the order they finish, each in its own process: error is None, or
+    what the site raised (a crashed process: BrokenProcessPool), or that the run passed `timeout` seconds, when the
+    sites still measuring are stopped. Every site is yielded exactly once."""
+    names = list(names)
+    jobs = min(len(names), jobs or int(os.environ.get("BNE_DRIVE_JOBS") or 0) or os.cpu_count() or 1)
+    deadline = time.monotonic() + timeout if timeout else None
+    pool = ProcessPoolExecutor(max(1, jobs))
+    site = {pool.submit(measure, n): n for n in names}
+    pending = set(site)
+    try:
+        while pending:
+            left = None if deadline is None else max(0.0, deadline - time.monotonic())
+            done, pending = wait(pending, timeout=left, return_when=FIRST_COMPLETED)
+            if not done:
+                for f in sorted(pending, key=lambda f: names.index(site[f])):
+                    yield site[f], None, f"timed out: still measuring after {timeout:.0f} s"
+                return
+            for f in sorted(done, key=lambda f: names.index(site[f])):
+                try:
+                    yield site[f], f.result(), None
+                except Exception as e:
+                    yield site[f], None, f"{type(e).__name__}: {e}"
+    finally:
+        for proc in list((getattr(pool, "_processes", None) or {}).values()):
+            proc.kill()         # a site still measuring holds the run open; its result is no longer wanted
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 class Report:
@@ -374,8 +420,54 @@ def score_table(rows):
     return lines
 
 
-def load_baseline():
+def _load():
     return json.loads(BASELINE.read_text()) if BASELINE.exists() else {}
+
+
+def load_baseline():
+    """{site: entry}"""
+    return {k: v for k, v in _load().items() if k != MEASURED_ON}
+
+
+def baseline_commit():
+    """The commit the baseline was last written on (with "+dirty" when the tree had changes), or None."""
+    return _load().get(MEASURED_ON)
+
+
+def _head():
+    root = Path(__file__).resolve().parents[2]
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=root,
+                               capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return sha.strip()[:12] + ("+dirty" if dirty.strip() else "")
+
+
+def compare(result, base):
+    """([worse], [better]) of a measurement against its baseline entry, each a line for whoever reads the failure."""
+    worse, better = [], []
+    steps_tol = _tolerance(base["steps"], 0, STEPS_TOL)
+    if result["steps"] > base["steps"] + steps_tol:
+        worse.append(f"steps {base['steps']} -> {result['steps']}")
+    elif result["steps"] < base["steps"] - steps_tol:
+        better.append(f"steps {base['steps']} -> {result['steps']}")
+    for key in sorted(set(result["parts"]) | set(base["parts"])):
+        now, was = result["parts"].get(key), base["parts"].get(key)
+        for m, (limit, abs_tol, *_rest) in METRICS.items():
+            was_m, now_m = (was or {}).get(m, 0.0), (now or {}).get(m, 0.0)
+            tol = _tolerance(was_m, limit, abs_tol)
+            if now_m > max(was_m, limit) + tol:
+                worse.append(f"{key} ({now['class']}, at {now.get(m + '_at')}): {m} {was_m if was else 'ok'} -> {now_m}")
+            elif was_m > limit and now_m < was_m - tol:
+                better.append(f"{key}: {m} {was_m} -> {now_m if now_m > limit else 'ok'}")
+    return worse, better
+
+
+def _tolerance(was, limit, abs_tol):
+    """How far a value may move before it counts: abs_tol, or REL_TOL of a value already over its limit."""
+    return max(abs_tol, REL_TOL * was) if was > limit else abs_tol
 
 
 def baseline_entry(result):
@@ -388,6 +480,7 @@ def write_baseline(results):
     base = load_baseline()
     for r in results:
         base[r["site"]] = baseline_entry(r)
+    base[MEASURED_ON] = _head()
     BASELINE.write_text(json.dumps(dict(sorted(base.items())), indent=1) + "\n")
 
 
@@ -396,8 +489,10 @@ def main():
     ap.add_argument("names", nargs="*", help="sites (default: all)")
     ap.add_argument("--update", action="store_true", help="write the measurements to the baseline")
     ap.add_argument("--baseline", action="store_true", help="the baseline's scores, without measuring")
-    ap.add_argument("--json", action="store_true", help="one JSON line per site instead of the scores")
+    ap.add_argument("--json", action="store_true", help="one JSON line per site on stdout (the rest on stderr)")
     ap.add_argument("--jobs", type=int, help="sites measured at once (default: BNE_DRIVE_JOBS, else one per CPU)")
+    ap.add_argument("--timeout", type=float, default=float(os.environ.get("BNE_DRIVE_TIMEOUT") or TIMEOUT_S),
+                    help=f"the run's limit in seconds (default: BNE_DRIVE_TIMEOUT, else {TIMEOUT_S})")
     a = ap.parse_args()
     unknown = sorted(set(a.names) - set(SITES))
     if unknown:
@@ -405,17 +500,39 @@ def main():
     names, baseline = a.names or list(SITES), load_baseline()
     if a.baseline:
         print("\n".join(score_table((n, baseline[n], None) for n in names if n in baseline)))
-        return
-    results = []
-    for result in measure_all(names, a.jobs):
-        results.append(result)
+        return 0
+    report = sys.stderr if a.json else sys.stdout
+    print(f"baseline measured on {baseline_commit() or 'an unrecorded commit'}; measuring {_head()}", file=report,
+          flush=True)
+    results, failed, worse, better = {}, {}, {}, {}
+    for name, result, error in measure_guarded(names, a.jobs, a.timeout):
+        if error:
+            failed[name] = error
+            print(f"FAILED {name}: {error}", file=report, flush=True)
+            continue
+        results[name] = result
         if a.json:
             print(json.dumps(result), flush=True)
-    if not a.json:
-        print("\n".join(score_table((r["site"], r, baseline.get(r["site"])) for r in results)))
+        if name in baseline:
+            worse[name], better[name] = compare(result, baseline[name])
+        print(f"measured {name} ({len(results) + len(failed)}/{len(names)})", file=sys.stderr, flush=True)
+    ordered = [results[n] for n in names if n in results]
+    print("\n".join(score_table((r["site"], r, baseline.get(r["site"])) for r in ordered)), file=report)
+    for name in names:
+        for line in worse.get(name, ()):
+            print(f"WORSE {name}: {line}", file=report)
+        for line in better.get(name, ()):
+            print(f"better {name}: {line}", file=report)
     if a.update:
-        write_baseline(results)
+        write_baseline(ordered)
+    n_worse = sum(bool(worse.get(n)) for n in results)
+    n_better = sum(bool(better.get(n)) for n in results)
+    new = [n for n in results if n not in baseline]
+    print(f"drivability: {len(results)}/{len(names)} measured, {n_worse} worse, {n_better} better, "
+          f"{len(new)} without a baseline, {len(failed)} failed" + (f" ({', '.join(failed)})" if failed else "")
+          + ("; baseline written" if a.update else ""), file=report, flush=True)
+    return 1 if failed or (n_worse and not a.update) else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

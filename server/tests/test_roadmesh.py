@@ -544,6 +544,25 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(mr, ["road_asphalt_2lane"], "the asphalt is in the road mesh ...")
         self.assertAlmostEqual(Pr[:, 2].max(), 22.0 + roadmesh.DECK_SKIN, msg="... just over the slab")
 
+    def test_deck_top_is_the_planned_height_whatever_its_depth(self):
+        """The drawn top is the chunk's height, the plan's (the road surface the ramps and the ground are laid to): the
+        slab and the girders hang under it, whatever the bridge's depth. Only the slab's underside lies under the plan
+        (a slab's thickness): a deck's end seen from its boundary edges alone is the underside's edge, not its top."""
+        for dd in (None, 0.9, 2.0):
+            deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,
+                    "n": [[0, 0, 20.0], [25, 0, 21.0], [50, 0, 22.0]]}
+            if dd is not None:
+                deck["dd"] = dd
+            P, T, UV, mats, M = roadmesh.deck([deck], (0.0, 0.0, 0.0), parapets=[])
+            top = np.unique(T[M == mats.index(roadmesh.DECK_TOP)])
+            self.assertGreater(len(top), 0)
+            np.testing.assert_allclose(P[top, 2], 20.0 + 0.04 * P[top, 0], atol=1e-9, err_msg=str(dd))
+            slab = roadmesh.DECK_DEPTH * (dd or roadmesh.DECK_DEPTH + roadmesh.GIRDER_D) / (
+                roadmesh.DECK_DEPTH + roadmesh.GIRDER_D)
+            under = P[np.setdiff1d(np.arange(len(P)), top)]
+            self.assertAlmostEqual(float(P[:, 2][P[:, 0] == 0.0].max()), 20.0, msg="no vertex over the plan")
+            self.assertTrue(np.isclose(under[:, 2], 20.0 + 0.04 * under[:, 0] - slab, atol=1e-9).any())
+
 
 class BridgeLookTest(unittest.TestCase):
     """Girders, parapets and piers (2026-10-17, the user: "Bridges need a lot of work in general")."""
@@ -734,7 +753,9 @@ class BridgeProfilesTest(unittest.TestCase):
         za = got1["a"][1]
         self.assertAlmostEqual(za[0], 10.0, delta=0.2, msg="an abutment on the ground")
         k = int(np.argmin(np.abs(got1["a"][0][:, 0] - 0.0)))
-        self.assertGreaterEqual(za[k], 10.0 + roads.DECK_ROAD_CLEAR - 0.6, "headroom over the street")
+        # (the chain's own depth, from its span, not the full one)
+        clear = roads.deck_road_clear(roads.deck_depth(roads.geom_span([got1["a"][0], got1["b"][0]])))
+        self.assertGreaterEqual(za[k], 10.0 + clear - 0.6, "headroom over the street")
         bp2 = roads.BridgeProfiles(FRAME, cell_fn, flat)        # another tile asking first: same deck
         got2 = {fid: (xy, z) for fid, spec, xy, z, lon in bp2.parts([f], (0, -128, 256, 128))}
         self.assertTrue(np.allclose(got2["a"][1], got1["a"][1]) and np.allclose(got2["b"][1], got1["b"][1]))

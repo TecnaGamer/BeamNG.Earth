@@ -481,6 +481,7 @@ fn rail_tile_mesh<'p>(
     furniture: Obj<'p>,
     under: Obj<'p>,
     records: Obj<'p>,
+    tracks_out: Obj<'p>,
 ) -> PyResult<Obj<'p>> {
     let rw = py.import("railways")?;
     let roads = py.import("roads")?;
@@ -493,6 +494,8 @@ fn rail_tile_mesh<'p>(
         let ex = expanded(bounds, roads.getattr("OVERLAP")?.extract()?);
         let clip = expanded(ex, 2.);
         let fit = rw.getattr("RAIL_ROAD_FIT")?.is_truthy()?;
+        // (the fork's raised underpasses: the road class of each short road tunnel road_underpasses finds)
+        let tcls = PyList::empty(py);
         let (tunnels, worn, gauges, mut rails) = if fit {
             if rec.is_none() {
                 rec = rw.call_method1(
@@ -510,7 +513,9 @@ fn rail_tile_mesh<'p>(
                 rec.get_item("rails")?,
             )
         } else {
-            let tunnels = rw.call_method1("road_underpasses", (&frame, &cells, &bbox))?;
+            let ukw = PyDict::new(py);
+            ukw.set_item("classes", &tcls)?;
+            let tunnels = rw.call_method("road_underpasses", (&frame, &cells, &bbox), Some(&ukw))?;
             ground = rw.call_method1("_mixed", (&ground, &far, &bbox))?;
             let worn = PyDict::new(py);
             let gauges = PyDict::new(py);
@@ -545,35 +550,51 @@ fn rail_tile_mesh<'p>(
                 walk.append(b)?;
             }
         }
-        let decks = PyList::empty(py);
+        let mut decks = PyList::empty(py);
         if rails.len()? == 0 && walk.is_empty() {
             return pack(py.None().into_bound(py), decks, both);
         }
+        let (prof_all, runs_all) = if rails.len()? == 0 {
+            (PyList::empty(py).into_any(), None)
+        } else if fit {
+            (
+                rec.get_item("prof")?,
+                Some(rec.get_item("runs")?),
+            )
+        } else {
+            let ukw = PyDict::new(py);
+            ukw.set_item("tunnels", &tunnels)?;
+            let plain =
+                rw.call_method("plain_underpasses", (&frame, &cells, &bbox, &rails), Some(&ukw))?;
+            let raised = rw.call_method1("raising_underpasses", (&tunnels, &tcls))?;
+            let p = rw.call_method1(
+                "_beds",
+                (&frame, &rails, &ground, raised.add(plain)?, &load, &elev),
+            )?;
+            // (the fork's tracks over a road under their bridge: drawn as spans past its carriageway)
+            let ways = rw.call_method1(
+                "_roads_under_bridges",
+                (&frame, &cells, &bbox, rw.getattr("REACH_M")?, &rails),
+            )?;
+            let sp = rw.call_method1("_spans_over_roads", (&rails, &p, &ways))?;
+            rails = sp.get_item(0)?;
+            (sp.get_item(1)?, None)
+        };
         let mut keep = Vec::new();
         for i in 0..rails.len()? {
             if !skip.contains(&i) && !drop.contains(i)? {
                 keep.push(i);
             }
         }
-        let (prof, runs) = if rails.len()? == 0 {
-            (PyList::empty(py), None)
-        } else if fit {
-            (
-                subset(&rec.get_item("prof")?, &keep)?,
-                Some(subset(&rec.get_item("runs")?, &keep)?),
-            )
-        } else {
-            let coarse = rw.call_method1("coarse_underpasses", (&frame, &cells, &bbox, &rails))?;
-            let p = rw.call_method1(
-                "_beds",
-                (&frame, &rails, &ground, tunnels.add(coarse)?, &load, &elev),
-            )?;
-            (subset(&p, &keep)?, None)
+        let prof = subset(&prof_all, &keep)?;
+        let runs = match runs_all {
+            Some(r) => Some(subset(&r, &keep)?),
+            None => None,
         };
         let rails = subset(&rails, &keep)?;
         let mut carried = vec![];
         let mut ground_lines = vec![];
-        for (r, p) in rails.iter().zip(prof.iter()) {
+        for r in rails.iter() {
             let class = r.get_item(1)?;
             let kind = r.get_item(2)?;
             let xy = r.get_item(3)?;
@@ -582,33 +603,12 @@ fn rail_tile_mesh<'p>(
             if kind.eq("ground")? && !class.eq("tram")? {
                 ground_lines.push(xy.clone());
             }
-            if both && !gone && kind.eq("bridge")? {
-                let z: Vec<f64> = p.get_item(0)?.extract()?;
-                let line = points(xy.extract()?)?;
-                if line.len() != z.len() {
-                    return Err(PyValueError::new_err("deck/profile lengths differ"));
-                }
-                let deck = PyDict::new(py);
-                deck.set_item(
-                    "n",
-                    rows(
-                        py,
-                        line.into_iter()
-                            .zip(z)
-                            .map(|(p, z)| at(p, z + 0.3))
-                            .collect(),
-                    ),
-                )?;
-                deck.set_item(
-                    "w",
-                    if class.eq("tram")? {
-                        2. * 1.3
-                    } else {
-                        2. * 2.4
-                    },
-                )?;
-                decks.append(deck)?;
-            }
+        }
+        if both {
+            // (railways._bridge_decks: the deck lines with the depth "under" each reaches below its line)
+            decks = rw
+                .call_method1("_bridge_decks", (&rails, &prof, carried.clone()))?
+                .cast_into::<PyList>()?;
         }
         let true_cross = rw.getattr("TRUE_CROSSERS_ON")?.is_truthy()?;
         let (all_cr, cr, crossers) = if fit && rec.get_item("rails")?.len()? > 0 {
@@ -670,6 +670,7 @@ fn rail_tile_mesh<'p>(
             concrete,
             stone: py.import("railxing")?.getattr("ENABLED")?.is_truthy()?,
         };
+        let carried_of = carried.clone();
         for (i, gone) in carried.into_iter().enumerate() {
             tile.draw(i, switch.get_item(i)?.extract()?, gone)?;
         }
@@ -755,6 +756,20 @@ fn rail_tile_mesh<'p>(
         }
         if !furniture.is_none() {
             furniture.call_method1("__iadd__", (props,))?;
+        }
+        if !tracks_out.is_none() {
+            // (every track part drawn, its bed as it was finally laid: what the clearance check stands its wagons on)
+            let np = py.import("numpy")?;
+            for (i, r) in rails.iter().enumerate() {
+                if carried_of[i] {
+                    continue;
+                }
+                let zb = np.call_method1("asarray", (tile.finals.get_item(i)?, "float64"))?;
+                tracks_out.call_method1(
+                    "append",
+                    ((r.get_item(0)?, r.get_item(1)?, r.get_item(2)?, r.get_item(3)?, zb),),
+                )?;
+            }
         }
         return pack(mesh.call_method0("result")?, decks, both);
     }

@@ -33,14 +33,19 @@ not feasible. This module only assembles its inputs and reports measured converg
 import logging
 import math
 import os
+import threading
 import time
 
 import numpy as np
 import dnp
 
 log = logging.getLogger("earthd.grading")
+PROBE = threading.local()   # .on: this thread's solves are probes (a search for the least easing of a law: ix/relax.py): their
+#                             misses are not logged, the answer's are
 
 STEP_M = 4.0            # m between profile samples
+MIN_SEGMENT_M = 0.5     # m: the least spacing a chain's own `ds` gives a segment (two samples closer than this, one point
+                        # the lattice and a joint both asked for, are held to the grade of 0.5 m, not of 0 m)
 TRUST_M = 40.0          # m from a bridge's end over which the ground's weight rises from 0 to 1
 LAMBDA = 2.0e4          # smoothness (a curve of ~40 m per metre of bend where nothing else decides)
 # The road's shape between the points whose heights matter (the user, 2026-11-02: "skip the earthworks calculation as
@@ -58,6 +63,10 @@ ROUNDS = 150            # sparse QP iterations at most
 # s one region's solves may take at most: exhaustion is reported and the region is not persisted. A worker past
 # earthd's road-tile timeout (300 s) is restarted, its work lost, and the tile built again from the start.
 BUDGET_S = float(os.environ.get("BNE_CW_BUDGET_S", "30"))
+# a system whose laws contradict is solved again with what contradicts eased (ix/relax.py): the harder problem (the interior point
+# gets slow where the feasible set is thin), so its budget is its own
+BUDGET_RELAXED_S = float(os.environ.get("BNE_CW_BUDGET_RELAXED_S", "150"))
+RELAXED_ROUNDS = 4 * ROUNDS     # (its iterations too: 5444 roads' 173 where the same laws, not contradicting, take under 60)
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
                         # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
@@ -198,13 +207,19 @@ def weights(br, from_end, trust=TRUST_M):
 def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
-    chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length.
-    couplings: (chain a, sample i, chain b, sample j, "eq" or "ge", value).
+    chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length, and optionally ds (n - 1,): the distance
+    from each sample to the next (a segment's grade bound and a window's curve bound are then its own spacings'; without
+    it, the chain's one `step`, the closest two samples').
+    couplings: (chain a, sample i, chain b, sample j, "eq", "ge" or "le", value): z_a - z_b = 0, >= value, <= value;
+    or (a, i, b, j, kind, value, chain c, sample k, alpha): the same of z_a - (1 - alpha) z_b - alpha z_c (b's height
+    moved alpha of the way to c's: a road's height where another leaves it; roadlaws' landings).
     Negative sample indices address a chain's end as in NumPy. Optional diagnostics receives
     convergence, budget and measured constraint residuals. The returned profiles retain input order.
     """
     import fast
-    fast.require(156, "carriageway_profiles")
+    cp = list(couplings)
+    three = any(len(c) == 9 for c in cp)
+    fast.require(305 if three or any(c[4] == "le" for c in cp) else 156, "carriageway_profiles")
     target = [np.asarray(c["t"], np.float64) for c in chains]
     offsets = np.r_[0, np.cumsum([len(t) for t in target])].astype(np.int64)
     pack = lambda arrays: np.ascontiguousarray(np.concatenate(arrays) if arrays else np.zeros(0), np.float64)
@@ -219,20 +234,46 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     parameters = np.asarray([(float(c["grade"]), float(c["K"]), float(c.get("lam", LAMBDA)),
                               float(c.get("step", STEP_M)), float(c.get("length", LENGTH_BIAS)))
                              for c in chains], np.float64).reshape(-1, 5)
-    cp = list(couplings)
-    if any(kind not in ("eq", "ge") for _a, _i, _b, _j, kind, _v in cp):
-        raise ValueError("carriageway coupling kind must be eq or ge")
-    rows = np.asarray([(a, i, b, j, int(kind == "ge")) for a, i, b, j, kind, _v in cp], np.int64).reshape(-1, 5)
-    values = np.asarray([v for _a, _i, _b, _j, _kind, v in cp], np.float64)
+    if any(len(c) not in (6, 9) or c[4] not in ("eq", "ge", "le") for c in cp):
+        raise ValueError("carriageway coupling kind must be eq, ge or le, with no third sample or one and its alpha")
+    kinds = {"eq": 0, "ge": 1, "le": 2}
+    if three:
+        rows = np.asarray([tuple(c[:4]) + (kinds[c[4]],) + (tuple(c[6:8]) if len(c) == 9 else (-1, 0)) for c in cp],
+                          np.int64).reshape(-1, 7)
+        alpha = np.asarray([float(c[8]) if len(c) == 9 else 0.0 for c in cp], np.float64)
+    else:
+        rows = np.asarray([tuple(c[:4]) + (kinds[c[4]],) for c in cp], np.int64).reshape(-1, 5)
+        alpha = None
+    values = np.asarray([c[5] for c in cp], np.float64)
+    own = [c.get("ds") for c in chains]
+    spacing = None
+    if any(d is not None for d in own):
+        fast.require(309, "carriageway_profiles spacing")
+        pieces = []
+        for c, t, d in zip(chains, target, own):
+            if d is None:
+                pieces.append(np.zeros(len(t)))             # (0: the chain's step)
+                continue
+            d = np.asarray(d, np.float64)
+            if d.shape != (max(len(t) - 1, 0),):
+                raise ValueError("each carriageway's ds must have one distance per segment")
+            pieces.append(np.r_[np.maximum(d, MIN_SEGMENT_M), 0.0][:len(t)])
+        spacing = pack(pieces)
     budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
     if np.isnan(budget):
         raise ValueError("carriageway deadline must not be NaN")
     budget = max(0.0, budget)
+    import xproc
+    left = xproc.deadline_left()        # (a pipeline step's time limit is the kernel's too: its own budget never goes past it)
+    if left is not None:
+        budget = max(0.0, min(budget, left))
     z, info = fast._ef.carriageway_profiles(pack(target), pack(weights_), pack(lower), pack(upper), offsets,
-                                           parameters, rows, values, rounds, budget)
+                                           parameters, rows, values, rounds, budget,
+                                           *(() if alpha is None and spacing is None else (alpha,)),
+                                           **({} if spacing is None else {"spacing": spacing}))
     if diagnostics is not None:
         diagnostics.update(info)
-    if not info["converged"] or not info["feasible"]:
+    if (not info["converged"] or not info["feasible"]) and not getattr(PROBE, "on", False):
         log.warning("carriageways: %d chains, %d couplings: %s, %d iterations, converged=%s feasible=%s budget=%s; "
                     "grade excess %.6f, curve excess %.6f, bounds %.3f/%.3f m, junction %.3f m, clearance %.3f m",
                     len(chains), len(cp), info["status"], info["rounds"], info["converged"], info["feasible"], info["timed_out"],

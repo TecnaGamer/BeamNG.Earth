@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::gradesep::np_interp;
-use crate::levels::np_sum;
+use crate::levels::{np_sum, part_floor, ring_length};
 use crate::{dual_side_core, polyline_dist_core, tight_bends_core};
 
 type P = [f64; 2];
@@ -565,6 +565,7 @@ fn bmean(v: &[bool]) -> f64 {
 /// The kernels' scalar constants read at each call (roads._spec_prm: tests change some).
 struct Prm {
     min_part: f64,
+    min_part_m: f64,
     urban_sample: f64,
     urban_share: f64,
     urban_beside: f64,
@@ -595,7 +596,7 @@ impl Prm {
     fn new(p: &HashMap<String, f64>) -> PyResult<Prm> {
         let g = |k: &str| prm_get(p, k);
         Ok(Prm {
-            min_part: g("MIN_PART")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
+            min_part: g("MIN_PART")?, min_part_m: g("MIN_PART_M")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
             urban_beside: g("URBAN_BESIDE_M")?, urban_highway_beside: g("URBAN_HIGHWAY_BESIDE_M")?,
             urban_beside_share: g("URBAN_BESIDE_SHARE")?,
             urban_both_share: g("URBAN_BOTH_SHARE")?, dual_gap0: g("DUAL_GAP_M0")?, dual_gap1: g("DUAL_GAP_M1")?,
@@ -938,7 +939,13 @@ fn base_bridge(l: &Layer, rules: &RoadRules, i: usize, lanes: Option<i64>) -> (S
         rule_w = Some(rules.link_width(lanes.filter(|&v| v != 0).unwrap_or(if ow { 1 } else { 2 })));
     }
     let (w, _) = rules.cw(c, l.built(kind), false, rule_w, ow, lanes.map(|v| v as f64), link);
-    (Sp { width: w, w32: false, kind, urban: false, cls: c, oneway: ow, dir: l.dir(i), kmh: None, gap: None,
+    // (its speed limit as the ground spec reads it: the bridge is a stretch of the same road, and graded, signed and
+    // furnished at the speed it is driven at, not its class's default: a 40 km/h spiral loop was a 90 km/h trunk)
+    let mut kmh = if l.has_k[i] && l.kv[i] > 0.0 { Some(l.kv[i]) } else { None };
+    if kmh.is_none() && l.osm_ms[i].is_finite() {
+        kmh = Some(l.osm_ms[i]);
+    }
+    (Sp { width: w, w32: false, kind, urban: false, cls: c, oneway: ow, dir: l.dir(i), kmh, gap: None,
           median: None, lanes, surf: l.stok[i], link, sides: -1, parking: true, mountain: false },
      ow || rule_w.is_some())
 }
@@ -1078,7 +1085,14 @@ impl RoadRules {
                 for r in a..b {
                     s += rr[[r, 1]] - rr[[r, 0]];
                 }
-                if s > 1.0 - prm.min_part {
+                // (the share a piece of this feature must have: roads.part_floor)
+                let mut len = 0.0f64;
+                for p in l.po[i]..l.po[i + 1] {
+                    for r in l.ro[p]..l.ro[p + 1] {
+                        len += ring_length(&|k, d| l.ll[[k, d]], l.co[r], l.co[r + 1]);
+                    }
+                }
+                if s > 1.0 - part_floor(prm.min_part, prm.min_part_m, len) {
                     continue;
                 }
             }

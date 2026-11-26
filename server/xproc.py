@@ -370,11 +370,53 @@ def _cancelled():
     return extra is not None and extra()
 
 
+class TimeLimit(Exception):
+    """The step this thread is in ran past its wall-clock limit (set_deadline): raised by check_cancel, at the places that
+    already ask whether the job is still wanted. Never raised in a thread that set no deadline."""
+
+    def __init__(self, what, secs):
+        super().__init__("%s: time limit %g s" % (what, secs))
+        self.what, self.secs = what, secs
+
+
+_deadline = threading.local()       # this thread's .until (time.monotonic), .what, .secs
+
+
+def set_deadline(what, secs, used=0.0):
+    """This thread's time limit: secs for `what`, of which `used` seconds are spent already (None what: none). It is a
+    deadline for check_cancel, never a kill: the work stops where it next asks. Returns the one it replaces."""
+    old = (getattr(_deadline, "until", None), getattr(_deadline, "what", None), getattr(_deadline, "secs", None))
+    if what is None:
+        _deadline.until = _deadline.what = _deadline.secs = None
+    else:
+        _deadline.until, _deadline.what, _deadline.secs = time.monotonic() + secs - used, what, secs
+    return old
+
+
+def restore_deadline(old):
+    _deadline.until, _deadline.what, _deadline.secs = old
+
+
+def deadline_left():
+    """Seconds this thread's time limit has left (negative: over it), None without one."""
+    until = getattr(_deadline, "until", None)
+    return None if until is None else until - time.monotonic()
+
+
+def check_deadline():
+    """Raise TimeLimit when this thread's time limit (set_deadline) has run out."""
+    left = deadline_left()
+    if left is not None and left <= 0.0:
+        raise TimeLimit(_deadline.what, _deadline.secs)
+
+
 def check_cancel():
-    """Raise pools.Abandoned when this thread's (or worker process's) job is no longer wanted (set_cancel)."""
+    """Raise pools.Abandoned when this thread's (or worker process's) job is no longer wanted (set_cancel), and TimeLimit
+    when the step it is in has run out of time (set_deadline)."""
     if _cancelled():
         import pools
         raise pools.Abandoned()
+    check_deadline()
 
 
 def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_note=None, patient=False):

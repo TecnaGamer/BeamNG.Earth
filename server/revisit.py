@@ -397,6 +397,8 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
                 # (an older version shown while this one is built: what is kept is this version's either way)
                 "BNE_STALE_REVISIT", "BNE_STALE_DAYS",
+                # (the clearance log only writes log lines: the tiles are the same with it on or off)
+                "BNE_CLEARANCE_LOG",
                 # (where the home cells' lane graphs and the decoded roads layers are kept and when they are written:
                 # the same graphs and layers either way, roadsurf3.LANES_DISK, roadlayercache.ASYNC)
                 "BNE_LANES_DISK", "BNE_ROADS_DEC_ASYNC",

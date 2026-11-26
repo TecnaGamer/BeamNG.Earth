@@ -25,7 +25,7 @@ log = logging.getLogger("earthd.picnic")
 URL = "https://data.openstreetmap.us/layercake/pois.parquet"
 PATH = "osm/pois.parquet"
 VERSION_TTL_S = 7 * 86400
-RETRY_S = 3600
+RETRY_S = 120               # the source unreachable: asked again after this long, doubling per failure in a row up to VERSION_TTL_S (rangeread.pinned_version); short to start: a host back up must not stay shut out (2026-11-08)
 COLUMNS = ("id", "leisure", "amenity", "tourism")
 TABLES = {"picnic_table"}
 SITES = {"picnic_site"}
@@ -36,9 +36,11 @@ class Source:
     """Picnic features of a map cell, from the pinned Layercake POIs version."""
 
     def __init__(self, reader, fetcher, url=URL):
-        self.reader, self.fetcher, self.url = reader, fetcher, url
+        self.reader, self.url = reader, url
         self.raw_dir = reader.raw_dir
+        self.fetcher = rangeread.HostDown(fetcher, os.path.join(self.raw_dir, "picnicsource", "hostdown"))
         self._lock = threading.Lock()
+        self._probing = threading.Lock()    # (the one thread asking the host for its version: _version)
         self._remote = None
         self._checked = 0.0
         self._meta = None           # (RemoteFile, row groups)
@@ -126,13 +128,22 @@ class Source:
         return None
 
     def _version(self, kind):
+        if self._probing.locked():      # (another thread is asking the host: not waiting behind it)
+            raise rangeread.RangeError(f"{self.url}: being asked by another thread")
         with self._lock:
             if self._remote is not None and time.time() - self._checked < VERSION_TTL_S:
                 return self._remote
-            # (a pin past VERSION_TTL_S stays in use when the server cannot be asked: stale-if-error)
-            etag, size, fresh_for = rangeread.pinned_version(
-                self.fetcher, self.url, os.path.join(self.raw_dir, "picnicsource"), kind, VERSION_TTL_S, RETRY_S,
-                f"picnic tables: {self.url}")
+            # (a pin past VERSION_TTL_S stays in use when the server cannot be asked: stale-if-error, upstream dev's
+            # rangeread.pinned_version.) The fork's HostDown wrapper (self.fetcher) and its one-asker rule stay: the
+            # asking thread holds _probing, and every other thread is turned away at the top of this method at once
+            # (RangeError) instead of waiting on the lock behind a dead host's connect timeouts (2026-11-08, GitHub #435)
+            self._probing.acquire()
+            try:
+                etag, size, fresh_for = rangeread.pinned_version(
+                    self.fetcher, self.url, os.path.join(self.raw_dir, "picnicsource"), kind, VERSION_TTL_S, RETRY_S,
+                    f"picnic tables: {self.url}")
+            finally:
+                self._probing.release()
             d = os.path.join(self.raw_dir, "picnicsource", re.sub(r"[^A-Za-z0-9]+", "_", etag).strip("_"))
             self._remote = (etag, rangeread.RemoteFile([self.url], size, d, self.fetcher, if_match=etag))
             self._checked = time.time() - VERSION_TTL_S + fresh_for     # (asked again after fresh_for)

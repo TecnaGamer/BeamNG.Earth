@@ -27,7 +27,10 @@ class LevelSpacingTest(unittest.TestCase):
     def test_off_as_before(self):
         self.assertFalse(roads.LEVEL_SPACING)
         self.assertAlmostEqual(roads.deck_road_clear(), roads.DECK_ROAD_CLEAR)
-        self.assertAlmostEqual(roads.deck_road_clear(1.5, ["motorway"]), 6.15 + 1.5)
+        # (the road's headroom, 4 m (roads.MIN_BRIDGE_HEADROOM_M: the game's vehicles, not the old 6 m guess), its
+        # margin and the deck's depth)
+        self.assertAlmostEqual(roads.deck_road_clear(1.5, ["motorway"]),
+                               roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M + 1.5)
         self.assertAlmostEqual(roads.deck_depth(32.0), 32.0 / roads.DECK_SPAN_RATIO)
 
     def test_clearance_by_the_road_under(self):
@@ -51,7 +54,9 @@ class LevelSpacingTest(unittest.TestCase):
                 low, high = roads.deck_profile([a, b], flat, levels=[1.0, 2.0], widths=[12.0, 12.0], clear=clear)
                 gaps[on] = float(high[len(high) // 2] - low[len(low) // 2])
                 self.assertGreaterEqual(gaps[on], clear - 0.05)
-        self.assertLess(gaps[True], gaps[False] - 0.8, "about a metre lower a level")
+        # (the default is the low one now: a road's 4 m headroom under the deck (roads.MIN_BRIDGE_HEADROOM_M), where
+        # LEVEL_SPACING was about a metre lower a level than the old 6 m)
+        self.assertLessEqual(gaps[False], gaps[True] + 0.05)
 
     def test_crossing_ground_index(self):
         a, _b = cross()

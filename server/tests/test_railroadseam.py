@@ -7,6 +7,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import railroadseam as rs  # noqa: E402
+import railways  # noqa: E402
 
 
 def straight(y, n=51, x1=200.0):
@@ -53,7 +54,7 @@ class CoupleTest(unittest.TestCase):
         zb = np.full(len(x), 97.9)
         got = rs.couple(xy, zb, self.HALF, [(straight(0.0, 41, 400.0), np.full(41, 100.0), 8.6)])
         g = np.abs(np.diff(got)) / np.hypot(*np.diff(xy, axis=0).T)
-        self.assertLess(float(g.max()), 0.0201)
+        self.assertLessEqual(float(g.max()), railways.GRADE + 1e-4)
         self.assertAlmostEqual(float(got[-1]), 97.9, places=6, msg="far from the road it is its own again")
 
     def test_a_crossing_track_takes_the_roads_height(self):
@@ -196,3 +197,23 @@ class NaturalSlopeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeckHoldTest(unittest.TestCase):
+    """grading._held_by_decks: the coupling's move held near a rail deck's ends (Compiegne: the ring roads pulled the
+    track's ground line 6 m down between two bridges, a trench under the ballast)."""
+
+    def test_no_move_near_a_deck_end_then_growing_at_the_tracks_grade(self):
+        import grading
+        import railways
+        xy = np.c_[np.arange(0.0, 400.0, 2.0), np.zeros(200)]
+        got = grading._held_by_decks(xy, np.full(200, -6.0), np.array([[0.0, 0.0]]))
+        self.assertTrue(np.all(got[xy[:, 0] <= grading.SEAM_DECK_HOLD_M] == 0.0))
+        far = xy[:, 0] > grading.SEAM_DECK_HOLD_M + 6.0 / railways.GRADE
+        self.assertTrue(np.allclose(got[far], -6.0), "the whole move far from the deck")
+        self.assertLessEqual(float(np.abs(np.diff(got)).max()), railways.GRADE * 2.0 + 1e-9)
+
+    def test_no_deck_no_hold(self):
+        import grading
+        xy = np.c_[np.arange(0.0, 20.0, 2.0), np.zeros(10)]
+        self.assertTrue(np.allclose(grading._held_by_decks(xy, np.full(10, 3.0), np.zeros((0, 2))), 3.0))

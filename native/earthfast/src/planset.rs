@@ -614,8 +614,9 @@ impl Ord for Step {
 /// bank_off[j]..bank_off[j + 1] (has_bank[j] false: none, zeros), widen's the same. numpy's concatenation of them taken
 /// as it is: a plan's bank as long as it is (trim_side_mouths keeps the untrimmed plan's), read at the segments' vertex
 /// positions in the concatenated plans (as PlanPack's bk[ia]: one longer shifts the plans after it). half, road_half (plans,); rid (plans,): its road (-1: none); rank (plans,); abut (plans, 2); steep (plans,): flags,
-/// STEEP (a pass road's) and OPEN_TUNNEL (a tunnel's open section: gradebins), the segments' st;
-/// bbox (plans, 4); cut (c, 6) the plans' cut rows, plan j's cut_off[j]..cut_off[j + 1] (has_cut[j] false: it has
+/// STEEP (a pass road's), OPEN_TUNNEL (a tunnel's open section) and TUNNEL (a covered tunnel's section in the open:
+/// gradebins), the segments' st;
+/// bbox (plans, 4); cut (c, NCUT) the plans' cut rows, plan j's cut_off[j]..cut_off[j + 1] (has_cut[j] false: it has
 /// none); then grading's constants. Returns a dict of PlanPack's attributes.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
@@ -638,6 +639,10 @@ pub fn plan_pack<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyRe
     let res = py.detach(|| pack_core(&p, &inp, &k)).map_err(PyValueError::new_err)?;
     pack_dict(py, res)
 }
+
+/// A plan's cut row: a cutting's wall, top and top offset, left then right (grading.Plan.cut), then the fill walls' weights,
+/// left, right (gradebins).
+pub const NCUT: usize = 8;
 
 /// plan_pack's per-plan inputs read: the plans' banks (bank_off: plan j's bank_off[j]..bank_off[j + 1], has_bank[j]
 /// false: none), widens the same, cut rows the same, and their other arrays.
@@ -662,7 +667,7 @@ fn read_pack_in<'py>(np_: usize, bank: &PyReadonlyArray1<'py, f64>, bank_off: &P
     if !offs_ok(bank_off, bank.len(), has_bank) || !offs_ok(widen_off, widen.len(), has_widen)
         || half.len() != np_ || road_half.len() != np_
         || rid.len() != np_ || rank.len() != np_ || abut.nrows() != np_ || abut.ncols() != 2 || steep.len() != np_
-        || bbox.nrows() != np_ || bbox.ncols() != 4 || cut.ncols() != 6 || cut_off.len() != np_ + 1
+        || bbox.nrows() != np_ || bbox.ncols() != 4 || cut.ncols() != NCUT || cut_off.len() != np_ + 1
         || has_cut.as_array().len() != np_ || cut_off.iter().any(|&o| o < 0 || o as usize > cut.nrows())
         || (1..cut_off.len()).any(|i| cut_off[i] < cut_off[i - 1]) {
         return Err(PyValueError::new_err("plan_pack: mismatched plan arrays"));
@@ -676,10 +681,10 @@ fn read_pack_in<'py>(np_: usize, bank: &PyReadonlyArray1<'py, f64>, bank_off: &P
     };
     let banks = per(bank, bank_off, has_bank);
     let widens = per(widen, widen_off, has_widen);
-    let cutv: Vec<[f64; 6]> = (0..cut.nrows()).map(|r| std::array::from_fn(|c| cut[[r, c]])).collect();
+    let cutv: Vec<[f64; NCUT]> = (0..cut.nrows()).map(|r| std::array::from_fn(|c| cut[[r, c]])).collect();
     // (each plan's cut rows: its segments')
     let has_cut = has_cut.as_array();
-    let cuts: Vec<Option<Vec<[f64; 6]>>> = (0..np_).map(|j| if has_cut[j] {
+    let cuts: Vec<Option<Vec<[f64; NCUT]>>> = (0..np_).map(|j| if has_cut[j] {
         Some(cutv[cut_off[j] as usize..cut_off[j + 1] as usize].to_vec())
     } else { None }).collect();
     Ok(PackIn {
@@ -698,7 +703,7 @@ fn read_pack_in<'py>(np_: usize, bank: &PyReadonlyArray1<'py, f64>, bank_off: &P
 struct PackIn {
     banks: Vec<Option<Vec<f64>>>,
     widens: Vec<Option<Vec<f64>>>,
-    cuts: Vec<Option<Vec<[f64; 6]>>>,
+    cuts: Vec<Option<Vec<[f64; NCUT]>>>,
     half: Vec<f64>,
     road_half: Vec<f64>,
     rid: Vec<i64>,
@@ -733,7 +738,7 @@ struct Row {
     z: Vec<f64>,
     bank: Vec<f64>,
     widen: Vec<f64>,
-    cut: Option<Vec<[f64; 6]>>,
+    cut: Option<Vec<[f64; NCUT]>>,
     bbox: [f64; 4],
 }
 
@@ -811,7 +816,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
         // (np.concatenate of the rows' banks / widens, read at the vertices' positions in the concatenated rows)
         let bk: Vec<f64> = rows.iter().flat_map(|r| r.bank.iter().copied()).collect();
         let wd: Vec<f64> = rows.iter().flat_map(|r| r.widen.iter().copied()).collect();
-        const SURFACE_WIDTH: u8 = 4; // grading.PLAN_SURFACE_WIDTH
+        const SURFACE_WIDTH: u8 = 8; // grading.PLAN_SURFACE_WIDTH (4 is TUNNEL: gradebins)
         let mut width_delta = steep.iter().any(|&f| f & SURFACE_WIDTH != 0).then(|| Vec::with_capacity(ns));
         let any_w = wd.iter().any(|&w| w != 0.0);
         let mut g = 0usize;
@@ -1007,7 +1012,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
         };
         let mut ab = vec![0u8; ns];
         let mut abd = vec![f64::NAN; ns * 2];
-        let mut cutp = vec![f64::NAN; ns * 6];
+        let mut cutp = vec![f64::NAN; ns * NCUT];
         for r in 0..n {
             let mut offs = [f64::NAN; 2];
             for (e, o) in offs.iter_mut().enumerate() {
@@ -1039,11 +1044,11 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
                 // (numpy's assignment: as many rows as segments, or one row broadcast)
                 if c.len() == nseg[r] {
                     for (k, row) in c.iter().enumerate() {
-                        cutp[(s0[r] + k) * 6..(s0[r] + k + 1) * 6].copy_from_slice(row);
+                        cutp[(s0[r] + k) * NCUT..(s0[r] + k + 1) * NCUT].copy_from_slice(row);
                     }
                 } else if c.len() == 1 {
                     for k in 0..nseg[r] {
-                        cutp[(s0[r] + k) * 6..(s0[r] + k + 1) * 6].copy_from_slice(&c[0]);
+                        cutp[(s0[r] + k) * NCUT..(s0[r] + k + 1) * NCUT].copy_from_slice(&c[0]);
                     }
                 } else {
                     return Err(format!("plan_pack: {} cut rows for {} segments", c.len(), nseg[r]));
@@ -1268,7 +1273,7 @@ fn pack_dict(py: Python<'_>, res: PackOut) -> PyResult<Bound<'_, PyDict>> {
             d.set_item("rk", rk.into_pyarray(py))?;
             d.set_item("ab", ab.into_pyarray(py))?;
             d.set_item("abd", Array2::from_shape_vec((ns, 2), abd).unwrap().into_pyarray(py))?;
-            d.set_item("cut", Array2::from_shape_vec((ns, 6), cutp).unwrap().into_pyarray(py))?;
+            d.set_item("cut", Array2::from_shape_vec((ns, NCUT), cutp).unwrap().into_pyarray(py))?;
             d.set_item("st", st.into_pyarray(py))?;
             d.set_item("lk", lk.into_pyarray(py))?;
             d.set_item("box", Array2::from_shape_vec((n, 4), boxv).unwrap().into_pyarray(py))?;

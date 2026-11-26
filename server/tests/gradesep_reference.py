@@ -11,21 +11,23 @@ import roads as R
 
 
 def pieces(feats, i, kind):
-    """gradesep._pieces as it was (the length measured for every feature with a range)."""
+    """gradesep._pieces as it was (the length measured for every feature with a range; a railway's short tunnel
+    short along the line, railways.tunnel_run_m)."""
     rngs = R.tag_level_ranges(feats, i)
     L = R._feature_length_m(feats, i) if rngs else 0.0
+    floor = R.part_floor(feats, i, rngs)
     out, at = [], 0.0
     for a, b, k in rngs:
-        if a - at > R.MIN_PART:
+        if a - at > floor:
             out.append((kind, at, a, False))
         if k == "bridge":
             out.append((None, a, b, True))
-        elif kind == 1 and (b - a) * L < G.railways.SHORT_TUNNEL_M:
+        elif kind == 1 and G.railways.tunnel_run_m(feats, i, a, b) < G.railways.SHORT_TUNNEL_M:
             out.append((2, a, b, False))
         elif kind == 0:
             out.append((3, a, b, False))
         at = max(at, b)
-    if 1.0 - at > R.MIN_PART:
+    if 1.0 - at > floor:
         out.append((kind, at, 1.0, False))
     return out
 

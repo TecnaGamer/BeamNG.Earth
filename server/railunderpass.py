@@ -35,6 +35,7 @@ HOLE_TH_M = 7.0             # the ground this high over the floor is cut (the li
 HOLE_SIDE_M = 0.3           # the hole reaches this far past the walls (and the kernel adds its margin and a square)
 CONCRETE = bm.PLATFORM_TOP
 KERB = bm.KERB
+FLOOR_GRADE = 0.08          # the passage's floor falls toward an end whose ground lies under it by at most this (a ramp)
 
 
 def width_of(link):
@@ -52,6 +53,23 @@ def levels(frame, elev, st, link):
     return lid - CEIL_D - CLEAR_M, lid
 
 
+def profile(frame, elev, st, link, path):
+    """(floor z (k,), lid top z (k,)) along the resampled path: the floor of levels (under the lowest bed the link crosses)
+    where the ground at both ends lies over it, and toward an end whose ground lies under it, falling to that ground at the
+    end by FLOOR_GRADE at most (a ramp), the lid CEIL_D + CLEAR_M over it. A passage under an embankment from the platform
+    to the street below (Vienna's Erzherzog-Karl-Strasse: 100 m, the ground 159.4 at the platform's end, 153.6 at the road's
+    in its cutting, the floor 156.4 under the rails' bed) had its one floor 2.8 m over the road, a box standing on it with a
+    flight going down into the carriageway; now its floor ramps down to the road's level and ends there, no flight."""
+    zf0, _lid0 = levels(frame, elev, st, link)
+    s = rb._arc(path)
+    zf = np.full(len(path), zf0)
+    for e, fl in flights(link, path).items():
+        g = float(bm.ground(frame, elev, fl[-1:])[0])
+        d = s if e == 0 else s[-1] - s
+        zf = np.minimum(zf, g + FLOOR_GRADE * d)
+    return zf, zf + CEIL_D + CLEAR_M
+
+
 def flights(link, path):
     """{0 / -1: [points]} the stairs at the passage's ends, from the end outwards (railbridges._end_flights), each starting
     at the end of the passage itself."""
@@ -65,30 +83,34 @@ def flights(link, path):
 
 
 def _ceiling_and_floor(mesh, path, zf, zlid, w):
+    """zf, zlid: the floor's and the lid's top heights, a number or one per point of path."""
     t, n = rb._normals(path)
     L, R = path + n * w / 2.0, path - n * w / 2.0
     s = rb._arc(path)
+    zf = np.broadcast_to(np.asarray(zf, float), (len(path),))
+    zlid = np.broadcast_to(np.asarray(zlid, float), (len(path),))
     zc = zlid - CEIL_D
     rep = CONCRETE[1]
     for i in range(len(path) - 1):
         j = i + 1
         uv = [(s[i] / rep, 0.0), (s[j] / rep, 0.0), (s[j] / rep, w / rep), (s[i] / rep, w / rep)]
-        rb._quad(mesh, CONCRETE[0], [(*R[i], zf), (*R[j], zf), (*L[j], zf), (*L[i], zf)], uv)           # floor, up
-        rb._quad(mesh, CONCRETE[0], [(*R[i], zc), (*L[i], zc), (*L[j], zc), (*R[j], zc)], uv)           # ceiling, down
-        h = zc - zf
-        wuv = [(s[i] / rep, 0.0), (s[j] / rep, 0.0), (s[j] / rep, h / rep), (s[i] / rep, h / rep)]
-        rb._quad(mesh, KERB[0], [(*R[j], zf), (*R[i], zf), (*R[i], zc), (*R[j], zc)], wuv)               # the right wall, facing in
-        rb._quad(mesh, KERB[0], [(*L[i], zf), (*L[j], zf), (*L[j], zc), (*L[i], zc)], wuv)               # the left wall, facing in
+        rb._quad(mesh, CONCRETE[0], [(*R[i], zf[i]), (*R[j], zf[j]), (*L[j], zf[j]), (*L[i], zf[i])], uv)       # floor, up
+        rb._quad(mesh, CONCRETE[0], [(*R[i], zc[i]), (*L[i], zc[i]), (*L[j], zc[j]), (*R[j], zc[j])], uv)       # ceiling, down
+        h0, h1 = zc[i] - zf[i], zc[j] - zf[j]
+        wuv = [(s[i] / rep, 0.0), (s[j] / rep, 0.0), (s[j] / rep, h1 / rep), (s[i] / rep, h0 / rep)]
+        rb._quad(mesh, KERB[0], [(*R[j], zf[j]), (*R[i], zf[i]), (*R[i], zc[i]), (*R[j], zc[j])], wuv)           # the right wall, facing in
+        rb._quad(mesh, KERB[0], [(*L[i], zf[i]), (*L[j], zf[j]), (*L[j], zc[j]), (*L[i], zc[i])], wuv)           # the left wall, facing in
     # the lid: a slab over the passage, wider than it (it covers the terrain hole's squares)
     rb._strip(mesh, path, zlid, w + 2 * WALL_T + 2 * LID_EXTRA_M, CEIL_D, CONCRETE, KERB)
 
 
 def _lights(mesh, path, zlid, w):
     s = rb._arc(path)
-    zc = zlid - CEIL_D - 0.02
+    zlid = np.broadcast_to(np.asarray(zlid, float), (len(path),))
     t, n = rb._normals(path)
     for at in np.arange(LIGHT_STEP_M / 2.0, s[-1], LIGHT_STEP_M):
         p = np.array([dnp.interp(at, s, path[:, 0]), dnp.interp(at, s, path[:, 1])])
+        zc = float(dnp.interp(at, s, zlid)) - CEIL_D - 0.02
         i = min(int(np.searchsorted(s, at)), len(path) - 1)
         u, nn = t[i], n[i]
         rect = np.array([p - u * 0.15 - nn * 0.5, p + u * 0.15 - nn * 0.5, p + u * 0.15 + nn * 0.5, p - u * 0.15 + nn * 0.5])
@@ -138,13 +160,13 @@ def add(mesh, frame, elev, st, link, collide=False):
     path = rb.resample(link.xy)
     if len(path) < 2:
         return
-    zf, zlid = levels(frame, elev, st, link)
+    zf, zlid = profile(frame, elev, st, link, path)
     w = width_of(link)
     _ceiling_and_floor(mesh, path, zf, zlid, w)
     if not collide:
         _lights(mesh, path, zlid, w)
-    for _e, fl in flights(link, path).items():
-        _pit(mesh, frame, elev, fl, zf, w, collide)
+    for e, fl in flights(link, path).items():
+        _pit(mesh, frame, elev, fl, float(zf[0 if e == 0 else -1]), w, collide)
 
 
 def hole_parts(frame, elev, st, link):
@@ -152,15 +174,16 @@ def hole_parts(frame, elev, st, link):
     path = rb.resample(link.xy)
     if len(path) < 2:
         return []
-    zf, _lid = levels(frame, elev, st, link)
+    zf, _lid = profile(frame, elev, st, link, path)
     w = width_of(link)
     hw = w / 2.0 + WALL_T + HOLE_SIDE_M
-    out = [(path, np.full(len(path), zf), hw)]
-    for _e, fl in flights(link, path).items():
+    out = [(path, zf, hw)]
+    for e, fl in flights(link, path).items():
+        z0 = float(zf[0 if e == 0 else -1])
         g_end = float(bm.ground(frame, elev, fl[-1:])[0])
         line = rb.resample(fl, 1.0)
         s = rb._arc(line)
-        out.append((line, zf + (g_end - zf) * s / max(1e-6, s[-1]), hw))
+        out.append((line, z0 + (g_end - z0) * s / max(1e-6, s[-1]), hw))
     return out
 
 

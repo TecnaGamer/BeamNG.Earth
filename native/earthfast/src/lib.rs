@@ -2211,12 +2211,13 @@ macro_rules! grade_segs {
 /// wall, top and top offset, left then right; ba / bb: the cross slope at each segment's ends (m per m toward its left:
 /// a banked curve, grading.bank); steep: flags, gradebins::STEEP a mountain pass road's (grading.Plan.steep: its sides
 /// fall to the natural ground at steep_run, from steep_t_min, between its retaining wall and its parapet),
-/// gradebins::OPEN_TUNNEL a tunnel's open section (grading.Plan.open_tunnel); link: bit 0 the plan goes on
+/// gradebins::OPEN_TUNNEL a tunnel's open section (grading.Plan.open_tunnel), gradebins::TUNNEL a covered tunnel's
+/// section in the open (grading.Plan.tunnel_section); link: bit 0 the plan goes on
 /// before it, bit 1 after it (a point past such an end takes the segment's line carried on, up to extrap m, not its
 /// end height: on a grade the ends' heights blended in made a washboard of the plan's vertex step, the Stelvio
 /// 2026-11-01); rk: a road's grading rank (grading.grade_rank: a lower one gives way over a higher one's core);
 /// abut_d (segments, 2): along its road to a start / end abutment, NaN: none.
-#[pyfunction(signature = (px, pyy, base, a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut, wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step, yield_ramp, rank_fade, rank_height_fade, abut_under, abut_d, width_delta=None))]
+#[pyfunction(signature = (px, pyy, base, a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut, wall_t, wall_flat, wall_ahead, fill_flat, sep, sep_from, sep_full, core_fade, side_fade, sharp_step, yield_ramp, rank_fade, rank_height_fade, abut_under, abut_d, width_delta=None))]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
                      base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>, b: PyReadonlyArray2<'py, f64>,
@@ -2226,13 +2227,13 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                      ba: PyReadonlyArray1<'py, f64>, bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
                      link: PyReadonlyArray1<'py, u8>, extrap: f64,
                      lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64, blend_r: f64,
-                     bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
+                     bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64, fill_flat: f64,
                      sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
                      yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
                      abut_d: PyReadonlyArray2<'py, f64>, width_delta: Option<PyReadonlyArray1<'py, f64>>)
                      -> PyResult<Bound<'py, PyArray1<f64>>> {
     let prm = gradebins::Prm { extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut,
-                               wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
+                               wall_t, wall_flat, wall_ahead, fill_flat, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
                                yield_ramp, rank_fade, rank_height_fade, abut_under };
     let mut segs = grade_segs!(a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, abut_d);
     segs.width_delta = width_delta.as_ref().map(|d| d.as_array());
@@ -2246,7 +2247,7 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
 /// grading.grade_points (the default): grade_points' heights bit for bit by fine bins (gradebins::binned), without the
 /// GIL. keep (segments,): 1 for the segments taking part (the plans whose boxes meet the points': PlanPack.near's,
 /// without copying the arrays); bin_m: the fine bins' size (m).
-#[pyfunction(signature = (px, pyy, base, a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut, wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step, yield_ramp, rank_fade, rank_height_fade, abut_under, abut_d, keep, bin_m, width_delta=None))]
+#[pyfunction(signature = (px, pyy, base, a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut, wall_t, wall_flat, wall_ahead, fill_flat, sep, sep_from, sep_full, core_fade, side_fade, sharp_step, yield_ramp, rank_fade, rank_height_fade, abut_under, abut_d, keep, bin_m, width_delta=None))]
 #[allow(clippy::too_many_arguments)]
 fn grade_points_binned<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
                             base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>,
@@ -2258,14 +2259,14 @@ fn grade_points_binned<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy
                             bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
                             link: PyReadonlyArray1<'py, u8>, extrap: f64,
                             lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64,
-                            blend_r: f64, bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
+                            blend_r: f64, bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64, fill_flat: f64,
                             sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
                             yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
                             abut_d: PyReadonlyArray2<'py, f64>, keep: PyReadonlyArray1<'py, u8>, bin_m: f64,
                             width_delta: Option<PyReadonlyArray1<'py, f64>>)
                             -> PyResult<Bound<'py, PyArray1<f64>>> {
     let prm = gradebins::Prm { extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut,
-                               wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
+                               wall_t, wall_flat, wall_ahead, fill_flat, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
                                yield_ramp, rank_fade, rank_height_fade, abut_under };
     let mut segs = grade_segs!(a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, abut_d);
     segs.width_delta = width_delta.as_ref().map(|d| d.as_array());
@@ -7658,6 +7659,27 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 505: try598's 501 (P1c, the Rust ports 494-500) with RS S2b part 2a (493) and v2 P1b (498) merged; 502-504 are
     // other branches'
     // 508: the full Rust port's r2a18 (sidewalks::sidewalk_normals, sidewalks._normals_2d); 506-507 are other branches'
+    // the fork's grading kernels, first numbered 305-309 on its branch (carriageways, gradebins), as 509:
+    // 305: carriageway_profiles' couplings of three samples (z_a - (1 - alpha) z_b - alpha z_c: roadlaws' landings on the
+    // joined road's solved grade, not its planned one) and the <= kind
+    // 306: grade_points' ground past an abutment end, under the deck: the abutment's slope (1 in slope_run), never
+    // under the point's ground where that stands higher (gradebins::under_deck)
+    // 307: a road running beside a covered tunnel's section in the open keeps its own ground past the section's
+    // painted edge (gradebins::TUNNEL)
+    // 308: grade_points: a road's lanes and its rank's hold end at its wall's face (or fall), the ground steps there
+    // between two roads at other levels (gradebins::pair0 / pair1: the lower road's lanes no longer reach past its
+    // face over the other's carriageway)
+    // 309: carriageway_profiles takes a spacing per sample (the distance to the next): a segment's grade bound and a
+    // window's curve bound are its own spacings', not the chain's one closest-two-samples step (a dip piece with two
+    // samples 0.3 m apart was held to 0.3 m of grade over its whole length)
+    // 509: the fork's 305-309 above merged onto 508
+    // 510: RailNode.group(g) -> (keys, heights): railprofile._find_near reads a group's points (its nearest ones
+    // where no key matched, the fork's Popoli fix on the ported node)
+    // 511: the fork's 307 (a piece of a feature is dropped under a share of it, at most 1 m of it: roads.part_floor,
+    // MIN_PART_M; a share of a 24 km road was 24 m, its 23 m bridge dropped and its range left a hole in the road) merged
+    // on 510: gradesep_layer_rows takes min_part_m, LevelLayer.rules' parameters a 21st, lidar_lines' a 4th, road_specs'
+    // constants "MIN_PART_M"; bridge_level_spans (and level_spans) take absorb_part: a bridge's level fragments under a
+    // share of the road are absorbed into their neighbour as before, only a range under the floor is dropped
     m.add_function(wrap_pyfunction!(roadshape::forks::fork_records, m)?)?;
     // 510: road revamp v2 phase P2a (roadshape::forks::fork_records: the fork / gore records from the map, shadow only,
     // BNE_ROADSHAPE=sheet); 509 is another branch's
@@ -7822,6 +7844,17 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
     // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
     // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
+    // 581: upstream dev (580) merged with the fork's grading kernels (509-511 above: their numbers were taken by dev's own 509-511, so
+    // both sets of changes are in this build and the version is past both; rail_crossing_roads takes the road grade law's callback as its last argument
+    // (the third item of a ground crossing, railways.graded_crossings); the plans' SURFACE_WIDTH flag is 8 (4 is TUNNEL))
+    // 582: fill walls (gradebins pair1: the plan's weight on a segment's side, cut columns 6 and 7 (planset NCUT 8), gives the road's
+    // level flat for fill_flat past the core's edge, then a step to the natural ground; grade_points / grade_points_binned take fill_flat
+    // after wall_ahead)
+    // 583: the cutting's wall by the plan's weight too (those columns negative: -1 a cutting's wall, +1 a fill's): the ground over the
+    // road there, the same along the plan's run, not the point's own height over the road's (it flickered round wall_cut); every wall's
+    // flat strip is fill_flat (the lattice's teeth reach) behind the core
+    // 630: upstream dev (629) merged with the fork's grading kernels (581-583 above: gradebins fill / cutting walls, rail_crossing_roads' grade callback),
+    // both sets of changes in this build, the version past both
     // 629: the tunnel plan T1 (roadsys tunnel.rs, tunaudit.rs, tunnelrec.rs; BNE_ROADSYS_TUNNELS)
     // 630 (628 kept for another branch): RoadsysEnds.ceil / RoadsysCeil (roadsys ceil.rs: the ground under a deck at
     // most at its soffit less 0.3 m, BNE_ROADSYS=surface; every evaluator of the physics ground,
@@ -7841,6 +7874,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(landings::landing_chain, m)?)?;
     // 639: roadwear::puddle_plan (a tile's puddles: sags, gutters, ruts) and
     // puddle_atlas_px (their masks)
-    m.add("VERSION", 639)?;
+    // 640: dev (639: the puddle kernels) merged with the fork's grading kernels (581-583, 630 above: gradebins fill / cutting
+    // walls, rail_crossing_roads' grade callback) and dev's 638 landings: both sets of changes in this build, past both
+    m.add("VERSION", 640)?;
     Ok(())
 }

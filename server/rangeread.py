@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import threading
+import time
 from collections import OrderedDict
 
 import netfetch
@@ -71,6 +72,54 @@ CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)")
 # Errors after which the next mirror is asked (the same bytes from another host); NotFound is not
 # one of them: a release file that is missing on one mirror is missing.
 _FAILOVER = (netfetch.HostUnavailable, netfetch.RateLimited, netfetch.FetchFailed)
+
+
+class HostDown:
+    """A fetcher that stops asking a host that does not answer: after a request failed on the network (not a status)
+    a marker file in raw_dir keeps every thread and road-tile process off the host for DOWN_S, their reads failing at
+    once (HostUnavailable) instead of each waiting out its own connect timeouts: 4 road processes x 6 threads on a
+    dead data.openstreetmap.us stalled every road tile 75-300 s (2026-11-08, GitHub #435). The first request after
+    the time claims the marker again and is the probe: a good answer removes it. Reads served from the disk caches
+    never reach the fetcher."""
+
+    DOWN_S = 60.0
+
+    def __init__(self, fetcher, marker):
+        self._f, self._marker = fetcher, marker
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+    def _touch(self):
+        try:
+            os.makedirs(os.path.dirname(self._marker), exist_ok=True)
+            with open(self._marker, "w"):
+                pass
+        except OSError:
+            pass
+
+    def get(self, url, **kw):
+        try:
+            age = time.time() - os.path.getmtime(self._marker)
+        except OSError:
+            age = None
+        if age is not None:
+            if age < self.DOWN_S:
+                raise netfetch.HostUnavailable(f"{url}: unreachable at the last try", url, None,
+                                               retry_after=self.DOWN_S - age)
+            self._touch()                   # (the probe: the others wait for its answer)
+        try:
+            r = self._f.get(url, **kw)
+        except netfetch.FetchFailed as e:
+            if not isinstance(e, netfetch.BadResponse):
+                self._touch()
+            raise
+        if age is not None:
+            try:
+                os.remove(self._marker)
+            except OSError:
+                pass
+        return r
 
 
 class RangeError(IOError):

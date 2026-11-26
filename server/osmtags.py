@@ -43,7 +43,7 @@ log = logging.getLogger("earthd.mapdata")
 URL = "https://data.openstreetmap.us/layercake/highways.parquet"
 HOST = "data.openstreetmap.us"
 VERSION_TTL_S = 7 * 86400       # a pinned version is checked again after this long (the file changes ~weekly)
-RETRY_S = 3600                  # the source unreachable: asked again after this long (offline, blocked, gone)
+RETRY_S = 120                   # the source unreachable: asked again after this long, doubling per failure in a row up to VERSION_TTL_S (rangeread.pinned_version); short to start: a host back up must not stay shut out (2026-11-08)
 PATH = "osm/highways.parquet"   # (the path DuckDB reads it under)
 
 # The query: OSM way id and the parsed tags (NULL where absent or not understood).
@@ -105,8 +105,10 @@ class OsmTags:
     DIR = "osmtags"             # the pinned version's and its blocks' folder under raw_dir (osmfuel.OsmFuel: its own)
 
     def __init__(self, raw_dir, fetcher, url=URL):
-        self.raw_dir, self.fetcher, self.url = raw_dir, fetcher, url
+        self.raw_dir, self.url = raw_dir, url
+        self.fetcher = rangeread.HostDown(fetcher, os.path.join(raw_dir, self.DIR, "hostdown"))
         self._lock = threading.Lock()
+        self._probing = threading.Lock()    # (the one thread asking the host for its version: _version)
         self._remote = None         # (etag, RemoteFile)
         self._checked = 0.0
         self._reader = overture.Reader(raw_dir, fetcher)
@@ -115,13 +117,22 @@ class OsmTags:
 
     def version(self, kind="demand"):
         """(etag, RemoteFile) of the version in use: the one pinned on disk while fresh, else the server's."""
+        if self._probing.locked():      # (another thread is asking the host: not waiting behind it)
+            raise rangeread.RangeError(f"{self.url}: being asked by another thread")
         with self._lock:
             if self._remote is not None and time.time() - self._checked < VERSION_TTL_S:
                 return self._remote
-            # (a pin past VERSION_TTL_S stays in use when the server cannot be asked: stale-if-error)
-            etag, size, fresh_for = rangeread.pinned_version(
-                self.fetcher, self.url, os.path.join(self.raw_dir, self.DIR), kind, VERSION_TTL_S, RETRY_S,
-                f"{self.DIR}: {self.url}")
+            # (a pin past VERSION_TTL_S stays in use when the server cannot be asked: stale-if-error, upstream dev's
+            # rangeread.pinned_version.) The fork's HostDown wrapper (self.fetcher) and its one-asker rule stay: the
+            # asking thread holds _probing, and every other thread is turned away at the top of this method at once
+            # (RangeError) instead of waiting on the lock behind a dead host's connect timeouts (2026-11-08, GitHub #435)
+            self._probing.acquire()
+            try:
+                etag, size, fresh_for = rangeread.pinned_version(
+                    self.fetcher, self.url, os.path.join(self.raw_dir, self.DIR), kind, VERSION_TTL_S, RETRY_S,
+                    f"{self.DIR}: {self.url}")
+            finally:
+                self._probing.release()
             d = os.path.join(self.raw_dir, self.DIR, re.sub(r"[^A-Za-z0-9]+", "_", etag).strip("_"))
             self._remote = (etag, rangeread.RemoteFile([self.url], size, d, self.fetcher, if_match=etag))
             self._checked = time.time() - VERSION_TTL_S + fresh_for     # (asked again after fresh_for)

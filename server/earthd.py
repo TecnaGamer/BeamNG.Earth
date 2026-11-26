@@ -1262,10 +1262,6 @@ class Server:
             import winterpacks
             snowcovermod.set_packs(winterpacks.packs(cache_dir, self.net))
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=self.net)
-        import railways as _railways    # (coarse elevation: rail decks raised over the roads under them)
-        _railways.COARSE_AT = self.dem.coarse_at
-        # (and no separation in the ground under a rail bridge: railways.flat_rail_crossing)
-        _railways.RAW_ELEV = lambda la, lo, _d=self.dem: _d.sample(la, lo, gradingmod.PROFILE_ZOOM)
         # runways graded in (--airports on: main() loads the OurAirports copy before the worker processes)
         self.airports = airportgrademod.AirportGrader(airports_db, self.dem) if airports_db is not None else None
         self.airports_db = airports_db  # (also the road rules' country where no border says: navgraph.country_at)
@@ -3414,9 +3410,20 @@ class Server:
             towns = self.towns.maker(anchor.frame, roadsmod.cells_of_tile(anchor.frame, tx, ty,
                                                                           blockworker.TOWNS_MARGIN_M),
                                      self.out_dir, self.vfs_dir, town_faces)
+        import railways
+        rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)]
+        rground = railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon))
+        rfar = railways.point_ground(
+            anchor.frame, lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+            ("raw", aid, anchor.lat, anchor.lon))
+        rbed = getattr(getattr(self, "plan_store", None), "elev", None)
+        runder = ((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy)) if _bridge_fps else None)
         sheet_marks = []        # (BNE_ROADSHAPE=sheet: the forks' nodes, deck_pads' skip: roads._sheet_marks)
         import roadsurf3
+        # (the railways' bridge decks before the road tile's retaining walls: they stand under them as under a road's deck)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
+                                     rail_decks=railways.tile_decks(anchor.frame, tx, ty, rcells, rground, far_ground=rfar,
+                                                                    load=cell_fn, bed_elev=rbed, under=runder),
                                      sign_obstacles=sign_obstacles, sheet_marks=sheet_marks,
                                      v3=({"cell_fn": lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand")
                                           .layers.get("roads")} if roadsurf3.ON and self.mapdata is not None else None),
@@ -3574,22 +3581,13 @@ class Server:
         except Exception as ex:
             log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
-        import railways
         rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
         if rail_early is not None:      # (made above, before the decks: BNE_RAIL_ROAD_FIT)
             (rmesh, rail_decks), rail_props = rail_early, rail_early_props
         else:
-            rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
-                                     [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)],
-                                     railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
-                                     far_ground=railways.point_ground(
-                                         anchor.frame,
-                                         lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
-                                         ("raw", aid, anchor.lat, anchor.lon)),
-                                     return_decks=True, load=cell_fn,
-                                     bed_elev=getattr(getattr(self, "plan_store", None), "elev", None), furniture=rail_props,
-                                     under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                            if _bridge_fps else None), records=rail_rec)
+            rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty, rcells, rground, far_ground=rfar,
+                                     return_decks=True, load=cell_fn, bed_elev=rbed, furniture=rail_props,
+                                     under=runder, records=rail_rec)
         if rail_props:
             props = (props or []) + rail_props
         bld = None
@@ -4168,7 +4166,7 @@ class Server:
         split = WARM_SPLIT and len(bp) > LANE_PREFETCH and bp[LANE_PREFETCH][0] is not bp[LANE_REQUEST][0]
         for lane, (_, q) in {id(q_): (n_, (p_, q_)) for n_, (p_, q_) in enumerate(self.block_pools)}.values():
             try:
-                q.put_nowait((anchor.id, anchor.lat, anchor.lon, keys, split and lane == LANE_REQUEST))
+                q.put_nowait((anchor.id, anchor.lat, anchor.lon, keys, split and lane == LANE_REQUEST, self.out_dir))
             except Exception as e:      # a full / closed queue only costs the lookahead
                 log.debug("road plans ahead: %s", e)
         if self.road_pool is not None:      # road tiles plan in their processes: this one needs none ahead
@@ -4827,9 +4825,14 @@ class Server:
                 def setup(t):
                     t.wet = self.sea.depth if self.sea is not None else None
                     t.water = self.sea.water if self.sea is not None else None
-                    t.raw = lambda la, lo: self.ground(None, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
+                    def raw(la, lo):
+                        return self.ground(None, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
+                    t.raw = raw
                     if g is not None:
-                        t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)
+                        # (the cover as the plans read it: Grader.tunnel_ground, blockworker.tunnel_profiles)
+                        t.raw = g.tunnel_ground
+                        t.ends = lambda la, lo, base=None: g.apply(la, lo, raw(la, lo) if base is None else base,
+                                                       gradingmod.ROAD_LIFT, roads_only=True)
                 cls = roadsmod.TunnelProfiles
             cs = stores[kind] = roadsmod.ChainStore(cls, cell_fn, elev, setup)
         return roadsmod.ChainView(cs, anchor.frame)

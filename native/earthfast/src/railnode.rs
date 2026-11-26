@@ -52,6 +52,16 @@ impl RailNode {
         }).collect();
         Ok(out.into_pyarray(py))
     }
+
+    /// (keys (k,) int64, heights (k,)): group g's packed centimetre keys, sorted, and their heights (railprofile's
+    /// _find_near: a point no key matched takes the group's nearest points).
+    fn group<'py>(&self, py: Python<'py>, g: usize) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>)> {
+        if g >= self.start.len() - 1 {
+            return Err(PyValueError::new_err("RailNode.group: no such group"));
+        }
+        let (a, b) = (self.start[g], self.start[g + 1]);
+        Ok((self.keys[a..b].to_vec().into_pyarray(py), self.zs[a..b].to_vec().into_pyarray(py)))
+    }
 }
 
 /// Group g's (key, height) pairs: the keys sorted, each key's height that of its last point in the group's order

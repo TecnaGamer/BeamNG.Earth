@@ -350,6 +350,17 @@ class _ProfiledSubmit:
 class ThreadPoolExecutor(_ProfiledSubmit, _ThreadPoolExecutor):
     _submit_job = _ThreadPoolExecutor.submit
 
+    def prestart(self):
+        """Every worker thread started now, in the calling thread (never the event loop): a later submit finds an idle
+        worker and starts none. The pool starts its threads one per submit, and Thread.start waits until the new thread
+        has run: a trees pass of 64 submits after a teleport, on busy cores at below-normal priority, waited ~45 ms per
+        start, a 2.5 s event-loop stall (2026-11-16)."""
+        gate = threading.Event()
+        futs = [_ThreadPoolExecutor.submit(self, gate.wait) for _ in range(self._max_workers)]
+        gate.set()
+        for f in futs:
+            f.result()
+
 
 class TileJobs(_ProfiledSubmit):
     """The host's PyJob workers with the same profiler and revisit scopes as other tile builders."""
@@ -358,10 +369,20 @@ class TileJobs(_ProfiledSubmit):
         fast.require(551, "tile tracker PyJobs")
         self._thread_name_prefix = thread_name_prefix
         self._pool = fast._ef.PyJobs(size, thread_name_prefix)
+        self._size = int(size)
         self._submit_job = self._pool.submit
 
     def shutdown(self, wait=True, cancel_futures=False):
         self._pool.shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def prestart(self):
+        """Every worker thread started now, in the calling thread (never the event loop), as ThreadPoolExecutor.prestart:
+        the host's workers start one per submit and a later submit then finds an idle one."""
+        gate = threading.Event()
+        futs = [self._pool.submit(gate.wait) for _ in range(self._size)]
+        gate.set()
+        for f in futs:
+            f.result()
 
 
 async def stream(server):

@@ -870,6 +870,29 @@ and the shared body (`sign_town_body[_<cc>].dae`, the posts and the plate's back
 spot, as the speed-limit signs'. A road tile waits for its village points and land cover at most `POINTS_WAIT_S` (45 s)
 once, and is built without signs when they have not come.
 
+## Clearance log (`server/clearance.py`; `BNE_CLEARANCE_LOG=off` turns it off)
+
+While the game streams, every road tile the server builds is checked against the space a vehicle needs, and each place
+where the geometry would not let one through is one `clearance:` line in server.log (INFO, logger `earthd.clearance`; the
+launcher's console shows only warnings, so grep the file). Reference vehicles stand on the tile's own plans: a truck (12 x 2.55
+x 4.0 m) on every carriageway side of every road (both directions of a two-way road, both carriageways of a dual road, a
+deck on its top, a tunnel on its floor, a ground road on the terrain it is painted into) and a wagon (20 x 3.0 x 4.3 m) on
+every track at its rail head, every 24 / 30 m. The body starts 0.5 m over the wheels. A violation is the terrain (the
+physics block's ground), another deck, a tunnel tube or retaining wall, or a railway's mesh inside it, or a stretch of a
+road between two of its ground parts that has no deck or tunnel (an unbuilt bridge).
+
+```
+clearance: truck on road <id> (<class>, <ground|bridge|tunnel>) at x -599.5 y -803.2 z 2249.7 lat 35.392761 lon 138.723402 lane +2.0 heading 238 tile <key> frame <lat0> <lon0> anchor <aid|-> hits terrain by 0.73 m (at x .. y .. z ..)
+```
+
+`x y z` are in the tile's frame (`frame`: its origin's lat / lon; an anchor tile's is the anchor's), `tile` its key (`tx_ty` or
+a geotile's `g17_..`), `lane` the vehicle's offset from the carriageway's centre line, `by` how deep the other geometry is in
+the body (m), `at` where. `hits` is `terrain`, `a deck`, `a tunnel` or `a railway`; a missing bridge says `has no deck or
+tunnel under it (an unbuilt bridge), terrain below`. One line per place (10 m grid of lat / lon), vehicle kind and kind of
+violation in a process's life, at most 25 a tile (the deepest) and 240 a minute. The check runs in the road-tile worker
+that builds the tile, never on the event loop, and only logs; a fault in it is logged once as a warning. A tile that comes
+from the revisit cache is not built, so not checked again.
+
 ## Airports and runways (`server/airports.py`, `runwaygeom.py`, `runwaymarks.py`; docs/research/2026-10-11-airports.md)
 
 Not used by earthd yet. OurAirports' `airports.csv` / `runways.csv` (public domain) are downloaded through

@@ -540,10 +540,17 @@ class Sources:
     def tearDownClass(cls):
         shutil.rmtree(cls.fix_dir, ignore_errors=True)
 
-    def mapdata(self, files=None, cache=None, policies=None, **kw):
+    def mapdata(self, files=None, cache=None, policies=None, osm_answers=True, **kw):
         t = mf.Transport(files or self.files)
         md = mapdata.MapData(cache or os.path.join(self.tmp, "cache"), mf.fetcher(t, policies, **kw), mf.RELEASE)
         self.addCleanup(md.close)
+        if osm_answers:
+            # the OSM tags' source has no fixture: it answers "no tags here" (a failed read is not cached: a cell built
+            # without its tags is served once and kept for no one; test_a_cell_whose_osm_tags_failed_is_served_but_not_kept)
+            import osmtags
+            patch = mock.patch.object(osmtags.OsmTags, "cell", return_value=({}, []))
+            patch.start()
+            self.addCleanup(patch.stop)
         return md, t
 
 
@@ -907,6 +914,25 @@ class CacheTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertIsNone(f.__dict__.get("_bnge_fallback"))
         self.assertEqual(f.__dict__.get("_osm_built"), "layercake")
         self.assertIn("osm_lanes", f.attrs, "the join's columns")
+
+    def test_a_cell_whose_osm_tags_failed_is_served_as_a_stand_in(self):
+        # the tags' source is down (unreachable, DuckDB missing): the roads go on with their guesses this once. The
+        # layer file is Overture's alone (roads 10), so the cell is kept, but the decode is a stand-in (revisit told,
+        # nothing kept is made of it) and a later visit with the source back decodes it again with the tags (the fork's
+        # "served, not kept" of the unreachable source, GitHub #435, as the decode-time join keeps it)
+        import osmtags
+        import revisit
+        cache = os.path.join(self.tmp, "cache")
+        md, _ = self.mapdata(cache=cache)
+        faults = revisit.faults()
+        with mock.patch.object(osmtags.OsmTags, "cell", side_effect=rangeread.RangeError("unreachable at the last try")):
+            f = md.cell(mf.CELL, ("roads",)).layers["roads"]
+            self.assertIsNotNone(f.__dict__.get("_bnge_fallback"), "still served, as a stand-in")
+        self.assertGreater(revisit.faults(), faults, "revisit told")
+        md2, _ = self.mapdata(cache=cache)          # (a later visit: the first one's memory is gone)
+        with mock.patch.object(osmtags.OsmTags, "cell", return_value=({}, [])),                 mock.patch.object(mapdata, "STAND_IN_S", 0.0):
+            f = md2.cell(mf.CELL, ("roads",)).layers["roads"]
+        self.assertIsNone(f.__dict__.get("_bnge_fallback"), "decoded again with the tags once the source answers")
 
     def test_one_build_per_cell_across_processes(self):
         # two MapData over one cache (two of the server's processes): the second waits for the first's layer file

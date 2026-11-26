@@ -2275,6 +2275,7 @@ class Tracker:
         # blocked on the road processes, which re-plan every road cell for a new anchor: after a rebase at 90 mph
         # not one tree tile came for minutes (2026-10-17, salt flats)
         self.pool = None
+        self._warm = None           # (the pool's threads being started off the loop: _pool_ready)
         self.futs = {}
         # geo: keys are geotiles (geotiles.Z, the global grid): what was sent stays sent across anchors (the mod
         # re-places it at a rebase, geotile.lua), the tiles near a point found by their quads in the anchor's world
@@ -2322,7 +2323,6 @@ class Tracker:
         whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m.
         tree: the car's time-to-reach tree (reach.Tree; geotiles only): the car's tiles in its order
         (reach.order_geotiles: right round the car, then along the way it goes) instead of nearest first."""
-        from runtimeprofiler import TileJobs
         import geotiles
         fast.require(551, "scenery tile tracker")
         if self.geo and frame is None:
@@ -2335,8 +2335,8 @@ class Tracker:
                     f.cancel()
                 self.sent, self.building, self.futs = set(), set(), {}
             self.aid = aid
-        if self.pool is None:
-            self.pool = TileJobs(self.per_pose, f"{self.kind}-{'geo' if self.geo else 'tile'}")
+        if not self._pool_ready(loop, f"{self.kind}-{'geo' if self.geo else 'tile'}"):
+            return
         view = tuple(view) if view else None
         start = functools.partial(self._start, conn, loop, build)
         if self.geo:
@@ -2346,6 +2346,19 @@ class Tracker:
                                  functools.partial(self._drop_geo, conn, z))
         else:
             fast._ef.anchor_tiles(self, conn, aid, (x, y), view, foci, None, False, 0., start, None)
+
+    def _pool_ready(self, loop, name):
+        """The tracker's own pool (per_pose threads), made on its first pass with every thread started in the loop's
+        default executor, off the event loop (runtimeprofiler's prestart): False until they are, the pass left to the next
+        pose a few tens of ms later. Started one per submit on the loop, a teleport's first trees pass of 64 stalled the
+        event loop 2.5 s (2026-11-16). (A stand-in loop of the tests: no warming, ready at once.)"""
+        import asyncio
+        if self.pool is None:
+            from runtimeprofiler import TileJobs
+            self.pool = TileJobs(self.per_pose, name)
+            if isinstance(loop, asyncio.AbstractEventLoop):
+                self._warm = loop.run_in_executor(None, self.pool.prestart)
+        return self._warm is None or self._warm.done()
 
     def _start(self, conn, loop, build, key):
         out_dir = getattr(getattr(conn, "s", None), "out_dir", None)

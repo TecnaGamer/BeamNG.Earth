@@ -298,7 +298,6 @@ class RealDataTest(unittest.TestCase):
         # in the full suite only, 31 of 30)
         self.addCleanup(setattr, roadz, "PROVIDER", roadz.PROVIDER)
         self.addCleanup(setattr, revisit, "CACHE_DIR", revisit.CACHE_DIR)      # (_State points it at CACHE)
-        self.addCleanup(setattr, railways, "COARSE_AT", railways.COARSE_AT)
         self.addCleanup(setattr, bw, "_s", getattr(bw, "_s", None))
         revisit.ON = False
         copy = work_cache()

@@ -9,6 +9,7 @@ use pyo3::types::{PyDict, PyList, PySet, PySlice, PyTuple};
 /// Add one layer's crossings. Keep the existing ground-parts and projection providers: the
 /// former resolves the cell's current level ranges and the latter also handles non-ENU frames.
 #[pyfunction]
+#[pyo3(signature = (boxes, near, ids, specs, classes, eligible, styles, feats, frame, roads, project, seen, out, grade=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn rail_crossing_roads<'py>(
     py: Python<'py>,
@@ -25,6 +26,7 @@ pub fn rail_crossing_roads<'py>(
     project: &Bound<'py, PyAny>,
     seen: &Bound<'py, PySet>,
     out: &Bound<'py, PyList>,
+    grade: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<()> {
     let bounds = boxes.as_array();
     let mask = eligible.as_ref().map(|a| a.as_array());
@@ -42,13 +44,18 @@ pub fn rail_crossing_roads<'py>(
             continue;
         }
         let fid = ids.get_item(i)?.str()?;
-        let (half, class) = if let Some(specs) = specs {
+        let (half, class, law) = if let Some(specs) = specs {
             let spec = specs.get_item(i)?;
             if spec.is_none() || seen.contains(&fid)? {
                 continue;
             }
             seen.add(fid)?;
-            (spec.getattr("width")?.div(2)?, None)
+            // the road's grade law, asked once per feature when the caller wants it (the third item of a crossing)
+            let law = match grade {
+                Some(f) => Some(f.call1((&spec,))?),
+                None => None,
+            };
+            (spec.getattr("width")?.div(2)?, None, law)
         } else {
             if seen.contains(&fid)? {
                 continue;
@@ -81,21 +88,23 @@ pub fn rail_crossing_roads<'py>(
             {
                 continue;
             }
-            (st.get_item(0)?.div(2.0)?, Some(base))
+            (st.get_item(0)?.div(2.0)?, Some(base), None)
         };
         for ring in parts.call1((feats, i))?.try_iter()? {
             rings.append(ring?)?;
-            widths.push((half.clone(), class.clone()));
+            widths.push((half.clone(), class.clone(), law.clone()));
         }
     }
     if !rings.is_empty() {
         let lines = project.call1((feats, frame, rings))?;
-        for (line, (half, class)) in lines.try_iter()?.zip(widths) {
+        for (line, (half, class, law)) in lines.try_iter()?.zip(widths) {
             let line = line?;
             if let Some(c) = class {
                 if line.len()? >= 2 {
                     out.append((line, half, c))?;
                 }
+            } else if let Some(g) = law {
+                out.append((line, half, g))?;
             } else {
                 out.append((line, half))?;
             }

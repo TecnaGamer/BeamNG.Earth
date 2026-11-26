@@ -290,6 +290,28 @@ class ElasticPoolTest(unittest.TestCase):
         for f in futs:
             f.result(timeout=60)
 
+    def test_over_the_memory_limit_stops_drained_extras_at_once(self):
+        import time
+        import budget
+        p = self._pool()
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        for f in futs:
+            f.result(timeout=60)
+        ex = p.extra
+        deadline = time.monotonic() + 10
+        while ex.inflight and time.monotonic() < deadline:
+            time.sleep(0.05)                # (the done callbacks)
+        budget.OVER = True
+        try:
+            with self.assertLogs("earthd.pools", "INFO") as seen:
+                self.assertTrue(p.reap_step(1000.0), "no idle window once over the limit and drained")
+        finally:
+            budget.OVER = False
+        self.assertIsNone(p.extra)
+        self.assertEqual(p.extra_stops, 1)
+        self.assertTrue(any("over its memory limit" in line for line in seen.output), seen.output)
+        self.assertEqual(p.submit(abs, -5).result(timeout=60), 5, "the base goes on")
+
     def test_the_old_way_without_a_reaper(self):
         p = pools.ElasticPool("test", 1, 2, mp_context=SPAWN, idle_s=0)
         self.addCleanup(p.shutdown)
