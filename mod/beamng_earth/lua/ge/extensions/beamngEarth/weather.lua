@@ -986,7 +986,8 @@ end
 -- shader (shaders/beamngEarth/precipNearV.hlsl: the stock one plus a fade from 2.5 m to 0.8 m from the camera, so a
 -- drop passing the lens is no blob) as a ShaderData of our own, named in both datablocks, the objects made again.
 -- Once per level, at the first drops.
-M.NEAR_FADE = false
+M.NEAR_FADE = true         -- (on since phase C: it draws on DX11 and Vulkan, broker shots wc1 / wc2, and with the 0.14 drops the
+                           -- nearest ones no longer read as white flakes)
 M.NEAR_SHADER = 'bngEarthPrecipNearShader'
 local function setupNearFade(o)
   if not M.NEAR_FADE or S.nearFade ~= nil then return end
@@ -1095,6 +1096,7 @@ local function ownPrecip(e, dt)
   if block then rain, snow = 0, 0 end
   M.rainNow = rain                          -- (its sound: ambience.lua; api.weather)
   M.rainMmHNow = (not block and c and tonumber(c.rainMmH)) or 0   -- (the rain sound's layers)
+  M.windMsNow = c and tonumber(c.windMs) or 0  -- (the live weather sounds' gusts: liveaudio.lua)
   M.snowNow = snow
   local falling = rain >= M.PRECIP_NONE or snow >= M.PRECIP_NONE
   local r, sn = S.precip[M.RAIN_NAME], S.precip[M.SNOW_NAME]
@@ -1201,8 +1203,10 @@ M._restoreExposure = function() restoreExposure() end -- tests
 -- 0.2) turned the orange sky and fog a pale grey (water droplets scatter all colours alike), x15 hardly, x50 partly.
 -- Not over the 3D map nor high above the ground (applyFogTint's share: the same fade as the fog's).
 M.FOG_TINT = {
-  { field = 'atmoMieScattering', kind = 'mul', k = 150 },
-  { field = 'atmoMieExtinction', kind = 'mul', k = 150 },
+  -- (phase C: the haze absorbs more than it scatters, extinction x120 over scattering x20: a darker, slate-grey veil and
+  -- sky, as the storm photos show, where scattering x150 made a bright milky one; broker wc4)
+  { field = 'atmoMieScattering', kind = 'mul', k = 20 },
+  { field = 'atmoMieExtinction', kind = 'mul', k = 120 },
   { field = 'atmoMiePhaseG', kind = 'number', value = 0.2 },
 }
 M.TINT_EPS, M.TINT_ON = 0.05, 0.02
@@ -1253,13 +1257,16 @@ local function valuesDiffer(a, b)
   return tostring(a) ~= tostring(b)
 end
 
-local function restoreFogTint()
-  local t = S.tint
+-- The tint levers (FOG_TINT on the sky) on an object: moved towards their storm
+-- values by g, the object's own values kept as the base (someone else's later value becomes the base), put back when g
+-- is 0 again (only fields still holding ours). key: the state's slot (S.tint).
+local function untint(getObj, levers, key)
+  local t = S[key]
   if not t then return end
-  local o = sunObject()
+  local o = getObj()
   if o then
     local changed = false
-    for _, lv in ipairs(M.FOG_TINT) do
+    for _, lv in ipairs(levers) do
       local base, ours = t.base[lv.field], t.applied[lv.field]
       if base ~= nil and ours ~= nil and not valuesDiffer(o:getField(lv.field, 0), ours) then
         o:setField(lv.field, 0, base)
@@ -1268,25 +1275,24 @@ local function restoreFogTint()
     end
     if changed then o:postApply() end
   end
-  S.tint = nil
+  S[key] = nil
 end
-M._restoreFogTint = function() restoreFogTint() end -- tests
 
-local function applyFogTint(g)
+local function tint(getObj, levers, key, g)
   if g < M.TINT_EPS then
-    if S.tint then restoreFogTint() end
+    if S[key] then untint(getObj, levers, key) end
     return
   end
-  local o = sunObject()
+  local o = getObj()
   if not o then return end
-  local t = S.tint
+  local t = S[key]
   if not t then
     t = { base = {}, applied = {} }
-    for _, lv in ipairs(M.FOG_TINT) do t.base[lv.field] = o:getField(lv.field, 0) end
-    S.tint = t
+    for _, lv in ipairs(levers) do t.base[lv.field] = o:getField(lv.field, 0) end
+    S[key] = t
   end
   local changed = false
-  for _, lv in ipairs(M.FOG_TINT) do
+  for _, lv in ipairs(levers) do
     local have = o:getField(lv.field, 0)
     if t.base[lv.field] == nil or (t.applied[lv.field] ~= nil and valuesDiffer(have, t.applied[lv.field])) then
       t.base[lv.field] = have          -- (someone else set it since, or unread before: their value is the base)
@@ -1300,6 +1306,11 @@ local function applyFogTint(g)
   end
   if changed then o:postApply() end
 end
+
+local function restoreFogTint() untint(sunObject, M.FOG_TINT, 'tint') end
+M._restoreFogTint = function() restoreFogTint() end -- tests
+local function applyFogTint(g) tint(sunObject, M.FOG_TINT, 'tint', g) end
+
 
 -- The camera's height over the ground under the player (nil without one): what the fog and clouds go by.
 local function cameraOverGround()
@@ -1736,7 +1747,7 @@ function M.onAnyMissionChanged(state)
     pcall(restoreSun)
     pcall(restoreExposure)
     pcall(restoreFogTint)
-    if S.pending then -- the mission's own setup, just before 'started': no switch
+      if S.pending then -- the mission's own setup, just before 'started': no switch
       S.pending = nil
       local sk = sky()
       if sk and sk.setCloudFollow then sk.setCloudFollow(true) end

@@ -532,8 +532,12 @@ def keyed_env(k):
 # (roadsys.ceil_of_cell's box) and a node's value is the same whichever box asked.
 # BNE_ROADSYS=surface 8 (M5 round 5): the ceiling keeps the ground under every railway the rail tiles draw on the
 # ground (roadsys._ceil_rails: a short rail tunnel under a road bridge too).
+# BNE_ROADSYS=surface 9 (M5 round 7): a cell's pins planned in one batch each take their own landings
+# (grading._landings_each), not the batch's union with other cells' copies of a deck end.
+# BNE_ROADSYS=surface 10 (M5 round 7): each deck end's landing from the copy of the cell the end lies in
+# (grading._landings_in), whichever cells were read round the points.
 ROADSYS_STRUCTURES_VERSION = 2
-ROADSYS_SURFACE_VERSION = 8
+ROADSYS_SURFACE_VERSION = 10
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
                    "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1,

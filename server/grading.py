@@ -1033,7 +1033,7 @@ def field_heights(frame, elev, xy, r, sigma):
 
 
 def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None,
-               rings=None, landings=None, part_ids=None, ext_ids=None, bank_through=None, rough=None):
+               rings=None, landings=None, part_ids=None, ext_ids=None, bank_through=None, rough=None, land_of=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
@@ -1048,8 +1048,10 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     (FAST_GAP: gap_line, gap_apply), or None; part_ids, ext_ids: the features of the parts and of their extensions (per
     part (before, after), None unknown), whose samples a landing then takes by their road (gap_apply); bank_through(xy
     (2,)) -> bool (BNE_ROADSHAPE=decks: Grader._deck_end_simple): a banked road's end onto a bridge whose deck banks
-    with it (a simple structure's, roadshape) keeps its curve's context and is not faded level there. Pure given elev,
-    obs and bank_through."""
+    with it (a simple structure's, roadshape) keeps its curve's context and is not faded level there. land_of: per
+    part, the indices of the landings its samples may take, in order (Grader._stronger_groups: each part planned in a
+    batch with its own landings alone, as planned on its own), or None: every one. Pure given elev, obs and
+    bank_through."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -1170,7 +1172,7 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             eid = ext_ids[j] if ext_ids is not None else (None, None)
             pid_ = None if part_ids is None or part_ids[j] is None else str(part_ids[j])   # (None: no known piece)
             sid = [eid[0]] * nb + [pid_] * len(xy) + [eid[1]] * na
-            for ap_, c_, own_, other_, ids_, v_, ln_ in lines_:
+            for ap_, c_, own_, other_, ids_, v_, ln_ in (lines_ if land_of is None else [lines_[i] for i in land_of[j]]):
                 if c_ == spec.cls and ln_ is not None:
                     zx = gap_apply(zx, q_, ap_, ln_, own_, other_, sid, ids_, v_)
         # Curvature and its runoff need the joined-road context too. Computing
@@ -3395,9 +3397,15 @@ class _Planner:
                 fids = [asks[n][0][5] for n, _p in jobs]
                 ext, eids = self._extensions(parts, fids, with_ids=True) if FAST_GAP else \
                     (self._extensions(parts, fids), None)
+                # (BNE_ROADSYS=surface, roads.MAPPED_RANGES: each part with its own landings, as planned alone
+                # (_stronger_z): the batch's union held other cells' copies of a deck's end (~1e-5 m apart), the least
+                # of them taken, so a pin depended on which parts were planned with it, which a re-plan after
+                # _strong_memo or the road stages were evicted changes: Castlegar 5e-6 m, M5 round 7)
+                lands, land_of = self._landings_each(parts) if roadsmod.MAPPED_RANGES() else \
+                    (self._landings_of(parts), None)
                 plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
-                                   landings=self._landings_of(parts), part_ids=[asks[n][0][6] for n, _p in jobs],
-                                   ext_ids=eids,
+                                   landings=lands, part_ids=[asks[n][0][6] for n, _p in jobs],
+                                   ext_ids=eids, land_of=land_of,
                                    **self._strong_args(cell, parts[0][0]))
                 for (n, (part, last, whole)), p in zip(jobs, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
@@ -6661,6 +6669,21 @@ class _Planner:
         allp = np.concatenate(want)
         return self._fast_landings(allp[:, 1], allp[:, 0]) or None
 
+    def _landings_each(self, parts):
+        """(landings, land_of) for plan_roads: per part [(lonlat, spec)] its own _landings_of, as it has them planned
+        alone, in their order; the landings each once (by deck end, direction and class: _landing_chain's key)."""
+        lands, idx, land_of = [], {}, []
+        for part in parts:
+            own = []
+            for r in self._landings_of([part]) or ():
+                k = (float(r[0][0, 0]), float(r[0][0, 1]), float(r[5][0]), float(r[5][1]), r[1])
+                if k not in idx:
+                    idx[k] = len(lands)
+                    lands.append(r)
+                own.append(idx[k])
+            land_of.append(own)
+        return (lands or None), land_of
+
     def _memo_get(self, name, key):
         """(True, entry) of self.<name>[key] (its marks said: _marks_seen), or (False, None)."""
         with self.lock:
@@ -6797,32 +6820,69 @@ class _Planner:
         free ends of the motorways' and trunks' decks (FAST_GAP_CLASSES, not links') within FAST_GAP_CHAIN_M +
         FAST_GAP_FAR_M of the points (lat, lon), on the map's own lines (_raw_lines), in the frame, each once (by its end
         rounded to 0.1 m: the least of its copies), those with an approach (_landing_chain). A deck end another deck
-        goes on from (FAST_GAP_JOIN_M) is a joint, no landing. A function of the map round the points."""
-        ends = []                       # (end, direction into the deck, class)
-        for k in self._gap_cells(la, lo, FAST_GAP_CHAIN_M + FAST_GAP_FAR_M):
+        goes on from (FAST_GAP_JOIN_M) is a joint, no landing. A function of the map round the points: of the cells
+        round them (_landings_in)."""
+        return self._landings_in(tuple(self._gap_cells(la, lo, FAST_GAP_CHAIN_M + FAST_GAP_FAR_M)))
+
+    @_marked("_landings_in_memo", lambda self, cells: tuple(str(k) for k in cells))
+    def _landings_in(self, cells):
+        """_fast_landings of the cells' deck ends; kept per cell set when read complete (_memo_put: each pin's part
+        asks its own, _landings_each)."""
+        mkey = tuple(str(k) for k in cells)
+        got, res = self._memo_get("_landings_in_memo", mkey)
+        if got:
+            return res
+        ends = []                       # (end, direction into the deck, class, the cell whose copy it is)
+
+        def read(k):
+            got = []
             for b, cls, link in self._raw_lines(k)["bridges"]:
                 for at0 in (True, False):
                     e = b[0] if at0 else b[-1]
-                    ends.append((np.asarray(e, np.float64), roadsmod._dir_at(b, True) if at0
-                                 else -roadsmod._dir_at(b, False), None if link else cls))
+                    got.append((np.asarray(e, np.float64), roadsmod._dir_at(b, True) if at0
+                                else -roadsmod._dir_at(b, False), None if link else cls, str(k)))
+            return got
+        for k in cells:
+            ends += read(k)
+        home = None
+        if roadsmod.MAPPED_RANGES():
+            # (BNE_ROADSYS=surface: each deck end's copy from the cell the end lies in, read when not among the cells:
+            # every map cell has its own copy, ~1e-5 m from the others', and the least of those read was taken, so
+            # two neighbouring cells' plans took other copies of one end and met apart at their seam, M5 round 7. That
+            # cell's ends within a metre of one asked come too: a joint's other deck, seen whichever cells were read)
+            fk = sorted({(round(float(e[0]), 1), round(float(e[1]), 1)) for e, _d, c, _k in ends
+                         if c in FAST_GAP_CLASSES})
+            if fk:
+                fa = np.asarray(fk, np.float64)
+                la_, lo_, _ = self.frame.enu_to_geodetic(fa[:, 0], fa[:, 1], 0.0)
+                hc = mapcells.cells_of(np.asarray(la_, np.float64), np.asarray(lo_, np.float64))
+                home = {kk: str(h) for kk, h in zip(fk, hc)}
+                have = {str(k) for k in cells}
+                for h in sorted({h for h in hc if str(h) not in have}, key=str):
+                    for row in read(h):
+                        if float(np.min(dnp.hypot(*(fa - row[0]).T))) <= 1.0:
+                            ends.append(row)
         best = {}                       # (end rounded to 0.1 m -> its copy: the least by its values, whoever asks)
-        for e, d, c in ends:
+        for e, d, c, ck in ends:
             if c not in FAST_GAP_CLASSES:
                 continue
             # (a joint: another deck's end here, that deck going on the way this one comes from)
             if any(float(dnp.hypot(*(e2 - e))) <= FAST_GAP_JOIN_M and float(dnp.dot(d2, d)) < -0.5
-                   for e2, d2, _c2 in ends):
+                   for e2, d2, _c2, _k2 in ends):
                 continue
             key = (round(float(e[0]), 1), round(float(e[1]), 1))
             row = (float(e[0]), float(e[1]), -float(d[0]), -float(d[1]), str(c))
-            if key not in best or row < best[key]:
-                best[key] = row
+            # (surface: the home cell's copy before any other, then the least)
+            rank = (home is not None and home.get(key) != ck, row)
+            if key not in best or rank < best[key][0]:
+                best[key] = (rank, row)
+        best = {kk: v[1] for kk, v in best.items()}
         out = []
         for _k, r in sorted(best.items()):
             got = self._landing_chain(r[0], r[1], r[2], r[3], r[4])
             if got is not None:
                 out.append((got[0], r[4], got[1], got[2], got[3], np.array([r[2], r[3]], np.float64)))
-        return out
+        return self._memo_put("_landings_in_memo", mkey, out, cap=1024)
 
     @_marked("_landing_memo", lambda self, ex, ey, vx, vy, cls: (ex, ey, vx, vy, cls))
     def _landing_chain(self, ex, ey, vx, vy, cls):
