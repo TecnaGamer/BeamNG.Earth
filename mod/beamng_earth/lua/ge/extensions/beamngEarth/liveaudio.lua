@@ -21,6 +21,11 @@ M.MAX_PENDING = 32       -- thunders kept for the next message
 -- mod's files, as in Pre-recorded; the synth then only ducks its rain at each strike's crack).
 M.LIVE_THUNDER = { generated = 'ready', recorded = true }
 M.LIVE_KINDS = { strike = true, close = true }
+-- Whose rain plays while Live: false (the default) the game's own rain loops, exactly as in Pre-recorded (the synth's
+-- rain is off: synthRain = false in every message; the user, 2026-11-26: "the rain drops with Live sounds sound
+-- terrible and are super lound"); true the synth's, the game's fading out while the synth answers (for the recorded
+-- mix rain when it lands). The synth keeps the thunder and its ducks either way.
+M.LIVE_RAIN = false
 -- a ready render serves a final whose distance is within this much of the one it was rendered for (the synth's
 -- READY_REL_D: a hint moved further renders again)
 M.READY_REL_D = 0.15
@@ -58,8 +63,9 @@ end
 
 -- Pure: what decides a resend (rounded, so jitter does not send every frame).
 function M.signature(m, f)
-  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s', m, f.rainMmH, f.windMs, f.shelter,
-    tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet))
+  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s|%s', m, f.rainMmH, f.windMs, f.shelter,
+    tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet),
+    tostring(M.LIVE_RAIN == true))
 end
 
 -- Pure: the id of strike s ({ t, seed }): its hint and its final one share it.
@@ -219,10 +225,11 @@ function M.due(now)
   return #pending > 0 or lastSig == nil or lastSendT == nil or now - lastSendT >= M.SEND_S
 end
 
--- The mod's own weather sounds' factor (1 full .. 0 silent), faded over FADE_S between the two.
+-- The mod's own rain's factor (1 full .. 0 silent), faded over FADE_S between the two: silent only while the synth
+-- plays the rain (LIVE_RAIN) and answers.
 function M.ownFactor(now)
   now = now or clockhp()
-  local target = M.isLive(now) and 1 or 0
+  local target = (M.LIVE_RAIN and M.isLive(now)) and 1 or 0
   local dt = fadeAt and math.max(0, math.min(now - fadeAt, 0.1)) or 0   -- (not called while inactive: no jump back)
   fadeAt = now
   local step = dt / M.FADE_S
@@ -296,7 +303,8 @@ function M.tick(now, ctx)
   local ok, sent = pcall(function()
     return send({ type = 'weather_audio', mode = mode, rainMmH = f.rainMmH, windMs = f.windMs,
       shelter = f.shelter, tunnel = f.tunnel, cabin = f.cabin, volume = f.volume, thunderVolume = f.thunderVolume,
-      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, thunders = th })
+      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, synthRain = M.LIVE_RAIN == true,
+      thunders = th })
   end)
   if ok and sent then
     lastSig, lastSendT, modeSent = sig, now, mode
