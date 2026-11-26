@@ -346,6 +346,86 @@ pub fn patter(x: &[f64]) -> (f64, f64) {
     let hf = gb::db10(gb::band_power(&f, &p, 2000.0, 8000.0) / gb::band_power(&f, &p, 50.0, 16000.0).max(1e-30));
     (on as f64 / (x.len() as f64 / SR), hf)
 }
+/// Background noise in a wind window: (the share of 1024-point frames in tonal tracks 2-8 kHz, birds and insects; the largest narrow peak 30-500 Hz
+/// over its 41-bin running median in the long-term spectrum, dB, hum and engines; the 3-8 Hz share of the 300 Hz-3
+/// kHz band's 10 ms envelope modulation 0.3-20 Hz, voices). Wind is smooth noise with slow gusts.
+pub fn wind_noise(x: &[f64]) -> (f64, f64, f64) {
+    let nf = 1024usize;
+    let hop = 512usize;
+    let win = crate::npx::hanning(nf);
+    let ff = crate::npx::rfftfreq(nf);
+    let nfr = if x.len() >= nf { (x.len() - nf) / hop + 1 } else { 0 };
+    // per frame its most prominent 2-8 kHz bin (prominence over the 31-bin running median, within 40 dB of the
+    // frame's top); a bird or an insect is a track: 3 or more frames running, each 10 dB prominent, the peak moving by
+    // 3 bins or less from frame to frame (a chance noise peak does not line up)
+    let mut peaks: Vec<Option<usize>> = Vec::with_capacity(nfr);
+    for i in 0..nfr {
+        let fr: Vec<f64> = (0..nf).map(|j| x[i * hop + j] * win[j]).collect();
+        let sp: Vec<f64> = crate::npx::rfft(&fr, nf).iter().map(|c| gb::db10(c.re * c.re + c.im * c.im)).collect();
+        let top = (0..sp.len()).filter(|&k| ff[k] >= 100.0 && ff[k] <= 10000.0).map(|k| sp[k]).fold(f64::NEG_INFINITY, f64::max);
+        // (the running median over the whole spectrum, then the band: a median cut at the band's edge reads a steep
+        // spectral slope there as a peak, the same bin every frame, a false "track")
+        let band: Vec<usize> = (0..sp.len()).filter(|&k| ff[k] >= 2000.0 && ff[k] <= 8000.0).collect();
+        let full_md = gb::running_median(&sp, 31);
+        let bs: Vec<f64> = band.iter().map(|&k| sp[k]).collect();
+        let md: Vec<f64> = band.iter().map(|&k| full_md[k]).collect();
+        let mut best: Option<(usize, f64)> = None;
+        for (q, (v, m0)) in bs.iter().zip(&md).enumerate() {
+            let pr = v - m0;
+            if pr > 10.0 && *v > top - 40.0 && best.map(|b| pr > b.1).unwrap_or(true) {
+                best = Some((q, pr));
+            }
+        }
+        peaks.push(best.map(|b| b.0));
+    }
+    let mut tonal = 0usize;
+    let mut run = 0usize;
+    for i in 0..peaks.len() {
+        let cont = match (peaks[i], if i > 0 { peaks[i - 1] } else { None }) {
+            (Some(a), Some(b)) => (a as i64 - b as i64).abs() <= 3,
+            _ => false,
+        };
+        if peaks[i].is_some() && (cont || run == 0) {
+            run = if cont { run + 1 } else { 1 };
+        } else {
+            if run >= 3 {
+                tonal += run;
+            }
+            run = if peaks[i].is_some() { 1 } else { 0 };
+        }
+    }
+    if run >= 3 {
+        tonal += run;
+    }
+    let (f, p) = gb::psd(x, 16384);
+    let lp: Vec<f64> = p.iter().map(|v| gb::db10(*v)).collect();
+    let base = gb::running_median(&lp, 41);
+    let hum = (0..lp.len()).filter(|&k| f[k] >= 30.0 && f[k] <= 500.0).map(|k| lp[k] - base[k]).fold(f64::NEG_INFINITY, f64::max);
+    let b = gb::bandpass_fft(x, 300.0, 3000.0);
+    let w = (0.01 * SR) as usize;
+    let e: Vec<f64> = (0..b.len() / w).map(|i| gb::db10(gb::mean_sq(&b[i * w..(i + 1) * w]))).collect();
+    let mu = e.iter().sum::<f64>() / e.len().max(1) as f64;
+    let ed: Vec<f64> = e.iter().map(|v| v - mu).collect();
+    let n = 1024usize;
+    let spec = crate::npx::rfft(&ed, n);
+    let (mut sp_band, mut sp_all) = (0.0, 0.0);
+    for (k, c) in spec.iter().enumerate() {
+        let fr = k as f64 * 100.0 / n as f64; // (the envelope's rate is 100 Hz)
+        let pw = c.re * c.re + c.im * c.im;
+        if (0.3..=20.0).contains(&fr) {
+            sp_all += pw;
+            if (3.0..=8.0).contains(&fr) {
+                sp_band += pw;
+            }
+        }
+    }
+    (tonal as f64 / nfr.max(1) as f64, hum, if sp_all > 0.0 { sp_band / sp_all } else { 0.0 })
+}
+const WIND_BIRD_MAX: f64 = 0.01;
+const WIND_HUM_MAX_DB: f64 = 9.0;
+const WIND_TAKE_NOISY: f64 = 0.1;
+const WIND_SPEECH_MAX: f64 = 0.35;
+
 /// wind windows over these are patter or hiss, not wind (set from patter.tsv: see the README)
 const WIND_ONSETS_MAX: f64 = 3.0;
 const WIND_HF_MAX_DB: f64 = -12.0;
@@ -354,7 +434,10 @@ const WIND_HF_MAX_DB: f64 = -12.0;
 /// out of that class (while more than two recordings remain)
 const SPEC_DEV_MAX: f64 = 7.5;
 /// classes the spectral check leaves alone: light rain is the user's pick B, its sparse close-drop takes by design
-const SPEC_EXEMPT: [&str; 1] = ["rain_light"];
+/// and hail: its loop is the hit grains, whose takes (on a car, on tin) differ from each other by design
+const SPEC_EXEMPT: [&str; 2] = ["rain_light", "hail"];
+/// wind's own limit: whistle, rumble and tree roar differ more than rain takes do (the user wants all three)
+const SPEC_DEV_MAX_WIND: f64 = 10.0;
 
 /// The 1/3-octave power shape of x, 50 Hz-16 kHz, normalised to sum 1.
 pub fn third_oct_shape(x: &[f64]) -> Vec<f64> {
@@ -385,10 +468,41 @@ pub struct GrainKind {
     pub before_ms: f64,
     pub after_ms: f64,
     pub len_s: f64,
+    /// subtract the noise measured before the hit (the recorded drips' A/B; the user found it "super processed")
+    pub clean: bool,
+    /// the grain ends where it falls this far under its peak, faded over fade_ms
+    pub gate_db: f64,
+    pub fade_ms: f64,
+    /// uncleaned grains: the hit's peak 2 ms frame at least this far over the noise in the gap before it (dB): only hits
+    /// clean as recorded are kept
+    pub min_snr_db: f64,
 }
-pub const DRIP_GRAIN: GrainKind = GrainKind { lo: 1000.0, hi: 8000.0, rise_db: 18.0, before_ms: 100.0, after_ms: 250.0, len_s: 0.3 };
-/// hail: bright hard hits, closer together than drops, short
-pub const HAIL_GRAIN: GrainKind = GrainKind { lo: 2000.0, hi: 10000.0, rise_db: 14.0, before_ms: 40.0, after_ms: 80.0, len_s: 0.12 };
+pub const DRIP_GRAIN: GrainKind = GrainKind {
+    lo: 1000.0,
+    hi: 8000.0,
+    rise_db: 18.0,
+    before_ms: 100.0,
+    after_ms: 250.0,
+    len_s: 0.3,
+    clean: true,
+    gate_db: 40.0,
+    fade_ms: 10.0,
+    min_snr_db: 0.0,
+};
+/// hail: bright hard hits, closer together than drops, short; as recorded (no subtraction), only the naturally clean
+/// ones, a gentle 25 ms fade where the hit has fallen 30 dB
+pub const HAIL_GRAIN: GrainKind = GrainKind {
+    lo: 2000.0,
+    hi: 10000.0,
+    rise_db: 14.0,
+    before_ms: 40.0,
+    after_ms: 80.0,
+    len_s: 0.12,
+    clean: false,
+    gate_db: 30.0,
+    fade_ms: 25.0,
+    min_snr_db: 15.0,
+};
 
 /// Impact grains in a block, cleaned to true silence (the user, 2026-11-26, of the round-4 drips: "every time a drip
 /// sound is played I can hear its background noise with it"):
@@ -396,8 +510,9 @@ pub const HAIL_GRAIN: GrainKind = GrainKind { lo: 2000.0, hi: 10000.0, rise_db: 
 ///   after_ms behind;
 /// - the take's noise there measured in the gap just before the hit (150 to 20 ms ahead of its onset) and subtracted
 ///   (grainbuild::denoise: Wiener-style gain, over-subtraction 2, floor 0), so no bed rides along;
-/// - then gated to the hit: its 2 ms envelope from the peak on, the grain ends where it falls GRAIN_GATE_DB under the
-///   peak (a 10 ms cos fade to exact zeros), and starts 3 ms before the onset (a 3 ms fade in);
+/// - (hail: no subtraction; only hits whose bed is min_snr_db under them, as recorded)
+/// - then gated to the hit: its 2 ms envelope from the peak on, the grain ends where it falls gate_db under the peak
+///   (a fade_ms cos fade to exact zeros), and starts 3 ms before the onset (a 3 ms fade in);
 /// - peak set to DRIP_PEAK_DBFS. Returns (start s in the block, samples).
 pub fn impact_grains(x: &[f64], k: &GrainKind) -> Vec<(f64, Vec<f64>)> {
     let b = gb::bandpass_fft(x, k.lo, k.hi);
@@ -436,14 +551,21 @@ pub fn impact_grains(x: &[f64], k: &GrainKind) -> Vec<(f64, Vec<f64>)> {
             continue;
         }
         let bed = &x[b0..b1];
-        let clean = gb::denoise(&x[s0 - pad..s0 + len + pad], bed, 2.0, 0.0);
-        let mut g: Vec<f64> = clean[pad..pad + len].to_vec();
+        let mut g: Vec<f64> = if k.clean {
+            let clean = gb::denoise(&x[s0 - pad..s0 + len + pad], bed, 2.0, 0.0);
+            clean[pad..pad + len].to_vec()
+        } else {
+            x[s0..s0 + len].to_vec()
+        };
         // the gate: from the peak on, the first 2 ms frame GRAIN_GATE_DB under the peak frame ends the grain
         let w2 = (0.002 * SR) as usize;
         let e2: Vec<f64> = (0..len / w2).map(|i| gb::db10(gb::mean_sq(&g[i * w2..(i + 1) * w2]))).collect();
         let pk_i = e2.iter().enumerate().fold(0, |a, (i, v)| if *v > e2[a] { i } else { a });
-        let stop = (pk_i..e2.len()).find(|&i| e2[i] < e2[pk_i] - GRAIN_GATE_DB).map(|i| (i + 1) * w2).unwrap_or(len);
-        let fo = ((0.01 * SR) as usize).min(stop);
+        if !k.clean && e2[pk_i] - gb::db10(gb::mean_sq(bed)) < k.min_snr_db {
+            continue;
+        }
+        let stop = (pk_i..e2.len()).find(|&i| e2[i] < e2[pk_i] - k.gate_db).map(|i| (i + 1) * w2).unwrap_or(len);
+        let fo = ((k.fade_ms * 1e-3 * SR) as usize).min(stop);
         let fi = (0.003 * SR) as usize;
         for (i, v) in g.iter_mut().enumerate() {
             if i < fi {
@@ -468,7 +590,6 @@ pub fn impact_grains(x: &[f64], k: &GrainKind) -> Vec<(f64, Vec<f64>)> {
     }
     out
 }
-const GRAIN_GATE_DB: f64 = 40.0;
 const DRIP_PEAK_DBFS: f64 = -6.0;
 
 /// Envelope statistics of a block: (kurtosis of the 2.5-6 kHz 5 ms envelope, onsets per s >= 6 dB over the 1 s
@@ -651,7 +772,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     // per source: decode (checked), screen, runs, and the run samples cut
     #[allow(clippy::type_complexity)]
-    let per: Vec<Result<(Vec<(f64, Vec<String>)>, Vec<(Run, Vec<f64>)>, String, String, Vec<(f64, f64, f64)>), String>> =
+    let per: Vec<Result<(Vec<(f64, Vec<String>)>, Vec<(Run, Vec<f64>)>, String, String, Vec<(f64, f64, f64)>, Vec<(f64, f64, f64, f64)>), String>> =
         gb::par_map(srcs.len(), threads, |i| {
             let s = &srcs[i];
             let p = gb::original_of(&gbdir, &s.id).ok_or(format!("fs{}: no original", s.id))?;
@@ -678,6 +799,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             // per s and the 2-8 kHz share; every class's windows measured for the comparison, wind ones judged)
             let n5 = (WIN_S * SR) as usize;
             let mut metrics = Vec::new();
+            let mut noise = Vec::new();
             let v: Vec<(f64, Vec<String>)> = v
                 .into_iter()
                 .enumerate()
@@ -688,10 +810,40 @@ pub fn run(args: &[String]) -> Result<(), String> {
                         if s.cls.starts_with("wind") && (on > WIND_ONSETS_MAX || hf > WIND_HF_MAX_DB) {
                             r.push(format!("patter or hiss (onsets {on:.1}/s, 2-8 kHz {hf:.1} dB)"));
                         }
+                        if s.cls.starts_with("wind") {
+                            let (bird, hum, speech) = wind_noise(&x[wi * n5..(wi + 1) * n5]);
+                            noise.push((t, bird, hum, speech));
+                            if bird > WIND_BIRD_MAX {
+                                r.push(format!("tonal 2-8 kHz (birds / insects: {:.0} % of frames)", bird * 100.0));
+                            }
+                            if hum > WIND_HUM_MAX_DB {
+                                r.push(format!("low narrow peak (hum / engine: {hum:.1} dB)"));
+                            }
+                            if speech > WIND_SPEECH_MAX {
+                                r.push(format!("3-8 Hz modulation of 300 Hz-3 kHz (voices: {speech:.2})"));
+                            }
+                        }
                     }
                     (t, r)
                 })
                 .collect();
+            // a wind take whose background shows in more than WIND_TAKE_NOISY of its windows is left out whole: the
+            // same birds, traffic or voices are there under the threshold in its other windows too
+            let v: Vec<(f64, Vec<String>)> = if s.cls.starts_with("wind") && !noise.is_empty() {
+                let flagged = noise.iter().filter(|(_, b, h, sp)| *b > WIND_BIRD_MAX || *h > WIND_HUM_MAX_DB || *sp > WIND_SPEECH_MAX).count();
+                if flagged as f64 > WIND_TAKE_NOISY * noise.len() as f64 {
+                    v.into_iter()
+                        .map(|(t, mut r)| {
+                            r.push(format!("noisy take ({flagged} of {} windows with birds, hum or voices)", noise.len()));
+                            (t, r)
+                        })
+                        .collect()
+                } else {
+                    v
+                }
+            } else {
+                v
+            };
             let runs = runs_of(&v, i);
             let cut: Vec<(Run, Vec<f64>)> = runs
                 .into_iter()
@@ -702,14 +854,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     (r, y)
                 })
                 .collect();
-            Ok((v, cut, name, sha, metrics))
+            Ok((v, cut, name, sha, metrics, noise))
         });
     let mut screening = String::from("source\tclass\tstart_s\tok\treasons\n");
     let mut runs: Vec<(Run, Vec<f64>)> = Vec::new();
     let mut names: BTreeMap<usize, (String, String)> = BTreeMap::new();
+    let mut noise_log = String::from("source\tclass\tstart_s\tbird_frac\thum_db\tspeech_ratio\n");
     let mut patter_log = String::from("source\tclass\tstart_s\tonsets_per_s\thf_2_8k_db\n");
     for (i, r) in per.into_iter().enumerate() {
-        let (v, cut, name, sha, metrics) = r?;
+        let (v, cut, name, sha, metrics, noise) = r?;
+        for (t, b, h, sp) in &noise {
+            noise_log.push_str(&format!("{}\t{}\t{t:.1}\t{b:.3}\t{h:.2}\t{sp:.3}\n", srcs[i].id, srcs[i].cls));
+        }
         for (t, on, hf) in &metrics {
             patter_log.push_str(&format!("{}\t{}\t{t:.1}\t{on:.2}\t{hf:.2}\n", srcs[i].id, srcs[i].cls));
         }
@@ -721,6 +877,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     std::fs::write(out.join("screening.tsv"), &screening).map_err(|e| e.to_string())?;
     std::fs::write(out.join("patter.tsv"), &patter_log).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("wind_noise.tsv"), &noise_log).map_err(|e| e.to_string())?;
     // processing and stats per run
     let blocks_all: Vec<Block> = gb::par_map(runs.len(), threads, |k| {
         let (r, x) = &runs[k];
@@ -807,7 +964,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let med: Vec<f64> = (0..nb).map(|k| crate::npx::median(&alive.iter().map(|s| shapes[s][k]).collect::<Vec<_>>())).collect();
             let dev = |s: usize| m::sqrt(shapes[&s].iter().zip(&med).map(|(a, b)| (a - b) * (a - b)).sum::<f64>() / nb as f64);
             let worst = *alive.iter().max_by(|a, b| dev(**a).total_cmp(&dev(**b))).unwrap();
-            if alive.len() <= 2 || dev(worst) <= spec_max {
+            let lim = if CLASSES[ci].starts_with("wind") { spec_max.max(SPEC_DEV_MAX_WIND) } else { spec_max };
+            if alive.len() <= 2 || dev(worst) <= lim {
                 for s in &alive {
                     spec_log.push_str(&format!("{}\t{}\t{:.2}\ttrue\n", CLASSES[ci], srcs[*s].id, dev(*s)));
                 }

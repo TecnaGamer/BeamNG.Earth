@@ -213,7 +213,7 @@ fn cabs2(c: C) -> f64 {
 }
 
 /// wxlib.running_median: medians on a grid every max(1, k / 8) samples, interpolated.
-fn running_median(v: &[f64], k: usize) -> Vec<f64> {
+pub(crate) fn running_median(v: &[f64], k: usize) -> Vec<f64> {
     let step = (k / 8).max(1);
     let mut cs = Vec::new();
     let mut meds = Vec::new();

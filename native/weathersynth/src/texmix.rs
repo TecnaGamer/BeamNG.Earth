@@ -65,6 +65,8 @@ pub struct LoopSpec {
     pub bed_db: f64,
     /// level by the sample peak (dBFS) instead of the loudness: hits whose transients a limiter must not touch (hail)
     pub peak_db: f64,
+    /// a generated wind loop (windsynth.rs class name; "" = not one)
+    pub wind_synth: &'static str,
 }
 
 /// The roof heard from inside the car (the user, 2026-11-26: "INSIDE the car ... a muffled version of the roof"):
@@ -81,10 +83,10 @@ pub fn cabin_filter(x: &mut [f64]) {
 }
 
 const fn tex(name: &'static str, class: &'static str, secs: f64, lufs: f64) -> LoopSpec {
-    LoopSpec { name, class, secs, lufs, lowpass: &[], cabin: false, events: 0.0, gain_of: "", synth: false, bounce: 0.0, bed: "", bed_db: 0.0, peak_db: 0.0 }
+    LoopSpec { name, class, secs, lufs, lowpass: &[], cabin: false, events: 0.0, gain_of: "", synth: false, bounce: 0.0, bed: "", bed_db: 0.0, peak_db: 0.0, wind_synth: "" }
 }
 
-pub const LOOPS: [LoopSpec; 23] = [
+pub const LOOPS: [LoopSpec; 26] = [
     tex("light", "rain_light", 30.0, -30.2),
     tex("medium", "rain_moderate", 30.0, -24.2),
     tex("heavy", "rain_heavy", 30.0, -17.2),
@@ -115,6 +117,10 @@ pub const LOOPS: [LoopSpec; 23] = [
     tex("wind_light", "wind_light", 60.0, -36.0),
     tex("wind_moderate", "wind_moderate", 60.0, -30.0),
     tex("wind_strong", "wind_strong", 60.0, -24.0),
+    // generated wind (windsynth.rs): the A/B for the recorded (the user heard background noises in those)
+    LoopSpec { wind_synth: "light", ..tex("wind_light_synth", "wind_light", 60.0, -36.0) },
+    LoopSpec { wind_synth: "moderate", ..tex("wind_moderate_synth", "wind_moderate", 60.0, -30.0) },
+    LoopSpec { wind_synth: "strong", ..tex("wind_strong_synth", "wind_strong", 60.0, -24.0) },
     // hail (the user, 2026-11-26: "sounds similar to rain"): hard ice hits with gaps, some bouncing, over a little rain
     // (levelled by its peak, -3 dBFS: no limiter on the hits; its loudness is reported)
     LoopSpec { events: 7.0, bounce: 0.35, bed: "rain_moderate", bed_db: 14.0, peak_db: -3.0, ..tex("hail", "hail_hit", 30.0, -20.0) },
@@ -382,7 +388,10 @@ pub fn join_jumps(x: &[f64], info: &Info, xf_s: f64) -> ((f64, f64), (f64, f64))
 /// (samples, LUFS, true peak, info, the total gain applied)
 pub fn render_loop(bank: &Bank, spec: &LoopSpec, seed: u64, fixed_gain: Option<f64>) -> Option<(Vec<f64>, f64, f64, Info, f64)> {
     let n = (spec.secs * SR) as usize;
-    let (mut x, info) = if spec.synth {
+    let (mut x, info) = if !spec.wind_synth.is_empty() {
+        let c = crate::windsynth::class(spec.wind_synth)?;
+        (crate::windsynth::render(seed, n, &c), Info { segments: 0, sources: vec![], streams: 1, joins: vec![] })
+    } else if spec.synth {
         synth_drops(seed, n, spec.events)
     } else if spec.events > 0.0 {
         events(bank, spec.class, seed, n, spec.events, spec.bounce)?

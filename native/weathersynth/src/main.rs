@@ -58,6 +58,7 @@ mod serve;
 mod storm;
 mod texbuild;
 mod texmix;
+mod windsynth;
 mod thunder;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod thunderlive;
@@ -512,6 +513,26 @@ fn run() -> Result<(), String> {
         }
         "texbank-build" => texbuild::run(&args)?,
         "texbank-live" => texbuild::run_live(&args)?,
+        "wind-noise" => {
+            // the stricter wind screen's measures per 5 s window of a rendered loop: the worst window of each
+            println!("file\twindows\tbird tracks (worst)\thum dB (worst)\tvoice modulation (worst)\twindows failing");
+            for f in &args[2..] {
+                let (x, _) = wav::read(f)?;
+                let n = (5.0 * 44100.0) as usize;
+                let (mut b, mut h, mut sp, mut bad) = (0.0f64, f64::NEG_INFINITY, 0.0f64, 0);
+                for w in x.chunks_exact(n) {
+                    let (bi, hi, si) = texbuild::wind_noise(w);
+                    b = b.max(bi);
+                    h = h.max(hi);
+                    sp = sp.max(si);
+                    if bi > 0.01 || hi > 10.0 || si > 0.35 {
+                        bad += 1;
+                    }
+                }
+                let name = std::path::Path::new(f).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                println!("{name}\t{}\t{:.3}\t{h:.1}\t{sp:.2}\t{bad}", x.len() / n, b);
+            }
+        }
         "texbank-pack" => texbuild::run_pack(&args)?,
         "tex-set" => texmix::run_set(&args)?,
         "tex-check" => texmix::run_check(&args)?,

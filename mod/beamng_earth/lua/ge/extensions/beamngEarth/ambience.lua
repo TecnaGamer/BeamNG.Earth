@@ -890,7 +890,8 @@ M.DRIPS_LAYERS = { { 'drips_1', 'bne_drips_1.ogg', 0.0 }, { 'drips_2', 'bne_drip
   { 'drips_3', 'bne_drips_3.ogg', 0.7 } }
 M.DRIPS_TAIL = 0.2
 -- hail: weather.hailNow (the hail's share, 0..1), louder on a roof over the head (the car's, a shelter's)
-M.HAIL_GAIN = 0.5
+-- (the hail file is levelled by its peak, about -26 LUFS: 1.0 plays it as loud as the old -20 LUFS wash at 0.5)
+M.HAIL_GAIN = 1.0
 M.EXTRA_FADE_S = 2
 M.EXTRA_FILES = { wind_light = 'bne_wind_light.ogg', wind_moderate = 'bne_wind_moderate.ogg',
   wind_strong = 'bne_wind_strong.ogg', drips_1 = 'bne_drips_1.ogg', drips_2 = 'bne_drips_2.ogg',
