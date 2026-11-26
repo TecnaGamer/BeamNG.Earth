@@ -516,6 +516,10 @@ def keyed_env(k):
 # BNE_ROADSYS_TUNNELS 1 (T1, earthfast 629, the tunnel plan approved 2026-11-25): the tunnels from the road system's
 # record (floors from the one profile, sections never open for want of cover, portals and holes only where a tube
 # enters a hill; tunnelrec.py).
+# BNE_ROADSYS=surface 6 (earthfast 630): the ground under a deck at most at its soffit less 0.3 m (roadsys.ground_cut,
+# native/roadsys ceil.rs; the terrain blocks, skins and content ground from the published decks' heights).
+# BNE_ROADSYS=structures 2 (earthfast 630): the roads meeting a deck end's short approach at its far end (a junction at
+# the end: a roundabout's ring) are the end's own for its drop (native/roadsys handover.rs End.junction), not roads under.
 # BNE_ROADSYS_TUNNELS 2 (earthfast 631): the record's portals dig the approach to the floor (no lift of the floor onto
 # the plans' ground), twin tunnels held at one floor, a twin tube only where both carriageways run side by side.
 # BNE_ROADSYS_TUNNELS 3 (earthfast 633): a lid under a road crossing over the tube stays a lid however short (where
@@ -523,8 +527,11 @@ def keyed_env(k):
 # top under the ground, read past its sides (portals); round a tunnel the record does not build (under water) the
 # terrain targets as without the record (roadsys.pins_near legacy); twins paired by the record's rule only when both
 # are the record's.
-ROADSYS_STRUCTURES_VERSION = 1
-ROADSYS_SURFACE_VERSION = 5
+# BNE_ROADSYS=surface 7 (M5 round 5, earthfast 632): the ceiling counts a ground road or railway beside a deck within the
+# deck's own need (ceil.rs allow), not the read's deepest deck's, so each caller reads the decks near its own points
+# (roadsys.ceil_of_cell's box) and a node's value is the same whichever box asked.
+ROADSYS_STRUCTURES_VERSION = 2
+ROADSYS_SURFACE_VERSION = 7
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
                    "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1,

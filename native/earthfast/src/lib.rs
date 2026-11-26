@@ -7810,8 +7810,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
     // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
     // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
-    // 633: (tunnel plan T1) the tunnel record's lids under a road crossing over the tube kept however short (tunnel.rs
-    // StrokeIn.held)
+    // 629: the tunnel plan T1 (roadsys tunnel.rs, tunaudit.rs, tunnelrec.rs; BNE_ROADSYS_TUNNELS)
+    // 630 (628 kept for another branch): RoadsysEnds.ceil / RoadsysCeil (roadsys ceil.rs: the ground under a deck at
+    // most at its soffit less 0.3 m, BNE_ROADSYS=surface; every evaluator of the physics ground,
+    // roads.block_arch_raise), handover.rs End.junction
+    // 631: the tunnel plan T1 round 2 (tunnel records' portals and floors)
+    // 632: RoadsysCeil counts a ground road beside a deck within the deck's own need (ceil.rs allow), whatever other
+    // decks were read (roadsys.ceil_of_cell's box)
+    // 633: (tunnel plan T1 round 3) the tunnel record's lids under a road crossing over the tube kept (tunnel.rs
+    // StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as without the record: roadsys.pins_near legacy)
     m.add("VERSION", 633)?;
     Ok(())
 }
