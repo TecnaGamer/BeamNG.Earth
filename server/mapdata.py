@@ -1540,7 +1540,8 @@ class MapData:
     def layer_arrays(self, key, layer, kind="demand"):
         """(arrays, hit) of one cell's layer: from the cache, or built and cached. A StandIn (a dict) when the tiles
         failed and these are the parquet cell's, stored or built now, with or without a provenance record
-        (_decoded_layer marks the layer)."""
+        (_decoded_layer marks the layer); that fallback's outcome, its arrays or its error, kept STAND_IN_S
+        (_stand_in_get)."""
         if layer not in ALL_LAYERS:
             raise ValueError(f"unknown map layer {layer!r}; choose from {', '.join(ALL_LAYERS)}")
         key = _key(key)
