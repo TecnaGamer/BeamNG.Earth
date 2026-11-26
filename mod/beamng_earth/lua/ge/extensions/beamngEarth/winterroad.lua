@@ -178,13 +178,46 @@ function M.apply(look)
 end
 
 -- winter.lua: a snowstate (its look: nil with winter's roads off on the server).
+local lastLook = nil
 function M.onState(msg)
   if type(msg) ~= 'table' or type(msg.look) ~= 'table' then return 0 end
+  lastLook = msg.look
   return M.apply(msg.look)
 end
 
+-- winter.lua's once-a-second check: our values still on the materials? The engine can hand a shape that loads
+-- later a fresh copy of a material from its definition (Windows run 2026-11-26: every write made, every value back
+-- to the definition's once the skins loaded): one field of each kind is read back, and on a difference everything is
+-- written again. A few getField calls a second; nothing without a look.
+M.SENTINELS = { { 'bne_snow_line_white_p3', 'opacityFactor', 0 }, { 'bne_snow_deck_p3', 'opacityFactor', 1 },
+  { 'bne_snow_walk_s1u', 'opacityFactor', 1 }, { 'bne_snowbank_p3', 'baseColorFactor', 0 } }
+M.rewrites = 0
+function M.check()
+  if not lastLook or not loaded then return false end
+  local st = rawget(_G, 'scenetree')
+  for _, sn in ipairs(M.SENTINELS) do
+    local want = written[sn[1] .. '|' .. sn[2] .. '|' .. sn[3]]
+    local mat = st and st.findObject and st.findObject(sn[1])
+    if want and mat then
+      local ok, v = pcall(function() return mat:getField(sn[2], sn[3]) end)
+      local a, b = tonumber(ok and tostring(v):match('^%S+') or ''), tonumber(want:match('^%S+'))
+      if a and b and math.abs(a - b) > 0.002 then
+        written = {}
+        M.rewrites = M.rewrites + 1
+        M.apply(lastLook)
+        return true
+      end
+    elseif want and not mat then
+      loaded = false
+      M.apply(lastLook)
+      return true
+    end
+  end
+  return false
+end
+
 function M.reset()
-  loaded, written = false, {}
+  loaded, written, lastLook = false, {}, nil
 end
 
 function M._written() return written end      -- (tests)

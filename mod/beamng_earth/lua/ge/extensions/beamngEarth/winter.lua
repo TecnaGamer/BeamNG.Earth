@@ -487,6 +487,7 @@ function M.update(dt)
     M.apply()
     refreshReadout()
   end
+  if M._road then pcall(M._road.check) end     -- (winter W3: the road materials' values still ours)
 end
 
 function M.reset()

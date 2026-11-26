@@ -85,8 +85,18 @@ do
   mats = {}
   R.apply(look2)
   T.check(made == 2, 'a level load dropped them: made again')
+  -- a material handed back at its definition's values (a shape loaded later): the check writes everything again
+  for _, m in pairs(mats) do m.fields = {} end
+  function mats.bne_snow_deck_p3:getField(f, l) return self.fields[f .. '|' .. l] or '0' end
+  for name, m in pairs(mats) do
+    if not m.getField then function m:getField(f, l) return self.fields[f .. '|' .. l] or '1' end end
+  end
+  T.check(R.check() == true and R.rewrites == 1, 'a value undone: written again')
+  T.check(mats.bne_snow_deck_p3.fields['opacityFactor|1'] == '1.000', 'the deck white again')
+  T.check(R.check() == false, 'then the check finds nothing')
   W.reset()
   T.check(R._written() and next(R._written()) == nil, 'reset: nothing remembered')
+  T.check(R.check() == false, 'no look after a reset: no check')
   scenetree.findObject = stOld
 end
 
