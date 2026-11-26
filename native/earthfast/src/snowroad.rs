@@ -149,7 +149,49 @@ pub fn walk_states(depth: i64, cover: i64, age_h: i64, crust: bool, t_air: i64) 
     out
 }
 
-/// The road look of a snow state, for the mod and the photos.
+/// Residential frontages whose sidewalk is cleared, permille (plan 2.8: "many never cleared").
+pub const WALK_CLEARED_PERMILLE: u64 = 600;
+
+/// A block face's fixed draw in [0, 2^32): BLAKE2s-32 of "fid|side" (little-endian), the same on every machine.
+pub fn face_draw(fid: &str, side: i8) -> u64 {
+    use blake2::digest::consts::U4;
+    use blake2::{Blake2s, Digest};
+    let mut h = Blake2s::<U4>::new();
+    h.update(format!("{fid}|{side}").as_bytes());
+    let d = h.finalize();
+    u32::from_le_bytes([d[0], d[1], d[2], d[3]]) as u64
+}
+
+/// The sidewalk slot (0 S0 main streets, 1 S1 cleared, 2 S1 left, 3 S2 unmaintained) of a slab beside a road of
+/// plow class cls (NO_CLASS: none found), its feature and side: P0-P1 S0; P2-P3 residential, cleared on
+/// WALK_CLEARED_PERMILLE of the block faces by face_draw; the rest S2.
+pub fn walk_slot(cls: u8, fid: &str, side: i8) -> u8 {
+    match cls {
+        0 | 1 => 0,
+        2 | 3 => {
+            if face_draw(fid, side) * 1000 < WALK_CLEARED_PERMILLE << 32 { 1 } else { 2 }
+        }
+        _ => 3,
+    }
+}
+
+/// Cut discs (x, y, r) of crossings: each polyline's centre (the mean of its points) and its farthest point from it
+/// plus half its width and BANK_CLEAR_M.
+pub fn crossing_discs(lines: &[Vec<[f64; 2]>], widths: &[f64]) -> Vec<[f64; 3]> {
+    lines.iter().zip(widths).filter(|(l, _)| !l.is_empty()).map(|(l, w)| {
+        let n = l.len() as f64;
+        let (mut cx, mut cy) = (0.0, 0.0);
+        for p in l.iter() {
+            cx += p[0];
+            cy += p[1];
+        }
+        let (cx, cy) = (cx / n, cy / n);
+        let r = l.iter().map(|p| ((p[0] - cx) * (p[0] - cx) + (p[1] - cy) * (p[1] - cy)).sqrt()).fold(0.0, f64::max);
+        [cx, cy, r + 0.5 * w + BANK_CLEAR_M]
+    }).collect()
+}
+
+/// The road look of a state, for the mod and the photos.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Look {
     pub shares: [[i64; ZONES]; CLASSES],        // ground photo: eighths per class and zone
@@ -340,10 +382,13 @@ impl SegGrid {
         if !x0.is_finite() {
             return SegGrid { x0: 0.0, y0: 0.0, nx: 0, ny: 0, cells: Vec::new() };
         }
-        x0 -= pad;
-        y0 -= pad;
-        let nx = (((x1 + pad - x0) / GRID_M).ceil() as usize).clamp(1, 4096);
-        let ny = (((y1 + pad - y0) / GRID_M).ceil() as usize).clamp(1, 4096);
+        // (the grid reaches as far as any segment's half width + pad: a point off a wide deck's end, inside its
+        // half width but past its points' box, found nothing and a bank stood under the deck, Hanger Lane)
+        let reach = pad + lines.hw.iter().take(lines.count()).fold(0.0f64, |a, &h| if h.is_finite() { a.max(h) } else { a });
+        x0 -= reach;
+        y0 -= reach;
+        let nx = (((x1 + reach - x0) / GRID_M).ceil() as usize).clamp(1, 4096);
+        let ny = (((y1 + reach - y0) / GRID_M).ceil() as usize).clamp(1, 4096);
         let mut cells = vec![Vec::new(); nx * ny];
         for l in 0..lines.count() {
             let ln = lines.line(l);
@@ -481,10 +526,12 @@ pub fn junctions(lines: &Lines) -> Vec<([f64; 2], f64)> {
     out
 }
 
-/// Whether a line's end is open (a bank tapers there): no other line's end or vertex within 0.5 m.
-fn end_open(lines: &Lines, l: usize, p: [f64; 2]) -> bool {
+/// Whether a line's end is open (a bank tapers there): no other banked line's end or vertex within 0.5 m (a road
+/// carried on as a service road or track, never plowed, ends the bank as a dead end does).
+fn end_open(lines: &Lines, l: usize, p: [f64; 2], height: &[f64; CLASSES]) -> bool {
     for o in 0..lines.count() {
-        if o == l {
+        let c = lines.cls[o] as usize;
+        if o == l || c >= CLASSES || !(height[c] > 0.0) {
             continue;
         }
         for q in lines.line(o) {
@@ -521,6 +568,7 @@ pub const BANK_TAPER_M: f64 = 3.0;
 pub const BANK_CLEAR_M: f64 = 1.0;    // ... and no bank within this of another road's carriageway
 pub const BANK_END_M: f64 = 4.0;      // ... nor this near an open end
 pub const DUP_M: f64 = 1.0;           // a line within this of another everywhere is a copy of it
+pub const BANK_FOLD_M: f64 = 0.3;     // a bank point this far inside its own road's carriageway: folded (a tight bend)
 pub const BANK_PROFILE: [(f64, f64); 5] = [(0.0, 0.0), (0.22, 0.62), (0.5, 1.0), (0.78, 0.62), (1.0, 0.0)];
 
 /// Snowbanks along the plowed roads' edges: lines (the roads' ground parts: none on decks or in tunnels), the drawn
@@ -604,8 +652,8 @@ pub fn banks(lines: &Lines, height: &[f64; CLASSES], cuts: &[[f64; 3]], over: &L
         if ns < 2 {
             continue;
         }
-        let open0 = end_open(lines, l, ln[0]);
-        let open1 = end_open(lines, l, ln[ln.len() - 1]);
+        let open0 = end_open(lines, l, ln[0], height);
+        let open1 = end_open(lines, l, ln[ln.len() - 1], height);
         for side in [1.0f64, -1.0] {
             // per section: its normal (central difference), the crest point, cut or not
             let mut nrm = vec![[0.0f64; 2]; ns];
@@ -627,6 +675,24 @@ pub fn banks(lines: &Lines, height: &[f64; CLASSES], cuts: &[[f64; 3]], over: &L
                 if crest[0] < bbox[0] - base || crest[0] > bbox[2] + base || crest[1] < bbox[1] - base
                     || crest[1] > bbox[3] + base {
                     return true;
+                }
+                // folded into a carriageway: inside a tight bend (of this line or across a joint with its
+                // continuation) the offset section reaches back over the road; every profile point must stay outside
+                // this line's and its continuations' carriageways
+                for &(u, _) in BANK_PROFILE.iter() {
+                    let o = off0 + u * base;
+                    let q = [p[0] + nrm[i][0] * o, p[1] + nrm[i][1] * o];
+                    for &(o2, i2) in grid.near(q) {
+                        let o2 = o2 as usize;
+                        if o2 != l && !touch[l].contains(&o2) {
+                            continue;
+                        }
+                        let lo = lines.line(o2);
+                        let (d, _) = seg_dist(q, lo[i2 as usize], lo[i2 as usize + 1]);
+                        if d < lines.hw[o2] - BANK_FOLD_M {
+                            return true;
+                        }
+                    }
                 }
                 for (q, r) in &junc {
                     let (ex, ey) = (q[0] - p[0], q[1] - p[1]);
@@ -869,7 +935,34 @@ pub mod py {
         Ok(d)
     }
 
+    /// Sidewalk slots (walk_slot) of slabs: their road's class, feature id and side.
+    #[pyfunction]
+    pub fn snowroad_walk_slots(cls: Vec<u8>, fids: Vec<String>, sides: Vec<i8>) -> PyResult<Vec<u8>> {
+        if cls.len() != fids.len() || cls.len() != sides.len() {
+            return Err(PyValueError::new_err("snowroad_walk_slots: one class, feature and side a slab"));
+        }
+        Ok(cls.iter().zip(&fids).zip(&sides).map(|((&c, f), &s)| walk_slot(c, f, s)).collect())
+    }
+
+    /// Crossing cut discs (crossing_discs): polylines (each (k, 2+)), widths.
+    #[pyfunction]
+    pub fn snowroad_crossing_discs<'py>(py: Python<'py>, lines: Vec<PyReadonlyArray2<'py, f64>>, widths: Vec<f64>)
+                                        -> PyResult<Bound<'py, PyArray2<f64>>> {
+        if lines.len() != widths.len() {
+            return Err(PyValueError::new_err("snowroad_crossing_discs: a width a line"));
+        }
+        let ls: Vec<Vec<[f64; 2]>> = lines.iter().map(|a| {
+            let v = a.as_array();
+            if v.ncols() < 2 { Vec::new() } else { v.rows().into_iter().map(|r| [r[0], r[1]]).collect() }
+        }).collect();
+        let d = crossing_discs(&ls, &widths);
+        Ok(numpy::ndarray::Array2::from_shape_vec((d.len(), 3), d.into_iter().flatten().collect()).unwrap()
+            .into_pyarray(py))
+    }
+
     pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+        m.add_function(wrap_pyfunction!(snowroad_walk_slots, m)?)?;
+        m.add_function(wrap_pyfunction!(snowroad_crossing_discs, m)?)?;
         m.add_function(wrap_pyfunction!(snowroad_classes, m)?)?;
         m.add_function(wrap_pyfunction!(snowroad_zones, m)?)?;
         m.add_function(wrap_pyfunction!(snowroad_class_at, m)?)?;
@@ -884,6 +977,19 @@ pub mod py {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn walk_slots() {
+        assert_eq!(walk_slot(1, "w/1", 1), 0);
+        assert_eq!(walk_slot(4, "w/1", 1), 3);
+        assert_eq!(walk_slot(NO_CLASS, "", 0), 3);
+        // residential faces: cleared on about 60 %, fixed per face
+        let n = (0..2000).filter(|i| walk_slot(3, &format!("w/{i}"), 1) == 1).count();
+        assert!((1100..1300).contains(&n), "{n}");
+        assert_eq!(walk_slot(3, "w/7", -1), walk_slot(3, "w/7", -1));
+        let d = crossing_discs(&[vec![[-60.0, -6.0], [-60.0, 6.0]]], &[3.0]);
+        assert_eq!(d, vec![[-60.0, 0.0, 6.0 + 1.5 + BANK_CLEAR_M]]);
+    }
 
     #[test]
     fn classes() {
@@ -1042,6 +1148,48 @@ mod tests {
         // the narrow road keeps its bank away from the joint, drawn once (not twice by its copy)
         let near = m.xy.iter().zip(&m.h).filter(|(p, h)| **h > 0.3 && (p[0] + 50.0).abs() < 1.3 && p[1] > 0.0).count();
         assert!(near > 0 && near <= 3, "{near}"); // (one section of three crest-ish points; its copy would double it)
+    }
+
+    #[test]
+    fn banks_never_fold_into_a_bend() {
+        // a hairpin: east 60 m, then back west 12 m north (a U of radius 6 m about (60, 6))
+        let mut pts = vec![[0.0, 0.0]];
+        for k in 0..=12 {
+            let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * k as f64 / 12.0;
+            pts.push([60.0 + 6.0 * a.cos(), 6.0 + 6.0 * a.sin()]);
+        }
+        pts.push([0.0, 12.0]);
+        let n = pts.len();
+        let l = Lines { pts: &pts, off: &[0, n], hw: &[4.0], cls: &[3] };
+        let none = Lines { pts: &[], off: &[0], hw: &[], cls: &[] };
+        let m = banks(&l, &[0.0, 0.0, 0.0, 0.6, 0.0], &[], &none, [-100.0, -100.0, 200.0, 200.0]);
+        assert!(!m.tris.is_empty());
+        for (p, h) in m.xy.iter().zip(&m.h) {
+            if *h <= 0.03 {
+                continue;
+            }
+            let d = (0..n - 1).map(|i| seg_dist(*p, pts[i], pts[i + 1]).0).fold(f64::INFINITY, f64::min);
+            assert!(d >= 4.0 - BANK_FOLD_M - 1e-9, "a bank point {p:?} {d} m from the road");
+        }
+    }
+
+    #[test]
+    fn banks_end_where_a_road_goes_on_as_a_service_road() {
+        let pts = [[-100.0, 0.0], [0.0, 0.0], [0.0, 0.0], [30.0, 0.0]];
+        let l = Lines { pts: &pts, off: &[0, 2, 4], hw: &[4.0, 3.0], cls: &[3, 4] };
+        let none = Lines { pts: &[], off: &[0], hw: &[], cls: &[] };
+        let m = banks(&l, &[0.0, 0.0, 0.0, 0.6, 0.0], &[], &none, [-200.0, -200.0, 200.0, 200.0]);
+        assert!(!m.xy.iter().zip(&m.h).any(|(p, h)| *h > 0.03 && p[0] > -BANK_END_M));
+        assert!(m.xy.iter().zip(&m.h).any(|(p, h)| *h > 0.3 && p[0] < -20.0));
+    }
+
+    #[test]
+    fn grid_reaches_a_wide_deck_end() {
+        // a 2-point deck of half width 18 m ending at (0, 0); a point 15 m past its end is inside it
+        let pts = [[0.0, 100.0], [0.0, 0.0]];
+        let l = Lines { pts: &pts, off: &[0, 2], hw: &[18.0], cls: &[0] };
+        let r = class_at(&[[3.0, -15.0]], &l, 0.0);
+        assert_eq!(r[0].0, 0);
     }
 
     #[test]

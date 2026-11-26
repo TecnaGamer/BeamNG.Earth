@@ -15,7 +15,6 @@ What it changes, all keyed by the snow state that made it:
 The skins' winter part is the wear argument's "snow" (earthd.Server.wear_arg: {"q": 1, "banks": [bin per class]}):
 roadwear.wear_key never reads it (the geotile content stays season-free), skin_key does.
 """
-import hashlib
 import os
 
 import numpy as np
@@ -33,7 +32,6 @@ MARK_MATERIALS = ("line_white", "line_yellow", "crossing_white")
 DECK_MATERIALS = ("road_asphalt_2lane",)
 WALK_MATERIALS = ("sidewalk1",)
 WALK_SLOTS = ("s0", "s1c", "s1u", "s2")     # main streets, residential cleared, residential left, unmaintained
-WALK_CLEARED_SHARE = 0.6                    # residential frontages cleared (plan 2.8: "many never cleared")
 CROSSING_MATERIALS = ("crossing_white", "crossings")
 CLASS_EXTRA_M = 2.5         # a chunk this far past a road's half width still takes its class
 WALK_EXTRA_M = 7.0          # a sidewalk slab this far past it
@@ -90,8 +88,8 @@ def wear_snow(look):
 def road_lines(feats_list, frame, urban=None, widths=None, ground_only=True, bounds=None, bridges=False):
     """The roads of feats_list as a line set in frame m: (pts (n, 2), off (L + 1,) int64, hw (L,), cls (L,) uint8,
     lanes (L,) uint8, oneway (L,) bool, fids [L]); ground_only: their ground parts (no deck, no tunnel; the banks'),
-    else every part (any point's class); bridges: their bridge parts alone (the banks' cut lines). bounds (x0, y0, x1, y1): lines with no point inside it grown by their half
-    width are left out. Each feature once (its first copy)."""
+    else every part (any point's class); bridges: their bridge parts alone (the banks' cut lines). bounds (x0, y0,
+    x1, y1): lines whose box, grown by their half width, misses it are left out. Each feature once (its first copy)."""
     import mapgeom
     import roads as roadsmod
     pts, off, hw, names, lanes, oneway, fids = [], [0], [], [], [], [], []
@@ -116,8 +114,9 @@ def road_lines(feats_list, frame, urban=None, widths=None, ground_only=True, bou
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 xy = np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64)]
                 h = float(sp.width) / 2.0
-                if bounds is not None and not ((xy[:, 0] >= bounds[0] - h) & (xy[:, 0] <= bounds[2] + h)
-                                               & (xy[:, 1] >= bounds[1] - h) & (xy[:, 1] <= bounds[3] + h)).any():
+                # (the ring's box against the bounds: a long straight piece crosses them with no vertex inside)
+                if bounds is not None and (xy[:, 0].max() < bounds[0] - h or xy[:, 0].min() > bounds[2] + h
+                                           or xy[:, 1].max() < bounds[1] - h or xy[:, 1].min() > bounds[3] + h):
                     continue
                 pts.append(xy)
                 off.append(off[-1] + len(xy))
@@ -224,8 +223,8 @@ def remap_chunks(chunks, lines):
 
 
 def crossing_cuts(chunks):
-    """Discs (x, y, r) where the crossings are: no bank across them."""
-    out = []
+    """Discs (x, y, r) where the crossings are: no bank across them (snowroad.rs crossing_discs)."""
+    lines, widths = [], []
     for c in chunks:
         m = c.get("m")
         if m in CROSSING_MATERIALS or (isinstance(m, str) and m.startswith("bne_snow_crossing")):
@@ -233,12 +232,12 @@ def crossing_cuts(chunks):
             if n is None:
                 continue
             a = np.asarray(n, np.float64)
-            if a.ndim != 2 or len(a) == 0:
-                continue
-            ctr = a[:, :2].mean(axis=0)
-            r = float(np.max(np.hypot(a[:, 0] - ctr[0], a[:, 1] - ctr[1]))) + 0.5 * float(c.get("w") or 3.0) + 1.0
-            out.append((float(ctr[0]), float(ctr[1]), r))
-    return np.asarray(out, np.float64).reshape(-1, 3)
+            if a.ndim == 2 and len(a) and a.shape[1] >= 2:
+                lines.append(np.ascontiguousarray(a[:, :2]))
+                widths.append(float(c.get("w") or 3.0))
+    if not lines:
+        return np.zeros((0, 3), np.float64)
+    return np.asarray(_ef().snowroad_crossing_discs(lines, widths), np.float64).reshape(-1, 3)
 
 
 def bank_mesh(snow, lines, cuts, bbox, ground, origin, decks=None):
@@ -274,10 +273,6 @@ def bank_mesh(snow, lines, cuts, bbox, ground, origin, decks=None):
     return P, np.asarray(tris, np.int64), np.asarray(uv, np.float64), mats, np.asarray(tcls, np.int64)
 
 
-def _seed01(fid, side):
-    return int.from_bytes(hashlib.blake2s(f"{fid}|{int(side)}".encode(), digest_size=4).digest(), "little") / 2 ** 32
-
-
 def remap_walks(mesh, lines, origin):
     """A sidewalk mesh (P rel. origin, tris, uvs, materials, tri material) with its slabs (WALK_MATERIALS) on the
     winter copies by street kind: main streets (P0-P1) S0, residential (P2-P3) cleared or left by a draw per block
@@ -298,17 +293,9 @@ def remap_walks(mesh, lines, origin):
     base = len(mats)
     mats += [walk_name(s) for s in WALK_SLOTS]
     fids = lines[6]
-    slot = np.full(len(cen), 3, np.int64)
-    memo = {}
-    for j, (l, c, s) in enumerate(zip(np.asarray(li).tolist(), np.asarray(cls).tolist(), np.asarray(side).tolist())):
-        if l < 0 or c == 255:
-            continue
-        if c <= 1:
-            slot[j] = 0
-        elif c <= 3:
-            key = (fids[l], s)
-            if key not in memo:
-                memo[key] = 1 if _seed01(fids[l], s) < WALK_CLEARED_SHARE else 2
-            slot[j] = memo[key]
+    li = np.asarray(li)
+    slot = np.frombuffer(bytes(_ef().snowroad_walk_slots(
+        bytes(np.asarray(cls, np.uint8)), [fids[i] if i >= 0 else "" for i in li.tolist()],
+        np.asarray(side, np.int8).tolist())), np.uint8).astype(np.int64)
     M[np.where(sel)[0]] = base + slot
     return P, T, UV, mats, M
