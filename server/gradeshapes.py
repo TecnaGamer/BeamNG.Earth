@@ -828,21 +828,37 @@ def _end_meets(net, e, se, o, so, crossed):
 def _pair_relations(net, i, j):
     """Member i's joints and crossings with member j: [("join"|"cross", s on i, s on j, q)]. An end on the other's
     line is a joint, or (_end_meets) between structures at different levels a crossing at that end."""
+    return _pair_from(net, i, j, *_pair_geometry(net, i, j))
+
+
+def _pair_geometry(net, i, j):
+    """(hits, ends) of members i and j, the plan's numbers alone (earthfast.LineNet makes the same to the bit):
+    hits [(s on i, s on j, q)] where they cross away from both ends (CROSS_END_M), ends [(swap, s of the end, s on
+    the other, q)] where an end of one (i's, then j's: swap) lies within JOIN_M of the other's line."""
     hits = []
     for a_i, b_j, ta, tb, q in _seg_hits(net.lines[i], net.lines[j]):
         si = net.s[i][a_i] + ta * (net.s[i][a_i + 1] - net.s[i][a_i])
         sj = net.s[j][b_j] + tb * (net.s[j][b_j + 1] - net.s[j][b_j])
         if min(si, net.L[i] - si, sj, net.L[j] - sj) >= CROSS_END_M:
             hits.append((si, sj, q))
-    out = []
-    for e, e_line, e_s, o, o_line, o_s, swap in ((i, net.lines[i], net.s[i], j, net.lines[j], net.s[j], False),
-                                                  (j, net.lines[j], net.s[j], i, net.lines[i], net.s[i], True)):
+    ends = []
+    for e_line, e_s, o_line, o_s, swap in ((net.lines[i], net.s[i], net.lines[j], net.s[j], False),
+                                           (net.lines[j], net.s[j], net.lines[i], net.s[i], True)):
         for se in (0.0, float(e_s[-1])):
             q = e_line[0] if se == 0.0 else e_line[-1]
             so, d = proj(o_line, o_s, q)
             if d <= JOIN_M:
-                kind = "join" if _end_meets(net, e, se, o, so, bool(hits)) else "cross"
-                out.append((j, kind, so if swap else se, se if swap else so, q))
+                ends.append((swap, se, so, q))
+    return hits, ends
+
+
+def _pair_from(net, i, j, hits, ends):
+    """_pair_relations from the pair's geometry (_pair_geometry's): what each contact is."""
+    out = []
+    for swap, se, so, q in ends:
+        e, o = (j, i) if swap else (i, j)
+        kind = "join" if _end_meets(net, e, se, o, so, bool(hits)) else "cross"
+        out.append((j, kind, so if swap else se, se if swap else so, q))
     # (one joint found from both its parts' ends once)
     uniq = []
     for r_ in out:
