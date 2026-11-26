@@ -10120,6 +10120,13 @@ class TunnelProfiles(BridgeProfiles):
         bank was built, an open trench across the avenue with its mouth at the river; GitHub #128)."""
         if self.wet is None:
             return
+        wet = self._chain_wet(comp, pool)
+        with self.lock:
+            for k in comp:
+                self._drowned[self._part_id(k)] = wet
+
+    def _chain_wet(self, comp, pool):
+        """_mark_drowned's test (pure, nothing marked): is a part of the chain comp under water?"""
         wet = False
         gfn = self._raw_ground if self.raw is not None else self._ground
         low = None                      # (the lowest ground at the parts' ends: the lower portal's)
@@ -10143,9 +10150,7 @@ class TunnelProfiles(BridgeProfiles):
             if w.mean() > TUNNEL_WET_SHARE or wet_run_inside(xy, w) >= TUNNEL_WET_RUN_M:
                 wet = True
                 break
-        with self.lock:
-            for k in comp:
-                self._drowned[self._part_id(k)] = wet
+        return wet
 
     def drowned(self, key, ring):
         """Is tunnel part key (fid, j) (ring: its lon/lat points) in a chain with a part under water
@@ -10167,6 +10172,35 @@ class TunnelProfiles(BridgeProfiles):
         self._mark_drowned(self._resolve(key, pool, ground, loaded), pool)
         with self.lock:
             return bool(self._drowned.get(pid))
+
+    def feature_drowned(self, feat, lat, lon):
+        """(T1, BNE_ROADSYS_TUNNELS) Is a tunnel part of the road system's map feature feat (roadsys.feature) in the
+        cell of (lat, lon) in a chain under water (drowned: left on this store's solve until T3)? The grading takes the
+        profile squares' terrain targets round such a tunnel as they were without the record (roadsys.pins_near
+        legacy): the record's portal digs are for the floors it builds."""
+        import roadsys
+        if self.wet is None:
+            return False
+        ck = mapcells.cell_of(float(lat), float(lon))
+        mk = (feat, str(ck))
+        with self.lock:
+            got = self.__dict__.setdefault("_feat_wet", {}).get(mk)
+        if got is not None:
+            return got
+        pool, ground = {}, {}
+        self._load(ck, pool, ground)
+        wet = False
+        for key in sorted(pool, key=str):
+            if roadsys.feature(key[0]) != feat or len(pool[key][1]) < 2:
+                continue
+            # (the chain's own test, pure: never the parts' marks, which a solve's underwater membership rewrites)
+            comp = self._resolve(key, pool, ground, {str(ck)})
+            if self._chain_wet(comp, pool):
+                wet = True
+                break
+        with self.lock:
+            self._feat_wet[mk] = wet
+        return wet
 
     def _chain_pins(self, comp, pool, ground):
         """{key: (start, end)}: the floor height (this frame's z, NaN at a portal) at each end of the chain comp's parts
@@ -12231,10 +12265,12 @@ def _line_near(xy, other):
     return out_d, out_q
 
 
-def twin_tunnels(parts):
+def twin_tunnels(parts, rec=None):
     """Pairs of tunnel parts ([(fid, spec, xy, z, lon)]) side by side: [(i, j, midline (k, 3), width)] with i < j their
     indices, the midline along part i (each point halfway to j's line, the floors' mean) and the width of a road
-    surface covering both carriageways (the tube round both: roadmesh.tunnel). Each part in one pair at most. Pure."""
+    surface covering both carriageways (the tube round both: roadmesh.tunnel). Each part in one pair at most. rec (T1):
+    the fids of the road system's record (TunnelProfiles.holes); a pair of two of them is paired by the record's rule.
+    Pure."""
     import roadmesh
     taken, out = set(), []
     for i, (fa, sa, xa, za, _) in enumerate(parts):
@@ -12264,8 +12300,9 @@ def twin_tunnels(parts):
             if near.mean() < TWIN_SHARE:
                 continue
             tb = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xb, axis=0).T))]
-            if roadsys.TUNNELS:
-                # (T1: and b beside a for that share of b's length too: the tube round both runs along a only, and a
+            if roadsys.TUNNELS and rec is not None and fa in rec and fb in rec:
+                # (T1: and b beside a for that share of b's length too (two parts of the record; a network left on the
+                # old solve, under water, paired as before: Tromsoysund's twin bores lost their floor at the mouth): the tube round both runs along a only, and a
                 # short section of one carriageway paired with the other's long one left the long one without a tube
                 # (Moscow's Garden Ring, its twin floors held together by the record))
                 sb_ = np.linspace(0.0, tb[-1], max(2, int(tb[-1] / TWIN_STEP_M) + 1))
@@ -12312,11 +12349,11 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                             out.append(_chunk(look, w, c))
     parts = [p for p in tunnels.parts(cells, exact) if np.isfinite(p[3]).all()]
     layouts = rampmerges.plans([(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in parts])
-    twins = twin_tunnels(parts)
-    twinned = {k for i, j, _, _ in twins for k in (i, j)}
     # (T1: the sub-parts the road system's record built (its holes): their cover meets the ground, portals.cover; a
     # network on the legacy solve keeps its cover as before)
     rec = set(getattr(tunnels, "holes", None) or ()) if roadsys.TUNNELS else set()
+    twins = twin_tunnels(parts, rec)
+    twinned = {k for i, j, _, _ in twins for k in (i, j)}
     jobs = []                                   # (fid, its ends, [(look, width, line)])
     for i, j, mid, width in twins:              # the tube round both, with the first's portals
         if len(mid) >= 2:

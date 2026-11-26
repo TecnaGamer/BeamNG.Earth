@@ -610,6 +610,44 @@ class RawLinesShort(unittest.TestCase):
         self.assertEqual(f.__dict__["_level_ranges"], {}, "nothing written into the layer being loaded")
         self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
 
+    def test_mapped_ranges_never_wait_for_a_busy_layer(self):
+        # (BNE_ROADSYS=surface, roads.MAPPED_RANGES, M5 round 6: the pieces are the map's tags alone, so a layer
+        # another thread is still making its ranges for, or one marked short, is read whole and kept: the same lines,
+        # the same landings, whichever thread touched the layer first. Read short and empty, the landings of Seal
+        # Beach's and railramp's fast roads, the pins planned with them and the bridge chains' end heights on those
+        # plans differed by ~0.2 mm between two runs of one build)
+        import mapcells
+        site, key = self.layer()
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+
+        def fresh(state=None, short=None):
+            f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+            f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+            if state is not None:
+                f.__dict__["_ranges_state"] = state
+                f.__dict__["_level_ranges"] = {}
+            if short is not None:
+                f.__dict__["_ranges_short_until"] = short
+            return f
+        got = []
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), mock.patch.object(roads, "MAPPED_RANGES", lambda: True):
+            for f in (fresh(), fresh("busy"), fresh("done", 1e18)):
+                g = self.planner(f)
+                la, lo, _ = g.frame.enu_to_geodetic(np.array([5.0]), np.array([-25.0]), 0.0)
+                with revisit.scope() as b:
+                    lines = g._raw_lines(k)
+                    lands = g._fast_landings(la, lo)
+                self.assertFalse(b.n, f.__dict__.get("_ranges_state"))
+                self.assertIn(str(k), g._raw_lines_memo)
+                if f.__dict__.get("_ranges_state") == "busy":
+                    self.assertEqual(f.__dict__["_level_ranges"], {}, "nothing written into the layer being made")
+                got.append((repr([(np.round(x[0], 9).tolist(),) + tuple(x[1:]) for kind in ("bridges", "ground")
+                                  for x in lines[kind]]),
+                            repr([(np.round(r[0], 9).tolist(), r[1]) for r in lands])))
+        self.assertTrue(got[0][0].count("motorway") or got[0][0].count("trunk"), "a fast road read")
+        self.assertEqual(got[1], got[0], "busy: the same lines and landings")
+        self.assertEqual(got[2], got[0], "marked short: the same")
+
     def test_bridge_restored_with_the_clean_copy(self):
         # (Codex review of round 5: the short home copy had no bridge, the layer's kept bridge_specs say none; the clean
         # copy restores it: the retry emits and keeps its deck, its eligibility from the ranges read, not those specs)
@@ -921,6 +959,129 @@ class GapLandingCells(unittest.TestCase):
                 self.assertEqual(dv.measure("a20_921", approach=at), base, at)
         lift = max((p.get("lift_g", 0.0) for k, p in base["parts"].items() if k.startswith("bridge:")), default=0.0)
         self.assertLess(lift, 0.5)
+
+
+class PinBatch(unittest.TestCase):
+    """BNE_ROADSYS=surface (roads.MAPPED_RANGES), M5 round 7: a cell's pin heights (_stronger_zs) planned in one batch
+    are each the pin's own: the same bytes as planned alone (_stronger_z), and as planned again in another batch after
+    the kept ones are evicted (_strong_memo cleared, as at 4096 entries or a road stage made again). Each map cell has
+    its own copy of a deck (~1e-5 m from the others'; here each fixture cell's bridges moved by a few 1e-5 m): the
+    batch's landings were the union round all its parts, the least copy of each deck end taken, so a part took another
+    cell's copy than its own: Castlegar's 0a58d21e 5e-6 m apart, batch against alone."""
+
+    SITE = "castlegar_939"
+
+    def grader(self):
+        from types import SimpleNamespace
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import drivability as dv
+        import interchanges
+        site = interchanges.load(self.SITE, "interchange", keep_m=dv.KEEP_M_SITE.get(self.SITE, dv.KEEP_M))
+        md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}),
+                             dem=SimpleNamespace(sample=site.sample))
+        dv._hook_cells(site, md, self.SITE)
+        store = grading.PlanStore(md, site.sample)
+        store.frame_of = lambda region: site.frame
+        return site, grading.Grader(site.frame, md, site.sample, store=store)
+
+    def test_batch_alone_and_evicted(self):
+        import zlib
+        import roadsurf
+        raw = grading._Planner._raw_lines
+
+        def copies(self_, k):               # (each cell's own copy of its decks)
+            out = raw(self_, k)
+            h = zlib.crc32(str(k).encode()) % 97
+            off = np.array([1e-5 * (h % 7 + 1), -1e-5 * (h % 5 + 1)])
+            memo = self_.__dict__.setdefault("_test_copies", {})
+            if str(k) not in memo:
+                memo[str(k)] = {"bridges": [(np.asarray(b, np.float64) + off,) + tuple(r) for b, *r in out["bridges"]],
+                                "ground": out["ground"]}
+            return memo[str(k)]
+        with mock.patch.object(grading, "FAST_GAP", True), mock.patch.object(roads, "RANGE_OWNERS", True), \
+                mock.patch.object(roads, "MAPPED_RANGES", lambda: True), \
+                mock.patch.object(grading._Planner, "_raw_lines", copies), \
+                mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", 1), \
+                mock.patch.object(roadsurf, "ON", False):
+            site, g = self.grader()
+            import mapcells
+            key = mapcells.CellKey(14, 2837, 5605)
+            pl = g.store.planner_of_cell(key)
+            asks = [(c, last) for c in pl._chain_cands(key) for last in (False, True)]
+            self.assertGreater(len(asks), 20)
+            batch = pl._stronger_zs(asks, key)
+            self.assertTrue(any(z is not None for z in batch))
+            self.assertTrue(any(pl._landings_of([(pl._strong_part(c, last)[0], c[4])]) for c, last in asks),
+                            "a fast road's landings in play")
+            # (evicted: planned again in other batches, the second half first, then the first half)
+            pl.__dict__["_strong_memo"].clear()
+            half = len(asks) // 2
+            again = pl._stronger_zs(asks[half:], key)
+            again = pl._stronger_zs(asks[:half], key) + again
+            # (alone: each on its own, from a fresh grader, nothing kept between)
+            _s, g2 = self.grader()
+            pl2 = g2.store.planner_of_cell(key)
+            alone = []
+            for c, last in [(c, last) for c in pl2._chain_cands(key) for last in (False, True)]:
+                pl2.__dict__.pop("_strong_memo", None)
+                alone.append(pl2._stronger_z(c, last, key))
+        for n, (c, last) in enumerate(asks):
+            self.assertEqual(repr(batch[n]), repr(alone[n]), (str(key), c[5], last, "batch against alone"))
+            self.assertEqual(repr(again[n]), repr(batch[n]), (str(key), c[5], last, "evicted against fresh"))
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 9, "the surface plans keyed apart from round 6's")
+
+
+class LandingHomeCopy(unittest.TestCase):
+    """BNE_ROADSYS=surface (roads.MAPPED_RANGES), M5 round 7: a deck end's landing is the copy of the cell the end lies
+    in, whichever cells were read round the points asked. A motorway deck ends 50 m inside one cell and runs on into
+    its east neighbour, which has its own copy 2e-5 m off: the plans of points 400 m into either cell (neither reading
+    the other's cell) took each its own cell's copy, so the two cells' plans met apart at their seam."""
+
+    def test_both_sides_take_the_home_copy(self):
+        import geodesy
+        import mapcells
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(54.0, 12.6)
+        a = mapcells.cell_of(54.0, 12.6)
+        lon0, lat0, lon1, lat1 = a.bounds()
+        ee, _n, _ = g.frame.geodetic_to_enu(np.array([54.0]), np.array([lon1]), 0.0)
+        edge = float(np.asarray(ee)[0])
+        end = np.array([edge - 50.0, 0.0])
+        deck = np.array([end, end + [200.0, 0.0]])
+        road = np.array([end, end - [300.0, 0.0]])
+        b = mapcells.cell_of(54.0, lon1 + 1e-6)
+        self.assertNotEqual(str(a), str(b))
+        shift = {str(a): np.zeros(2), str(b): np.array([2e-5, -2e-5])}
+
+        def raw(self_, k):
+            s = shift.get(str(k))
+            if s is None:
+                return {"bridges": [], "ground": []}
+            return {"bridges": [(deck + s, "motorway", False)], "ground": [(road + s, "motorway", False, True, "road")]}
+        def sides(mapped):
+            got = []
+            g.__dict__.pop("_landings_in_memo", None)
+            g.__dict__.pop("_landing_memo", None)
+            with mock.patch.object(grading._Planner, "_raw_lines", raw), \
+                    mock.patch.object(roads, "MAPPED_RANGES", lambda: mapped):
+                for x in (edge - 400.0, edge + 400.0):
+                    la, lo, _ = g.frame.enu_to_geodetic(np.array([x]), np.array([0.0]), 0.0)
+                    cells = {str(k) for k in g._gap_cells(la, lo, grading.FAST_GAP_CHAIN_M + grading.FAST_GAP_FAR_M)}
+                    self.assertEqual((str(a) in cells, str(b) in cells), (x < edge, x > edge), "one cell's copy read")
+                    lands = g._fast_landings(la, lo)
+                    self.assertEqual(len(lands), 1)
+                    got.append([(r[0].tolist(), r[1], r[5].tolist()) for r in lands])
+            return got
+        got = sides(True)
+        self.assertEqual(repr(got[1]), repr(got[0]), "the same landing from either side")
+        self.assertEqual(got[0][0][0][0], end.tolist(), "the home cell's copy")
+        # (off: each side its own cell's copy, as before; the landings kept per cell set, _landings_in: the east
+        # side's read never answered with the west side's kept one)
+        off = sides(False)
+        self.assertEqual(off[0][0][0][0], end.tolist())
+        self.assertEqual(off[1][0][0][0], (end + shift[str(b)]).tolist())
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 10)
 
 
 class UnderSpeed(unittest.TestCase):

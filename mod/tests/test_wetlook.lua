@@ -23,7 +23,7 @@ check(w2 > 0.2 and w2 < 0.6, 'drizzle: damp')
 check(W.wetStep(1, 0, W.DRY_S / 2) == 0.5 and W.wetStep(0.1, 0, W.DRY_S) == 0, 'drying')
 -- the wet values: darker by porosity, glossier by gloss
 local col, ro = W.wetValues('asphalt', { 0.5, 0.5, 0.5, 1 }, 0.8, W.LEVELS)
-near(tonumber(col:match('^(%S+)')), 0.5 * (1 - W.WET_DARK * 0.55), 1e-4, 'soaked asphalt darker')
+near(tonumber(col:match('^(%S+)')), 0.5 * (1 - W.WET_DARK * W.CLASSES.asphalt[1]), 1e-4, 'soaked asphalt darker')
 near(tonumber(ro), 0.8 * (1 - W.WET_ROUGH * 0.75), 1e-4, 'and glossier')
 col, ro = W.wetValues('metal', { 0.5, 0.5, 0.5, 1 }, nil, W.LEVELS)
 check(col == nil and tonumber(ro) < 1, 'metal: not darker, glossier')

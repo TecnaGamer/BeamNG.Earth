@@ -148,6 +148,7 @@ mod underdeck;
 mod deckground;
 mod railseam;
 mod stageshare;
+mod terrainpacks;
 mod classgrid;
 mod frontage;
 mod furnstations;
@@ -7807,8 +7808,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
     // W2 snow on the ground photos, server/snowcover.py)
     snow::py::register(m)?;
-    // 634: snowroad_classes / snowroad_zones / snowroad_class_at / snowroad_banks / snowroad_look (snowroad.rs: the
-    // winter W3 lane sheet, server/snowroad.py); SnowLook's road mask by (class, zone): 15 slots (snowlook.rs)
+    // 637 (W3, see the end): snowroad.rs, server/snowroad.py
     snowroad::py::register(m)?;
     // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
@@ -7821,7 +7821,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 631: the tunnel plan T1 round 2 (tunnel records' portals and floors)
     // 632: RoadsysCeil counts a ground road beside a deck within the deck's own need (ceil.rs allow), whatever other
     // decks were read (roadsys.ceil_of_cell's box)
-    // 634: winter W3 (snowroad.rs; SnowLook's 15 road slots) on top of 632
-    m.add("VERSION", 634)?;
+    // 635 (633 and 634 kept for the tunnel and winter W3 branches): tpacks_* (terrainpacks.rs: the ledger, prune, cap
+    // and one-time wipe of our photo packs in the game's terrain texture cache, server/terrainpacks.py)
+    terrainpacks::register(m)?;
+    // 636 (the tunnel branch's 633 renumbered over dev's 635): tunnel plan T1 round 3, the tunnel record's lids under
+    // a road crossing over the tube kept (tunnel.rs StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as
+    // without the record: roadsys.pins_near legacy)
+    // 637: winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look; SnowLook's road mask by
+    // (class, zone), 15 slots) on top of 636
+    m.add("VERSION", 637)?;
     Ok(())
 }

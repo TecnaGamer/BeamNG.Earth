@@ -47,6 +47,9 @@ COVER_NEED = 1.0            # m of ground over the crown that covers a tube (les
 COVER_OVER = 0.3            # m the cover's top lies over the crown
 COVER_SIDE = 1.5            # m the cover's sides stand outside the tube's wall (past the terrain hole's edge)
 COVER_FOOT = 1.0            # m its sides reach under the floor
+COVER_EDGE_M = 0.5          # (T1) m past a record's cover's sides the ground its top follows is read (fit)
+FOLLOW_DIP = 0.2           # (T1) m a record's cover's top lies under the ground it follows (cover(); over 15 cm: no
+                            # second surface under the terrain or a road on it, no hand-over lip against it)
 COVER_REACH = 1.0           # the ground over the tube: the lowest of its axis and this far beyond its walls either side
                             # (the terrain's holes reach TUNNEL_HOLE_MARGIN and a square past the wall)
 TWIN_GAP = 0.5              # m a headwall keeps from another tube's wall (a twin bore's collar)
@@ -139,7 +142,10 @@ def fit(roads, tunnels, cells, chunks, parts):
         d = np.gradient(xy, axis=0)
         d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
         left = np.c_[-d[:, 1], d[:, 0]]
-        pts = [xy, xy + left * (hw + COVER_REACH), xy - left * (hw + COVER_REACH)]
+        # (T1: a record's tube, whose cover's top follows this ground (cover()), reads it past the cover's own sides: read
+        # at COVER_REACH the top stood over the ground falling away beside it, a hand-over lip at its edge (Malta))
+        cr = COVER_SIDE + COVER_EDGE_M if c.get("rec") and _follow() else COVER_REACH
+        pts = [xy, xy + left * (hw + cr), xy - left * (hw + cr)]
         ends = []
         for e, at in enumerate((0, len(xy) - 1)):
             if not (c.get("portal") or (False, False))[e]:
@@ -337,12 +343,19 @@ def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None, rec=Tru
     (roadmesh._tunnel_section), the opening its end caps inside the hill leave clear; rec: a tube of the road system's
     record (its top follows the ground only then: a network on the legacy solve keeps its cover as before)."""
     fast.require(VERSION, "tunnel_cover_mesh")
+    follow = rec and _follow()
+    # (T1: a followed top lies FOLLOW_DIP under the ground, the need lowered with it so the same rows are bare: at the
+    # ground it was a second surface under the terrain where that is kept, two owners under a road crossing over the
+    # tube (Seal Beach's I-405 over its connector, 2026-11-25); a hole's edge stands FOLLOW_DIP over it, within the
+    # seam rule's tolerance)
+    dip = FOLLOW_DIP if follow else 0.0
     return fast._ef.tunnel_cover_mesh(np.ascontiguousarray(mid, np.float64), np.ascontiguousarray(left, np.float64),
-                                      np.ascontiguousarray(z, np.float64), np.ascontiguousarray(ground, np.float64),
-                                      float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED, COVER_FOOT,
+                                      np.ascontiguousarray(z, np.float64),
+                                      np.ascontiguousarray(np.asarray(ground, np.float64) - dip),
+                                      float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED - dip, COVER_FOOT,
                                       bool(caps[0]), bool(caps[1]), float(uv_m), float(soil_uv_m),
                                       np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64),
-                                      *((True,) if rec and _follow() else ()))
+                                      *((True,) if follow else ()))
 
 
 def _follow():

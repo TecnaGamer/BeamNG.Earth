@@ -31,6 +31,7 @@ class ConnectionCleanupTest(unittest.IsolatedAsyncioTestCase):
         c.s = SimpleNamespace(anchors={}, hm_here=0, tile_workers=1, remote_slots=lambda: 0,
                               connections=set(), slots_let_go=mock.Mock(), drop_claims=mock.Mock())
         c.s.stream_leases = SimpleNamespace(detach=lambda conn: False)
+        c.s.liveaudio = SimpleNamespace(on_close=mock.Mock())   # (the live weather sounds stop with their game)
         c.reader = asyncio.StreamReader()
         c.writer = SimpleNamespace(drain=mock.AsyncMock(), close=mock.Mock())
         c.peer = ("in-memory-probe", 0)
