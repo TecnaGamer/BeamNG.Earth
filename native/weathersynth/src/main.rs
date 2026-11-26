@@ -15,12 +15,15 @@
 //!   weathersynth grainbank-pack [--manifest M] [--out BIN]   assets/grains (manifest + grains/*.ogg) into one i16 .bin
 //!   weathersynth grains-render --bank BIN --class C --seed N [--dist M] [--live] --out F.wav   one grain-bank strike
 //!   weathersynth grains-set --bank BIN --out DIR [--seeds A,B] [--ogg]   bne_thunder_<class>1/2 from the grain bank
+//!   weathersynth grainbank-build plan|cut --gb DIR [--plan F] [--out BANKDIR] [--threads N]   the bank v3 builder
+//!   weathersynth grainbank-compare --ref MANIFEST --new MANIFEST   a re-cut bank against a reference (SPEC 9)
 
 mod analyze;
 #[cfg(feature = "audio")]
 mod audio;
 mod dsp;
 mod grainbank;
+mod grainbuild;
 mod live;
 mod loudness;
 mod m;
@@ -488,6 +491,12 @@ fn run() -> Result<(), String> {
                     println!("{line}");
                 }
             }
+        }
+        "grainbank-build" => grainbuild::run_build(&args)?,
+        "grainbank-compare" => {
+            let r = arg(&args, "--ref").ok_or("--ref MANIFEST")?;
+            let n = arg(&args, "--new").ok_or("--new MANIFEST")?;
+            print!("{}", grainbuild::compare(std::path::Path::new(&r), std::path::Path::new(&n))?);
         }
         "storm-dump" => print!("{}", storm::dump()),
         "analyze" => {

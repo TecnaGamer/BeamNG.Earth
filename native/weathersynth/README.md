@@ -144,6 +144,37 @@ renderer (render_v3.py; the user approved its references on 2026-11-25).
 - **Determinism:** nprng, libm maths and f64 mixing in a fixed order; absorption through minimum-phase kernels designed
   per distance in 1 % steps (a kernel depends only on its key, so the cache never changes the output).
 
+### Cutting the bank from the originals (src/grainbuild.rs; bank v3)
+
+`grainbank-build` turns the CC0 originals into grains, following
+`~/bnge-tests/weather/procedural/grainbank/v3/SPEC.md` sections 1-5. It is a port of the research tools
+(`build_bank.py` with `BANK=v3`, `gbdsp.py`, and the screening in `wxlib.py`). The bank folder needs `sources.json`,
+`originals/fs<ID>.*` and `originals.sha256`.
+
+```
+weathersynth grainbank-build plan --gb DIR [--plan DIR/plan_v3.json] [--threads N] [--verbose]
+weathersynth grainbank-build cut  --gb DIR [--plan DIR/plan_v3.json] --out BANKDIR [--threads N]
+weathersynth grainbank-compare --ref REF/manifest.json --new BANKDIR/manifest.json
+```
+
+- **plan:** finds and screens the events in each original, then denoises them and checks the residue, the rain
+  contamination and clipping. It lists the candidate cuts and selects them by score, budget and per-source cap.
+- **cut:** cuts each planned grain. Wet takes get the Wiener denoise and the high-band gate, cracks a 700 Hz high-pass,
+  peaky bodies pre-compression. Each grain is faded, levelled to -18 dBFS (loudest 400 ms) and written as Vorbis q5
+  (`BANKDIR/grains/<id>.ogg`, through ffmpeg with `+bitexact`). `BANKDIR/manifest.json` uses the reference's schema.
+- **Inputs are checked:** every original's sha256 must match `originals.sha256` before ffmpeg decodes it. A missing
+  or wrong entry stops the build.
+- **Deterministic:**
+  - libm maths and sums in a fixed order;
+  - sources and grains in the input files' order;
+  - `--threads` only splits independent sources, and the results go back in source order.
+- **Against the Python reference (2026-11-25, 79 originals):**
+  - the plan log is identical line for line, and the plan is identical field for field (scores within 2e-13);
+  - all 97 grains decode bit-identical to the reference's `v3/grains`;
+  - the manifest is text-identical except `sha256_grain`. The reference's Ogg files carry a random stream serial and
+    an encoder tag.
+  - The run takes 22 s (plan) and 8 s (cut) with 4 threads, on the PC.
+
 ## Audio rules (src/audio.rs)
 
 - **Output streams only.** On WASAPI, an input stream opened on an output device is loopback capture of the system's

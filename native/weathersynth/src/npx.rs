@@ -104,13 +104,53 @@ pub fn fft_any(x: &mut Vec<C>, inverse: bool) {
         return;
     }
     let fs = factors(n);
-    assert!(fs.iter().all(|&p| p <= 16), "a prime factor over 16 ({fs:?}): not needed by method B");
+    if fs.iter().any(|&p| p > 16) {
+        bluestein(x, inverse);
+        return;
+    }
     let table = table_for(n, inverse);
     let mut y = vec![C::default(); n];
     fft_rec(x, 0, 1, &mut y, &fs, &table);
     let s = if inverse { 1.0 / n as f64 } else { 1.0 };
     for (a, b) in x.iter_mut().zip(y) {
         *a = b.scale(s);
+    }
+}
+
+/// Bluestein's chirp-z transform for lengths with a prime factor over 16 (method B never has one; the grain-bank builder
+/// takes FFTs of arbitrary cut lengths): x_k w_k convolved with conj(w) through power-of-two FFTs, w_k = exp(sign i pi
+/// k^2 / n), the angle reduced exactly (k^2 mod 2n) before the trigonometry. Accurate to ~1e-12 relative.
+fn bluestein(x: &mut [C], inverse: bool) {
+    let n = x.len();
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let w: Vec<C> = (0..n)
+        .map(|k| {
+            let k2 = ((k as u128 * k as u128) % (2 * n as u128)) as f64;
+            let a = sign * m::PI * k2 / n as f64;
+            C::new(m::cos(a), m::sin(a))
+        })
+        .collect();
+    let len = dsp::next_pow2(2 * n - 1);
+    let mut a = vec![C::default(); len];
+    for k in 0..n {
+        a[k] = x[k].mul(w[k]);
+    }
+    let mut b = vec![C::default(); len];
+    b[0] = C::new(w[0].re, -w[0].im);
+    for k in 1..n {
+        let c = C::new(w[k].re, -w[k].im);
+        b[k] = c;
+        b[len - k] = c;
+    }
+    dsp::fft(&mut a, false);
+    dsp::fft(&mut b, false);
+    for (ai, bi) in a.iter_mut().zip(&b) {
+        *ai = ai.mul(*bi);
+    }
+    dsp::fft(&mut a, true);
+    let s = if inverse { 1.0 / n as f64 } else { 1.0 };
+    for k in 0..n {
+        x[k] = a[k].mul(w[k]).scale(s);
     }
 }
 
@@ -298,7 +338,7 @@ mod tests {
 
     #[test]
     fn mixed_radix_matches_a_dft() {
-        for n in [4usize, 6, 8, 12, 30, 63, 70, 120, 77, 1024, 1470, 2048] {
+        for n in [4usize, 6, 8, 12, 30, 63, 70, 120, 77, 1024, 1470, 2048, 251, 502, 1757, 3514] {
             let x: Vec<f64> = (0..n).map(|i| m::sin(i as f64 * 0.7) + 0.3 * m::cos(i as f64 * 2.1)).collect();
             let f = rfft(&x, n);
             for k in 0..=n / 2 {
