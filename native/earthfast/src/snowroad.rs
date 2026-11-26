@@ -977,6 +977,7 @@ pub mod py {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dm::Dm;
 
     #[test]
     fn walk_slots() {
@@ -1156,7 +1157,7 @@ mod tests {
         let mut pts = vec![[0.0, 0.0]];
         for k in 0..=12 {
             let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * k as f64 / 12.0;
-            pts.push([60.0 + 6.0 * a.cos(), 6.0 + 6.0 * a.sin()]);
+            pts.push([60.0 + 6.0 * a.dcos(), 6.0 + 6.0 * a.dsin()]);   // (dm: test_determinism's platform-maths scan)
         }
         pts.push([0.0, 12.0]);
         let n = pts.len();
