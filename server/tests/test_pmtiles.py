@@ -743,6 +743,96 @@ class MapDataTest(Base):
         lay = md.cell(other, ("buildings",)).layers["buildings"]
         self.assertIsNone(lay.__dict__.get("_bnge_fallback"))
 
+    def test_only_lasting_fallback_errors_are_kept_and_never_for_a_more_urgent_read(self):
+        """The fallback's passing refusals (the limiter, a rate limit, a circuit open, a timeout: DEFERRED and the other
+        fetch errors) and errors of no fetch at all are never kept: the next read asks the sources again. A lasting one
+        (offline, not found) is kept for reads as urgent as the one that had it or less; a more urgent read tries the
+        sources itself, and its own answer is then kept for both (Gemini review of a82c9ae8e)."""
+        import overture
+        self.enterContext(mock.patch.object(mapdata, "MAP_SOURCE", "pmtiles"))
+        md = self.md(FakeFetcher({}))
+        md.fetcher.down.update(pmtiles.HOSTS)
+        builds = []
+        real = mapdata.MapData._build
+
+        def counted(self_, key, layer, kind):
+            builds.append(kind)
+            return real(self_, key, layer, kind)
+        self.enterContext(mock.patch.object(mapdata.MapData, "_build", counted))
+        q = self.enterContext(mock.patch.object(md.overture, "query", return_value=(overture.empty("buildings"), {})))
+        passing = [netfetch.Deferred("busy, demand dropped", "u", "h"),
+                   netfetch.RateLimited("rate limited for 3 s", "u", "h", retry_after=3.0),
+                   netfetch.HostUnavailable("h unavailable for 9 s (circuit open)", "u", "h"),
+                   netfetch.FetchError("timed out", "u", "h"), ValueError("bad row group")]
+        for i, err in enumerate(passing):
+            key = mapcells.CellKey(14, CELL.x, CELL.y + 10 + i)
+            q.side_effect = err
+            n = len(builds)
+            for _ in range(2):
+                with self.assertRaises(type(err)):
+                    md.layer_arrays(key, "buildings")
+            self.assertEqual(len(builds) - n, 2, f"{type(err).__name__} asked again, not kept")
+            self.assertNotIn(md.path(key, "buildings"), md._stand_ins)
+        # a lasting one, had by a demand read: kept for demand reads, not for an urgent one
+        key = mapcells.CellKey(14, CELL.x, CELL.y + 20)
+        q.side_effect = netfetch.Offline("offline: parquet", "u", "h")
+        n = len(builds)
+        for _ in range(2):
+            with self.assertRaises(netfetch.Offline):
+                md.layer_arrays(key, "buildings", kind="demand")
+        self.assertEqual(builds[n:], ["demand"])
+        with self.assertRaises(netfetch.Offline):
+            md.layer_arrays(key, "buildings", kind="urgent")
+        self.assertEqual(builds[n:], ["demand", "urgent"], "the urgent read tried the sources itself")
+        for kind in ("urgent", "demand"):          # (the urgent read's own answer: kept for both)
+            with self.assertRaises(netfetch.Offline):
+                md.layer_arrays(key, "buildings", kind=kind)
+        self.assertEqual(builds[n:], ["demand", "urgent"])
+        # not found: kept too
+        key = mapcells.CellKey(14, CELL.x, CELL.y + 21)
+        q.side_effect = netfetch.NotFound("404", "u", "h", status=404)
+        for _ in range(2):
+            with self.assertRaises(netfetch.NotFound):
+                md.layer_arrays(key, "buildings")
+        self.assertEqual(builds.count("demand"), len(passing) * 2 + 2)
+
+    def test_bare_error_copies(self):
+        """_bare_error: the class, message, args and attributes, OSError's filename / filename2 (outside __dict__),
+        no traceback; None for an exception it cannot make alike (its __new__ refuses the args), which is then not
+        kept: the read raises its own error, never a TypeError of the copy (Gemini review of a82c9ae8e)."""
+        e = FileNotFoundError(2, "No such file or directory", "/data/x.parquet")
+        c = mapdata._bare_error(e)
+        self.assertEqual((type(c), str(c), c.errno, c.strerror, c.filename), (type(e), str(e), 2, e.strerror,
+                                                                                "/data/x.parquet"))
+        e2 = OSError(18, "Invalid cross-device link", "/a", None, "/b")
+        c2 = mapdata._bare_error(e2)
+        self.assertEqual((type(c2), str(c2), c2.filename, c2.filename2), (type(e2), str(e2), "/a", "/b"))
+        try:
+            raise netfetch.Offline("offline: u", "u", "h")
+        except netfetch.Offline as raised:
+            c3 = mapdata._bare_error(raised)
+        self.assertEqual((type(c3), str(c3), c3.url, c3.host, c3.__traceback__), (netfetch.Offline, "offline: u", "u",
+                                                                                   "h", None))
+
+        class Odd(netfetch.NotFound):
+            def __new__(cls, code, where):
+                return super().__new__(cls)
+
+            def __init__(self, code, where):
+                super().__init__(f"{code} at {where}", where, "h")
+        self.assertIsNone(mapdata._bare_error(Odd(404, "u")))
+        self.enterContext(mock.patch.object(mapdata, "MAP_SOURCE", "pmtiles"))
+        md = self.md(FakeFetcher({}))
+        md.fetcher.down.update(pmtiles.HOSTS)
+
+        def odd(*a, **k):
+            raise Odd(404, "u")
+        self.enterContext(mock.patch.object(md.overture, "query", side_effect=odd))
+        for _ in range(2):
+            with self.assertRaises(Odd):
+                md.layer_arrays(CELL, "buildings")
+        self.assertNotIn(md.path(CELL, "buildings"), md._stand_ins)
+
     def test_kept_fallbacks_are_bounded(self):
         """The kept fallbacks: at most STAND_IN_N layers and STAND_IN_MB of arrays in memory (the mirror's mapped
         views not counted), the least recently used out; one larger than STAND_IN_MB alone not kept; dropped by

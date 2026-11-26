@@ -238,9 +238,10 @@ def digest_arrays(arrays):
 STAND_IN_S = 30.0           # s a parquet cell standing in for the tiles' is served from memory (cell()), then the
                             # tiles asked again (a memory hit does not extend it)
 # A layer whose tiles failed is not asked of them, nor of its parquet fallback, again for STAND_IN_S (layer_arrays):
-# the fallback's outcome, the parquet cell's arrays (a StandIn) or the error the fallback raised, is kept per cell
-# layer and served from memory, still a stand-in (a revisit fault each time, as the fallback's own), until the tiles'
-# file is there or STAND_IN_S has passed since. Every read of such a layer went to the tiles and the parquet files
+# the fallback's outcome, the parquet cell's arrays (a StandIn) or a lasting error it raised (offline, not found:
+# _keeps; never the limiter's or a host's passing refusals), is kept per cell layer and served from memory, still a
+# stand-in (a revisit fault each time, as the fallback's own), until the tiles' file is there or STAND_IN_S has passed
+# since (a kept error only to reads no more urgent than the one that had it). Every read of such a layer went to the tiles and the parquet files
 # again: a road tile's walls ask each building cell hundreds of times (roadwidth keeps nothing made of a stand-in), and
 # with the parquet cell missing too (offline) the fallback failed every time: 73,096 failed fallbacks at study-express,
 # 59 s of CPU -> 133 s (BNE_ROADSYS=surface, whose _raw_lines measure the road widths there, M5 round 6). At most
@@ -430,15 +431,36 @@ def _resident(arrays):
     return sum(v.nbytes for v in arrays.values() if getattr(v, "flags", None) is not None and v.flags.writeable)
 
 
+_SLOTS = ("filename", "filename2", "name", "obj", "path")   # (attributes some built-in exceptions keep outside __dict__)
+
+
 def _bare_error(e):
-    """A copy of exception e without its traceback, cause or context (its class, args and attributes; __init__ not
-    run): a kept fallback's error, and each one raised from it. A raised exception's traceback holds its frames and,
-    through them, its callers' frames and locals: the kept one never holds a reader's stack, and no two readers raise
-    the same object (concurrent raises would rewrite one traceback)."""
-    out = type(e).__new__(type(e), *e.args)
-    out.args = e.args
-    out.__dict__.update(e.__dict__)
-    return out
+    """A copy of exception e without its traceback, cause or context (its class, args, attributes and the built-in
+    ones' own fields, OSError's filename / filename2 and the like; __init__ not run), or None when it cannot be made
+    alike (its __new__ refused its args, or a field did not copy): a kept fallback's error, and each one raised from
+    it. A raised exception's traceback holds its frames and, through them, its callers' frames and locals: the kept one
+    never holds a reader's stack, and no two readers raise the same object (concurrent raises would rewrite one
+    traceback)."""
+    try:
+        out = type(e).__new__(type(e), *e.args)
+        out.args = e.args
+        out.__dict__.update(getattr(e, "__dict__", {}))
+        for a in _SLOTS:
+            if a not in out.__dict__ and getattr(e, a, None) is not None:
+                setattr(out, a, getattr(e, a))
+        if type(out) is not type(e) or str(out) != str(e) or any(getattr(out, a, None) != getattr(e, a, None)
+                                                                 for a in _SLOTS):
+            return None
+        return out
+    except Exception:           # (any: the error is then not kept, and the read asks the sources again next time)
+        return None
+
+
+def _keeps(e):
+    """Is the fallback's error e one to keep for STAND_IN_S: a lasting answer (--offline: only the disk caches serve;
+    the host has no data there), not a refusal that passes (the limiter, a budget, a policy, a circuit open, a rate
+    limit, a timeout or a server error: DEFERRED and the other fetch errors), nor anything else?"""
+    return isinstance(e, (netfetch.Offline, netfetch.NotFound))
 
 
 def _fresh(arrays, since):
@@ -519,7 +541,8 @@ class MapData:
         self._slim = OrderedDict()          # cell -> (slim places, bytes): places_slim's LRU (PLACES_SLIM_MB)
         self._slim_bytes = 0
         self._slim_locks = [threading.Lock() for _ in range(16)]    # (one thread makes a cell's)
-        # tiles' path -> (monotonic when the fallback ended, StandIn arrays or None, error or None, resident bytes):
+        # tiles' path -> (monotonic when the fallback ended, StandIn arrays or None, error or None, resident bytes,
+        # the read's kind):
         # the fallback's outcomes (STAND_IN_S, STAND_IN_MB, STAND_IN_N), least recently used first; _mem_lock
         self._stand_ins = OrderedDict()
         self._stand_ins_bytes = 0
@@ -1588,8 +1611,9 @@ class MapData:
                 try:
                     arrays = self._build(key, layer, kind)
                 except Exception as e:
-                    if _fell.on and kind in _FALLBACK_KINDS and not executor_closed(e):
-                        self._stand_in_put(path, None, _bare_error(e))     # (the fallback failed too: kept too)
+                    bare = _bare_error(e) if _fell.on and kind in _FALLBACK_KINDS and _keeps(e) else None
+                    if bare is not None:
+                        self._stand_in_put(path, None, bare, kind)     # (the fallback failed too, lastingly: kept too)
                     raise
                 finally:
                     fell, _fell.on = _fell.on, False
@@ -1600,7 +1624,7 @@ class MapData:
                     if not os.path.exists(ppath):
                         self._store(ppath, arrays)
                     got = StandIn(self._mirrored(key, layer, ppath, arrays))
-                    since = self._stand_in_put(path, got, None) if fell and kind in _FALLBACK_KINDS else None
+                    since = self._stand_in_put(path, got, None, kind) if fell and kind in _FALLBACK_KINDS else None
                     if since is not None:
                         return _fresh(got, since), False    # (the kept arrays never handed out: no caller changes them)
                     return got, False
@@ -1613,8 +1637,9 @@ class MapData:
 
     def _stand_in_get(self, path, kind):
         """The fallback's kept outcome for the tiles' path (STAND_IN_S): a fresh StandIn of its arrays, or its error
-        raised; None when there is none (or it is old, then dropped, or kind would not fall back). A revisit fault
-        each time, as _build's own when the tiles failed: nothing built from it is kept."""
+        raised; None when there is none (or it is old, then dropped, or kind would not fall back, or it is an error
+        a less urgent read had: this one tries the sources itself). A revisit fault each time, as _build's own when the
+        tiles failed: nothing built from it is kept."""
         if kind not in _FALLBACK_KINDS:
             return None
         with self._mem_lock:
@@ -1624,15 +1649,19 @@ class MapData:
             if time.monotonic() - got[0] >= STAND_IN_S:     # (>=: as _stand_in_stale, a coarse clock reads 0.0)
                 self._stand_ins_bytes -= self._stand_ins.pop(path)[3]
                 return None
+            if got[2] is not None and xproc.KIND_RANK.get(kind, 1) < xproc.KIND_RANK.get(got[4], 1):
+                return None
             self._stand_ins.move_to_end(path)
             self._cell_stats["stand_in_hits"] = self._cell_stats.get("stand_in_hits", 0) + 1
         revisit.fault()
         if got[2] is not None:
-            raise _bare_error(got[2])
+            err = _bare_error(got[2])
+            raise err if err is not None else got[2].with_traceback(None)    # (copied once already: alike)
         return _fresh(got[1], got[0])
 
-    def _stand_in_put(self, path, arrays, err):
-        """Keep the fallback's outcome for path: StandIn arrays, or the error it raised (STAND_IN_MB, STAND_IN_N).
+    def _stand_in_put(self, path, arrays, err, kind="demand"):
+        """Keep the fallback's outcome for path, of a read of kind: StandIn arrays, or the error it raised (STAND_IN_MB,
+        STAND_IN_N).
         The monotonic time it is kept from, None when not kept (larger than STAND_IN_MB alone)."""
         if "_stand_ins" not in self.__dict__:
             return None
@@ -1646,7 +1675,7 @@ class MapData:
                 self._stand_ins_bytes -= old[3]
             for p in [p for p, v in self._stand_ins.items() if now - v[0] >= STAND_IN_S]:
                 self._stand_ins_bytes -= self._stand_ins.pop(p)[3]
-            self._stand_ins[path] = (now, arrays, err, n)
+            self._stand_ins[path] = (now, arrays, err, n, kind)
             self._stand_ins_bytes += n
             while len(self._stand_ins) > 1 and (self._stand_ins_bytes > STAND_IN_MB * 1e6
                                                 or len(self._stand_ins) > STAND_IN_N):
