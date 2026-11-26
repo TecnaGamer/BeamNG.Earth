@@ -508,23 +508,25 @@ pub fn banks(lines: &Lines, height: &[f64; CLASSES], cuts: &[[f64; 3]], bbox: [f
     let mut m = BankMesh { xy: Vec::new(), h: Vec::new(), tris: Vec::new(), uv: Vec::new(), tri_cls: Vec::new() };
     let junc = junctions(lines);
     let grid = SegGrid::new(lines, BANK_CLEAR_M + 4.0);
-    // the lines touching each line's ends (a continuation, a junction's partner: the junction discs cut there)
+    // each line's continuations: lines with an end meeting one of its ends away from any junction (one road carried
+    // on by another feature: their bodies overlap at the joint, no cut there); a junction's partners are not skipped:
+    // their bodies cut the bank wherever they reach it (a side street at a slant reaches past the junction's disc)
     let touch: Vec<Vec<usize>> = (0..lines.count()).map(|l| {
         let ln = lines.line(l);
         let mut t = Vec::new();
         if ln.is_empty() {
             return t;
         }
-        let ends = [ln[0], ln[ln.len() - 1]];
-        for o in 0..lines.count() {
-            if o == l {
+        let close = |a: &[f64; 2], b: &[f64; 2]| (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) <= 0.25;
+        for e in [ln[0], ln[ln.len() - 1]] {
+            if junc.iter().any(|(q, _)| close(q, &e)) {
                 continue;
             }
-            let lo = lines.line(o);
-            let near = |p: &[f64; 2]| lo.iter().any(|q| (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]) <= 0.25);
-            let near_end = |q: &[f64; 2]| ln.iter().any(|p| (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]) <= 0.25);
-            if ends.iter().any(near) || (!lo.is_empty() && (near_end(&lo[0]) || near_end(&lo[lo.len() - 1]))) {
-                t.push(o);
+            for o in 0..lines.count() {
+                let lo = lines.line(o);
+                if o != l && !lo.is_empty() && (close(&lo[0], &e) || close(&lo[lo.len() - 1], &e)) && !t.contains(&o) {
+                    t.push(o);
+                }
             }
         }
         t
