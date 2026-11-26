@@ -254,6 +254,9 @@ pub struct Msg {
     pub muted: bool,
     pub duck: f64,
     pub t: f64,
+    /// the synth plays the rain (liveaudio.lua LIVE_RAIN; absent: true, as before the field). false: the game plays
+    /// its own rain loops and the synth only the thunder (and its ducks)
+    pub synth_rain: bool,
     pub thunders: Vec<Thunder>,
 }
 
@@ -301,6 +304,7 @@ pub fn msg(line: &str) -> Result<Msg, String> {
         muted: j.bool("muted").unwrap_or(false),
         duck: c01("duck", 1.0),
         t: j.num("t").unwrap_or(0.0),
+        synth_rain: j.bool("synthRain").unwrap_or(true),
         thunders,
     })
 }
@@ -347,6 +351,8 @@ mod tests {
     fn prerecorded_and_defaults() {
         let m = msg(r#"{"mode":"prerecorded"}"#).unwrap();
         assert!(!m.live && m.thunders.is_empty() && m.shelter == 1.0 && m.volume == 1.0);
+        assert!(m.synth_rain, "no synthRain (an older mod): the synth plays the rain as before");
+        assert!(!msg(r#"{"mode":"live","synthRain":false}"#).unwrap().synth_rain, "synthRain false: the game's rain");
     }
 
     #[test]

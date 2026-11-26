@@ -87,6 +87,63 @@ check(storm.playVolume(1, false) == 1 and storm.playVolume(2, false) == 1 and st
   'thunder volume never above 1.0')
 check(storm.thunderFor(storm.STRIKE_M + 1).kind == 'close', 'past STRIKE_M: a close crack')
 check(storm.thunderFor(500).gain > storm.thunderFor(10000).gain, 'nearer is louder')
+
+-- the gain law (2026-11-26): only a correction within the class, from the file's render distance to the strike's
+-- every shipped file has its render distance and loudness, as SOURCES.md lists them
+do
+  local src = io.open(dir .. '/../beamng_earth/levels/beamng_earth/art/sound/weather/SOURCES.md'):read('*a')
+  local n, bad = 0, {}
+  for name, dist, unit, lufs in src:gmatch('| (bne_thunder_[%w_]+%.ogg) | [^|]-| ([%d.]+) (k?m) |[^\n]-(%-[%d.]+) LUFS') do
+    n = n + 1
+    local d = tonumber(dist) * (unit == 'km' and 1000 or 1)
+    local info = storm.FILE_INFO[name]
+    -- (SOURCES.md rounds: metres to 1 m, km to 10 m, LUFS to 0.1)
+    if not info or math.abs(info[1] - d) > (unit == 'km' and 6 or 0.6) or math.abs(info[2] - tonumber(lufs)) > 0.051 then
+      bad[#bad + 1] = name
+    end
+  end
+  check(n == 48 and #bad == 0, 'FILE_INFO agrees with SOURCES.md (' .. n .. ' files; off: ' .. table.concat(bad, ', ') .. ')')
+  local k = 0
+  for _ in pairs(storm.FILE_INFO) do k = k + 1 end
+  check(k == 48, 'FILE_INFO: every shipped file once')
+end
+for _, set in ipairs({ 'generated', 'recorded' }) do
+  local c = storm.levelCurve(set)
+  check(#c == 4 and c[1].kind == 'strike' and c[4].kind == 'far' and c[1][1] < c[2][1] and c[2][1] < c[3][1]
+    and c[3][1] < c[4][1] and c[1][2] > c[4][2], set .. ': its curve from the classes, nearest and loudest first')
+  for name, info in pairs(storm.FILE_INFO) do
+    local isRec = name:find('^bne_thunder_rec_') ~= nil
+    if isRec == (set == 'recorded') then
+      local kind = name:match('(%a+)%d+%.ogg$')
+      near(storm.fileGain(name, info[1], kind), 1, 1e-12, name .. ' at its own render distance: as approved')
+    end
+  end
+  -- never above 1, falling with distance within each class
+  local prev, mono, capped = 2, true, true
+  for d = 300, storm.HEAR_M, 50 do
+    local th = storm.thunderFor(d, set)
+    if th.gain > 1 then capped = false end
+    local g = storm.fileGain(nil, d, th.kind)
+    if g > 1 then capped = false end
+    if storm.thunderFor(d - 50, set).kind == th.kind and th.gain > prev + 1e-12 then mono = false end
+    prev = th.gain
+  end
+  check(capped and mono, set .. ': never above 1.0, never louder farther within a class')
+end
+check(storm.fileGain('bne_thunder_strike3.ogg', 290, 'strike') == 1 and storm.thunderFor(290).gain == 1,
+  'a strike within STRIKE_M: always full')
+-- not attenuated on top of the files' own level: a far file at its class's distance plays at full, the old law had
+-- -13.7 dB at 9 km
+check(storm.fileGain('bne_thunder_far2.ogg', 8787, 'far') == 1, 'far2 at its 8.79 km: full (the old law: 0.21)')
+near(20 * math.log10(storm.fileGain('bne_thunder_far2.ogg', 8787 * 2, 'far')), storm.PAST_FAR_DB, 1e-9,
+  'past the far class: PAST_FAR_DB per doubling')
+check(storm.fileGain('bne_thunder_mid1.ogg', 3000, 'mid') == 1, 'nearer than its render: full, never above 1')
+local g15 = storm.fileGain('bne_thunder_close1.ogg', 1499, 'close')
+check(g15 < 1 and g15 > 0.8, 'close1 (900 m) at 1499 m: a dB or two down (' .. string.format('%.3f', g15) .. ')')
+-- the synth: the recorded renders are levelled to their own distance (1), method B's to the class (the correction)
+check(storm.synthGain('recorded', 'far', 15000) == 1 and storm.synthGain('generated', 'strike', 250) == 1, 'synth gains')
+near(storm.synthGain('generated', 'close', 1499), storm.thunderFor(1499, 'generated').gain, 1e-12,
+  'generated synth: the class correction')
 -- the stand-in distance inside the fog
 check(storm.proxyDistance(5000, nil) == 5000, 'no visibility known: its own distance')
 check(storm.proxyDistance(5000, 2000) == math.max(storm.PROXY_MIN_M, storm.PROXY_VIS * 2000), 'in a storm\'s fog: nearer')
@@ -177,11 +234,15 @@ for i = nBefore + 1, #played do if played[i][2]:find(th1.kind) then heardEarly =
 check(not heardEarly, 'no thunder before the sound arrives')
 clock = first.t + th1.delay + 0.05
 storm.update(0.016, 0, { groundZ = 0 })
-local heard = false
+local heard, vol, file = false, nil, nil
 for i = nBefore + 1, #played do
-  if played[i][2]:find('bne_thunder_' .. th1.kind) and played[i][1] == 'AudioEnvironment' then heard = true end
+  if played[i][2]:find('bne_thunder_' .. th1.kind) and played[i][1] == 'AudioEnvironment' then
+    heard, file, vol = true, played[i][2]:match('[^/]+$'), played[i][3]
+  end
 end
 check(heard, 'its thunder (' .. th1.kind .. ') after ' .. string.format('%.1f', th1.delay) .. ' s')
+near(vol or -1, storm.playVolume(storm.fileGain(file, d, th1.kind), false), 1e-12,
+  'played at its file\'s own gain (' .. tostring(file) .. ', ' .. math.floor(d) .. ' m)')
 -- the storm gone, the queue empty: the module says it is done
 clock = clock + 120
 check(storm.update(0.016, 0, {}) == false, 'class 0 and nothing queued: done')

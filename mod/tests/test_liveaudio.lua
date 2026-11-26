@@ -138,6 +138,20 @@ for i = 1, la.MAX_PENDING + 5 do la.onThunder({ id = tostring(i) }) end
 la.tick(1.64, { rainMmH = 3 })
 check(#sent[7].thunders == la.MAX_PENDING and sent[7].thunders[1].id == '6', 'live: pending capped, the oldest dropped')
 
+-- Live's rain is the game's own (the default since the 2026-11-26 playtest, LIVE_RAIN false): the synth answers live,
+-- the mod's rain stays full, and every message tells the synth to keep its rain off
+check(la.LIVE_RAIN == false, 'Live: the game\'s rain loops by default')
+check(sent[2].synthRain == false and sent[7].synthRain == false, 'Live: synthRain = false in every message')
+do
+  local t0 = os.clockhp and os.clockhp() or os.clock()
+  la.onAudioState({ state = 'live', latencyMs = 20 })
+  local f
+  for i = 1, 20 do f = la.ownFactor(t0 + i * 0.05) end
+  check(la.isLive(t0 + 0.5) and f == 1, 'Live, the synth answering: the mod\'s rain stays full (the synth only thunders)')
+  la.onAudioState({ state = 'off' })   -- (the server's word gone again for the fade below)
+end
+la.LIVE_RAIN = true     -- (the synth's rain, for when the recorded-mix rain lands: the handover fade below)
+
 -- the mod's own sounds: full until the server says live, faded out over FADE_S, back when it goes stale
 local now0 = os.clockhp and os.clockhp() or os.clock()
 check(la.ownFactor(now0 - 1) == 1, 'own: full before the server answers')
