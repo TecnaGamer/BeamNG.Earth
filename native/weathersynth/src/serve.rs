@@ -62,6 +62,27 @@ pub const XRUN_GROW: usize = 3;
 pub const XRUN_WINDOW_S: f64 = 60.0;
 pub const SHRINK_AFTER_S: f64 = 300.0;
 
+/// A machine with at most this many hardware threads (the Steam Deck: 4 cores, 8 threads) keeps a grown buffer: each
+/// reopen is an audible glitch, and the Deck's 2026-11-26 broker run flipped 512 <-> 1024 six times (grown on xruns,
+/// shrunk after 5 quiet minutes, grown again).
+pub const LOW_CORE_THREADS: usize = 8;
+
+/// Pure: may the buffer step back down after a quiet SHRINK_AFTER_S on a machine with `threads` hardware threads?
+pub fn shrink_allowed(threads: usize) -> bool {
+    threads > LOW_CORE_THREADS
+}
+
+/// The machine's hardware threads (1 when unknown).
+pub fn hw_threads() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+}
+
+/// Is the machine busy for a costly thunder render (thunderlive::BUSY_RENDER_LOAD; Linux's load average; elsewhere
+/// never: the render thread's below-normal priority is the guard there)?
+pub fn render_busy() -> bool {
+    load_per_cpu().is_some_and(|l| l > crate::thunderlive::BUSY_RENDER_LOAD)
+}
+
 /// Pure: the buffer to step back down to after a quiet SHRINK_AFTER_S, or None (at the first size already).
 pub fn shrunk_buffer(frames: u32, first: u32) -> Option<u32> {
     if frames > first {
@@ -228,10 +249,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
         crate::prio::describe(out.worker_prio.load(std::sync::atomic::Ordering::Relaxed))
     );
     let mut prio_said = false;
+    let may_shrink = shrink_allowed(hw_threads());
     let b2 = bus.clone();
     let render = std::thread::Builder::new()
         .name("thunder-render".into())
-        .spawn(move || thunderlive::render_loop(b2, renderer, thunderlive::utc_now))
+        .spawn(move || thunderlive::render_loop(b2, renderer, thunderlive::utc_now, render_busy))
         .map_err(|e| e.to_string())?;
 
     let mut last: Option<Msg> = None;
@@ -292,7 +314,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let stream_error = out.error.load(std::sync::atomic::Ordering::Relaxed);
         let xrun_trouble = xrun_at.len() >= XRUN_GROW && grown_buffer(buffer).is_some();
         let calm = !stream_error && xrun_at.is_empty() && last_trouble.elapsed().as_secs_f64() >= SHRINK_AFTER_S;
-        let shrink = if calm { shrunk_buffer(buffer, first_buffer) } else { None };
+        let shrink = if calm && may_shrink { shrunk_buffer(buffer, first_buffer) } else { None };
         if stream_error || xrun_trouble || shrink.is_some() {
             // trouble: a stream error (ALSA POLLERR after an xrun the sound server did not recover, a device switched
             // or unplugged) or repeated xruns (a starved audio thread): the default device opened again with a buffer
@@ -355,8 +377,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let line = state_line(out.latency_ms(), underruns_before + u - base_underruns.unwrap_or(u), &rname, bus.counts(), buf);
             let (rl, rm) = bus.render_ms();
             let ready = ready_json(&bus.ready());
+            let skipped = bus.skipped();
             let line = format!(
-                "{},\"reopens\":{reopens},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0},\"limited\":{},\"thunderSets\":{sets_json},\"readyThunders\":{ready}}}",
+                "{},\"reopens\":{reopens},\"skipped\":{skipped},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0},\"limited\":{},\"thunderSets\":{sets_json},\"readyThunders\":{ready}}}",
                 &line[..line.len() - 1],
                 out.limited.load(std::sync::atomic::Ordering::Relaxed)
             );
@@ -431,6 +454,12 @@ mod tests {
         assert_eq!(shrunk_buffer(2048, 512), Some(1024));
         assert_eq!(shrunk_buffer(768, 512), Some(512));
         assert_eq!(shrunk_buffer(512, 512), None);
+    }
+
+    #[test]
+    fn a_low_core_machine_keeps_its_buffer() {
+        assert!(!shrink_allowed(8), "the Deck (4 cores, 8 threads): no step back down, no second reopen");
+        assert!(!shrink_allowed(4) && shrink_allowed(16), "a desktop with more threads may");
     }
 
     #[test]
