@@ -309,8 +309,9 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
 # quads of the puddle atlas (PUDDLE_CELLS: 4 shapes a row, the rows ever shallower). The chunks carry "puddle": 1:
 # roadmesh.build leaves them out of the road mesh, and a geotile's skin draws them as a mesh of their own (blockworker
 # _geo_skin_build: the "puddle" part), which the mod shows only while the ground is wet (wetlook.lua: the material's
-# alpha threshold falls as the rain fills them, rises as they dry: a near-mirror water film, roughness 0.03, the
-# engine's reflections in it). BNE_PUDDLES=off: none (keyed by the build switches).
+# alpha threshold falls as the rain fills them, rises as they dry: a smooth water film, roughness 0.06, its colour the
+# overcast sky a puddle mirrors: broker r9, our static meshes got no sky reflection at Normal, a dark film vanished on
+# the wet asphalt). BNE_PUDDLES=off: none (keyed by the build switches).
 PUDDLES = os.environ.get("BNE_PUDDLES", "on").strip().lower() not in ("off", "0", "no", "false")
 PUDDLE_MATERIAL = "bne_puddle"
 PUDDLE_CELLS = _grid(4, 4)

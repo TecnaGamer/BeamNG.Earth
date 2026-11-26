@@ -70,7 +70,8 @@ M.ROUGH_MIN = 0.06
 
 -- Puddles (the skins' puddle meshes, server roadwear.puddle_chunks: the road's sags, gutters and ruts; roads.lua
 -- setPuddles): drawn from PUDDLE_MIN wetness on, hidden below it (no draw at all). Their one material (bne_puddle: a
--- near-mirror water film, roughness 0.03, the engine's reflections in it) masks them by the atlas's depth: its alpha
+-- smooth water film, roughness 0.06, coloured as the overcast sky it mirrors: the engine gave our static meshes no sky
+-- reflection at Normal, broker r9, and a dark film vanished on the wet asphalt) masks them by the atlas's depth: its alpha
 -- test threshold falls as the rain fills them (the deep sag pools first, the shallow ruts last) and rises as they dry,
 -- in PUDDLE_STEPS steps (one material write a step, never per frame).
 M.PUDDLE_MIN = 0.45

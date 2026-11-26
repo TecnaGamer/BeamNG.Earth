@@ -12,12 +12,12 @@
     "Stages": [
       {
         "baseColorFactor": [
-          0.03,
-          0.032,
-          0.036,
+          0.36,
+          0.39,
+          0.44,
           1
         ],
-        "roughnessFactor": 0.03,
+        "roughnessFactor": 0.06,
         "metallicFactor": 0,
         "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_puddle_o.data.dds"
       },

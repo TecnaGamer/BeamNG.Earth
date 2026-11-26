@@ -723,7 +723,7 @@ in 2026-10-10-weather-probe-results.md.
   Wetness = the wetter of W1's road row and the own rain model (`wetlook.wetOf`). Puddles: `earthfast.puddle_plan`
   (roadwear.rs: sags of the centre line's profile, kerb gutters, worn wheel paths; seeded per road) -> chunks marked
   `puddle` that `roadmesh.build` leaves out of the road mesh; the geotile skin draws them as its own `puddle` part
-  (`bne_puddle`: alpha-tested depth atlas `bne_puddle_o`, roughness 0.03), hidden while dry (`roads.setPuddles`), its
+  (`bne_puddle`: alpha-tested depth atlas `bne_puddle_o`, roughness 0.06, sky-grey), hidden while dry (`roads.setPuddles`), its
   alphaRef stepped by wetness (`wetlook.puddleStep`). Drops never collide (doCollision off); `shelterCheck` fades
   them under cover. Winter's trees: one look per tree at every distance (`baretrees.lua`: bare copies, tinted copies
   at the season's tint in 4 steps, or stock; seasonlook's live tint off meanwhile), the leaf cycle scaled by the
