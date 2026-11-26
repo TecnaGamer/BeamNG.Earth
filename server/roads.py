@@ -9516,12 +9516,16 @@ class BridgeProfiles:
                 prof = None
             if prof is not None:
                 dd = self.__dict__.setdefault("depth", {})
+                kk = self.__dict__.setdefault("kept", {})
                 for k in comp:
                     v = shaped[k]
                     shaped[k] = (v[0], v[1], np.asarray(prof["deck_z"][k], np.float64), v[3])
                     # (M3: drawn with the depth its floors were solved with: its structure's, roadsys._deck_depth)
                     if prof.get("depth", {}).get(k) is not None:
                         dd[k] = float(prof["depth"][k])
+                    # (M5 round 8: the ends the chain kept at its profile's heights, their approaches' ramps:
+                    # roadsys._keep_ends, read by roadsys.pins_near through ChainView.kept_of_part)
+                    kk[k] = tuple(prof.get("kept", {}).get(k, ()))
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read
@@ -11107,6 +11111,16 @@ class ChainView:
             if d is not None:
                 return float(d)
         return None
+
+    def kept_of_part(self, key):
+        """(M5 round 8) The ends part key's chain solve kept at its profile's heights: ((end, ramp line [(lat, lon)], its
+        arc m, dz at its read point, ramp m, half width), ...) (roadsys._keep_ends); () when none or not solved here."""
+        for st in self._stores():
+            with st.lock:
+                got = st.__dict__.get("kept", {}).get(key)
+            if got is not None:
+                return got
+        return ()
 
     def depth_of(self, fid):
         ds = []

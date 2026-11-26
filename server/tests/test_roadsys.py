@@ -332,6 +332,64 @@ class ChainEndsTest(unittest.TestCase):
         self.assertEqual(roadsys._half_width((None, a)), roadsys.DECK_HALF_MIN_M)
 
 
+class KeptEndsTest(unittest.TestCase):
+    """(M5 round 8, surface 12) A short chain keeps its profile's deck end where the plans' ground past it lies in a
+    hollow, and its approach is ramped to it: the kept end's approach read along its own map feature to the first
+    junction (approach_run), the decision (kept_ends: a 32 m trunk deck, its north end's ground 2 m under its profile
+    end, 60 m of approach free: kept, a 33.3 m ramp; the same with a junction 40 m on: not), and pins_near's ramp from
+    the deck end's height at its read point back to the plans' own at the ramp's length (ramp_dz)."""
+
+    def test_decision_and_ramp(self):
+        import roadsys
+        fast.require(roadsys.KEPT_KERNEL, "test")
+        part = (np.array([[0.0, 0.0], [0.0, -32.0]]), np.array([70.0, 69.7]))
+        prm = (roadsys.KEEP_SHORT_M, roadsys.KEEP_DZ_M, roadsys.RAMP_MIN_M, roadsys.RAMP_CLEAR_M, roadsys.RAMP_RIDE_A)
+        trunk = type("Spec", (), {"cls": "trunk", "link": False, "width": 10.0})()
+        g, v = roadsys._class_grade(trunk), roadsys._class_speed(trunk)
+        self.assertEqual(g, 0.06)
+        # (130 m free: the curve's limit at 60 mph, v sqrt(6 x 2 / a) = 54 m, over the grade's 33 m)
+        got = fast._ef.roadsys_kept_ends([part], [(68.0, 69.9)], [(130.0, 130.0)], [g], [v], prm)
+        self.assertAlmostEqual(got[0][0], v * (12.0 / roadsys.RAMP_RIDE_A) ** 0.5)
+        self.assertEqual(got[0][1], 0.0, "wholly kept")
+        self.assertTrue(np.isnan(got[0][2]), "0.2 m off: lifted as before")
+        got = fast._ef.roadsys_kept_ends([part], [(68.0, 69.9)], [(60.0, 60.0)], [g], [v], prm)
+        r = roadsys.RAMP_RIDE_A * 40.0 ** 2 / (6 * v * v)
+        self.assertAlmostEqual(got[0][0], 40.0)
+        self.assertAlmostEqual(got[0][1], -(2.0 - r), msg="a junction 60 m on: 40 m of ramp, the rest dropped")
+        got = fast._ef.roadsys_kept_ends([part], [(68.0, 69.9)], [(35.0, 60.0)], [g], [v], prm)
+        self.assertTrue(np.isnan(got[0][0]), "no room before the junction")
+        dz = np.asarray(fast._ef.roadsys_ramp_dz(np.array([0.0, 10.0, 33.3, 40.0]), 2.0, 33.3))
+        self.assertEqual(dz[0], 2.0)
+        self.assertTrue(0.0 < dz[1] < 2.0 and dz[2] == 0.0 and dz[3] == 0.0, dz)
+
+    def test_approach_run_stops_at_the_first_junction(self):
+        import roadsys
+        fast.require(roadsys.KEPT_KERNEL, "test")
+        # the deck's feature goes on north from y = 0 to y = 100; another road joins it at y = 70
+        lines = [(np.array([[0.0, 0.0], [0.0, 100.0]]), [(0.0, 1), (70.0, 2), (100.0, 3)], [0.0]),
+                 (np.array([[0.0, 70.0], [60.0, 70.0]]), [(0.0, 2)], [])]
+        run, pts = fast._ef.roadsys_approach_run(lines, 0, 0.5, True, 170.0)
+        self.assertAlmostEqual(run, 69.5)
+        self.assertAlmostEqual(float(pts[-1][1]), 70.0)
+
+    def test_ramp_pins_come_whole_from_the_kept_ends(self):
+        import roadsys
+        fast.require(roadsys.KEPT_KERNEL, "test")
+        ll = np.column_stack((np.linspace(54.0, 54.0003, 18), np.full(18, 12.6)))
+        arc = np.linspace(0.0, 33.36, 18)
+        entry = (ll, arc, 2.0, 33.3, 5.0)
+        with mock.patch.object(roadsys, "_kept_in_cell", lambda c, cell_fn: [entry]):
+            pins = roadsys._ramp_pins(53.9999, 12.5999, 54.0001, 12.6001, None, lambda la, lo: np.full(len(la), 68.0))
+        self.assertEqual(len(pins), 1, "one ramp, however many cells were read")
+        pla, plo, dz, t, half, w, share = pins[0]
+        self.assertEqual(len(pla), 18)
+        self.assertEqual(float(dz[0]), 2.0)
+        self.assertEqual(float(dz[-1]), 0.0)
+        self.assertEqual(float(t[0]), 68.0)
+        self.assertEqual(half, 5.0)
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 12)
+
+
 class StructureDepthTest(unittest.TestCase):
     def test_some_bridges_are_thicker_than_others(self):
         """(M5) roadsys.structure_depth: a through truss's floor system whatever its span, a deck truss a tenth of its

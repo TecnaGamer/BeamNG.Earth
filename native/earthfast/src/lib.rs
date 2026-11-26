@@ -7846,6 +7846,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // puddle_atlas_px (their masks)
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
-    m.add("VERSION", 640)?;
+    // 643 (641 wet grip, 642 tunnels): roadsys_kept_ends / roadsys_approach_run / roadsys_ramp_dz (M5 round 8: a short
+    // chain keeps its profile's deck end where its approach ground lies in a hollow; the approach is ramped to it)
+    m.add("VERSION", 643)?;
     Ok(())
 }
