@@ -39,7 +39,10 @@ M.CLOSE_M, M.MID_M = 1500, 6000     -- thunder sounds: a crack nearer than CLOSE
 -- strike, no delay after the flash (at 300 m the sound needs 0.9 s; the crack of a strike that near reads as at once),
 -- full volume, the rain bed ducked under it for DUCK_S
 M.STRIKE_M = 300
-M.DUCK_S, M.DUCK_TO = 3.0, 0.35
+M.DUCK_S, M.DUCK_TO = 3.0, 0.35   -- (the old timed duck; strikes now schedule ambience.scheduleDuck from the crack's time)
+-- the crack's place in the thunder files (their renders' 0.5 s lead, measured on the method B set: 0.46-0.59 s; far1
+-- 0.88 s swells in): the duck's t0 is the file's start + FILE_ONSET_S
+M.FILE_ONSET_S = 0.5
 M.LPI_MIN, M.LPI_STRONG = 0.5, 5    -- J/kg (ICON-D2's lightning potential index)
 M.CAPE_MIN, M.CAPE_RAIN_MMH = 800, 0.5
 M.CHECK_S = 0.25          -- the strike walk while a storm is on ...
@@ -215,8 +218,57 @@ M.SOUND = '/levels/beamng_earth/art/sound/weather/'
 M.THUNDER = { close = { 'bne_thunder_close1.ogg', 'bne_thunder_close2.ogg' }, mid = { 'bne_thunder_mid1.ogg',
   'bne_thunder_mid2.ogg' }, far = { 'bne_thunder_far1.ogg', 'bne_thunder_far2.ogg' },
   strike = { 'bne_thunder_strike1.ogg', 'bne_thunder_strike2.ogg' } }
+-- The thunder's playback gain, never above 1.0: the files' true peak is about -1.1 dBTP, and a gain over unity goes past
+-- full scale (Linux / Proton clip, the Windows engine limiter pumps). The impact comes from the duck instead.
+-- The thunder file sets: bne_thunder_<kind>N.ogg (generated, method B: the default) and bne_thunder_rec_<kind>N.ogg
+-- (recorded: grain bank v3, CC0 field recordings layered by native/weathersynth), N = 1, 2, ... as many as exist (up
+-- to MAX_FILES; found once per set and kind). A recorded kind without files plays the generated set.
+M.MAX_FILES = 12
+M.THUNDER_SET = 'generated'   -- 'generated' | 'recorded' (the Weather page's Thunder sound)
+local setFiles = {}           -- set .. '/' .. kind -> the file names found
+local lastPick = {}           -- kind -> the file played last (not played twice in a row)
+function M.setThunderSet(v) M.THUNDER_SET = (v == 'recorded') and 'recorded' or 'generated' end
+
+-- Pure (exists: a file test, its result kept per set and kind): the files of a kind in a set.
+function M.thunderFiles(kind, set, exists)
+  local key = set .. '/' .. kind
+  if setFiles[key] == nil then
+    local prefix = (set == 'recorded') and 'bne_thunder_rec_' or 'bne_thunder_'
+    local list = {}
+    for n = 1, M.MAX_FILES do
+      local f = prefix .. kind .. n .. '.ogg'
+      if not exists(M.SOUND .. f) then break end
+      list[#list + 1] = f
+    end
+    setFiles[key] = list
+  end
+  local list = setFiles[key]
+  if #list == 0 and set == 'recorded' then return M.thunderFiles(kind, 'generated', exists) end
+  if #list == 0 then return M.THUNDER[kind] end      -- (no file test in the game's start-up: the two names of old)
+  return list
+end
+function M._resetRecOk() setFiles, lastPick = {}, {} end
+
+-- Pure: the file for a strike's seed: the same for everyone who sees the strike (multiplayer), never the one played
+-- last for the kind (the next one instead).
+function M.pickFile(files, seed, last)
+  local n = #files
+  if n == 0 then return nil end
+  local i = 1 + (tonumber(seed) or 0) % n
+  if n > 1 and files[i] == last then i = i % n + 1 end
+  return files[i]
+end
 M.THUNDER_VOL = 1.0
+-- Pure: the playback volume for a thunder of gain g (muffled: in a tunnel or under a deck): never above 1.
+function M.playVolume(g, muffled)
+  local v = (tonumber(g) or 0) * math.min(1, M.THUNDER_VOL) * (muffled and M.MUFFLED or 1)
+  return math.max(0, math.min(1, v))
+end
 M.MUFFLED = 0.45          -- the thunder's volume in a tunnel or under a deck
+-- the SFXDescription the files play through. 'AudioGui' is the UI channel: it follows the UI volume slider and the
+-- FMOD bank's "UI Ducking" snapshot. Kept until an in-game probe names a description on the Environment channel
+-- (the probe: ~/bnge-tests/weather/live/probe_thunder_channel.lua).
+M.THUNDER_DESC = 'AudioGui'
 -- the flash's light: as bright at the camera as a strike of LIGHT_LM lumens d m away (~50 lux at 3 km: a night lit up,
 -- lost in daylight as a real flash is), but put LIGHT_NEAR_M from the camera towards the strike and LIGHT_UP_M up, its
 -- lumens scaled by the distance squared (a light kilometres away drew nothing on the ground in the broker shots: the
@@ -320,8 +372,10 @@ local function strike(s, now, ctx)
   if th then
     local la = package.loaded['beamngEarth/liveaudio']
     if la and la.mode() == 'live' then la.onThunder(la.thunder(s, d, th, true)) end
-    local files = M.THUNDER[th.kind]
-    st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = files[1 + s.seed % #files], gain = th.gain, kind = th.kind }
+    local files = M.thunderFiles(th.kind, M.THUNDER_SET, function(p) return FS and FS.fileExists and FS:fileExists(p) or false end)
+    local file = M.pickFile(files, s.seed, lastPick[th.kind])
+    lastPick[th.kind] = file
+    st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = file, gain = th.gain, kind = th.kind, d = d }
   end
   local gain = M.flashGain(d)
   if gain <= 0.002 then return end
@@ -414,18 +468,25 @@ local function playThunders(now, muffled)
   for _, t in ipairs(st.thunders) do
     if now >= t.at then
       local la = package.loaded['beamngEarth/liveaudio']
-      if la and la.isLive() then
+      local synth = la and la.isLive() and la.liveThunder()
+      local played = false
+      if synth then
         M.thunders = M.thunders + 1   -- (the live synth plays it: liveaudio sent it at the strike)
+        played = true
       elseif now - t.at < 2 then      -- (a thunder missed by more than that, a pause or a hitch: dropped)
         local au = Engine and Engine.Audio
         if au and au.playOnce then
-          pcall(au.playOnce, 'AudioGui', M.SOUND .. t.file, { volume = t.gain * M.THUNDER_VOL * (muffled and M.MUFFLED or 1) })
+          pcall(au.playOnce, M.THUNDER_DESC, M.SOUND .. t.file, { volume = M.playVolume(t.gain, muffled) })
           M.thunders = M.thunders + 1
-          if t.kind == 'strike' then          -- (the rain bed ducked under a strike's crack and boom)
-            local amb = package.loaded['beamngEarth/ambience']
-            if amb and amb.duck then pcall(amb.duck, M.DUCK_S, M.DUCK_TO) end
-          end
+          played = true
         end
+      end
+      if played and t.kind == 'strike' then
+        -- the bed (and the music) ducked under the crack, scheduled from its known arrival: a file's crack comes
+        -- FILE_ONSET_S into it, the synth's at once (the synth ducks its own rain the same way)
+        local amb = package.loaded['beamngEarth/ambience']
+        local c = os.clockhp and os.clockhp() or os.clock()
+        if amb and amb.scheduleDuck then pcall(amb.scheduleDuck, c, c + (synth and 0 or M.FILE_ONSET_S), t.d) end
       end
     else
       keep[#keep + 1] = t

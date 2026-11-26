@@ -34,7 +34,7 @@ SERVER = os.path.dirname(os.path.abspath(__file__))
 EXE = "weathersynth.exe" if os.name == "nt" else "weathersynth"
 # the fields passed on to the synth (protocol_table.json weather_audio; anything else is dropped)
 FIELDS = ("mode", "rainMmH", "windMs", "shelter", "tunnel", "cabin", "volume", "thunderVolume", "muted", "duck", "t",
-          "thunders")
+          "thunderSet", "thunders")
 THUNDER_FIELDS = ("id", "at", "d", "kind", "gain", "seed", "final")
 STATE_FIELDS = ("state", "reason", "latencyMs")
 MAX_THUNDERS = 32            # per message (a hint burst is a few)

@@ -549,13 +549,104 @@ function M.duck(seconds, to)
   duckLen, duckTo = math.max(0.1, tonumber(seconds) or 3), math.max(0, math.min(1, tonumber(to) or 0.35))
   duckUntil = os.clockhp() + duckLen
 end
--- Pure-ish: the duck's factor at time now (os.clockhp).
-function M.duckFactor(now)
+-- Pure-ish: the old timed duck's factor at time now (os.clockhp).
+local function legacyDuck(now)
   local left = duckUntil - now
   if left <= 0 then return 1 end
   if left >= 1 then return duckTo end
   return duckTo + (1 - duckTo) * (1 - left)
 end
+
+-- The scheduled duck under a strike (~/bnge-tests/weather/thunder_research/CLOSE_STRIKE_AND_LOUDNESS.md, "Delivery";
+-- the thunder never gets playback gain above 1.0, the bed makes room instead). Each strike is an event
+-- { flash, t0 (the crack's arrival), depth dB } in os.clockhp:
+-- - from the flash: a pre-dip of PREDIP_DB;
+-- - a DUCK_RAMP_S ramp ending at t0, down to the depth (-10 dB at 60 m to -5 dB at 280 m);
+-- - held DUCK_HOLD_S, then released over DUCK_RELEASE_S (linear in dB).
+-- The rain bed follows it, and the music channel follows the same envelope down to MUSIC_DB. Its volume is the
+-- player's own setting x the duck, set only while a duck runs and restored on every exit: the end, clear/reset (the
+-- level, the connection) and unload.
+M.DUCK_RAMP_S, M.DUCK_HOLD_S, M.DUCK_RELEASE_S = 0.015, 0.45, 2.0
+M.PREDIP_DB = -2.5
+M.MUSIC_DB = -5
+M.MUSIC_CHANNEL = 'AudioChannelMusic'
+local ducks = {}
+local musicDucked = false
+
+-- Pure: the depth (dB, negative) for a strike d m away: -10 at 60 m, -5 at 280 m, linear between, clamped.
+function M.duckDepthDb(d)
+  d = tonumber(d) or 280
+  local t = math.max(0, math.min(1, (d - 60) / (280 - 60)))
+  return -10 + 5 * t
+end
+
+-- Pure: the duck's envelope 0..1 (1: the full depth) of one event at time now; and whether the event is over.
+function M.duckEnvelope(ev, now)
+  local depth = ev.depth
+  local pre = math.min(0, M.PREDIP_DB) / depth                  -- (the pre-dip as a share of the depth)
+  local r0 = ev.t0 - M.DUCK_RAMP_S
+  if now < ev.flash then return 0, false end
+  if now < r0 then return pre, false end
+  if now < ev.t0 then return pre + (1 - pre) * (now - r0) / M.DUCK_RAMP_S, false end
+  local h = ev.t0 + M.DUCK_HOLD_S
+  if now < h then return 1, false end
+  local e = 1 - (now - h) / M.DUCK_RELEASE_S
+  if e <= 0 then return 0, true end
+  return e, false
+end
+
+-- storm.lua: a strike's duck (the clock now is its flash; t0 when its crack arrives; d m away).
+function M.scheduleDuck(flash, t0, d)
+  ducks[#ducks + 1] = { flash = tonumber(flash) or os.clockhp(), t0 = tonumber(t0) or os.clockhp(), depth = M.duckDepthDb(d) }
+end
+
+-- The rain bed's factor at time now: the deepest duck running (and the old timed duck, M.duck).
+function M.duckFactor(now)
+  local f = legacyDuck(now)
+  for _, ev in ipairs(ducks) do
+    local e = M.duckEnvelope(ev, now)
+    if e > 0 then f = math.min(f, 10 ^ (ev.depth * e / 20)) end
+  end
+  return f
+end
+
+local function music(v, temporary)
+  local au = Engine and Engine.Audio
+  if au and au.setChannelVolume and au.getChannelVolume then
+    pcall(function()
+      local base = au.getChannelVolume(M.MUSIC_CHANNEL, false)        -- (the player's setting, not the ducked value)
+      au.setChannelVolume(M.MUSIC_CHANNEL, (tonumber(base) or 1) * v, temporary)
+    end)
+  end
+end
+
+-- The music back to the player's own setting (every exit path).
+function M.restoreMusic()
+  if musicDucked then
+    music(1, true)
+    musicDucked = false
+  end
+end
+
+-- Every frame (M.update, before the dry return of the rain): the events that ended dropped, the music channel on the
+-- deepest envelope. Nothing when no duck is scheduled.
+local function updateDucks(now)
+  if not next(ducks) then return end
+  local keep, env = {}, 0
+  for _, ev in ipairs(ducks) do
+    local e, over = M.duckEnvelope(ev, now)
+    if not over then keep[#keep + 1] = ev end
+    env = math.max(env, e)
+  end
+  ducks = keep
+  if env > 0 then
+    music(10 ^ (M.MUSIC_DB * env / 20), true)
+    musicDucked = true
+  else
+    M.restoreMusic()
+  end
+end
+M._updateDucks = updateDucks
 
 local function cabinCam()
   local cam = rawget(_G, 'core_camera')
@@ -685,6 +776,7 @@ end
 -- Every frame (core.lua): the cloud made again when the listener has moved or the tiles near it changed; the room
 -- tone follows the listener. Another anchor's tiles go (a teleport), but a rebase's ghosts. sea: sea.lua (the rivers).
 function M.update(anchorId, sea)
+  updateDucks(os.clockhp())
   listener.x, listener.y, listener.z = SFXSystem.getPositionXYZ()
   updateRivers(anchorId, sea, listener.x, listener.y)
   updateRain()
@@ -709,6 +801,8 @@ end
 
 -- The server's tiles go (disconnect): the ambience with them.
 function M.clear()
+  ducks = {}
+  M.restoreMusic()
   for key in pairs(spaces) do M.dropSpaces(key) end
   if rainEm and simObjectExists(rainEm) then rainEm:delete() end
   for name, e in pairs(layerEm) do if simObjectExists(e) then e:delete() end; layerVol[name] = 0 end

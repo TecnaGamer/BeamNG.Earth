@@ -231,6 +231,38 @@ amb.duck(3, 0.35)
 T.check(math.abs(amb.duckFactor(t0) - 0.35) < 1e-9 and math.abs(amb.duckFactor(t0 + 2.5) - (0.35 + 0.65 * 0.5)) < 0.02
   and amb.duckFactor(t0 + 3.1) == 1, 'the rain ducked under a strike, back after 3 s')
 
+-- the scheduled duck (CLOSE_STRIKE_AND_LOUDNESS.md): the depth by distance, a pre-dip from the flash, a 15 ms ramp
+-- ending at the crack, the hold, the release; the music on the same envelope, back to the player's setting at the end
+T.check(amb.duckDepthDb(60) == -10 and amb.duckDepthDb(280) == -5 and amb.duckDepthDb(20) == -10
+  and math.abs(amb.duckDepthDb(170) - -7.5) < 1e-9, 'depth: -10 dB at 60 m to -5 dB at 280 m')
+local ev = { flash = 100, t0 = 100.5, depth = -10 }
+local pre = amb.PREDIP_DB / -10
+T.check(amb.duckEnvelope(ev, 99.9) == 0, 'before the flash: nothing')
+T.check(math.abs(amb.duckEnvelope(ev, 100.2) - pre) < 1e-12, 'flash to the ramp: the pre-dip')
+T.check(math.abs(amb.duckEnvelope(ev, 100.5 - amb.DUCK_RAMP_S / 2) - (pre + (1 - pre) / 2)) < 1e-9, 'the ramp, half way')
+T.check(amb.duckEnvelope(ev, 100.5) == 1 and amb.duckEnvelope(ev, 100.5 + amb.DUCK_HOLD_S - 0.01) == 1, 'held from the crack')
+local e, over = amb.duckEnvelope(ev, 100.5 + amb.DUCK_HOLD_S + amb.DUCK_RELEASE_S / 2)
+T.check(math.abs(e - 0.5) < 1e-9 and not over, 'released linearly (in dB)')
+e, over = amb.duckEnvelope(ev, 100.5 + amb.DUCK_HOLD_S + amb.DUCK_RELEASE_S + 0.01)
+T.check(e == 0 and over, 'over after the release')
+local musicSet = {}
+Engine.Audio = { getChannelVolume = function(ch, actual) return 0.8 end,
+  setChannelVolume = function(ch, v, temp) musicSet[#musicSet + 1] = { ch, v, temp } end }
+local c0 = os.clockhp()
+amb.scheduleDuck(c0, c0 + 0.5, 60)
+T.check(math.abs(amb.duckFactor(c0 + 0.6) - 10 ^ (-10 / 20)) < 1e-9, 'the rain at -10 dB under a 60 m crack')
+amb._updateDucks(c0 + 0.6)
+local last = musicSet[#musicSet]
+T.check(last and last[1] == 'AudioChannelMusic' and math.abs(last[2] - 0.8 * 10 ^ (amb.MUSIC_DB / 20)) < 1e-9 and last[3] == true,
+  'the music ducked on the same envelope, from the player\'s setting, temporarily')
+amb._updateDucks(c0 + 0.5 + amb.DUCK_HOLD_S + amb.DUCK_RELEASE_S + 0.1)
+last = musicSet[#musicSet]
+T.check(math.abs(last[2] - 0.8) < 1e-9, 'the duck over: the music back to the player\'s setting')
+local n = #musicSet
+amb._updateDucks(c0 + 10)
+T.check(#musicSet == n, 'no duck: nothing set')
+Engine.Audio = nil
+
 amb._setLayersOk(false)
 local function rainEm()
   for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.track == amb.RAIN_TRACK then return o end end
@@ -255,4 +287,18 @@ beamngEarth_weather = nil
 
 amb.clear()
 T.check(#S.liveOf('SFXEmitter') == 0 and af.enabled == false, 'clear: the room tone goes')
+-- clear (the level, the connection): a running duck's music back to the player's setting
+do
+  local set = {}
+  Engine.Audio = { getChannelVolume = function() return 0.7 end,
+    setChannelVolume = function(ch, v, temp) set[#set + 1] = { ch, v, temp } end }
+  local c = os.clockhp()
+  amb.scheduleDuck(c, c + 0.5, 60)
+  amb._updateDucks(c + 0.6)
+  amb.clear()
+  T.check(#set >= 2 and math.abs(set[#set][2] - 0.7) < 1e-9, 'clear: the music back')
+  T.check(math.abs(amb.duckFactor(c + 10) - 1) < 1e-9, 'clear: no duck left')
+  Engine.Audio = nil
+end
+
 T.done('test_ambience')

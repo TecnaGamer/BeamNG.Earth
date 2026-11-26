@@ -69,6 +69,22 @@ check(th.kind == 'mid' and storm.thunderFor(500).kind == 'close' and storm.thund
 check(storm.thunderFor(storm.HEAR_M + 1) == nil, 'too far to hear')
 local sk = storm.thunderFor(200)
 check(sk.kind == 'strike' and sk.delay == 0 and sk.gain == 1 and #storm.THUNDER.strike == 2, 'a strike within STRIKE_M: its own sound, at once, full')
+-- the file sets: as many files as exist, the recorded set or the generated one, never the same file twice in a row
+local have = { ['bne_thunder_close1.ogg'] = true, ['bne_thunder_close2.ogg'] = true, ['bne_thunder_close3.ogg'] = true,
+  ['bne_thunder_rec_far1.ogg'] = true }
+local ex = function(p) return have[p:match('[^/]+$')] == true end
+storm._resetRecOk()
+check(#storm.thunderFiles('close', 'generated', ex) == 3, 'generated: the three close files found')
+check(storm.thunderFiles('close', 'recorded', ex)[1] == 'bne_thunder_close1.ogg', 'recorded without files: the generated set')
+check(storm.thunderFiles('far', 'recorded', ex)[1] == 'bne_thunder_rec_far1.ogg', 'recorded: its own files')
+local fl = storm.thunderFiles('close', 'generated', ex)
+check(storm.pickFile(fl, 4, nil) == 'bne_thunder_close2.ogg', 'the seed picks')
+check(storm.pickFile(fl, 4, 'bne_thunder_close2.ogg') == 'bne_thunder_close3.ogg', 'not the last one again')
+check(storm.pickFile({ 'a.ogg' }, 4, 'a.ogg') == 'a.ogg', 'one file: that one')
+storm._resetRecOk()
+-- the playback gain: never above 1
+check(storm.playVolume(1, false) == 1 and storm.playVolume(2, false) == 1 and storm.playVolume(1, true) == storm.MUFFLED,
+  'thunder volume never above 1.0')
 check(storm.thunderFor(storm.STRIKE_M + 1).kind == 'close', 'past STRIKE_M: a close crack')
 check(storm.thunderFor(500).gain > storm.thunderFor(10000).gain, 'nearer is louder')
 -- the stand-in distance inside the fog

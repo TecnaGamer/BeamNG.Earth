@@ -32,7 +32,14 @@ check(la.shouldSend('live', 'b', 'a', 1.0, 0.99, 0), 'live: a change at once')
 
 -- a thunder: the hint and the final one share the id; at = the strike + the sound's delay
 local th = la.thunder({ t = 1000.5, seed = 77 }, 1715, { delay = 5, kind = 'close', gain = 0.6 }, false)
-check(th.id == '77@1000.500' and th.at == 1005.5 and th.d == 1715 and th.kind == 'close' and th.final == false, 'thunder: hint')
+check(th.id == '77@1000.500' and th.at == 1005.5 + la.FILE_ONSET_S and th.d == 1715 and th.kind == 'close' and th.final == false,
+  'thunder: hint (generated: the game plays the file, its crack FILE_ONSET_S in)')
+check(not la.liveThunder() and la.thunderSet() == 'generated', 'generated: the game plays the thunder')
+la.setThunderSet('recorded')
+check(la.liveThunder() and la.thunder({ t = 1000.5, seed = 77 }, 1715, { delay = 5, kind = 'close', gain = 0.6 }, false).at == 1005.5,
+  'recorded: the synth plays it, its crack at once')
+check(la.fields({ thunderSet = 'recorded' }).thunderSet == 'recorded' and la.fields({}).thunderSet == 'generated', 'fields: the set')
+la.setThunderSet('generated')
 check(la.thunder({ t = 1000.5, seed = 77 }, 1700, { delay = 4.9, kind = 'close', gain = 0.6 }, true).id == th.id, 'thunder: same id')
 
 -- live only while the server's last word is live and fresh

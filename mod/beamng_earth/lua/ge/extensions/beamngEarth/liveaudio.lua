@@ -14,6 +14,13 @@ M.SEND_S = 0.25          -- weather_audio while live (and at once on a change or
 M.STALE_S = 1.5          -- a live audio_state older than this: the pre-recorded sounds come back
 M.FADE_S = 0.3           -- the handover fade (the mod's sounds out / back in)
 M.MAX_PENDING = 32       -- thunders kept for the next message
+-- Who plays the thunder while Live, per thunder set: true the synth (its ThunderRenderer for the set), false the game
+-- (the mod's files, as in Pre-recorded; the synth then only ducks its rain at each strike's crack). Generated (method
+-- B): the game, the approved files exactly (a Rust port of the B renderer is not done: ~0.5-2 s a strike on the PC).
+-- Recorded (the grain bank): the synth, a new layering per strike.
+M.LIVE_THUNDER = { generated = false, recorded = true }
+-- the crack's place in the thunder files (storm.FILE_ONSET_S): a thunder the game plays arrives this late in its file
+M.FILE_ONSET_S = 0.5
 
 local mode = 'prerecorded'   -- the setting: 'prerecorded' | 'live'
 local state = { state = 'off', t = nil }   -- the server's last audio_state and when it came (os.clockhp)
@@ -22,6 +29,7 @@ local fade = 0               -- 0: the mod's sounds full, 1: silent (live)
 local fadeAt = nil
 local pending = {}           -- thunders for the next message
 local sender = nil           -- core.lua's: send(msg) -> true when sent (connected, a session)
+local thunderSet = 'generated' -- the Weather page's Thunder sound: 'generated' | 'recorded'
 
 local function clockhp() return os.clockhp and os.clockhp() or os.clock() end
 
@@ -39,13 +47,14 @@ function M.fields(ctx)
     shelter = c01(ctx.shelter, 1), tunnel = ctx.tunnel == true, cabin = ctx.cabin == true,
     volume = c01(ctx.volume, 1), thunderVolume = c01(ctx.thunderVolume, 1),
     muted = ctx.muted == true, duck = c01(ctx.duck, 1), t = num(ctx.t, 0),
+    thunderSet = (ctx.thunderSet == 'recorded') and 'recorded' or 'generated',
   }
 end
 
 -- Pure: what decides a resend (rounded, so jitter does not send every frame).
 function M.signature(m, f)
-  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f', m, f.rainMmH, f.windMs, f.shelter,
-    tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck)
+  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s', m, f.rainMmH, f.windMs, f.shelter,
+    tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet))
 end
 
 -- Pure: a thunder for the synth from storm.lua's strike s ({ t, seed }), its distance d m and storm.thunderFor(d) th:
@@ -53,9 +62,22 @@ end
 -- (false: a look-ahead hint to render early; true: it struck, play it).
 function M.thunder(s, d, th, final)
   local t, seed = tonumber(s.t) or 0, tonumber(s.seed) or 0
-  return { id = string.format('%d@%.3f', seed, t), at = t + (tonumber(th.delay) or 0), d = tonumber(d) or 0,
+  -- (a thunder the game plays from a file: its crack comes FILE_ONSET_S into it, which is when the synth's rain ducks)
+  local lead = M.liveThunder() and 0 or M.FILE_ONSET_S
+  return { id = string.format('%d@%.3f', seed, t), at = t + (tonumber(th.delay) or 0) + lead, d = tonumber(d) or 0,
     kind = th.kind, gain = tonumber(th.gain) or 0, seed = seed, final = final == true }
 end
+
+function M.setThunderSet(v)
+  local s = (v == 'recorded') and 'recorded' or 'generated'
+  if s ~= thunderSet then
+    thunderSet = s
+    lastSig = nil
+  end
+end
+function M.thunderSet() return thunderSet end
+-- Whether the synth plays the thunder now (Live, and the set's LIVE_THUNDER).
+function M.liveThunder() return M.LIVE_THUNDER[thunderSet] == true end
 
 -- Pure: send now? (a changed signature or a waiting thunder at once; while live also every SEND_S, the heartbeat the
 -- server's synth and state ride on)
@@ -163,14 +185,15 @@ function M.ownFactor(now)
   return 1 - fade
 end
 
--- The game's volumes: rain on the Other channel, thunder on the UI channel (the channels the mod's own play on).
+-- The game's volumes: rain on the Other channel, thunder on the UI channel (the channels the mod's own play on: the
+-- thunder files through 'AudioGui', the UI channel; core/settings/audio.lua: AudioChannelUi, pref AudioUiVol).
 function M.gameVolumes()
   local au = Engine and Engine.Audio
   local getChannel = au and au.getChannelVolume and function(c) return au.getChannelVolume(c, false) end or nil
   local s = rawget(_G, 'settings')
   local getSetting = s and s.getValue and function(k) return s.getValue(k) end or nil
   return M.channelVolume(getChannel, getSetting, 'AudioChannelOther', 'AudioOtherVol'),
-    M.channelVolume(getChannel, getSetting, 'AudioChannelGui', 'AudioUiVol')
+    M.channelVolume(getChannel, getSetting, 'AudioChannelUi', 'AudioUiVol')
 end
 
 function M.paused()
@@ -216,6 +239,7 @@ function M.tick(now, ctx)
     ctx.muted = ctx.muted == true or M.quiet()
     ctx.t = ctx.t or M.clock()
   end
+  ctx.thunderSet = thunderSet
   local f = M.fields(ctx)
   local sig = M.signature(mode, f)
   if not M.shouldSend(mode, sig, lastSig, now, lastSendT, #pending) then return end
@@ -223,7 +247,7 @@ function M.tick(now, ctx)
   local ok, sent = pcall(function()
     return send({ type = 'weather_audio', mode = mode, rainMmH = f.rainMmH, windMs = f.windMs,
       shelter = f.shelter, tunnel = f.tunnel, cabin = f.cabin, volume = f.volume, thunderVolume = f.thunderVolume,
-      muted = f.muted, duck = f.duck, t = f.t, thunders = th })
+      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, thunders = th })
   end)
   if ok and sent then
     lastSig, lastSendT, modeSent = sig, now, mode

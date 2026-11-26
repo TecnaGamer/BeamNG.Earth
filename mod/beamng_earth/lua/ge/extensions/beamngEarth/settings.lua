@@ -118,6 +118,10 @@ M.SCHEMA = {
   -- the weather sounds: the mod's pre-recorded files, or played live by the world server (native/weathersynth;
   -- liveaudio.lua), which falls back to the files by itself when the live sound fails (the user, 2026-11-25)
   weatherSoundSource = { kind = 'enum', default = 'prerecorded', values = { 'prerecorded', 'live' }, label = 'Weather sounds' },
+  -- the thunder: generated (the physical model, method B; the user's pick, 2026-11-25) or recorded (CC0 field
+  -- recordings layered, the grain bank; the user: "also keep and update the recording mix method and add a setting
+  -- switch between the 2"), for the files and for the live sound
+  weatherThunderSound = { kind = 'enum', default = 'generated', values = { 'generated', 'recorded' }, label = 'Thunder sound' },
   realClouds = { kind = 'bool', default = true, label = 'Real clouds' },
   realFog = { kind = 'bool', default = true, label = 'Real fog' },
   realWind = { kind = 'bool', default = true, label = 'Real wind' },
@@ -256,7 +260,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'weatherStormLight',
-  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherSoundSource', 'realClouds',
+  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherSoundSource', 'weatherThunderSound', 'realClouds',
   'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
@@ -661,6 +665,11 @@ M.APPLY = {
   weatherStreaks = function(v) local w = ext('beamngEarth_weather') if w and w.setStreaks then w.setStreaks(v) end end,
   weatherWetLook = function(v) local w = ext('beamngEarth_weather') if w and w.setWetLook then w.setWetLook(v) end end,
   weatherSoundSource = function(v) require('beamngEarth/liveaudio').setMode(v) end,
+  weatherThunderSound = function(v)
+    require('beamngEarth/liveaudio').setThunderSet(v)
+    local ok, storm = pcall(require, 'beamngEarth/storm')
+    if ok and storm and storm.setThunderSet then storm.setThunderSet(v) end
+  end,
   realClouds = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('clouds', v) end end,
   realFog = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('fog', v) end end,
   realWind = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('wind', v) end end,
