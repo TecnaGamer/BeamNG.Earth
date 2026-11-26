@@ -62,6 +62,10 @@
         </g>
         <polyline v-for="r in areaRoutes" :key="'rt' + r.id" class="area-route" :class="r.cls" :points="r.points"
                   :style="{ strokeWidth: r.px + 'px' }" />
+        <g v-if="roadsDrivenOn">
+          <polyline v-for="(p, i) in drivenLines" :key="'rdg_' + i" class="driven-line-glow" :points="p" />
+          <polyline v-for="(p, i) in drivenLines" :key="'rd_' + i" class="driven-line" :points="p" />
+        </g>
         <polyline v-if="routeDone" class="route-done" :points="routeDone" />
         <polyline v-if="routeAhead" class="route-line-casing" :points="routeAhead" />
         <polyline v-if="routeAhead" class="route-line" :points="routeAhead" />
@@ -144,6 +148,10 @@
         <span v-if="weatherBadge.icon">{{ weatherBadge.icon }}</span>
         <span v-if="weatherBadge.temp != null">{{ weatherBadge.temp }}</span>
         <span v-if="weatherBadge.localTime">{{ weatherBadge.localTime }}</span>
+      </div>
+      <div v-if="state.roadsDriven && state.roadsDriven.totalKm > 0" class="odometer-badge" title="Exploration Odometer (Issue #365): Total distance driven on Earth">
+        <span class="odo-label">DRIVEN</span>
+        <span class="odo-val">{{ fmtMiles((state.roadsDriven.totalKm || 0) * 1000) }}</span>
       </div>
       <div class="search" @mousedown.stop @focusin="searchFocused = true" @focusout="searchFocusOut">
         <div class="search-field">
@@ -251,6 +259,8 @@
             <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
+          <label class="layer-opt"><input type="checkbox" v-model="roadsDrivenOn" /> Roads driven tracker
+            <span class="layer-hint" v-if="state.roadsDriven">({{ fmtMiles((state.roadsDriven.totalKm || 0) * 1000) }})</span></label>
           <template v-if="debugAvail">
           <div class="panel-sub">Debug Overlays</div>
           <label class="layer-opt"><input type="checkbox" v-model="debugOn" /> Cliff placement</label>
@@ -488,7 +498,13 @@
 
     <!-- bottom: cursor position, scale, attribution -->
     <div class="map-bottom" :class="{ 'beside-panel': panelOpen }">
-      <span class="cursor-pos">{{ cursorText }}</span>
+      <div class="bottom-left-group">
+        <span class="cursor-pos">{{ cursorText }}</span>
+        <div class="scale-bar-wrap" title="Map Scale">
+          <div class="scale-bar" :style="{ width: scaleBar.px + 'px' }"></div>
+          <span class="scale-label">{{ scaleBar.label }}</span>
+        </div>
+      </div>
       <!-- two lines, the whole text on hover or a click (it grew to five lines over the Places panel, 2026-10-20) -->
       <span class="attribution" :class="{ full: creditsFull }" :title="attributionText"
             @click.stop="creditsFull = !creditsFull" @mousedown.stop>{{ attributionText }}</span>
@@ -539,6 +555,7 @@ function poll() {
   engineLua("beamngEarth_settings and beamngEarth_settings.uiMapState and beamngEarth_settings.uiMapState() or nil", s => {
     if (!s) { state.value = { places: [], recent: [], missing: true }; return }
     state.value = { ...s, places: toArray(s.places), recent: toArray(s.recent) }
+    checkDrivenLines()
     if (!s.others && playersPanel.value) closePlayers()   // (out of the session: not open again by itself in the next)
     if (followingPlayer()) {
       const o = followedPlayer.value
@@ -572,8 +589,75 @@ const BASE_LAYERS = new Set(["sat", "map", "dark"])
 const storedBase = stored("beamngEarth.map.base", "sat")
 const baseLayer = ref(BASE_LAYERS.has(storedBase) ? storedBase : "sat")
 const labelsOn = ref(stored("beamngEarth.map.labels", "0") === "1")
+const roadsDrivenOn = ref(stored("beamngEarth.map.roadsDriven", "1") === "1")
+const drivenSegments = ref([])
+const loadedDrivenRev = ref(0)
+let loadingDriven = false
+
+function checkDrivenLines() {
+  if (!roadsDrivenOn.value) return
+  const rd = state.value.roadsDriven
+  if (!rd || loadingDriven) return
+
+  const rev = rd.rev || 0
+  const segs = drivenSegments.value
+  const hasRevChange = rev > 0 && rev !== loadedDrivenRev.value
+
+  // Can we safely append cur to the active line?
+  // Only if: rev has not changed, cur exists, segment count matches backend's n,
+  // and the backend's current line length is exactly our segment's length + 1 (single-step progression).
+  const canAppend = !hasRevChange && rd.cur && segs.length > 0 &&
+                    segs.length === rd.n && (rd.len === segs[segs.length - 1].line.length + 1)
+
+  if (canAppend) {
+    const cur = rd.cur
+    const lastSeg = segs[segs.length - 1]
+    const line = lastSeg.line
+    const lastPt = line[line.length - 1]
+    if (cur[0] !== lastPt[0] || cur[1] !== lastPt[1]) {
+      line.push(cur)
+      if (cur[0] < lastSeg.box[0]) lastSeg.box[0] = cur[0]
+      if (cur[0] > lastSeg.box[1]) lastSeg.box[1] = cur[0]
+      if (cur[1] < lastSeg.box[2]) lastSeg.box[2] = cur[1]
+      if (cur[1] > lastSeg.box[3]) lastSeg.box[3] = cur[1]
+      drivenSegments.value = [...segs]
+    }
+    return
+  }
+
+  // Fetch needed if rev changed, or if map segment count / line length is out of step
+  const needsFetch = hasRevChange || (rd.n > 0 && (segs.length !== rd.n || (segs.length > 0 && rd.len > segs[segs.length - 1].line.length)))
+  if (needsFetch) {
+    loadingDriven = true
+    engineLua("beamngEarth_settings and beamngEarth_settings.uiDrivenLines and beamngEarth_settings.uiDrivenLines() or {}", res => {
+      loadingDriven = false
+      if (Array.isArray(res)) {
+        const newSegs = []
+        for (const line of res) {
+          if (!line || line.length < 1) continue
+          let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180
+          for (let i = 0; i < line.length; i++) {
+            const lat = line[i][0], lon = line[i][1]
+            if (lat < minLat) minLat = lat
+            if (lat > maxLat) maxLat = lat
+            if (lon < minLon) minLon = lon
+            if (lon > maxLon) maxLon = lon
+          }
+          newSegs.push({ box: [minLat, maxLat, minLon, maxLon], line: [...line] })
+        }
+        drivenSegments.value = newSegs
+        loadedDrivenRev.value = rev
+      }
+    })
+  }
+}
+
 watch(baseLayer, v => store("beamngEarth.map.base", v))
 watch(labelsOn, on => store("beamngEarth.map.labels", on ? "1" : "0"))
+watch(roadsDrivenOn, on => {
+  store("beamngEarth.map.roadsDriven", on ? "1" : "0")
+  if (on) checkDrivenLines()
+})
 const layersPanel = ref(false)
 // "Dark" is not a tile source of its own: the "map" tiles (terrain-light, already hillshaded) through a CSS
 // filter (.tile-dark below) - the usual trick for a dark map without a dark-themed tile set of its own.
@@ -859,6 +943,105 @@ const cursorText = computed(() => {
   const c = cursor.value
   const z = `zoom ${view.value.z.toFixed(1)}`
   return c ? `${mm.fmtLatLon(c.lat, c.lon)}   ${z}` : z
+})
+
+// Roads Driven polylines (Issue #365): transformed into screen SVG polyline coords
+// Viewport-culled and downsampled to maintain 60 FPS even with 50,000 recorded points.
+const drivenLines = computed(() => {
+  view.value; w.value; h.value
+  if (!roadsDrivenOn.value) return []
+  const segments = drivenSegments.value || []
+  if (!segments.length) return []
+
+  const v = view.value
+  const width = w.value, height = h.value
+  const margin = 80
+  const vb = mm.viewBox(v.lat, v.lon, v.z, width, height, margin)
+
+  const out = []
+  for (const seg of segments) {
+    const box = seg.box
+    // O(1) Precomputed bounding box check against viewBox [wLon, sLat, eLon, nLat]
+    if (box[1] < vb[1] || box[0] > vb[3]) continue
+    if (vb[0] <= vb[2]) {
+      if (box[3] < vb[0] || box[2] > vb[2]) continue
+    } else {
+      if (box[3] < vb[0] && box[2] > vb[2]) continue
+    }
+
+    const line = seg.line
+    // Viewport clipping and Manhattan distance downsampling (threshold >= 1.5 px)
+    let currentPts = []
+    let lastX = -99999, lastY = -99999
+    let lastWasOff = false
+
+    for (let i = 0; i < line.length; i++) {
+      const pt = line[i]
+      const lat = Number(pt[0]), lon = Number(pt[1])
+      if (!isFinite(lat) || !isFinite(lon)) continue
+      const p = screen(lat, lon)
+      const off = p.x < -margin || p.x > width + margin || p.y < -margin || p.y > height + margin
+
+      if (off && lastWasOff) {
+        if (currentPts.length >= 2) out.push(currentPts.join(" "))
+        currentPts = []
+        lastX = p.x
+        lastY = p.y
+        continue
+      }
+      lastWasOff = off
+
+      const isLast = (i === line.length - 1)
+      const dx = Math.abs(p.x - lastX)
+      const dy = Math.abs(p.y - lastY)
+      if (!isLast && dx < 1.5 && dy < 1.5) {
+        continue
+      }
+
+      currentPts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+      lastX = p.x
+      lastY = p.y
+    }
+
+    if (currentPts.length >= 2) {
+      out.push(currentPts.join(" "))
+    }
+  }
+  return out
+})
+
+// Dynamic Google Maps style scale bar: calculates real-world distance corresponding to ~100px
+// Supports metric (m/km) and imperial (ft/mi) based on settings.
+const scaleBar = computed(() => {
+  const v = view.value
+  const latRad = (v.lat * Math.PI) / 180
+  const mPerPx = (156543.03392 * Math.cos(latRad)) / Math.pow(2, v.z)
+  const isMetric = !!((state.value.gps || state.value).metric)
+
+  if (isMetric) {
+    const targetM = 100 * mPerPx
+    const steps = [
+      5, 10, 20, 50, 100, 200, 500,
+      1000, 2000, 5000, 10000, 20000, 50000,
+      100000, 200000, 500000, 1000000, 2000000
+    ]
+    const dist = steps.find(s => s >= targetM * 0.75) || steps[steps.length - 1]
+    const px = Math.min(180, Math.max(25, Math.round(dist / mPerPx)))
+    const label = dist >= 1000 ? `${dist / 1000} km` : `${dist} m`
+    return { px, label }
+  } else {
+    const targetFt = 100 * mPerPx * 3.28084
+    const stepsFt = [
+      20, 50, 100, 200, 500, 1000, 2000,
+      5280, 2 * 5280, 5 * 5280, 10 * 5280, 20 * 5280, 50 * 5280,
+      100 * 5280, 200 * 5280, 500 * 5280, 1000 * 5280
+    ]
+    const distFt = stepsFt.find(s => s >= targetFt * 0.75) || stepsFt[stepsFt.length - 1]
+    const distM = distFt / 3.28084
+    const px = Math.min(180, Math.max(25, Math.round(distM / mPerPx)))
+    const label = distFt >= 5280 ? `${Math.round(distFt / 5280)} mi` : `${distFt} ft`
+    return { px, label }
+  }
 })
 
 // ---- mouse ---------------------------------------------------------------------------------
@@ -2640,9 +2823,32 @@ const fmtLatLon = mm.fmtLatLon
 .gps-download-bar { width: 60px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.15); overflow: hidden; }
 .gps-download-fill { display: block; height: 100%; background: #36a3ff; transition: width 0.2s linear; }
 .map-grid polyline { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.map-grid .driven-line-glow { stroke: rgba(0, 210, 255, 0.4); stroke-width: 7; }
+.map-grid .driven-line { stroke: #00d2ff; stroke-width: 3.5; opacity: 0.95; }
 .map-grid .route-line-casing { stroke: rgba(10, 40, 80, 0.85); stroke-width: 8; }
 .map-grid .route-line { stroke: #3aa0ff; stroke-width: 5; }
 .map-grid .route-done { stroke: rgba(200, 200, 200, 0.6); stroke-width: 4; }
+.odometer-badge {
+  display: flex; gap: 6px; align-items: center; padding: 4px 10px;
+  background: rgba(0, 180, 240, 0.18); border: 1px solid rgba(0, 210, 255, 0.45);
+  border-radius: 4px; font-size: 12px; color: #7fe4ff; font-weight: 500;
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.15);
+}
+.odometer-badge .odo-label {
+  font-size: 10px; opacity: 0.75; letter-spacing: 0.5px; font-weight: 600;
+}
+.odometer-badge .odo-val {
+  font-weight: 600;
+}
+.bottom-left-group { display: flex; gap: 8px; align-items: flex-end; }
+.scale-bar-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  background: rgba(0, 0, 0, 0.65); padding: 3px 8px; border-radius: 4px; pointer-events: none;
+}
+.scale-bar {
+  height: 4px; border-left: 2px solid #fff; border-right: 2px solid #fff; border-bottom: 2px solid #fff;
+}
+.scale-label { font-size: 10px; color: #d0d7de; }
 .marker.gps { z-index: 3; }
 .marker.gps .flag {
   position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50% 50% 50% 0;

@@ -1120,7 +1120,14 @@ function M.uiMapState()
     gps = require('beamngEarth/gps').status(),
     metric = require('beamngEarth/gps').metric(),     -- (the game's length unit with no GPS route: the Players list)
     weather = localWeatherBadge(),
+    roadsDriven = require('beamngEarth/roads_driven').uiState(),
   }
+end
+
+-- Full roads driven lines requested on-demand when rev changes (Issue #365)
+function M.uiDrivenLines()
+  local ok, res = pcall(function() return require('beamngEarth/roads_driven').uiLines() end)
+  return ok and res or {}
 end
 
 -- Teleport from the map (the page asked "Teleport here?" first); recorded in the recent places.

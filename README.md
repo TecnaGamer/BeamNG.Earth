@@ -297,6 +297,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   search box do the same in one click. Ctrl+V pastes into the search and the other text boxes. Works with a controller,
   laid out like the stock map. Layers > **Highways** (off by default) draws the US Interstates and US routes with their
   shields while zoomed out, so you can see which highways a GPS route takes (closer in, Roads & labels shows every road).
+  Layers > **Roads driven tracker** (on by default): tracks where you have driven on the map with a glowing cyan
+  line and keeps a persistent exploration odometer across sessions; a dynamic map scale bar (metric / imperial) shows real-world distance.
 - **3D map** (experimental): a Google Earth style view in the game itself. Fly up from your car to see the whole
   globe with its photos, search for places, pick a spot with a click, set a GPS route or teleport there; its compass
   needle turns with the view. The map key opens the 2D or 3D map, whichever you used last, and each has a button for
