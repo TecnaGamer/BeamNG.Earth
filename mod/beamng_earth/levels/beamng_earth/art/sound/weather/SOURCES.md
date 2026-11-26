@@ -119,14 +119,15 @@ Method B (`rainb-modset`, seed 1), 30 s seamless loops. The true peak is measure
 | bne_rain_roof_light.ogg | roof_light | the car's panels from outside near the car, light | -30.0 LUFS | -2.00 dBTP | 285,631 B |
 | bne_rain_roof.ogg | roof | the panels from outside, medium | -24.2 LUFS | -2.75 dBTP | 277,682 B |
 | bne_rain_roof_heavy.ogg | roof_heavy | the panels from outside, heavy | -17.2 LUFS | -1.38 dBTP | 277,943 B |
-| bne_rain_roof_cabin_light.ogg | cabin_light | the roof inside the car (its modes, the headliner, the windscreen, the outside through the body), light | -30.0 LUFS | -4.38 dBTP | 400,956 B |
-| bne_rain_roof_cabin.ogg | cabin | the roof inside the car, medium | -24.1 LUFS | -3.05 dBTP | 329,615 B |
-| bne_rain_roof_cabin_heavy.ogg | cabin_heavy | the roof inside the car, heavy | -17.2 LUFS | -1.20 dBTP | 288,066 B |
+| bne_rain_roof_cabin_light.ogg | cabin_light | the roof inside the car (its modes and thumps, the headliner's two 680 Hz low-passes, the windscreen, the outside through the body), light, 6 dB under the outside (rainb.rs CABIN_GAIN_DB) | -36.0 LUFS | -12.31 dBTP | 340,155 B |
+| bne_rain_roof_cabin.ogg | cabin | the roof inside the car, medium | -30.1 LUFS | -10.03 dBTP | 308,311 B |
+| bne_rain_roof_cabin_heavy.ogg | cabin_heavy | the roof inside the car, heavy | -23.2 LUFS | -6.37 dBTP | 283,565 B |
 | bne_rain_muffled.ogg | muffled_closed | enclosed shelters (tunnels, closed bridges, buildings): the medium rain through two 900 Hz low-passes | -25.9 LUFS | -9.92 dBTP | 144,514 B |
 | bne_rain_muffled_open.ogg | muffled | open shelters (bridges, overpasses): a 12 m deck overhead, the open sides, its edges dripping | -25.9 LUFS | -10.70 dBTP | 274,771 B |
 
-In total 3.1 MB, against 1.05 MB for the 7 procedural loops before: +2.05 MB. Compared with the real recordings
-(compare corpus), method B scores within the real takes' own range for every class.
+In total 3.0 MB, against 1.05 MB for the 7 procedural loops before: +2.0 MB. Compared with the real recordings
+(compare corpus), method B scores within the real takes' own range outdoors and under shelter. The cabin is
+muffled and quieter than the real in-car takes by the user's choice (2026-11-26: "Make cabin more muffled and quieter").
 
 
 ### Recorded rain, wind, drips and hail (the recorded mix, 2026-11-26)

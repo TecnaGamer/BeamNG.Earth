@@ -68,7 +68,7 @@ const N_SURF: usize = 7;
 /// rate, for the open air, the cabin path and the shelter (shelter weight 1); and the cabin parts' gains.
 const LEVEL_RATES: [f64; 11] = [0.05, 0.1, 0.3, 0.7, 1.0, 2.0, 5.0, 10.0, 20.0, 35.0, 60.0];
 const LEVEL_OPEN: [f64; 11] = [-37.50, -34.45, -26.34, -23.24, -18.20, -13.50, -5.78, 1.48, 6.80, 10.48, 14.21];
-const LEVEL_CABIN: [f64; 11] = [-37.92, -31.78, -26.04, -22.01, -18.63, -13.87, -8.39, -4.28, 0.77, 3.59, 8.74];
+const LEVEL_CABIN: [f64; 11] = [-40.42, -33.80, -28.50, -24.54, -21.39, -16.48, -11.05, -6.54, -1.00, 1.98, 7.18];
 const LEVEL_SHELTER: [f64; 11] = [-40.23, -38.35, -30.54, -22.56, -22.55, -16.78, -8.40, -1.60, 5.65, 9.32, 11.08];
 const GLASS_G: f64 = 1.027607e0;
 const BODY_G: f64 = 2.486389e1;
@@ -186,7 +186,7 @@ impl CabinFx {
             floor_g: m::undb(env_f("floor_db", 10.0)),
             thump_g: m::undb(env_f("thump_db", 0.0)),
             thump_d: env_f("thump_d", 2.2),
-            glass_g: m::undb(env_f("glass_db", -2.0)),
+            glass_g: m::undb(env_f("glass_db", -7.0)),
             hf_bp: Biquad::highpass(FS, env_f("hf_hz", 2500.0), 0.7071),
             hf_g: m::undb(env_f("hf_db", -6.0)),
             tick_pre: env_f("tick_pre", 0.0),
@@ -341,6 +341,7 @@ pub struct LiveRainB {
     roof: ModeBank<16>,
     force: [f64; CH],
     liner: Biquad,
+    liner2: Biquad,
     cfx: CabinFx,
     wash_u: [f32; CH],
     floor_std: f64,
@@ -655,6 +656,7 @@ impl LiveRainB {
             roof,
             force: [0.0; CH],
             liner: Biquad::lowpass(FS, rainb::Tune::get().liner_hz, 0.6),
+            liner2: Biquad::lowpass(FS, rainb::Tune::get().liner_hz, 0.6),
             cfx: CabinFx::new(),
             wash_u: [0.0; CH],
             floor_std: 0.0,
@@ -1173,7 +1175,12 @@ impl LiveRainB {
         };
         let l_open = lerp(by_rate(&self.tab.open, r), by_rate(&self.tab.shelter, r) - SHELTER_DB, sh);
         let g_open = if self.tap == Tap::OpenRaw { 1.0 } else { m::undb(tgt - l_open) * fade };
-        let g_cab = if self.tap == Tap::CabinRaw { 1.0 } else { m::undb(tgt - by_rate(&self.tab.cabin, r)) * fade };
+        // (the cabin CABIN_GAIN_DB under the outside, as the offline cabin loops)
+        let g_cab = if self.tap == Tap::CabinRaw {
+            1.0
+        } else {
+            m::undb(tgt + rainb::CABIN_GAIN_DB - by_rate(&self.tab.cabin, r)) * fade
+        };
         // the roof's modes over the chunk, one mode at a time (each a short recursion; no per-sample loop over modes)
         let mut roof_raw = [0.0f64; CH];
         if self.cab > 0.0 || self.tap != Tap::Mix {
@@ -1200,7 +1207,8 @@ impl LiveRainB {
             let mut cabin = 0.0;
             let (mut roof_v, mut glass_v, mut body_v) = (0.0, 0.0, 0.0);
             if c > 0.0 || self.tap != Tap::Mix {
-                roof_v = self.lf.tick(self.liner.tick(roof_raw[j]));
+                // the headliner: two low-passes (24 dB / octave, as offline)
+                roof_v = self.lf.tick(self.liner2.tick(self.liner.tick(roof_raw[j])));
                 glass_v = self.cfx.glass_hp.tick(self.bins[GLASS_BIN][j] as f64);
                 body_v = self.body1.tick(o);
                 // the cabin's transfer: body / panel resonances on the roof and the outside

@@ -50,6 +50,9 @@ use crate::nprng::NpRng;
 use crate::thunder::cutoff_for_path;
 
 pub const FS: f64 = 44100.0;
+/// The rain inside the car against the outside at the same rate (dB; the offline cabin loops' loudness and the live
+/// engine's cabin level). The user, 2026-11-26: "Make cabin more muffled and quieter": -6, to tune after a listen.
+pub const CABIN_GAIN_DB: f64 = -6.0;
 pub(crate) const OBS_H: f64 = 1.6;
 const RHO_W: f64 = 998.0;
 const SIGMA_W: f64 = 0.0728;
@@ -148,15 +151,15 @@ impl Tune {
             car_db: -4.0,
             iso: 0.25,
             cap: 3000.0,
-            glass_db: -17.0,
+            glass_db: -22.0,
             body_db: -6.0,
-            liner_hz: 1000.0,
+            liner_hz: 680.0,
             drip_db: 0.0,
             drip_frac: 0.25,
             fast_near: 0.35,
             fast_far: 0.15,
             cabin_lf_db: 3.0,
-            roofhf_db: -22.0,
+            roofhf_db: -27.0,
             fast_cabin: 0.2,
         };
         if let Ok(s) = std::env::var("WEATHERSYNTH_RB") {
@@ -657,9 +660,10 @@ pub fn scene(kind: &str) -> Option<Scene> {
         "medium" => open("medium", 5.0, -24.2, 0.10, 0.5, 0.2, 0.4),
         "heavy" => open("heavy", 35.0, -17.2, 0.30, 1.5, 1.0, 0.45),
         "roof" => Scene { mode: Mode::NearCar, ..open("roof", 5.0, -24.2, 0.10, 0.5, 0.2, 0.4) },
-        "cabin_light" => Scene { mode: Mode::Cabin, ..open("cabin_light", 0.7, -30.0, 0.04, 0.2, 0.0, 0.3) },
-        "cabin" => Scene { mode: Mode::Cabin, ..open("cabin", 5.0, -24.1, 0.10, 0.5, 0.2, 0.4) },
-        "cabin_heavy" => Scene { mode: Mode::Cabin, ..open("cabin_heavy", 35.0, -17.2, 0.30, 1.5, 1.0, 0.45) },
+        // inside the car: CABIN_GAIN_DB under the outside loops of the same rate
+        "cabin_light" => Scene { mode: Mode::Cabin, ..open("cabin_light", 0.7, -30.0 + CABIN_GAIN_DB, 0.04, 0.2, 0.0, 0.3) },
+        "cabin" => Scene { mode: Mode::Cabin, ..open("cabin", 5.0, -24.1 + CABIN_GAIN_DB, 0.10, 0.5, 0.2, 0.4) },
+        "cabin_heavy" => Scene { mode: Mode::Cabin, ..open("cabin_heavy", 35.0, -17.2 + CABIN_GAIN_DB, 0.30, 1.5, 1.0, 0.45) },
         "muffled" => Scene { mode: Mode::Shelter, ..open("muffled", 5.0, -25.9, 0.10, 0.5, 0.2, 0.4) },
         // the mod's file set: the roof next to the car at the other rates, and an enclosed shelter (a tunnel, a closed
         // bridge, a building: the medium rain through the walls, two 900 Hz low-passes as the mod's muffled A)
@@ -1042,8 +1046,9 @@ fn cabin(seed: u64, sc: &Scene, tn: &Tune, n: usize, outside: &[f64]) -> Vec<f64
             }
         }
     }
-    let mut liner = Biquad::lowpass(FS, tn.liner_hz, 0.6);
-    liner.run_circular(&mut roof_out);
+    // the headliner: two low-passes (24 dB / octave; the user, 2026-11-26: "Make cabin more muffled and quieter")
+    Biquad::lowpass(FS, tn.liner_hz, 0.6).run_circular(&mut roof_out);
+    Biquad::lowpass(FS, tn.liner_hz, 0.6).run_circular(&mut roof_out);
     Biquad::highpass(FS, 35.0, 0.7071).run_circular(&mut roof_out);
     // the closed cabin below its first air mode (~70-90 Hz): a pressure chamber, the low end comes up
     Biquad::lowshelf(FS, 150.0, tn.cabin_lf_db).run_circular(&mut roof_out);
@@ -1253,15 +1258,21 @@ pub const MOD_FILES: [(&str, &str); 11] = [
     ("bne_rain_muffled_open", "muffled"),
 ];
 
-/// weathersynth rainb-modset --out DIR [--seed N] [--secs S]: the mod's Generated rain loops (Vorbis q4, as the
+/// weathersynth rainb-modset --out DIR [--seed N] [--secs S] [--only kind,kind]: the mod's Generated rain loops (Vorbis q4, as the
 /// recorded set) and a table of their loudness, true peak and size for SOURCES.md.
 pub fn run_modset(args: &[String]) -> Result<(), String> {
     let dir = arg(args, "--out").ok_or("--out DIR")?;
     let seed: u64 = arg(args, "--seed").and_then(|v| v.parse().ok()).unwrap_or(1);
     let secs: f64 = arg(args, "--secs").and_then(|v| v.parse().ok()).unwrap_or(30.0);
     std::fs::create_dir_all(format!("{dir}/wav")).map_err(|e| e.to_string())?;
+    let only: Option<Vec<String>> = arg(args, "--only").map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
     println!("file\tkind\tLUFS\ttrue peak dBTP\tbytes");
     for (stem, kind) in MOD_FILES {
+        if let Some(o) = &only {
+            if !o.iter().any(|n| n == kind) {
+                continue;
+            }
+        }
         let (x, _) = render(kind, seed, secs)?;
         crate::wav::write_f32(&format!("{dir}/wav/{stem}.wav"), &x, 44100).map_err(|e| e.to_string())?;
         let path = format!("{dir}/{stem}.ogg");
@@ -1367,6 +1378,16 @@ mod tests {
         assert!((f / want - 1.0).abs() < 0.1, "{f} vs {want}");
         assert!(splash_k(1.0, terminal_v(1.0)) < splash_kc(0.5));
         assert!(splash_k(2.0, terminal_v(2.0)) > splash_kc(0.25));
+    }
+
+    /// The cabin loops play CABIN_GAIN_DB under the outside loops of the same rate.
+    #[test]
+    fn cabin_sits_under_the_outside() {
+        for (cab, out) in [("cabin_light", -30.0), ("cabin", -24.1), ("cabin_heavy", -17.2)] {
+            let c = scene(cab).unwrap();
+            assert!((c.lufs - (out + CABIN_GAIN_DB)).abs() < 1e-9, "{cab}");
+        }
+        assert!(CABIN_GAIN_DB < 0.0);
     }
 
     /// Same seed, same samples.
