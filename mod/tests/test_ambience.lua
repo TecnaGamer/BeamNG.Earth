@@ -237,6 +237,30 @@ T.check(math.abs(amb.duckFactor(t0) - 0.35) < 1e-9 and math.abs(amb.duckFactor(t
 -- ending at the crack, the hold, the release; the music on the same envelope, back to the player's setting at the end
 T.check(amb.duckDepthDb(60) == -10 and amb.duckDepthDb(280) == -5 and amb.duckDepthDb(20) == -10
   and math.abs(amb.duckDepthDb(170) - -7.5) < 1e-9, 'depth: -10 dB at 60 m to -5 dB at 280 m')
+-- the thunder-over-rain options (2026-11-26): one name picks the rain's gain and whether closes duck
+T.check(amb.MIX_OPTIONS[amb.MIX] and amb.RAIN_GAIN == amb.MIX_OPTIONS[amb.MIX].rainGain
+  and amb.CLOSE_DUCK == amb.MIX_OPTIONS[amb.MIX].closeDuck, 'the mix option sets RAIN_GAIN and CLOSE_DUCK')
+for name, o in pairs(amb.MIX_OPTIONS) do
+  T.check(o.rainGain > 0 and o.rainGain <= 0.5 and type(o.closeDuck) == 'boolean', 'mix option ' .. name)
+end
+T.check(math.abs(20 * math.log10(amb.MIX_OPTIONS.rainlow.rainGain / 0.5) - -3) < 0.2
+  and math.abs(20 * math.log10(amb.MIX_OPTIONS.both.rainGain / 0.5) - -2) < 0.1, 'rainlow -3 dB, both -2 dB')
+T.check(amb.closeDuckDepthDb(300) == -6 and amb.closeDuckDepthDb(1500) == -3 and amb.closeDuckDepthDb(100) == -6
+  and amb.closeDuckDepthDb(3000) == -3 and math.abs(amb.closeDuckDepthDb(900) - -4.5) < 1e-9,
+  'close duck: -6 dB at 300 m to -3 dB at 1500 m')
+do
+  local saved = amb.CLOSE_DUCK
+  amb.CLOSE_DUCK = false
+  T.check(amb.ducksFor('strike') and not amb.ducksFor('close') and not amb.ducksFor('mid'), 'current: only strikes duck')
+  amb.CLOSE_DUCK = true
+  T.check(amb.ducksFor('strike') and amb.ducksFor('close') and not amb.ducksFor('far'), 'duck: closes too')
+  local c = os.clockhp() + 10   -- (past the old timed duck above)
+  amb.scheduleDuck(c, c + 0.5, 900, 'close')
+  local f = amb.duckFactor(c + 0.6)
+  T.check(math.abs(f - 10 ^ (-4.5 / 20)) < 1e-9, 'a close crack at 900 m: the rain -4.5 dB (' .. f .. ')')
+  amb._updateDucks(c + 10)
+  amb.CLOSE_DUCK = saved
+end
 local ev = { flash = 100, t0 = 100.5, depth = -10 }
 local pre = amb.PREDIP_DB / -10
 T.check(amb.duckEnvelope(ev, 99.9) == 0, 'before the flash: nothing')

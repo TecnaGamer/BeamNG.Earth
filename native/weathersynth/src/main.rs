@@ -40,6 +40,8 @@ mod npzig;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod outbus;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
+mod prio;
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod proto;
 mod rain;
 mod rng;
