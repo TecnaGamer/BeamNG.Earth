@@ -6819,36 +6819,26 @@ class _Planner:
         got, res = self._memo_get("_landings_in_memo", mkey)
         if got:
             return res
-        ends = []                       # (end, direction into the deck, class, the cell whose copy it is)
+        # (landings.rs landing_ends: both ends of every deck line of the cells, in their order, the joint test and each
+        # end once at its 0.1 m key. BNE_ROADSYS=surface (roads.MAPPED_RANGES): the end at its key and its direction
+        # to 1e-4, the same whichever copy: every map cell has its own copy of a deck, ~1e-5 m from the others', and
+        # the least of those read was taken, so two neighbouring cells' plans, each reading round its own points, took
+        # other copies of one end and met apart at their seam, M5 round 7. Reading the end's own cell for its copy cost
+        # 4x the CPU at Express, every cell past a place's edge read for its ends)
+        lines, cls = [], []
         for k in cells:
-            for b, cls, link in self._raw_lines(k)["bridges"]:
-                for at0 in (True, False):
-                    e = b[0] if at0 else b[-1]
-                    ends.append((np.asarray(e, np.float64), roadsmod._dir_at(b, True) if at0
-                                 else -roadsmod._dir_at(b, False), None if link else cls, str(k)))
-        snap = roadsmod.MAPPED_RANGES()
-        best = {}                       # (end rounded to 0.1 m -> its copy: the least by its values, whoever asks)
-        for e, d, c, _ck in ends:
-            if c not in FAST_GAP_CLASSES:
-                continue
-            # (a joint: another deck's end here, that deck going on the way this one comes from)
-            if any(float(dnp.hypot(*(e2 - e))) <= FAST_GAP_JOIN_M and float(dnp.dot(d2, d)) < -0.5
-                   for e2, d2, _c2, _k2 in ends):
-                continue
-            key = (round(float(e[0]), 1), round(float(e[1]), 1))
-            if snap:
-                # (BNE_ROADSYS=surface: the end at its key and its direction to 1e-4, the same whichever copy: every
-                # map cell has its own copy of a deck, ~1e-5 m from the others', and the least of those read was taken,
-                # so two neighbouring cells' plans, each reading round its own points, took other copies of one end
-                # and met apart at their seam, M5 round 7. Reading the end's own cell for its copy cost 4x the CPU at
-                # Express, every cell past a place's edge read for its ends)
-                row = (key[0], key[1], round(-float(d[0]), 4), round(-float(d[1]), 4), str(c))
-            else:
-                row = (float(e[0]), float(e[1]), -float(d[0]), -float(d[1]), str(c))
-            if key not in best or row < best[key]:
-                best[key] = row
+            for b, c, link in self._raw_lines(k)["bridges"]:
+                lines.append(np.asarray(b, np.float64)[:, :2])
+                cls.append(None if link else c)
+        rows = []
+        if lines:
+            import fast
+            fast.require(637, "landing_ends")
+            rows = fast._ef.landing_ends(np.concatenate(lines), [0] + np.cumsum([len(x) for x in lines]).tolist(),
+                                         cls, list(FAST_GAP_CLASSES), FAST_GAP_JOIN_M, roadsmod.TURN_LOOK_M,
+                                         bool(roadsmod.MAPPED_RANGES()))
         out = []
-        for _k, r in sorted(best.items()):
+        for r in rows:
             got = self._landing_chain(r[0], r[1], r[2], r[3], r[4])
             if got is not None:
                 out.append((got[0], r[4], got[1], got[2], got[3], np.array([r[2], r[3]], np.float64)))
@@ -6867,60 +6857,26 @@ class _Planner:
         got, res = self._memo_get("_landing_memo", key)
         if got:
             return res
-        end, v = np.array([ex, ey], np.float64), np.array([vx, vy], np.float64)
         la, lo, _ = self.frame.enu_to_geodetic(np.array([ex]), np.array([ey]), 0.0)
-        cand, rest, seen = [], [], set()
+        lines, cand, fids = [], [], []
         for k in self._gap_cells(la, lo, FAST_GAP_CHAIN_M + 20.0):
             for g, gc, lk, built, gfid in self._raw_lines(k)["ground"]:
-                g = np.asarray(g, np.float64)[:, :2]
-                kk = (round(float(g[0, 0]), 2), round(float(g[0, 1]), 2), round(float(g[-1, 0]), 2),
-                      round(float(g[-1, 1]), 2), len(g))
-                if len(g) < 2 or kk in seen:
-                    continue
-                seen.add(kk)
-                (cand if gc == cls and not lk and built else rest).append((kk, g, gfid))
-        cand.sort(key=lambda r: r[0])
-        rest.sort(key=lambda r: r[0])
-        pts, used, at, u, total, first = [end[None]], [], end, v, 0.0, True
-        while total < FAST_GAP_CHAIN_M:
-            best = None
-            for kk, g, gfid in cand:
-                if any(kk == q for q, _g, _f in used):
-                    continue
-                for rev in (False, True):
-                    q = g[::-1] if rev else g
-                    d0 = float(dnp.hypot(*(q[0] - at)))
-                    if d0 > (FAST_GAP_START_M if first else FAST_GAP_LINK_M):
-                        continue
-                    w = roadsmod._dir_at(q, True)
-                    cs = float(dnp.dot(w, u))
-                    if first and d0 > CHAIN_JOIN_M:
-                        gap = (q[0] - at) / d0
-                        cs = min(cs, float(dnp.dot(gap, u)))
-                    if cs < FAST_GAP_COS:
-                        continue
-                    # (a part joined at the node before one that starts beside it: a lane section's offset joint)
-                    rank = (d0 > CHAIN_JOIN_M, -cs, kk, rev)
-                    if best is None or rank < best[0]:
-                        best = (rank, kk, q, g, gfid)
-            if best is None:
-                break
-            _r, kk, q, g, gfid = best
-            used.append((kk, g, gfid))
-            pts.append(q)
-            total += float(dnp.hypot(*np.diff(q, axis=0).T).sum())
-            at, u, first = q[-1], roadsmod._dir_at(q, False), False
+                lines.append(np.asarray(g, np.float64)[:, :2])
+                cand.append(bool(gc == cls and not lk and built))
+                fids.append(gfid)
         res = None
-        if used:
-            ap = np.vstack(pts)
-            ap = ap[np.r_[True, dnp.hypot(*np.diff(ap, axis=0).T) > 1e-6]]
-            if len(ap) >= 2:
-                own_keys = {q for q, _g, _f in used}
-                near = _along(ap, np.arange(0.0, FAST_GAP_FAR_M + 1e-6, PROFILE_STEP))
-                lo_, hi_ = near.min(0) - FAST_GAP_ID_M - 1.0, near.max(0) + FAST_GAP_ID_M + 1.0
-                other = [g for kk, g, _f in cand + rest if kk not in own_keys
-                         and not ((g.max(0) < lo_).any() or (g.min(0) > hi_).any())]
-                res = (ap, [g for _q, g, _f in used], other, frozenset(f for _q, _g, f in used))
+        if lines:
+            # (landings.rs landing_chain: the lines each once, the chain walked, the approach and the roads round it)
+            import fast
+            fast.require(637, "landing_chain")
+            got = fast._ef.landing_chain(
+                (ex, ey), (vx, vy), np.concatenate(lines), [0] + np.cumsum([len(x) for x in lines]).tolist(), cand,
+                np.arange(0.0, FAST_GAP_FAR_M + 1e-6, PROFILE_STEP),
+                (FAST_GAP_START_M, FAST_GAP_LINK_M, CHAIN_JOIN_M, FAST_GAP_COS, FAST_GAP_CHAIN_M, FAST_GAP_ID_M,
+                 roadsmod.TURN_LOOK_M))
+            if got is not None:
+                ap, used, other = got
+                res = (ap, [lines[i] for i in used], [lines[i] for i in other], frozenset(fids[i] for i in used))
         return self._memo_put("_landing_memo", key, res)
 
     def _end_never_raised(self, xy):

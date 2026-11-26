@@ -78,6 +78,7 @@ mod power;
 mod underpass;
 mod coarseease;
 mod junctionsnap;
+mod landings;
 mod tunnelcover;
 mod tunnelchain;
 mod tunnelrec;
@@ -7824,6 +7825,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 636 (the tunnel branch's 633 renumbered over dev's 635): tunnel plan T1 round 3, the tunnel record's lids under
     // a road crossing over the tube kept (tunnel.rs StrokeIn.held), RoadsysSquare.tunnel_pins (the squares' targets as
     // without the record: roadsys.pins_near legacy)
-    m.add("VERSION", 636)?;
+    // 637: landing_ends / landing_chain (landings.rs: FAST_GAP's deck-end landings and their approaches, ported from
+    // grading._Planner._landings_in / _landing_chain)
+    m.add_function(wrap_pyfunction!(landings::landing_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(landings::landing_chain, m)?)?;
+    m.add("VERSION", 637)?;
     Ok(())
 }
