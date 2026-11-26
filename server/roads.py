@@ -9162,9 +9162,10 @@ class BridgeProfiles:
                         # first part's region), or None: this one
     region_of = None    # region_of(self, comp, pool) -> owner_of's region, with no side effect (ChainStore._region_of)
 
-    def parts_todo(self, todo, solved_only=False, part_ids=False):
+    def parts_todo(self, todo, solved_only=False, part_ids=False, retry=True):
         """[(fid, spec, xy, z, lon)] of the parts todo [((fid, j), feats, i)], each solved with its chain (once);
-        solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
+        solved_only: only those solved already; part_ids: return (fid, j) rather than fid; retry=False: a part published
+        short is taken as it is (its note: the reader is short too), never solved again for this reader (_retry_due)."""
         out = []
         for key, feats, i in todo:
             ring = None
@@ -9177,7 +9178,7 @@ class BridgeProfiles:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 if not self._held_in(key, ring):
                     continue
-            if not solved_only and self.__dict__.get("profile_retry"):
+            if not solved_only and retry and self.__dict__.get("profile_retry"):
                 self._retry_due(key)    # (P3c: a short profile's chain asked again when due; Codex review of P3c)
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
@@ -10960,6 +10961,12 @@ class ChainView:
         """Bridge parts with their stable (fid, part index), including when tiles ask for different spans."""
         return self._parts(cells_feats, box, part_ids=True)
 
+    def parts_published(self, cells_feats, box):
+        """parts_with_ids, a part published short taken as it is (BridgeProfiles.parts_todo retry=False: its reader is
+        short, never kept; the chain solved again only for the readers that keep what they build: the under-deck
+        ceiling's boxes asked a short chain again every PROFILE_RETRY_S, M5 r5)."""
+        return self._parts(cells_feats, box, part_ids=True, retry=False)
+
     def parts_shaped(self, cells_feats, box):
         """parts() with each part's shape (roadshape, BNE_ROADSHAPE=decks; None without one) as a sixth field, from
         the store its line comes from and mapped as that line is."""
@@ -11049,6 +11056,15 @@ class ChainView:
             with st.lock:
                 out.extend(st.__dict__.get("profiles", {}).values())
         return out
+
+    def depth_of_part(self, key):
+        """(M5) m of structure under part key's road as its chain's solve gave it (None: not solved here)."""
+        for st in self._stores():
+            with st.lock:
+                d = st.__dict__.get("depth", {}).get(key)
+            if d is not None:
+                return float(d)
+        return None
 
     def depth_of(self, fid):
         ds = []
@@ -11225,11 +11241,12 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     """arch_raise for ground heights at the points (la, lo) of a block in the anchor-frame box (x0, y0, x1, y1),
     the tunnels from the map cells under it. z as it was when the cells are not at hand. BNE_ROADSYS=structures: then
     the ground under the decks' ground ends lowered (roadsys.handover_drop: every evaluator of the physics ground is
-    one of this function's callers, so the blocks, the skins and the decks' hand-over agree node for node)."""
+    one of this function's callers, so the blocks, the skins and the decks' hand-over agree node for node);
+    BNE_ROADSYS=surface: and nowhere over a deck's soffit less 0.3 m (roadsys.ground_cut)."""
     z = _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box)
     if roadsys.STRUCTURES:
         try:
-            z = np.asarray(z, np.float64) - roadsys.handover_drop(frame, cell_fn, la, lo)
+            z = roadsys.ground_cut(frame, cell_fn, la, lo, z)
         except Exception as ex:     # no drop rather than no ground (nothing built with it kept)
             (log.debug if isinstance(ex, OSError) else log.warning)("deck ends' hand-over: %s: %s", type(ex).__name__, ex)
             import revisit

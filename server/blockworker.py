@@ -3103,7 +3103,10 @@ def _anchor_drawn(aid, lat, lon, zoom, box):
 
     def drawn(la, lo):
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo), box)
-    return frame, drawn, cell_fn
+
+    def pre(la, lo):            # (drawn before the road system's cut: the hand-over's lowering is pre - drawn)
+        return roadsmod._block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo), box)
+    return frame, drawn, cell_fn, pre
 
 
 HANDOVER_GRID_MAX = 400_000     # lattice nodes one deck's hand-over may read (beyond: the sheared deck as it was)
@@ -3152,7 +3155,7 @@ def _deck_handover(blob, pos, tile, frame, piv, aid, lat, lon, zoom, q):
     W = dnp.matmul(P + np.asarray(pos, np.float64), rot.T) + off
     x0, y0 = float(W[:, 0].min()), float(W[:, 1].min())
     x1, y1 = float(W[:, 0].max()), float(W[:, 1].max())
-    fr, drawn, cell_fn = _anchor_drawn(aid, lat, lon, zoom, (x0 - 60.0, y0 - 60.0, x1 + 60.0, y1 + 60.0))
+    fr, drawn, cell_fn, pre = _anchor_drawn(aid, lat, lon, zoom, (x0 - 60.0, y0 - 60.0, x1 + 60.0, y1 + 60.0))
     ends = roadsys.ends_for_box(fr, cell_fn, (x0, y0, x1, y1))
     if ends is None or not ends.count():
         return None
@@ -3180,7 +3183,11 @@ def _deck_handover(blob, pos, tile, frame, piv, aid, lat, lon, zoom, q):
         ys = heightmap.lattice_coords(j0 + b0, b1 - b0 + 1)
         _el, u = heightmap.surface(fr, drawn, xs, ys, keep)
         zq = np.rint(np.asarray(u, np.float64) * (1.0 / q)) * q
-        dr = roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])
+        if roadsys.CEIL:        # (M5: a node the ceiling lowers is the deck's as a dropped one is)
+            dr = roadsys.ground_lowering(fr, cell_fn, keep["lat"], keep["lon"],
+                                         pre(np.asarray(keep["lat"], np.float64), np.asarray(keep["lon"], np.float64)))
+        else:
+            dr = roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])
         zg[b0:b1 + 1, a0:a1 + 1] = zq
         dg[b0:b1 + 1, a0:a1 + 1] = np.asarray(dr, np.float64).reshape(zq.shape)
     top = names.index(roadmeshmod.DECK_TOP)
@@ -4694,4 +4701,8 @@ def _square_disk():
 if _roadsys.HEIGHTS:
     _roadsys.GROUND = plan_elev
     _roadsys.DISK_FN = _square_disk
+if _roadsys.CEIL:
+    # (M5: the ground under the decks from the road tiles' own bridge chains: the store every anchor shares, on the
+    # plans' first stage as _bridges makes it under the road system, so the ceiling is the drawn decks' whoever asks)
+    _roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1) if getattr(_s, "md", None) is not None else None
 _roadsys.AREAS_MD_FN = lambda: getattr(_s, "md", None)     # (BNE_ROADSYS_AREAS: the decks' mapped road areas)

@@ -892,6 +892,17 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   row, "Clearing..." / "Freed"), a clear while driving (nothing around the player re-downloads), the
   start-up walk's time on the real cache, and the log line of the first eviction with a small cap.
 
+### The game's terrain texture cache (`server/terraincache.py`, `server/terrainpacks.py`; 2026-11-25)
+- The server writes a BC7 pack of every block photo into `<user>/temp/art/terrainmaterialcache/<key>.dds` (key: xxh64
+  of the photo's and the AO map's paths), so the game does not pack it on its main thread.
+- Every pack is recorded first in `terrainpacks.log` in the server's cache (key, session, time). A session's recorded
+  packs go with it. At a start with no game running, the recorded packs of sessions that are gone are deleted, photo or
+  not, then the recorded packs over 2 GB, oldest first.
+- Deletes list the packs before their photo, and a clean exit does the queued pack deletes.
+- A one-time wipe (`terrainpacks_wiped_v2`) removes packs earlier versions leaked. It matches only our writer's packs:
+  exact size and header, every sampled block BC7 mode 6 with the flat AO 251. It never touches the game's own packs,
+  and it leaves alone a folder holding anything that is not a pack.
+
 ## Robustness: no server, lost server (docs/ROADMAP.md "Robustness" 1-3; built offline 2026-10-11, feature/robustness)
 - **Banner** (`banner.lua`, docs/DEVTOOLS.md "Connection banner"): a pure state machine fed once per
   frame by core.lua from net.lua (state, `attempts()`, `everConnected()`), the server's hello and the
