@@ -3647,6 +3647,7 @@ teleportTo = function(lat, lon, name, kind, heading)
     M._trafficvisuals.onTeleport()
     do local ok, err = pcall(farcars.onTeleport) if not ok then log('W', 'beamngEarth', 'far cars: ' .. tostring(err)) end end
     pcall(mpsession.onTeleport)      -- (BeamMP: the camera is ours to put at the target, commitTeleport)
+    do local w = rawget(_G, 'beamngEarth_weather') if w and w.onTeleport then pcall(w.onTeleport) end end   -- (wet roads stay behind)
     if kind ~= 'tool' then
       statusbar.reset()
       local ok, err = pcall(places.noteTeleport, lat, lon, name, kind)
