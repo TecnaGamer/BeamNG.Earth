@@ -196,5 +196,92 @@ class CoverTest(unittest.TestCase):
             importlib.reload(snowcover)
 
 
+class FieldTest(unittest.TestCase):
+    """snowfield.SnowField (stage A glue) with a fake DEM, fake Open-Meteo answers and fake IMS windows."""
+
+    T0 = 1768910400             # 2026-01-20 12:00 UTC
+
+    class Dem:
+        """A 3,500 m peak at (39.875, -105.125) on a 1,500 m plain."""
+
+        def sample(self, la, lo, zoom):
+            la, lo = np.broadcast_arrays(np.asarray(la, float), np.asarray(lo, float))
+            d2 = ((la - 39.875) / 0.1) ** 2 + ((lo + 105.125) / 0.1) ** 2
+            return (1500.0 + 2000.0 * np.exp(-d2)).astype(np.float32)
+
+    def om(self, n, t, p, depth_m=0.0):
+        times = [self.T0 - 3600 * (240 - i) for i in range(247)]
+        h = {"time": times, "temperature_2m": [t] * 247, "dew_point_2m": [t - 3] * 247,
+             "precipitation": [p] * 247, "snowfall_water_equivalent": [p * 0.7 if t < 0 else 0.0] * 247,
+             "wind_speed_10m": [2.0] * 247, "shortwave_radiation": [150.0] * 247, "soil_temperature_0cm": [t] * 247,
+             "snow_depth": [depth_m] + [0.0] * 246, "relative_humidity_2m": [70.0] * 247, "cloud_cover": [30.0] * 247}
+        return [{"hourly": h, "elevation": 1500.0, "utc_offset_seconds": 0} for _ in range(n)]
+
+    def field(self, t, p, ims_class, depth_m=0.0, cap=None):
+        need()
+        import tempfile
+        import snowfield
+        import urllib.parse
+        self.calls = []
+
+        def fetch_json(url):
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+            n = len(q["latitude"][0].split(","))
+            self.calls.append(n)
+            return self.om(n, t, p, depth_m)
+
+        def reader(_body, boxes):
+            return [np.full((b[1] - b[0] + 1, b[3] - b[2] + 1), ims_class, np.uint8) for b in boxes]
+
+        d = tempfile.mkdtemp(prefix="snowfield-test-")
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        old = (snowfield.NEAR_KM, snowfield.FAR_KM, snowfield.WEIGHT_CAP)
+        snowfield.NEAR_KM, snowfield.FAR_KM = 30.0, 60.0
+        if cap is not None:
+            snowfield.WEIGHT_CAP = cap
+        self.addCleanup(lambda: setattr(snowfield, "NEAR_KM", old[0]) or setattr(snowfield, "FAR_KM", old[1])
+                        or setattr(snowfield, "WEIGHT_CAP", old[2]))
+        return snowfield, snowfield.SnowField(self.Dem(), fetch_json, lambda url: b"ims", d, clock=lambda: self.T0,
+                                              ims_reader=reader)
+
+    def test_rings_nearest_first(self):
+        import snowfield
+        near, far = snowfield.rings(39.9, -105.1, 30.0, 60.0)
+        self.assertEqual(near[0], snowfield.cell_of(39.9, -105.1))
+        self.assertTrue(far)
+        self.assertFalse(set(near) & {c for v in far.values() for c in v})
+
+    def test_mild_and_bare_is_no_snow(self):
+        sf, f = self.field(6.0, 0.0, 2)
+        changed = f.update(39.9, -105.1)
+        self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
+        self.assertEqual(changed, [])
+        self.assertEqual(len(self.calls), 2)        # (the near ring and the far ring: one request each)
+
+    def test_observed_snow_without_snowfall_is_thin_cover(self):
+        sf, f = self.field(2.0, 0.0, 4)
+        changed = f.update(39.9, -105.1)
+        self.assertTrue(changed)
+        fld = f.provider(39.0, -106.0, 41.0, -104.0)
+        self.assertIsNotNone(fld)
+        t = next(iter(fld.cells.values()))
+        self.assertTrue(all(len(r) == 6 for r in t.rows))
+        self.assertTrue(any(r[2] in (1, 2) for r in t.rows))
+        # nothing to do again within the hour: no request
+        n = len(self.calls)
+        self.assertEqual(f.update(39.9, -105.1), [])
+        self.assertEqual(len(self.calls), n)
+
+    def test_bare_two_days_vetoes_model_snow(self):
+        sf, f = self.field(-3.0, 0.0, 2, depth_m=0.3)
+        f.update(39.9, -105.1)
+        self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
+
+    def test_weight_cap(self):
+        sf, f = self.field(2.0, 0.0, 4, cap=1.0)
+        self.assertEqual(f.update(39.9, -105.1), [])
+        self.assertEqual(self.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

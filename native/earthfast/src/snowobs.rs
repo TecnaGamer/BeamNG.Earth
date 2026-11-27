@@ -461,6 +461,14 @@ pub fn snowline(counts: &[[u32; 4]], k0: i32, col: usize) -> (i32, u32, u32) {
             bare_above -= bare[i];
         }
     }
+    // (one class seen only: the line past every row, not somewhere among the rows without pixels)
+    let (nb, ns) = (bare.iter().sum::<u32>(), snow.iter().sum::<u32>());
+    if total > 0 && ns == 0 {
+        return ((k0 + n as i32) * BAND_M - BAND_M / 2, 0, total);
+    }
+    if total > 0 && nb == 0 {
+        return (k0 * BAND_M - BAND_M / 2, 0, total);
+    }
     let best = *errs.iter().min().unwrap_or(&0);
     let ties: Vec<usize> = (0..=n).filter(|&i| errs[i] == best).collect();
     let i = ties[(ties.len() - 1) / 2];

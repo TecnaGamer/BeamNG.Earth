@@ -138,14 +138,15 @@ class SnowField:
     """The S1 snow field round the anchor (stage A). update() blocks (network, DEM, kernels): run it in an executor.
 
     fetch_json(url) -> the parsed body (Open-Meteo); fetch_bytes(url) -> bytes or None (a 404: not there yet);
-    dem: dem.Dem (sample()); cache_dir: where the IMS days and the cells' ground are kept. Tests pass fakes."""
+    dem: dem.Dem (sample()); cache_dir: where the IMS days and the cells' ground are kept; ims_reader(body, boxes): the
+    IMS windows (earthfast snowobs_ims_windows). Tests pass fakes."""
 
-    def __init__(self, dem, fetch_json, fetch_bytes, cache_dir, clock=time.time, cover=None):
+    def __init__(self, dem, fetch_json, fetch_bytes, cache_dir, clock=time.time, ims_reader=None):
         fast.require(NATIVE, "the snow field (BNE_LOCAL_WEATHER=snowfield)")
         self.dem, self.fetch_json, self.fetch_bytes = dem, fetch_json, fetch_bytes
         self.dir = cache_dir
         self.clock = clock
-        self.cover = cover
+        self.ims_reader = ims_reader if ims_reader is not None else fast._ef.snowobs_ims_windows
         self.lock = threading.Lock()
         self.cells = {}             # (ci, cj) -> _Cell
         self.refreshed = {}         # ring name -> clock of its last forcing
@@ -186,7 +187,7 @@ class SnowField:
             os.replace(tmp, path)
             self._prune_ims()
         r0, r1, c0, c1 = box
-        win = fast._ef.snowobs_ims_windows(body, [box])[0]
+        win = self.ims_reader(body, [box])[0]
         out = (r0, c0, fast._ef.snowobs_classes(win.ravel(), "ims").reshape(win.shape), box)
         self.ims[day] = out
         while len(self.ims) > IMS_KEEP:
@@ -338,7 +339,7 @@ class SnowField:
         """(executor) The anchor at (lat, lon): the rings' due work (the near ring hourly, the far ring every 3 h, the
         IMS days once a day). Returns the cells whose table changed (the server re-renders what shows them)."""
         now = self.clock()
-        near, far = rings(lat, lon)
+        near, far = rings(lat, lon, NEAR_KM, FAR_KM)
         with self.lock:
             # (S-6: a table older than a day, or out of the rings, goes: never another place's snow)
             keep = set(near) | {c for v in far.values() for c in v}

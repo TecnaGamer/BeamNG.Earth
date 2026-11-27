@@ -192,14 +192,25 @@ pub fn obs_lines(counts: &[[u32; 4]], k0: i32) -> [Option<i32>; 2] {
     if counts.is_empty() {
         return out;
     }
+    let n = counts.len() as i32;
     for (col, o) in out.iter_mut().enumerate() {
         let (l, err, total) = snowline(counts, k0, col);
         if total >= LINE_MIN_PIX && err * 1000 <= LINE_MAX_ERR * total {
-            *o = Some(l);
+            // (a cell seen all bare (the line above its rows) is bare at every row, its summit too: the 1 km pixel
+            // holding the summit was bare; seen all white, white at every row)
+            *o = Some(if l >= (k0 + n) * BAND_M - BAND_M / 2 { LINE_NONE } else if l <= k0 * BAND_M - BAND_M / 2 {
+                LINE_ALL
+            } else {
+                l
+            });
         }
     }
     out
 }
+
+/// obs_lines' line of a cell seen without snow / all white.
+pub const LINE_NONE: i32 = i32::MAX / 4;
+pub const LINE_ALL: i32 = i32::MIN / 4;
 
 /// A column's depth bin across evaluations (S-7: an hourly table must not re-texture tiles every hour across a bin
 /// edge): the bin shown, a candidate and how many evaluations in a row it has held.
@@ -582,6 +593,17 @@ mod tests {
         let (_, v, _, _) = cell_table(&f, 245, 1000, 4600, 1000, 1800, &seed, &bare, k_lo, &bare, k_lo, &[]);
         assert!(v.iter().all(|r| r[1] == 0 && r[3] == 0 && r[5] == 0), "{v:?}");
         assert!(v.last().unwrap()[7] & FLAG_VETO != 0);
+        // the pixels reach only the lower rows (the summit's 1 km pixel among them, its mean lower): the rows above
+        // them, the padding row too, are bare as well (the cell seen all bare)
+        let low: Vec<[u32; 4]> = (0..n).map(|i| if i + 3 < n { [8, 0, 8, 0] } else { [0; 4] }).collect();
+        let (_, v2, _, _) = cell_table(&f, 245, 1000, 4600, 1000, 1800, &seed, &low, k_lo, &low, k_lo, &[]);
+        assert!(v2.iter().all(|r| r[1] == 0 && r[3] == 0 && r[5] == 0), "{v2:?}");
+        // ... and a cell seen all white is white to its lowest row
+        let white: Vec<[u32; 4]> = (0..n).map(|i| if i >= 2 { [0, 8, 0, 8] } else { [0; 4] }).collect();
+        let dry = window(&[(246, 600, 0, 0)], 0);
+        let (_, w2, _, _) = cell_table(&dry, 245, 1000, 4600, 1000, 1800, &seed_profile(&[(1000, 0)]), &white, k_lo,
+                                       &white, k_lo, &[]);
+        assert!(w2.iter().all(|r| r[2] > 0 && r[4] > 0), "{w2:?}");
         // bare today only (yesterday unknown): kept
         let (_, k1, _, _) = cell_table(&f, 245, 1000, 4600, 1000, 1800, &seed, &bare, k_lo, &[], 0, &[]);
         assert_eq!(k1.last().unwrap()[2], base.last().unwrap()[2]);
