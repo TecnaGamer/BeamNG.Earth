@@ -304,4 +304,142 @@ do
   package.loaded['beamngEarth/trees'] = nil
 end
 
+-- the leaf cycle (BNE_LEAF_CYCLE): each tree its own dates about the place's calendar (phenology.rs leaf_calendar at
+-- Baltimore: 39.29 N, 50 m, Cfa; rows oak, beech, birch, poplar: bud, full, colour, drop, half, bare)
+local BALT = { v = 1, share = 1, spread = { 6, 9 },
+  cal = { { 107.3, 135.3, 285.0, 299.0, 310.0, 332.0 }, { 101.3, 123.3, 277.0, 289.0, 300.0, 320.0 },
+          { 95.3, 113.3, 267.0, 275.0, 287.0, 303.0 }, { 98.3, 118.3, 272.0, 282.0, 293.0, 310.0 } } }
+do
+  local row = BALT.cal[2]
+  local function L(d) return (B.leafState(row, d, 0, 0)) end
+  T.check(L(60) == 0 and L(101.3) == 0 and L(200) == 1 and L(330) == 0, 'bare in winter, full in summer')
+  T.check(L(112) > 0.4 and L(112) < 0.6, 'half way through the leaf-out')
+  T.check(L(289) == 1 and L(304.5) > 0.45 and L(304.5) < 0.55 and L(319) < 0.1, 'thinning from leaf fall to bare')
+  local _, k, s = B.leafState(row, 278, 0, 0)
+  T.check(k == nil and s == 0, 'first colour: no tint yet')
+  _, k, s = B.leafState(row, 300, 0, 0)
+  T.check(k == 'f' and s == B.TINT_STEPS, 'the midpoint: full autumn colour')
+  _, k, s = B.leafState(row, 104, 0, 0)
+  T.check(k == 's' and s >= 3, 'bud break: the fresh flush')
+  _, k = B.leafState(row, 200, 0, 0)
+  T.check(k == nil, 'summer: no tint')
+  _, k, s = B.leafState(row, 296, 0, 10)
+  T.check(L(296) < 1 and k == 'f' and s < B.TINT_STEPS and B.leafState(row, 296, 0, 10) == 1,
+    'a tree 10 days late: still full and less coloured')
+  T.check(B.leafDay(15, -35) == 197 and B.leafDay(15, 39.3) == 15, 'the south: half a year later')
+  -- per-tree draws: about normal, independent of the bare draw and of each other
+  local n, s1, s2, sx = 4000, 0, 0, 0
+  for i = 1, n do
+    local r = i / n
+    local a, b = B.normal(r, 1), B.normal(r, 2)
+    s1, s2, sx = s1 + a, s2 + a * a, sx + a * b
+  end
+  T.check(math.abs(s1 / n) < 0.06 and math.abs(s2 / n - 1) < 0.08 and math.abs(sx / n) < 0.06,
+    string.format('the dates\' draws: mean %.3f var %.3f cov %.3f', s1 / n, s2 / n, sx / n))
+  T.check(B.normal(0.1234, 1) == B.normal(0.1234, 1), 'deterministic')
+end
+
+-- through the autumn the wood colours and thins over weeks, tree by tree, never back
+do
+  local n = 1500
+  local prevBare, firstDay, lastDay = {}, nil, nil
+  local back = 0
+  local series = {}
+  for d = 260, 345, 1 do
+    local bare, tinted = 0, 0
+    for i = 1, n do
+      local r = ((i * 0.6180339887) % 1)
+      local what = B.treeLeaf(BALT, 'beech', false, r, d)
+      if what ~= 'stock' and not (what == 'tint' and select(2, B.treeLeaf(BALT, 'beech', false, r, d)) ~= 'w') then
+        if what == 'bare' then bare = bare + 1 end
+        prevBare[i] = true                -- (leafless: bare, or a marcescent crown of dead leaves)
+      elseif prevBare[i] then
+        back = back + 1
+      end
+      if what == 'tint' then tinted = tinted + 1 end
+    end
+    series[d] = { bare / n, tinted / n }
+    if bare > 0 and not firstDay then firstDay = d end
+    if bare >= n * (1 - B.KEEP.beech - 0.03) and not lastDay then lastDay = d end
+  end
+  T.check(back == 0, 'a leafless beech stays leafless through the autumn')
+  T.check(firstDay and firstDay < 300, 'the first beeches bare by late October: ' .. tostring(firstDay))
+  T.check(lastDay == nil or lastDay - firstDay >= 21, 'the wood thins over weeks: ' .. tostring(firstDay) .. '-'
+    .. tostring(lastDay))
+  T.check(series[304][1] > 0.25 and series[304][1] < 0.75, 'the midpoint: about half bare: ' .. series[304][1])
+  T.check(series[285][2] > 0.5 and series[285][1] < 0.05, 'mid October: most coloured, hardly any bare')
+  T.check(series[270][2] < series[285][2], 'the colour comes over the weeks')
+  -- marcescent oaks: about KEEP of them keep their dead leaves through winter
+  local keep = 0
+  for i = 1, n do
+    local w, k, s = B.treeLeaf(BALT, 'oak', false, (i * 0.6180339887) % 1, 15)
+    if w == 'tint' and k == 'w' and s == B.TINT_STEPS then keep = keep + 1 end
+  end
+  T.check(math.abs(keep / n - B.KEEP.oak) < 0.03, 'January: the marcescent oaks ' .. keep / n)
+  -- spring: leaves out tree by tree
+  local early, late = 0, 0
+  for i = 1, n do
+    local r = (i * 0.6180339887) % 1
+    if B.treeLeaf(BALT, 'beech', false, r, 108) ~= 'bare' then early = early + 1 end
+    if B.treeLeaf(BALT, 'beech', false, r, 130) ~= 'bare' then late = late + 1 end
+  end
+  T.check(early > 0.2 * n and early < 0.8 * n and late > 0.97 * n, 'spring: some leafed by mid April, all by May')
+  -- a place outside the cycle (a share of none): the stock trees
+  T.check(B.treeLeaf({ share = 0, cal = BALT.cal }, 'beech', false, 0.3, 15) == 'stock', 'the tropics: stock trees')
+  T.check(B.treeLeaf(BALT, 'beech', false, 0.3, 200) == 'stock', 'summer: the stock tree')
+end
+
+-- in the game: the calendar taken from the anchor, the trees mapped to their own copies, one tint folder for good
+do
+  B._reset()
+  local files = {}
+  local shape = ECA .. 'trees_oak/tree_oak_large_a'
+  files[shape .. '.cdae'] = 'HEAD' .. fix('oak_leaves_01') .. fix('m_oak_leaves_distant') .. 'TAIL'
+  files[B.TEX .. 'bne_twig_oak_b.color.dds'] = 'dds'
+  FS = { fileExists = function(_, p) return files[p] ~= nil end, directoryCreate = function() end }
+  readFile = function(p) return files[p] end
+  writeFile = function(p, d) files[p] = d; return true end
+  jsonEncode = function(t) local k = {} for n in pairs(t) do k[#k + 1] = n end table.sort(k) return table.concat(k, ',') end
+  local loaded = {}
+  loadJsonMaterialsFile = function(p) loaded[#loaded + 1] = p end
+  local stockMats = { oak_leaves_01 = { name = 'oak_leaves_01', Stages = { { baseColorFactor = { 1, 1, 1, 1 } } } },
+    m_oak_leaves_distant = { name = 'm_oak_leaves_distant', Stages = { {} } } }
+  jsonReadFile = function(p) return p == ECA .. 'trees_oak/main.materials.json' and stockMats or nil end
+  package.loaded['beamngEarth/trees'] = { applySeason = function() end }
+  seasonlook.setMode('auto')
+  seasonlook.setSnow({ mode = 'real' })
+  seasonlook.update(true, 39.29, 14, BALT)
+  T.check(B.status().leaf == BALT, 'the anchor\'s calendar taken')
+  local d = tonumber(os.date('*t').yday)
+  local kinds = {}
+  for i = 1, 300 do
+    local r = (i * 0.6180339887) % 1
+    local c = B.map(shape, r)
+    local what, k, s = B.treeLeaf(BALT, 'oak', false, r, d)
+    if what == 'bare' then T.check(c:find('/bare_v', 1, true) ~= nil, 'a bare oak: its twig copy')
+    elseif what == 'tint' then
+      T.check(c:find('_' .. k .. s .. '%.cdae$') ~= nil and files[c]:find(fix(B.tintName('oak_leaves_01', s, k)), 1, true),
+        'a coloured oak: its tint\'s copy ' .. c)
+    else T.check(c == shape, 'a green oak: the stock tree') end
+    kinds[what] = true
+  end
+  T.check(B.status().leafDay == d, 'today\'s trees')
+  local mats = B.tintMaterials(B.leafTints(), { oak = stockMats })
+  local nm = 0
+  for _ in pairs(mats) do nm = nm + 1 end
+  T.check(nm == 3 * B.TINT_STEPS * 2, 'the oak\'s every kind and step: one clone each of its two leaf materials ' .. nm)
+  T.check(#B.leafTints() == 3 * 3 * B.TINT_STEPS, 'three species, three kinds, every step')
+  -- a rebase nearby (the same calendar within RELEAF_DAYS): kept; a teleport far away: the new one
+  local near = { share = 1, spread = { 6, 9 }, cal = { BALT.cal[1], { 102, 124, 278, 290, 301, 321 }, BALT.cal[3], BALT.cal[4] } }
+  seasonlook.update(true, 39.29, 14, near)
+  T.check(B.status().leaf == BALT, 'a rebase nearby: the calendar kept')
+  local far = { share = 1, spread = { 6, 9 }, cal = { BALT.cal[1], { 130, 150, 250, 262, 273, 293 }, BALT.cal[3], BALT.cal[4] } }
+  seasonlook.update(true, 39.29, 14, far)
+  T.check(B.status().leaf == far and B.status().leafDay == nil, 'a teleport: the new place\'s calendar')
+  seasonlook.restore()
+  T.check(B.status().leaf == nil, 'the level ended: no calendar')
+  seasonlook.setSnow(nil)
+  package.loaded['beamngEarth/trees'] = nil
+end
+
 T.done('test_baretrees')

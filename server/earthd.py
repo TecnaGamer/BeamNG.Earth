@@ -10246,6 +10246,12 @@ class Connection:
             ready["koppen"] = int(climate.koppen_at(lat, lon))
         except Exception as e:          # (no class: the mod keeps the full cycle)
             log.warning("koppen at the anchor: %s", e)
+        import leafcycle
+        if leafcycle.ON:                # BNE_LEAF_CYCLE: the place's leaf calendar (baretrees.lua: each tree's dates)
+            try:
+                ready["leaf"] = leafcycle.anchor_leaf(lat, gz, ready.get("koppen"))
+            except Exception as e:      # (none: the bare trees by the season's amount)
+                log.warning("leaf calendar at the anchor: %s", e)
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
         progress["done"] = True

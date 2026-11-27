@@ -410,7 +410,9 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 # in the keys of the items it changes, the far tiles' textures and the blocks' base photos, as
                 # snowcover.key_parts: a spec's hash of the band tables, the packs and the look's version, nothing
                 # where no snow can lie. Anything else snow comes to change must carry its own spec part, snowcover.py)
-                "BNE_WINTER", "BNE_SNOW", "BNE_WET_ROADS")
+                "BNE_WINTER", "BNE_SNOW", "BNE_WET_ROADS",
+                # (the trees' leaf cycle, leafcycle.py: a field of the anchor's message only, the mod's trees by it)
+                "BNE_LEAF_CYCLE")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches

@@ -433,7 +433,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   black lanes with slush at their edges, side streets packed white with grey wheel tracks, markings fading under the
   snow, snowbanks along plowed roads (never across junctions, crossings or bridges), sidewalks shovelled, trampled or
   left covered, white bridge decks. `BNE_WINTER=light`, `heavy` or `ice` forces a fixed light-snow, snowstorm or
-  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too). A switch set by hand in the
+  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too); **Leaf cycle** (`BNE_LEAF_CYCLE=on`, with Winter: broadleaf trees colour and lose their leaves over several weeks in autumn, one tree at a time, and leaf out the same way in spring, by the place's latitude, height and climate). A switch set by hand in the
   server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's

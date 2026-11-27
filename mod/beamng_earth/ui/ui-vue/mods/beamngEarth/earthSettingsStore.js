@@ -189,6 +189,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expWetRoads", type: "bool", default: false, name: "Wet roads", desc: "Experimental. Rain leaves the roads wet for hours as they dry: less grip and tyre spray while they are wet (included in Winter grip).",
         note: RESTART_NOTE },
+      { id: "expLeafCycle", type: "bool", default: false, name: "Leaf cycle", desc: "Experimental. Broadleaf trees follow the real date at the place: in autumn they colour and lose their leaves over several weeks, one tree at a time, and in spring they leaf out the same way. The dates follow the latitude, the height and the climate. Needs Winter.",
+        note: RESTART_NOTE },
     ],
   },
   {

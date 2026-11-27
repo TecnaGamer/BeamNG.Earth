@@ -84,6 +84,7 @@ FEATURES = (
     ("expStaleRevisit", {"BNE_STALE_REVISIT": "on"}, None),               # revisit.STALE_ON (not a key: NOT_SWITCHES)
     ("expWinter", {"BNE_WINTER": "on"}, None),                            # snow.WINTER / snowcover.ON (not a key)
     ("expWetRoads", {"BNE_WET_ROADS": "on"}, None),                       # snow.WET_ROADS: rain's wet roads (not a key)
+    ("expLeafCycle", {"BNE_LEAF_CYCLE": "on"}, "expWinter"),              # leafcycle.ON: the trees' leaf cycle (not a key)
 )
 IDS = tuple(f[0] for f in FEATURES)
 # A setting that counts only in a file of this version or newer (settings.lua M.VERSION): the Road signs switch was on
