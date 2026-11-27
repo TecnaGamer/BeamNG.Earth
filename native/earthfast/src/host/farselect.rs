@@ -288,11 +288,11 @@ fn touches_side(poly: &[f64], quad: &[f64], side: usize) -> bool {
     let end = (side + 1) % 4;
     let (x, y) = (quad[2 * side], quad[2 * side + 1]);
     let (dx, dy) = (quad[2 * end] - x, quad[2 * end + 1] - y);
-    let length = dx.hypot(dy);
+    let length = dx.dhypot(dy);
     let on = |p: usize| ((poly[p] - x) * dy - (poly[p + 1] - y) * dx).abs() <= length * 1e-6;
     (0..poly.len()).step_by(2).any(|a| {
         let b = (a + 2) % poly.len();
-        on(a) && on(b) && (poly[a] - poly[b]).hypot(poly[a + 1] - poly[b + 1]) > 1e-6
+        on(a) && on(b) && (poly[a] - poly[b]).dhypot(poly[a + 1] - poly[b + 1]) > 1e-6
     })
 }
 

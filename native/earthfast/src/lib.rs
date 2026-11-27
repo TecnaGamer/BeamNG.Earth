@@ -121,6 +121,7 @@ mod deshadow;
 mod colormatch;
 mod finished_tile;
 mod farglobal;
+mod farhandoff;
 mod farlocal;
 mod farpvs;
 mod farsel;
@@ -6870,6 +6871,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_normal_err, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_clip_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(farhandoff::far_handoff_stitch, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::geo_owns, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_pack, m)?)?;
@@ -7848,6 +7850,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
-    m.add("VERSION", 641)?;
+    // 642: farhandoff::far_handoff_stitch (the local rim follows the neighbouring global tile).
+    m.add("VERSION", 642)?;
     Ok(())
 }

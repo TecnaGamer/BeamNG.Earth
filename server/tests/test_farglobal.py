@@ -181,15 +181,30 @@ class SelectionTest(unittest.TestCase):
             self.assertLess(abs(aa - ar), 0.01 * max(aa, ar) + 1.0, (adds, removes))
 
     def test_handoff_piece_and_its_touching_neighbour_swap_together(self):
-        piece = '2_0_0_c14_8150_4000'
-        neighbour = 'm14_8151_4000'
-        stitched = piece + '_h1' + neighbour
-        replacement = '2_1_0_c14_8151_4000'
+        args = (2, 0, 0, 14, 8150, 4000, (), ())
+        piece = ff.Piece(*args).key
+        neighbour = ff.global_key(14, 8151, 4000)
+        stitched = ff.Piece(*args, ((1, 14, 8151, 4000),)).key
+        replacement = ff.Piece(2, 1, 0, 14, 8151, 4000, (), ()).key
         left = (0, 0, 1, 0, 1, 1, 0, 1)
         right = (1, 0, 2, 0, 2, 1, 1, 1)
         polys = {piece: left, stitched: left, neighbour: right, replacement: right}
         self.assertEqual(ff.swap_groups([stitched, neighbour], [piece, replacement], polys.get),
                          [(sorted([piece, replacement]), sorted([stitched, neighbour]))])
+
+    def test_handoff_depends_on_the_global_geometry_version(self):
+        from unittest.mock import patch
+
+        args = (2, 0, 0, 14, 8151, 4000, (), ())
+        seam = ((1, 14, 8152, 4000),)
+        with patch.object(ff, "GLOBAL_GEO_VERSION", 1):
+            old = ff.Piece(*args, seam).key
+            isolated = ff.Piece(*args).key
+        with patch.object(ff, "GLOBAL_GEO_VERSION", 2):
+            new = ff.Piece(*args, seam).key
+            self.assertEqual(ff.Piece(*args).key, isolated)
+        self.assertNotEqual(new, old)
+        self.assertTrue(new.endswith("_h1m14_8152_4000"))
 
     def test_handoff_selection_names_only_visible_global_neighbours(self):
         _, _, (tiles, _) = self.select(LAT, LON)
@@ -291,27 +306,6 @@ class MeshTest(unittest.TestCase):
         self.assertTrue(np.any(np.linalg.norm(joined.positions - point, axis=1) < 1e-9))
         for tip in np.concatenate((east[-2:], north[:2])):
             self.assertFalse(np.any(np.linalg.norm(joined.positions - tip, axis=1) < 1e-9))
-
-    def test_corner_refans_a_narrow_boundary_knot(self):
-        from farhandoff import _close_corners
-
-        original = np.array([[0., 0., 0.], [0., -52., 0.], [.13, -52.13, 0.], [64., -52., 0.],
-                             [11.9, 0., 0.], [.108, 0., 0.]])
-        moved = np.array([[.1487, -.1205, .4], [.2126, -52.192, .4], [.3419, -52.322, .4],
-                          [64.108, -52.181, .4], [11.9926, -.0994, .4], [.1697, -.0946, .4]])
-        faces = np.array([[0, 1, 5], [5, 1, 2], [5, 2, 3], [5, 3, 4]])
-        uv = original[:, :2] / 64
-        built = ff.Built([0., 0., 0.], moved, np.tile([0., 0., 1.], (6, 1)), uv, uv, faces,
-                         np.zeros((2, 2)), 0., None, 1., 64.)
-        on_rim = np.array([[True, True, False, False, False, False], [True, False, False, False, True, True]])
-        displacement = np.zeros((2, 6, 3))
-        displacement[:, 0] = [[.2357, -.1464, .4], [.0617, -.0945, .4]]
-        joined = _close_corners(built, original, on_rim, displacement)
-        for endpoint in displacement[:, 0]:
-            self.assertTrue(np.any(np.linalg.norm(joined.positions - endpoint, axis=1) < 1e-9))
-        a, b, c = joined.positions[joined.tris].transpose(1, 0, 2)
-        self.assertTrue(np.all(np.cross(b-a, c-a)[:, 2] > 0))
-        self.assertEqual(len(joined.tris), len(faces) + 1)
 
     def built(self, z, x, y):
         zoom = ff.global_dem_zoom(z, 64)

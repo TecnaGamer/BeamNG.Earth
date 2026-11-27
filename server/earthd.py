@@ -7165,8 +7165,8 @@ class Server:
         return farfield.build_global(base, z, x, y, zoom, ref, self.layout)
 
     @functools.lru_cache(maxsize=PIECE_PARTS)
-    def _handoff_source(self, z, x, y):
-        """Global geometry shared by local pieces that meet the same tile."""
+    def _handoff_source(self, z, x, y, geometry_version):
+        """Share the global rim by tile and the geometry version used to build it."""
         return self._global_geometry(z, x, y)
 
     def _clip_piece(self, anchor, tile, built):
@@ -7174,7 +7174,7 @@ class Server:
         quad = np.asarray(tile.quad).reshape(4, 2)
         edges = []
         for side, z, x, y in tile.seams:
-            neighbour = self._handoff_source(z, x, y)
+            neighbour = self._handoff_source(z, x, y, farfield.GLOBAL_GEO_VERSION)
             edge = farhandoff.global_edge(neighbour, anchor.frame, tile, side, z, x, y)
             edges.append((quad[side], quad[(side + 1) % 4], edge, neighbour.size / self.layout.cells))
         return farhandoff.join_edges(clipped, edges)
