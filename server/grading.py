@@ -755,6 +755,11 @@ ABUT_MAX_M = 8.0            # m filled at most
 # its deck (a 9 % deck, 1.5 g). BNE_FAST_GAP=on.
 # (M5 round 8, BNE_ROADSYS=surface 13, earthfast 643) A road's embankment in the surface model's ground: the plans of a
 # road of these classes read their ground plus dsmground's cut where that cut is the road's own (_Planner._embank_obs):
+# Off unless BNE_ROADSYS_EMBANK=on (M5 round 8): the drawn ground road under BNE_ROADSYS=surface follows the profile
+# squares, whose ground is the filter's still, so lifting the plans (the terrain) alone buried 0bff's trunk up to 8 m
+# under its own embankment (wide corpus: surface_buried_2cm 840 -> 3268 there); the squares' ground must take the
+# embankment too before this is on.
+EMBANK_ON = os.environ.get("BNE_ROADSYS_EMBANK", "off").strip().lower() == "on"
 EMBANK_CLASSES = ("motorway", "trunk", "primary", "secondary", "tertiary")
 EMBANK_KERNEL = 643
 EMBANK_MATCH_M = 0.5        # m: the sample's ground within this of the filtered z12 (the filter's ground, no lidar)
@@ -3588,7 +3593,7 @@ class _Planner:
         the roads' plans read it: the terrain away from them is the filter's as before, the terrain beside them follows
         the plans (an embankment's slopes)."""
         import roadsys
-        if not roadsys.SURFACE:
+        if not roadsys.SURFACE or not EMBANK_ON:
             return None
         dem = getattr(self, "dem", None) or getattr(self.md, "dem", None)
         if dem is None or not getattr(dem, "ground_filter", False) or not hasattr(dem, "sample_raw12"):
