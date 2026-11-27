@@ -1553,6 +1553,31 @@ class Dem:
         got = self.tiles(keys, progress)
         return [np.asarray(got[k], np.float32) for k in keys]
 
+    def deep_at(self, lat, lon):
+        """Per point: does a Mapterhorn tile deeper than GLOBAL_ZOOM (national lidar) cover it on disk? (Its heights then
+        are no ground filter's: grading's road embankments leave it alone.) The fine tiles a plan's own samples read
+        were fetched before it asks; each tile's answer kept per process."""
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        out = np.zeros(len(lat), bool)
+        memo = self.__dict__.setdefault("_deep_memo", {})
+        for z in range(GLOBAL_ZOOM + 1, max(MAX_ZOOM, FINE_ZOOM) + 1):
+            n = 2 ** z
+            xs = np.floor((lon + 180.0) / 360.0 * n).astype(np.int64)
+            ys = np.floor((1.0 - dnp.arcsinh(dnp.tan(np.radians(np.clip(lat, -MAX_LAT, MAX_LAT)))) / math.pi) / 2.0
+                          * n).astype(np.int64)
+            for k in sorted(set(zip(xs.tolist(), ys.tolist()))):
+                key = (z, k[0] % n, k[1])
+                got = memo.get(key)
+                if got is None:
+                    got = os.path.exists(self._path(MAPTERHORN, *key))
+                    if len(memo) > 65536:
+                        memo.clear()
+                    memo[key] = got
+                if got:
+                    out |= (xs == k[0]) & (ys == k[1])
+        return out
+
     def sample_raw12(self, lat, lon):
         """Bilinear heights (m) of the raw z12 surface model (Mapterhorn's z12 tiles as they are: no ground filter, no
         deeper data) at lat/lon arrays: grading's road embankments (the filter's cut along a road, grading._embank_obs).

@@ -3610,13 +3610,26 @@ class _Planner:
             la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
             try:
                 fine = np.asarray(elev(la, lo), np.float64)
-                g12 = np.asarray(dem.sample(la, lo, 12), np.float64)
+                # (a national lidar's ground under it: no filter's cut to give back, nothing read; a lidar place read
+                # the raw model under every road of its plans, Springfield +30 % CPU)
+                deep = np.asarray(dem.deep_at(la, lo), bool)
+                if bool(deep.all()):
+                    return None
                 raw = np.asarray(dem.sample_raw12(la, lo), np.float64)
+                # (the filtered z12 read only where the raw model stands over the ground by a cut at all: the filter's
+                # z12 is decoded with its neighbours, and a lidar place asked it for every road of its plans, Springfield
+                # +53 % CPU)
+                pre = np.flatnonzero(~deep & np.isfinite(raw) & (raw - fine > EMBANK_CUT_MIN - EMBANK_MATCH_M))
+                if not len(pre):
+                    return None
+                g12 = np.full(len(xy), np.nan)
+                g12[pre] = np.asarray(dem.sample(la[pre], lo[pre], 12), np.float64)
             except Exception as e:      # (the plans' own ground rather than no grading: not kept)
                 _caught(e)
                 revisit.fault()
                 return None
-            cand = np.isfinite(raw) & (raw - g12 > EMBANK_CUT_MIN) & (np.abs(fine - g12) <= EMBANK_MATCH_M)
+            with np.errstate(invalid="ignore"):
+                cand = np.isfinite(raw) & np.isfinite(g12) & (raw - g12 > EMBANK_CUT_MIN) & (np.abs(fine - g12) <= EMBANK_MATCH_M)
             if not cand.any():
                 return None
             idx = np.flatnonzero(cand)
