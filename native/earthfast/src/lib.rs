@@ -7850,9 +7850,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
-    // 645 (642-644 kept for other branches; 644: the winter L1a hotfix): local weather S1, snowobs.rs (snowobs_*: the
-    // IMS / GIBS readers, the ground under their pixels, band counts, observed snowlines) and snowfield.rs
-    // (snowfield_*: band tables on the absolute 150 m grid fused with the observed cover; tools/snowobs_probe.py)
+    // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
+    // tunnels' and the roads' branches)
+    // 645: local weather S1, snowobs.rs (snowobs_*: the IMS / GIBS readers, the ground under their pixels, band
+    // counts, observed snowlines) and snowfield.rs (snowfield_*: band tables on the absolute 150 m grid fused with the
+    // observed cover; server/snowfield.py, tools/snowobs_probe.py)
     snowobs::py::register(m)?;
     snowfield::py::register(m)?;
     m.add("VERSION", 645)?;

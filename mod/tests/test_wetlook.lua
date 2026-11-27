@@ -55,6 +55,17 @@ W.update(W.CHECK_S, 0, false)          -- the weather off: back to dry at once
 for _ = 1, 5 do W.update(0.016, 0, false) end
 check(W.level() == 0 and mats.sidewalk_concrete.fields.baseColorFactor == '0.8000 0.8000 0.8000 1.0000', 'dry: own colour back')
 check(mats.line_white.fields.roughnessFactor == '0.4', 'someone else\'s value kept')
+-- a teleport leaves the old place's rain behind (the user, 2026-11-27)
+W.reset()
+for _ = 1, 400 do W.update(W.CHECK_S, 8, true) end
+for _ = 1, 50 do W.update(0.016, 8, true) end
+check(W.wetness() > 0.5 and W.level() > 0, 'teleport: wet before')
+W.onTeleport()
+W.update(0.016, 0, true)
+for _ = 1, 50 do W.update(0.016, 0, true) end
+check(W.wetness() == 0 and W.level() == 0, 'teleport: a dry place is dry at once')
+W.update(W.CHECK_S, 8, true)
+check(W.wetness() > 0 and W.wetness() < 0.5, 'teleport: rain at the new place wets it again over minutes')
 -- W1's road state wins over the rain
 package.loaded['beamngEarth/winter'] = { _state = function() return { roads = { {}, {}, { 'wet' } } }, 2 end }
 W.reset()

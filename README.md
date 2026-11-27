@@ -428,7 +428,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   when the real weather brings snow, slush, frost or ice, from an hourly snow model of the last 10 days' weather; main
   roads are cleared and salted first and bridges freeze first; the road's condition shows in the status bar; broadleaf
   trees go bare tree by tree in their winter, near and far, a few oaks and young beeches keeping their dead leaves; snow
-  lies on the ground near and far; snowy streets look the part by road class: main roads plowed and salted to wet
+  lies on the ground near and far where the real weather put it (only where it really snowed, never from the climate
+  alone; a teleport shows the new place's own snow); snowy streets look the part by road class: main roads plowed and salted to wet
   black lanes with slush at their edges, side streets packed white with grey wheel tracks, markings fading under the
   snow, snowbanks along plowed roads (never across junctions, crossings or bridges), sidewalks shovelled, trampled or
   left covered, white bridge decks. `BNE_WINTER=light`, `heavy` or `ice` forces a fixed light-snow, snowstorm or
