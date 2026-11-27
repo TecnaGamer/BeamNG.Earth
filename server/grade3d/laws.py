@@ -15,7 +15,9 @@ off it costs, and the bounds of its kind.
   dearest change there is.
 - Kinds: a road on the ground and a track pay to leave their ground. A deck pays nothing (it spans; its laws keep its
   line) but stands over its ground by its depth and DECK_AIR_M, away from its ends (ABUT_M: its abutments). A tunnel pays
-  nothing and stays under its ground by its cover and headroom, away from its mouths.
+  nothing and stays under its ground by its cover and headroom, away from its mouths. Floors and roofs are costs too
+  (W_BOUND per m^2 short, earthfast 644): only the joins and the ceilings are hard, and those a flat network always meets,
+  so every problem has an answer.
 
 The weights share one unit, W_GROUND: a road sample a metre off its ground. At REF_KMH, a grade 1 % past the comfortable
 over one STEP_M segment pays what that segment's sample a metre off its ground does (W_GRADE * h * 0.01^2 = 1)."""
@@ -23,11 +25,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import carriageways as _cw
 import gradeshapes as _gsh
 from . import network as _network
 
 W_GROUND = 1.0              # a road's sample a metre off its ground (per m^2)
 RAIL_GROUND_X = 20.0        # a track's: this times a road's
+W_BOUND = 1.0e4             # a deck's sample a metre under its floor, a tunnel's over its roof
 W_GRADE = 1.0e4 / _gsh.STEP_M   # per m of path, per (grade past the comfortable)^2, at REF_KMH
 W_CURVE = 1.0e3             # per m, per (curve past the comfortable, the kernel's measure)^2, at REF_KMH
 REF_KMH = 60.0
@@ -71,7 +75,7 @@ class Laws:
         return dict(t=self.t[sl], w=self.w[sl], lo=self.lo[sl], hi=self.hi[sl], grade=float(self.grade[p]),
                     K=float(self.K[p]), lam=float(self.lam[p]), step=max(float(samples.h[p]), 1e-3), length=0.0,
                     soft_grade=float(self.soft_grade[p]), w_grade=float(self.w_grade[p]),
-                    soft_K=float(self.soft_K[p]), w_curve=float(self.w_curve[p]))
+                    soft_K=float(self.soft_K[p]), w_curve=float(self.w_curve[p]), w_bound=W_BOUND)
 
 
 def road_length_near(network, xy, r=URBAN_R_M):
@@ -152,8 +156,10 @@ def lay(network, samples, ground):
     for p, path in enumerate(network.paths):
         g, rad, kmh[p] = path_law(network, path, bool(urban[p]))
         x = speed_x(kmh[p])
-        soft_grade[p], grade[p], w_grade[p] = g, g * CEIL_GRADE_X, W_GRADE * x
-        soft_K[p], K[p], w_curve[p] = rad / 100.0, rad / 100.0 / CEIL_CURVE_X, W_CURVE * x
+        soft_grade[p], w_grade[p] = g, W_GRADE * x
+        grade[p] = g * CEIL_GRADE_X if CEIL_GRADE_X else _cw.NO_GRADE_CEILING        # (0: no ceiling, the cost alone)
+        soft_K[p], w_curve[p] = rad / 100.0, W_CURVE * x
+        K[p] = rad / 100.0 / CEIL_CURVE_X if CEIL_CURVE_X else _cw.NO_CURVE_CEILING
         sl = samples.of(p)
         mem = samples.member[sl]
         kk = kind[mem]

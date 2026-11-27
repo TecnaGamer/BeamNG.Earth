@@ -75,6 +75,22 @@ class SoftLawTest(unittest.TestCase):
         self.assertAlmostEqual(float(za[0] - zb[0]), 0.0, delta=1e-6)
         self.assertGreater(info["soft_clearance_shortfall_m"], 6.0)
 
+    def test_a_soft_floor_gives_way_to_a_join(self):
+        # (a deck's middle asked 5 m over its ground, its ends joined to a road held on its ground (hard), its grade 10 %:
+        # 0.4 m within reach over 4 m. Hard: no answer; soft: as high as the grade lets it)
+        road = dict(t=np.zeros(1), w=np.ones(1), lo=np.zeros(1), hi=np.zeros(1), grade=0.1, K=0.01)
+        lo = np.array([-np.inf, 5.0, -np.inf])
+        deck = dict(t=np.zeros(3), w=np.ones(3), lo=lo, grade=0.1, K=0.01, step=4.0)
+        cps = [(1, 0, 0, 0, "eq", 0.0), (1, 2, 0, 0, "eq", 0.0)]
+        hard = {}
+        cw.solve([road, deck], cps, diagnostics=hard)
+        self.assertFalse(hard["converged"])
+        info = {}
+        _r, z = cw.solve([road, dict(deck, w_bound=1e4)], cps, diagnostics=info)
+        self.assertTrue(info["converged"] and info["feasible"], info)
+        self.assertAlmostEqual(float(z[1]), 0.4, delta=1e-3)
+        self.assertAlmostEqual(info["soft_bound_shortfall_m"], 4.6, delta=1e-3)
+
     def test_no_soft_law_is_the_hard_answer(self):
         a = dict(t=self.t, w=self.w, grade=0.2, K=30)
         self.assertTrue(np.array_equal(cw.solve([a])[0], cw.solve([dict(a, w_grade=5.0)])[0]))

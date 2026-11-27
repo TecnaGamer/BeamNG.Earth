@@ -33,12 +33,15 @@ pub struct Parameters {
     /// The cost of a window's curve past soft_k: w_curve (s / hm)^2 hm / 2 for an excess s of its curve row (m),
     /// hm the window's mean spacing.
     pub w_curve: f64,
+    /// The cost of a sample under its lower bound or over its upper one: 0, the bounds hard; > 0, the shortfall s (m)
+    /// a slack paid w_bound s^2 / 2 (a deck's floor over its ground, a tunnel's roof under it: not past the joins).
+    pub w_bound: f64,
 }
 
 impl Parameters {
     /// The five hard parameters alone (no soft law).
     pub fn hard(grade: f64, k: f64, lam: f64, step: f64, length: f64) -> Self {
-        Self { grade, k, lam, step, length, soft_grade: 0., w_grade: 0., soft_k: 0., w_curve: 0. }
+        Self { grade, k, lam, step, length, soft_grade: 0., w_grade: 0., soft_k: 0., w_curve: 0., w_bound: 0. }
     }
 
     fn soft_grade_on(&self) -> bool {
@@ -135,6 +138,8 @@ pub struct Diagnostics {
     pub soft_cost: f64,
     /// The largest shortfall of a soft coupling (m).
     pub soft_clearance_shortfall: f64,
+    /// The largest shortfall of a soft bound (m): a sample under its lower bound or over its upper one.
+    pub soft_bound_shortfall: f64,
     pub slack_vars: usize,
     pub elapsed_s: f64,
     pub objective_nnz: usize,
@@ -273,10 +278,19 @@ pub fn measure(problem: &Problem, z: &[f64], d: &mut Diagnostics) {
             }
         }
     }
-    for (i, &v) in z.iter().enumerate() {
-        d.lower_shortfall = d.lower_shortfall.max((problem.lower[i] - v).max(0.));
-        d.upper_excess = d.upper_excess.max((v - problem.upper[i]).max(0.));
-        d.feasible &= v.is_finite();
+    for (chain, p) in problem.parameters.iter().enumerate() {
+        for i in problem.offsets[chain]..problem.offsets[chain + 1] {
+            let v = z[i];
+            let (under, over) = ((problem.lower[i] - v).max(0.), (v - problem.upper[i]).max(0.));
+            if p.w_bound > 0. {
+                d.soft_bound_shortfall = d.soft_bound_shortfall.max(under).max(over);
+                d.soft_cost += 0.5 * p.w_bound * (under * under + over * over);
+            } else {
+                d.lower_shortfall = d.lower_shortfall.max(under);
+                d.upper_excess = d.upper_excess.max(over);
+            }
+            d.feasible &= v.is_finite();
+        }
     }
     for c in &problem.couplings {
         let gap = c.gap(z);
@@ -405,7 +419,19 @@ pub fn solve(
                 pc.push(a + i);
                 pv.push(a2[i - 2]);
             }
-            if problem.lower[a + i] > problem.upper[a + i] {
+            if p.w_bound > 0. {
+                // (soft: lower - s <= z, z <= upper + s, each side's slack its own, nonnegative, paid for)
+                for (bound, sign) in [(problem.lower[a + i], -1.), (problem.upper[a + i], 1.)] {
+                    if bound.is_finite() {
+                        let s = nv;
+                        nv += 1;
+                        slack_p.push(p.w_bound);
+                        let mut r = Row::new(&[a + i, s], &[sign, -1.]);
+                        r.rhs = sign * bound;
+                        ineq.push(r);
+                    }
+                }
+            } else if problem.lower[a + i] > problem.upper[a + i] {
                 d.infeasible = true;
             } else {
                 bounds(
@@ -454,6 +480,7 @@ pub fn solve(
     measure(problem, &z, &mut d);
     d.slack_vars = nv - n;
     let exact = d.soft_clearance_shortfall <= 1e-8
+        && d.soft_bound_shortfall <= 1e-8
         && d.soft_grade_excess <= 1e-10
         && d.soft_curve_excess <= 1e-12
         && d.grade_excess <= 1e-10
@@ -549,6 +576,7 @@ pub fn solve(
     d.soft_curve_excess = measured.soft_curve_excess;
     d.soft_cost = measured.soft_cost;
     d.soft_clearance_shortfall = measured.soft_clearance_shortfall;
+    d.soft_bound_shortfall = measured.soft_bound_shortfall;
     d.converged = matches!(status, SolverStatus::Solved | SolverStatus::AlmostSolved) && d.feasible;
     d.elapsed_s = start.elapsed().as_secs_f64();
     Ok((z, d))
@@ -636,6 +664,37 @@ mod tests {
         assert!(d.converged && d.feasible, "soft: {:?}", d);
         assert!(d.soft_clearance_shortfall > 5., "{:?}", d);       // (0.8 m of the 6 at most within the grades)
         assert!(z[1] - z[4] > 0.5 && z[1] - z[4] <= 0.8 + 1e-6, "{:?}", z);
+    }
+
+    #[test]
+    fn a_soft_floor_gives_way_to_the_ceilings_and_a_hard_one_has_no_answer() {
+        // (a deck of three samples 4 m apart, both ends joined to a ground sample held at 0 (hard), its grade at most
+        // 10 %, a floor of 5 m on its middle: 0.4 m within reach. Hard, no answer; soft, the middle as high as the grade
+        // lets it, 4.6 m short of its floor, the ground's bound and the joins held)
+        let ground = Parameters::hard(0.1, 0.001, 1., 4., 0.);
+        let mk = |deck: Parameters| Problem {
+            target: vec![0., 0., 0., 0.],
+            weight: vec![1.; 4],
+            lower: vec![0., f64::NEG_INFINITY, 5., f64::NEG_INFINITY],
+            upper: vec![0., f64::INFINITY, f64::INFINITY, f64::INFINITY],
+            offsets: vec![0, 1, 4],
+            parameters: vec![ground, deck],
+            spacing: Vec::new(),
+            couplings: vec![
+                Coupling { a: 1, b: 0, inequality: false, value: 0., c: 0, alpha: 0., upper: false, soft: 0. },
+                Coupling { a: 3, b: 0, inequality: false, value: 0., c: 0, alpha: 0., upper: false, soft: 0. },
+            ],
+        };
+        let mut deck = Parameters::hard(0.1, 0.001, 1., 4., 0.);
+        let (_, d) = solve(&mk(deck), 200, 10.).unwrap();
+        assert!(!d.converged, "hard: {:?}", d);
+        deck.w_bound = 1.0e4;
+        let (z, d) = solve(&mk(deck), 200, 10.).unwrap();
+        assert!(d.converged && d.feasible, "soft: {:?}", d);
+        assert!(z[0].abs() < 1e-6 && (z[1] - z[0]).abs() < 1e-6 && (z[3] - z[0]).abs() < 1e-6, "{:?}", z);
+        assert!((z[2] - 0.4).abs() < 1e-3, "{:?}", z);
+        assert!((d.soft_bound_shortfall - 4.6).abs() < 1e-3, "{:?}", d);
+        assert!(d.lower_shortfall < 1e-6 && d.upper_excess < 1e-6, "{:?}", d);
     }
 
     #[test]

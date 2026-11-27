@@ -92,3 +92,45 @@ def test_every_member_is_in_one_path_and_paths_are_continuous():
             ends.append((a, b))
         for (_a, b), (a2, _b2) in zip(ends, ends[1:]):
             assert np.hypot(*(a2 - b)) <= 2.5 + 1e-9
+
+
+def _rail(way, line, kind="rail"):
+    line = np.asarray(line, np.float64)
+    return Member(("rail", kind, way) + tuple(np.round(line[[0, -1]].ravel())), line, kind, "rail", None,
+                  1.0 if kind == "rail_deck" else 0.0, 2.0, None, None)
+
+
+def test_a_ways_overlapping_clips_are_one_line():
+    # (a track clipped by two cells with a margin: the copies overlap 100 m; a third copy wholly inside the first)
+    ms = [_rail("w1", _line(0, 0, 600, 0)), _rail("w1", _line(500, 0, 1200, 0)), _rail("w1", _line(100, 0, 300, 0))]
+    out = network.one_way(ms)
+    (m,) = out
+    assert abs(m.line[0, 0]) < 1e-9 and abs(m.line[-1, 0] - 1200) < 1e-9
+    assert np.all(np.diff(m.line[:, 0]) > 0)
+    net = network.build(ms)
+    assert len(net.paths) == 1 and net.crossings == [] and abs(net.paths[0].length - 1200) < 1e-6
+
+
+def test_a_copy_drawn_the_other_way_extends_the_start():
+    ms = [_rail("w1", _line(0, 0, 600, 0)), _rail("w1", _line(100, 0, -400, 0))]
+    (m,) = network.one_way(ms)
+    xs = m.line[:, 0]
+    assert abs(xs.min() + 400) < 1e-9 and abs(xs.max() - 600) < 1e-9 and np.all(np.diff(xs) > 0)
+
+
+def test_a_track_under_its_own_deck_is_cut_there_and_chains_through_it():
+    ms = [_rail("w1", _line(0, 0, 1000, 0)), _rail("w1", _line(400, 0, 600, 0), "rail_deck"),
+          _m("road", _line(500, -100, 500, 100))]
+    net = network.build(ms)
+    kinds = sorted(m.kind for m in net.members)
+    assert kinds == ["ground", "rail", "rail", "rail_deck"]
+    (x,) = net.crossings                              # (the road under the deck, not the track under its own deck)
+    assert {net.members[x[0]].kind, net.members[x[2]].kind} == {"rail_deck", "ground"}
+    rail_paths = [p for p in net.paths if any(net.members[i].kind.startswith("rail") for i in p.members())]
+    assert len(rail_paths) == 1 and abs(rail_paths[0].length - 1000) < 2 * network.OVERLAP_M
+
+
+def test_other_ways_are_untouched():
+    ms = [_rail("w1", _line(0, 0, 600, 0)), _rail("w2", _line(0, 4, 600, 4)), _m("a", _line(0, 0, 100, 0))]
+    out = network.one_way(ms)
+    assert len(out) == 3 and all(o is m for o, m in zip(sorted(out, key=str), sorted(ms, key=str)))

@@ -68,6 +68,8 @@ BUDGET_S = float(os.environ.get("BNE_CW_BUDGET_S", "30"))
 BUDGET_RELAXED_S = float(os.environ.get("BNE_CW_BUDGET_RELAXED_S", "150"))
 RELAXED_ROUNDS = 4 * ROUNDS     # (its iterations too: 5444 roads' 173 where the same laws, not contradicting, take under 60)
 SOFT_KEYS = ("soft_grade", "w_grade", "soft_K", "w_curve")     # a chain's soft laws (solve), in the kernel's order
+NO_GRADE_CEILING = 1.0      # a chain with a soft grade law and a grade this steep has no hard grade rows (the kernel's)
+NO_CURVE_CEILING = 1.0e-3   # ... with a soft curve law and a K this small, no hard curve rows
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
                         # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
@@ -212,7 +214,8 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, 
     from each sample to the next (a segment's grade bound and a window's curve bound are then its own spacings'; without
     it, the chain's one `step`, the closest two samples'). Soft laws, optional (SOFT_KEYS): soft_grade, the comfortable
     grade, and w_grade, what each metre of road pays per (grade past it)^2; soft_K, the comfortable vertical curve's K,
-    and w_curve, its cost likewise. grade and K are then the hard ceilings past which nothing goes.
+    and w_curve, its cost likewise. grade and K are then the hard ceilings past which nothing goes. w_bound, optional:
+    lo and hi soft, a sample's shortfall under lo or over hi paid w_bound s^2 / 2 (earthfast 644; 0: hard).
     couplings: (chain a, sample i, chain b, sample j, "eq", "ge" or "le", value): z_a - z_b = 0, >= value, <= value;
     or (a, i, b, j, kind, value, chain c, sample k, alpha): the same of z_a - (1 - alpha) z_b - alpha z_c (b's height
     moved alpha of the way to c's: a road's height where another leaves it; roadlaws' landings).
@@ -245,6 +248,13 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, 
         fast.require(643, "carriageway_profiles soft laws")
         laws = np.asarray([tuple(float(c.get(k, 0.0)) for k in SOFT_KEYS) for c in chains], np.float64).reshape(-1, 4)
         parameters = np.ascontiguousarray(np.hstack([parameters, laws]))
+    if any(c.get("w_bound") for c in chains):
+        # (soft bounds: a sample under its lo or over its hi paid w_bound per m^2 instead of a hard row; 0: hard)
+        fast.require(644, "carriageway_profiles soft bounds")
+        if parameters.shape[1] == 5:
+            parameters = np.hstack([parameters, np.zeros((len(chains), 4))])
+        wb = np.asarray([float(c.get("w_bound", 0.0)) for c in chains], np.float64).reshape(-1, 1)
+        parameters = np.ascontiguousarray(np.hstack([parameters, wb]))
     if any(len(c) not in (6, 9) or c[4] not in ("eq", "ge", "le") for c in cp):
         raise ValueError("carriageway coupling kind must be eq, ge or le, with no third sample or one and its alpha")
     kinds = {"eq": 0, "ge": 1, "le": 2}

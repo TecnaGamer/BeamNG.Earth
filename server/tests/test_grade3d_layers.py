@@ -65,3 +65,19 @@ def test_a_member_end_inside_a_path_is_no_end():
     net = network.build(ms)
     (x,) = layers.order(net)
     assert x.why == "levels" and x.weight == layers.W_CLEAR
+
+
+def test_an_order_by_the_kinds_is_doubted_where_the_map_also_joins_them_there():
+    # (a street crossing under a deck 16 m from its end, where it meets the deck's own end and ramp: both meet and pass)
+    ms = [_m("deck", _line(-200, 0, 0, 0), "deck", 1.0), _m("ramp", _line(0, 0, 100, 0)),
+          _m("street", np.array([[-10.0, -100.0], [-10.0, 5.0], [0.0, 0.0]]))]
+    net = network.build(ms)
+    lay = layers.order(net)
+    (x,) = [y for y in lay if y.upper is not None]
+    assert x.why == "kinds" and x.weight == layers.W_DOUBT
+    # (the same street going on 200 m past the deck, not joined to it: a firm order)
+    linenet.reset()
+    ms[2] = _m("street", _line(-50, -100, -50, 200))
+    net = network.build(ms)
+    (x,) = layers.order(net)
+    assert x.why == "kinds" and x.weight == layers.W_CLEAR
