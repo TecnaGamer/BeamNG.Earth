@@ -360,6 +360,26 @@ pub fn cell_table_with(f: &[i32], upto: usize, z_cell: i32, lat_e2: i32, zmin: i
         runs.push(run);
         states.push((k, st));
     }
+    // the maps' thin cover is "observed, depth unknown": never deeper than the kernel's own snow higher up (a D2 slope
+    // under a D1 summit read as a whiter slope than the peak: Pikes Peak, 2026-11-27's IMS)
+    for col in 0..2 {
+        let mut cap: Option<i64> = None;
+        for i in (0..rows.len()).rev() {
+            let added = (rows[i][7] >> (3 * col)) & FLAG_ADDED != 0;
+            let bin = rows[i][2 + 2 * col];
+            if added {
+                if let Some(c) = cap {
+                    if bin > c {
+                        rows[i][2 + 2 * col] = c;
+                        rows[i][1 + 2 * col] = rows[i][1 + 2 * col].min(COVER_OF_BIN[c as usize]);
+                        states[i].1[col].bin = c;
+                    }
+                }
+            } else if bin > 0 {
+                cap = Some(bin);
+            }
+        }
+    }
     (k_lo, rows, states, runs)
 }
 
@@ -681,6 +701,25 @@ mod tests {
         let (_, _, _, runs) = cell_table(&g, 245, 1000, 4600, 900, 1400, &seed_profile(&[(1000, 0)]), &[], 0, &[], 0,
                                       &[]);
         assert!(runs.iter().any(|r| r.depth[0] > r.depth[1]), "{runs:?}");
+    }
+
+    #[test]
+    fn observed_cover_never_deeper_than_the_kernels_above() {
+        // a cold dry window, the model's dusting only near the top (15 mm at 4,000 m, none at 3,000 m), the maps white
+        // everywhere: the rows the maps fill in below stay a dusting too, not a 2 cm cover under a dusted summit
+        let f = window(&[(246, -1000, 0, 0)], 0);
+        let seed = seed_profile(&[(3000, 0), (4000, 15)]);
+        let (k_lo, n) = band_rows(2500, 4200);
+        let white: Vec<[u32; 4]> = vec![[0, 8, 0, 8]; n];
+        let (_, rows, st, _) = cell_table(&f, 245, 3000, 3900, 2500, 4200, &seed, &white, k_lo, &white, k_lo, &[]);
+        assert!(rows.iter().any(|r| r[7] & FLAG_ADDED != 0), "{rows:?}");
+        assert!(rows.iter().any(|r| r[7] & FLAG_ADDED == 0 && r[2] == 1), "{rows:?}");
+        assert!(rows.iter().all(|r| r[2] <= 1 && r[4] <= 1), "{rows:?}");
+        assert!(st.iter().all(|s| s.1[0].bin <= 1));
+        // with no kernel snow anywhere the maps' cover stands as observed (D2)
+        let (_, rows, _, _) = cell_table(&f, 245, 3000, 3900, 2500, 4200, &seed_profile(&[(3000, 0)]), &white, k_lo,
+                                         &white, k_lo, &[]);
+        assert!(rows.iter().all(|r| r[2] == 2), "{rows:?}");
     }
 
     #[test]

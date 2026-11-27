@@ -297,7 +297,11 @@ class SnowField:
             if not self._spend(om_weight(len(part))):
                 log.info("snow field: Open-Meteo weight cap (%d a day) reached: tables kept as they are", WEIGHT_CAP)
                 return None
-            body = self.fetch_json(hourly_url_many(part), kind)
+            try:
+                body = self.fetch_json(hourly_url_many(part), kind)
+            except Exception:
+                self._spend(-om_weight(len(part)))      # (not asked after all: the day's weight given back)
+                raise
             body = body if isinstance(body, list) else [body]
             if len(body) != len(part):
                 raise IOError(f"snow field: {len(body)} answers for {len(part)} locations")
@@ -443,7 +447,9 @@ def make(dem, net, cache_dir):
 
     def fetch_bytes(url):
         try:
-            return net.get(url, kind="background").body
+            # (demand: one file a day, waited for in the field's executor; background was dropped whenever the
+            # host's bucket was low, and the field ran without the map)
+            return net.get(url, kind="demand").body
         except netfetch.NotFound:        # (the day's file not published yet)
             return None
 
