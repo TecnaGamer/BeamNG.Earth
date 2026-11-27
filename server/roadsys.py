@@ -1434,30 +1434,18 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None, lega
 
 
 _kept_memo = {}
+RAMP_SNAP_M = 64.0          # m: the grid a query's box is snapped out to for its kept ends' read (_kept_near's memo)
 
 
 def _ramp_pins(g0, h0, g1, h1, cell_fn, today_ll):
     """(M5 round 8) The kept deck ends' approach ramps (KEEP_*) whose lines come into the box (degrees, grown by the
     caller's reach) as pins_near's pins: each whole (the same whichever query asks), its change native/roadsys
     endmatch.rs ramp_dz along its arc (the deck end's height at its read point, back to the plans' own at its ramp's
-    length), its height today the plans' first stage there, the deck's half width, fade and share 1. Each kept end is
-    read from the cell its read point lies in (_kept_in_cell), the cells round the box by the ramps' reach."""
-    import dmath
+    length), its height today the plans' first stage there, the deck's half width, fade and share 1 (_kept_near: the
+    kept ends of the chains near the box)."""
     import fast
-    import mapcells
-    import math
-    pad = (RAMP_MAX_M + RAMP_CLEAR_M + RAMP_STEP_M) / 110574.0
-    padlo = pad / max(0.05, dmath.cos(math.radians(max(abs(g0), abs(g1)))))
-    keys = sorted(set(mapcells.cells_for_points(np.array([g0, g1]), np.array([h0, h1]), pad, padlo)), key=str)
-    found, seen = [], set()
-    for c in keys:
-        for ll, arc, dz0, ramp, half in _kept_in_cell(c, cell_fn):
-            if ll[:, 0].max() < g0 or ll[:, 0].min() > g1 or ll[:, 1].max() < h0 or ll[:, 1].min() > h1:
-                continue
-            kk = (ll.tobytes(), arc.tobytes(), dz0, ramp, half)
-            if kk not in seen:
-                seen.add(kk)
-                found.append((ll, arc, dz0, ramp, half))
+    found = [f for f in _kept_near(g0, h0, g1, h1, cell_fn)
+             if not (f[0][:, 0].max() < g0 or f[0][:, 0].min() > g1 or f[0][:, 1].max() < h0 or f[0][:, 1].min() > h1)]
     if not found:
         return []
     fast.require(KEPT_KERNEL, "roadsys_ramp_dz")
@@ -1476,35 +1464,44 @@ def _ramp_pins(g0, h0, g1, h1, cell_fn, today_ll):
     return out
 
 
-def _kept_in_cell(c, cell_fn):
-    """[(ramp line [(lat, lon)], its arc m, dz at its read point, ramp m, half width)] of the kept deck ends whose read
-    point lies in map cell c, from the decks the bridge chains publish round it (ChainView.kept_of_part, its region's
-    view; the 3 x 3 cells round it, the cell + 60 m), sorted by content. Kept when read complete; [] without a view."""
+def _kept_near(g0, h0, g1, h1, cell_fn):
+    """[(ramp line [(lat, lon)], its arc m, dz at its read point, ramp m, half width)] of the kept deck ends of the
+    bridge chains whose decks come within a ramp's reach of the box (degrees): every one whose ramp can reach into it,
+    whatever the box (a kept end is its chain's alone), from the decks published round it (ChainView.kept_of_part, the
+    box's region's view; its box snapped out to RAMP_SNAP_M and grown by the ramps' reach: only the chains there are
+    solved, as the ceiling reads only the decks near its points; the whole cell's chains read per cell cost the wide
+    corpus +133 % CPU), sorted by content. Kept per snapped box when read complete; [] without a view."""
+    import dmath
     import mapcells
+    import math
     import revisit
-    with _memo_lock:
-        got = _kept_memo.get(str(c))
-    if got is not None:
-        return got
-    la, lo = c.center()
-    _fid, fr = region(la, lo)
+    _fid, fr = region((g0 + g1) / 2, (h0 + h1) / 2)
     view = _decks_view(fr)
     if view is None:
         return []
-    n = 1 << c.z
-    keys = [mapcells.CellKey(c.z, (c.x + dx) % n, c.y + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
-            if 0 <= c.y + dy < n]
-    la0, lo0, la1, lo1 = _cell_bounds(c)
-    bx, by, _u = fr.geodetic_to_enu(np.array([la0, la0, la1, la1]), np.array([lo0, lo1, lo0, lo1]), np.zeros(4))
-    reg = (float(np.min(bx)) - 60.0, float(np.min(by)) - 60.0, float(np.max(bx)) + 60.0, float(np.max(by)) + 60.0)
+    bx, by, _u = fr.geodetic_to_enu(np.array([g0, g0, g1, g1]), np.array([h0, h1, h0, h1]), np.zeros(4))
+    sn = RAMP_SNAP_M
+    box = (float(np.floor(np.min(bx) / sn) * sn), float(np.floor(np.min(by) / sn) * sn),
+           float(np.ceil(np.max(bx) / sn) * sn), float(np.ceil(np.max(by) / sn) * sn))
+    mk = (_frame_key(fr), box)
+    with _memo_lock:
+        got = _kept_memo.get(mk)
+    if got is not None:
+        return got
+    r = RAMP_MAX_M + RAMP_CLEAR_M + RAMP_STEP_M
+    reg = (box[0] - r, box[1] - r, box[2] + r, box[3] + r)
+    la, lo, _u = fr.enu_to_geodetic(np.array([reg[0], reg[2], reg[0], reg[2]]), np.array([reg[1], reg[1], reg[3], reg[3]]),
+                                    0.0)
+    la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+    pad = (roads_near_m() + 1.0) / 110574.0
+    padlo = pad / max(0.05, dmath.cos(math.radians(float(np.max(np.abs(la))))))
+    keys = sorted(set(mapcells.cells_for_points(la, lo, pad, padlo)), key=str)
     out = {}
     with revisit.scope() as rd:
         try:
             cells = [cell_fn(k) for k in keys]
             for key, _spec, _xy, _z, _lon in view.parts_published(cells, reg):
                 for _e, ll, arc, dz0, ramp, half in view.kept_of_part(key):
-                    if str(mapcells.cell_of(float(ll[0, 0]), float(ll[0, 1]))) != str(c):
-                        continue
                     kk = (ll.tobytes(), arc.tobytes(), float(dz0), float(ramp), float(half))
                     out.setdefault(kk, (ll, arc, float(dz0), float(ramp), float(half)))
         except Exception as ex:             # (no ramps rather than no ground: not kept)
@@ -1514,10 +1511,16 @@ def _kept_in_cell(c, cell_fn):
     got = [out[k] for k in sorted(out)]
     if rd.complete:
         with _memo_lock:
-            if len(_kept_memo) > 256:
+            if len(_kept_memo) > 512:
                 _kept_memo.clear()
-            _kept_memo[str(c)] = got
+            _kept_memo[mk] = got
     return got
+
+
+def roads_near_m():
+    """m: a bridge part within this of a read's box is read (roads.NEAR_M, ChainView._todo's)."""
+    import roads
+    return float(roads.NEAR_M)
 
 
 # ------------------------------------------------------------------------- M3 structures: the deck ends' hand-over

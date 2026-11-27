@@ -418,9 +418,9 @@ class KeptEndsTest(unittest.TestCase):
         ll = np.column_stack((np.linspace(54.0, 54.0003, 18), np.full(18, 12.6)))
         arc = np.linspace(0.0, 33.36, 18)
         entry = (ll, arc, 2.0, 33.3, 5.0)
-        with mock.patch.object(roadsys, "_kept_in_cell", lambda c, cell_fn: [entry]):
+        with mock.patch.object(roadsys, "_kept_near", lambda g0, h0, g1, h1, cell_fn: [entry]):
             pins = roadsys._ramp_pins(53.9999, 12.5999, 54.0001, 12.6001, None, lambda la, lo: np.full(len(la), 68.0))
-        self.assertEqual(len(pins), 1, "one ramp, however many cells were read")
+        self.assertEqual(len(pins), 1)
         pla, plo, dz, t, half, w, share = pins[0]
         self.assertEqual(len(pla), 18)
         self.assertEqual(float(dz[0]), 2.0)
