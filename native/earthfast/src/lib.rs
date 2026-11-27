@@ -7619,6 +7619,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
     m.add_function(wrap_pyfunction!(roadwear::puddle_plan, m)?)?;
     m.add_function(wrap_pyfunction!(roadwear::puddle_atlas_px, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_spots, m)?)?;
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
     // where the ground bulges inside it: no dip under its lift). 495-498 are other branches'
@@ -7846,6 +7847,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // puddle_atlas_px (their masks)
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
+    // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
+    // 642: SnowLook's weather cell support and wind shelter.
     m.add("VERSION", 642)?;
     Ok(())
 }

@@ -209,6 +209,10 @@ mx = amb.rainMix(0.5, 5, 1, false, false, 1)
 T.check(math.abs(mx.roof_medium - 0.5 * amb.RAIN_ROOF) < 1e-9 and mx.roofcab_medium == 0 and math.abs(mx.medium - 0.5) < 1e-9,
   'hood camera: the plain roof, the rain unmuffled')
 T.check(amb.roofNearFor('onboard', 30) == 1 and amb.roofNearFor('driver', 1) == 0, 'roofNear: hood 1, inside 0')
+T.check(amb.roofNearFor('onboard.hood', 30) == 1 and amb.roofNearFor('occupant.driver', 1) == 0
+  and amb.camKind('occupant.passenger') == 'cabin' and amb.camKind('onboard.driver') == 'cabin'
+  and amb.camKind('onboard.bumper') == 'near' and amb.camKind('orbit') == nil and amb.camKind(nil) == nil,
+  'camKind: BeamNG 0.40 seat cameras are inside, the onboard ones near')
 T.check(math.abs(amb.roofNearFor('orbit', amb.ROOF_NEAR_M) - amb.ROOF_ORBIT) < 1e-12 and amb.roofNearFor('orbit', amb.ROOF_FAR_M) == 0
   and amb.roofNearFor('orbit', 8) > 0 and amb.roofNearFor('orbit', 8) < amb.ROOF_ORBIT, 'roofNear: orbit by distance')
 -- under an open shelter (a bridge, an overpass): muffled B; enclosed or a tunnel: muffled A
@@ -404,6 +408,24 @@ do
   T.check(#set >= 2 and math.abs(set[#set][2] - 0.7) < 1e-9, 'clear: the music back')
   T.check(math.abs(amb.duckFactor(c + 10) - 1) < 1e-9, 'clear: no duck left')
   Engine.Audio = nil
+end
+
+-- the Generated rain (method B, 2026-11-26): every file the layers name is shipped, the cabin and the open shelter
+-- with their own loops (not the outside roof's / the enclosed muffled loop as before)
+do
+  local base = dir .. '/../beamng_earth/levels/beamng_earth/art/sound/weather/'
+  local files = { amb.RAIN_MUFFLED, amb.RAIN_MUFFLED_OPEN }
+  for _, l in ipairs(amb.RAIN_LAYERS) do files[#files + 1] = l[2] end
+  for _, f in pairs(amb.RAIN_ROOF_LAYERS) do files[#files + 1] = f end
+  for _, f in pairs(amb.RAIN_CABIN_LAYERS) do files[#files + 1] = f end
+  local missing = {}
+  for _, f in ipairs(files) do
+    local h = io.open(base .. f, 'rb')
+    if h then h:close() else missing[#missing + 1] = f end
+  end
+  T.check(#files == 11 and #missing == 0, 'Generated rain: all 11 files shipped (missing: ' .. table.concat(missing, ', ') .. ')')
+  T.check(amb.RAIN_CABIN_LAYERS.medium ~= amb.RAIN_ROOF_LAYERS.medium and amb.RAIN_MUFFLED_OPEN ~= amb.RAIN_MUFFLED,
+    'Generated rain: own cabin and open-shelter loops')
 end
 
 T.done('test_ambience')

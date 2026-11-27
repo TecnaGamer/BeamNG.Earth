@@ -241,4 +241,61 @@ T.check(vars.baseAggression == 0.25, 'slippery: traffic aggression 0.25')
 W._aggression(false)
 T.check(vars.baseAggression == 0.35, 'its own value back')
 
+-- the weather shown (the user, 2026-11-26: "grip should follow the weather shown in game"): wetlook.lua's condition,
+-- the wetter of it and the real road; snow and ice keep priority
+T.check(W.mergeShown(nil, nil) == nil and W.mergeShown(nil, 'wet')[1] == 'wet' and W.mergeShown(nil, 'wet')[3] == nil,
+  'no snowstate: the shown condition, no temperature')
+local dryRow = { 'dry', 0, 12, 'dry', 0, 0, 1 }
+T.check(W.mergeShown(dryRow, 'wet')[1] == 'wet' and W.mergeShown(dryRow, 'wet')[4] == 'wet'
+  and W.mergeShown(dryRow, 'wet')[3] == 12 and dryRow[1] == 'dry', 'a dry real road under a shown storm: wet (a copy)')
+T.check(W.mergeShown({ 'salt_wet', 0, 1 }, 'wet')[1] == 'salt_wet' and W.mergeShown({ 'wet', 0, 1 }, 'damp')[1] == 'wet',
+  'the real road wetter: kept')
+T.check(W.mergeShown({ 'packed', 30, -5 }, 'wet')[1] == 'packed' and W.mergeShown({ 'ice', 0, -2 }, 'wet')[1] == 'ice',
+  'snow and ice keep priority')
+T.check(W.composeReadout({ 'wet', 0, nil, 'wet', 0, 0, 1 }, nil, nil) == 'Wet road', 'readout without degrees')
+-- the AI: margins on a wet road, but no planning-horizon patch and no fallback cap (the 0.2 g plan floor holds)
+local wp = W.aiParamsFor({ 'wet', 0, 5 })
+T.check(wp and wp.patch == false and W.aiParamsFor({ 'ice', 0, -5 }).patch == true
+  and W.aiParamsFor({ 'packed', 30, -5 }).patch == true, 'the patch on snow and ice only')
+W.reset()
+core_environment.groundModels = models()
+calls = {}
+speeding.winter, statusbar.extra = nil, nil
+W.setShown('wet')
+m = byName()
+T.check(m.ASPHALT_OLD and m.ASPHALT_OLD.staticFrictionCoefficient == 0.80 and m.ASPHALT_OLD.collisiontype == 12,
+  'shown wet, no snowstate: terrain roads wet (ASPHALT_WET)')
+T.check(m.ASPHALT and m.ASPHALT.staticFrictionCoefficient == 0.80, 'decks wet')
+T.check(m.GRASS == nil and m.SNOW == nil, 'open ground never touched')
+T.check(speeding.winter == W and W.speedFactor() == 0.95 and statusbar.extra() == 'Wet road', 'hooks: AI, readout')
+T.check(W.aiSpeedCap(5) == nil, 'wet: no fallback cap')
+n = #calls
+W.update(1.0)
+W.update(1.0)
+T.check(#calls == n and not W.setShown('wet'), 'steady: no engine calls')
+W.setShown('damp')
+T.check(byName().ASPHALT_OLD.staticFrictionCoefficient == 0.90, 'damp')
+W.setShown(nil)
+gms = core_environment.groundModels
+m = byName()
+T.check(m.ASPHALT_OLD == gms.ASPHALT_OLD.cdata and m.ASPHALT == gms.ASPHALT.cdata, 'dry again: the stock cdata back')
+T.check(speeding.winter == nil and statusbar.extra == nil, 'hooks gone')
+n = #calls
+for _ = 1, 5 do W.update(1.0) end
+T.check(#calls == n, 'loaded and dry: nothing')
+-- with a snowstate: a dry real road under the shown storm is wet, a snowy one stays snowy
+W.setShown('wet')
+W._setClass(3)
+W.onState(state({ 'dry', 0, 8, 'dry', 0, 0, 1 }, { 'dry', 0, 7, 'dry', 0, 0, 1 }))
+T.check(byName().ASPHALT_OLD.staticFrictionCoefficient == 0.80 and W.readout() == 'Wet road, 8\194\176C',
+  'snowstate dry + shown wet: wet, the real temperature')
+W.onState(state({ 'packed', 40, -5, 'loose', 80, 0, 0.9 }, { 'packed', 40, -5, 'loose', 80, 0, 0.9 }))
+T.check(byName().ASPHALT_OLD.staticFrictionCoefficient == 0.27, 'snowstate packed + shown wet: packed')
+-- the snowstate goes stale (a server without winter), the shown wet stays
+obj.getPosition = function() return pos end
+W.onHello()
+for _ = 1, 70 do W.update(1.0) end
+T.check(byName().ASPHALT_OLD.staticFrictionCoefficient == 0.80 and speeding.winter == W, 'stale: the shown wet stays')
+W.reset()
+
 T.done('test_winter')

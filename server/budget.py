@@ -72,7 +72,6 @@ LEAN_IMAGERY_TILES = 128    # imagery.MEM_TILES (512: ~100 MB of decoded source 
 LEAN_PMTILES_MB = 32        # pmtiles.MEM_TILES_MB (96)
 LEAN_RANGEREAD_MB = 16      # rangeread.MEM_BYTES (64 MB)
 LEAN_SEA_CELLS = 6          # seacarve.MEM_CELLS (24 rasters of ~10 MB)
-LEAN_PHOTOSURFACE_TILES = 32    # photosurface.MEM_TILES (96)
 LEAN_FAR_K = 0.6            # (instead of SMALL_FAR_K)
 LEAN_FAR_TEX = 256
 EMERGENCY_DEM_TILES = 48
@@ -428,14 +427,12 @@ def apply(is_small=None):
             # (the per-process caches the small profile keeps at a desktop's size: a lean block process held 291 MB
             # of imagery arrays after two minutes of Baltimore, 2026-11-12)
             import pmtiles
-            import photosurface
             import rangeread
             import seacarve
             imagery.MEM_TILES = min(imagery.MEM_TILES, LEAN_IMAGERY_TILES)
             pmtiles.MEM_TILES_MB = min(pmtiles.MEM_TILES_MB, LEAN_PMTILES_MB)
             rangeread.MEM_BYTES = min(rangeread.MEM_BYTES, LEAN_RANGEREAD_MB * 2 ** 20)
             seacarve.MEM_CELLS = min(seacarve.MEM_CELLS, LEAN_SEA_CELLS)
-            photosurface.MEM_TILES = min(photosurface.MEM_TILES, LEAN_PHOTOSURFACE_TILES)
         far_k = EMERGENCY_FAR_K if emergency else LEAN_FAR_K if leanest else SMALL_FAR_K
         far_tex = EMERGENCY_FAR_TEX if emergency else LEAN_FAR_TEX if leanest else SMALL_FAR_TEX
         for cells, table in farfield.K_TABLE.items():       # (read when the server makes its Layout)

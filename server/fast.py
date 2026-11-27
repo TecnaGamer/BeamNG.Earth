@@ -40,7 +40,7 @@ def _exit_hook():
 if _ef is not None and sys.version_info < (3, 14):
     import atexit
     atexit.register(_exit_hook)
-MIN_VERSION = 642 # SnowLook weather-cell support, wind shelter and the 15 winter road slots.
+MIN_VERSION = 642 # 642: SnowLook weather-cell support and wind shelter; 641: puddle spots for aquaplaning
 if os.environ.get("BNE_BATTER", "off") == "vanilla":
     # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
     # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)

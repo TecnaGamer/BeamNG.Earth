@@ -1019,13 +1019,18 @@ local st0, we0, sr0 = package.loaded['beamngEarth/storm'].update, package.loaded
 package.loaded['beamngEarth/storm'].update = function(...) stormU = stormU + 1 return st0(...) end
 package.loaded['beamngEarth/wetlook'].update = function(...) wetU = wetU + 1 return we0(...) end
 package.loaded['beamngEarth/rainstreaks'].update = function(...) strU = strU + 1 return sr0(...) end
+local aqU, aq0 = 0, package.loaded['beamngEarth/aquaplane'].update
+package.loaded['beamngEarth/aquaplane'].update = function(...) aqU = aqU + 1 return aq0(...) end
 run(70)           -- (winding down: a thunder still on its way, the materials going back)
-local s1, w1, r1 = stormU, wetU, strU
+local s1, w1, r1, a1 = stormU, wetU, strU, aqU
 run(5)
-check(stormU == s1 and strU == r1 and wetU == w1, 'Off, wound down: no storm, streak or wet-look work per frame ('
-  .. stormU - s1 .. ', ' .. strU - r1 .. ', ' .. wetU - w1 .. ')')
+check(stormU == s1 and strU == r1 and wetU == w1 and aqU == a1, 'Off, wound down: no storm, streak, wet-look or '
+  .. 'aquaplaning work per frame (' .. stormU - s1 .. ', ' .. strU - r1 .. ', ' .. wetU - w1 .. ', ' .. aqU - a1 .. ')')
+local wm = package.loaded['beamngEarth/winter']
+check(wm == nil or wm.shown() == nil, 'Off: no wet grip shown')
 package.loaded['beamngEarth/storm'].update, package.loaded['beamngEarth/wetlook'].update = st0, we0
 package.loaded['beamngEarth/rainstreaks'].update = sr0
+package.loaded['beamngEarth/aquaplane'].update = aq0
 settings = nil
 -- the real weather's parts: real rain off keeps it dry with rain in the real message
 W.setMode('real')

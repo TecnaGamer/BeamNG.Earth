@@ -11,7 +11,8 @@
 //!   `<Namespace>.dll`): cpal's WASAPI backend uses Win32 COM (CoCreateInstance) only, and this module uses nothing
 //!   else.
 
-use crate::live::{Controls, LiveRain, FS as ENGINE_FS};
+use crate::live::{Controls, FS as ENGINE_FS};
+use crate::rainb_live::LiveRainB;
 use crate::thunderlive::{utc_now, Bus};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -397,7 +398,8 @@ impl Worker {
         // above the game's threads where the system allows it (prio.rs): a starved worker is an underrun
         self.prio.store(crate::prio::raise_current_thread(), Ordering::Relaxed);
         let (sr, ch) = (self.sr, self.ch as usize);
-        let mut lr = LiveRain::new(self.seed);
+        // the Generated rain: method B (rainb_live.rs, 2026-11-26; live.rs's procedural drops before)
+        let mut lr = LiveRainB::new(self.seed);
         // the recorded rain (texture bank next to the program; none: the procedural rain plays whatever is asked)
         let mut tex = crate::texbuild::default_bank()
             .and_then(|p| crate::texbuild::Bank::load(&p).ok())
@@ -440,10 +442,17 @@ impl Worker {
             let m = self.mix.lock().map(|m| *m).ok();
             if let Some(m) = m {
                 let rec = m.rain_rec && tex.is_some();
-                // the procedural rain (its own level cap, live.rs), silent while the recorded one plays
-                let mut c = m.rain;
-                c.muted |= rec;
-                lr.set(c);
+                // the Generated rain (method B, levelled to the loops x the mod's rain volume), silent while the recorded
+                // one plays
+                let c = m.rain;
+                lr.set(crate::rainb_live::Controls {
+                    rain_mm_h: c.rain_mm_h,
+                    shelter: c.shelter,
+                    cabin: c.cabin,
+                    volume: c.volume,
+                    muted: c.muted || rec,
+                });
+                lr.set_rain_volume(m.rain_vol);
                 if let Some(t) = tex.as_mut() {
                     let r = m.rain;
                     t.set(crate::livetex::Controls {

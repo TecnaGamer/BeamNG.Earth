@@ -724,7 +724,21 @@ in 2026-10-10-weather-probe-results.md.
   (roadwear.rs: sags of the centre line's profile, kerb gutters, worn wheel paths; seeded per road) -> chunks marked
   `puddle` that `roadmesh.build` leaves out of the road mesh; the geotile skin draws them as its own `puddle` part
   (`bne_puddle`: alpha-tested depth atlas `bne_puddle_o`, roughness 0.06, sky-grey), hidden while dry (`roads.setPuddles`), its
-  alphaRef stepped by wetness (`wetlook.puddleStep`). Drops never collide (doCollision off); `shelterCheck` fades
+  alphaRef stepped by wetness (`wetlook.puddleStep`). Grip (setting `weatherWetGrip`, weather.lua `WET_GRIP`):
+  `wetlook.gripCond` (the own rain model as dry / damp / wet, with hysteresis) -> `winter.setShown` at changes only:
+  winter.lua (loaded by it when no snowstate came; core's once-a-second `update` runs whichever loaded it) retunes the
+  same ground models with its slots, the road row the wetter of the snowstate's and the shown one (`winter.mergeShown`;
+  snow and ice keep priority), AI margins as in winter (the planning-horizon patch and its fallback cap only below
+  `AI_PATCH_GRIP` 0.5: not on a wet road). Aquaplaning: the skin's `puddle` part carries `spots` (8 numbers a quad:
+  centre, along axis, half sizes relative to the part's origin, atlas cell; the height the draped puddle mesh's mean
+  inside it: `roadwear.puddle_spots`, native `earthfast.puddle_spots` 641); `aquaplane.lua` (GE, from weather.lua
+  while it rains or puddles show) sends the player's own car (BeamMP: `MPVehicleGE.isOwn`) the spots within
+  30 m + 1.5 s of travel, the puddles' alphaRef and the rain's water film (Gallaway's film depth from the rain shown,
+  smoothed over 60 s), only when the list changes (or every 3 s); the vehicle extension `beamngEarth_aquaplane`
+  looks each tyre's contact point up (the atlas's pool: depth = DMAX per row x (alpha - ref)), takes the Horne /
+  Gallaway hydroplaning speed (6.35 sqrt(kPa) km/h, x (20 mm / depth)^0.06) and scales its tread nodes' friction
+  (`obj:setNodeFrictionSlidingCoefs`, the stock deflation's call) by 1 - w(depth) (1 - max(0.1, 1 - (v / vp)^2)),
+  quantised to 0.05 and written at changes only; a deflated tyre is left alone. Drops never collide (doCollision off); `shelterCheck` fades
   them under cover. Winter's trees: one look per tree at every distance (`baretrees.lua`: bare copies, tinted copies
   at the season's tint in 4 steps, or stock; seasonlook's live tint off meanwhile), the leaf cycle scaled by the
   anchor's Koppen class (`anchor_ready.koppen`, `seasonlook.climateFactor`). Storms: the fog tint's Mie extinction

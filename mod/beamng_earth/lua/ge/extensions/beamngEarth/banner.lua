@@ -66,6 +66,31 @@ function M.noteOf(text)
   return nil
 end
 
+-- The degraded line (pure): the server's note (earthd net_note) joins the data sources' trouble (hosts unreachable,
+-- tiles without imagery) and this PC's own (the drive nearly full, Max RAM, a slow connection) with "; ". Only the
+-- first are "data sources not answering" (the user, 2026-11-26: a low RAM or full drive warning began with it).
+function M.degradedText(detail)
+  local data, other = {}, {}
+  for part in (tostring(detail or '') .. '; '):gmatch('(.-); ') do
+    if part ~= '' then
+      if part:find(' unreachable', 1, true) or part:find('tiles without imagery', 1, true) then
+        data[#data + 1] = part
+      else
+        other[#other + 1] = part
+      end
+    end
+  end
+  local lines = {}
+  if #data > 0 then
+    lines[#lines + 1] = 'Server OK, some internet data sources not answering: ' .. table.concat(data, '; ')
+  end
+  if #other > 0 then
+    lines[#lines + 1] = (#data > 0 and '' or 'Server OK, but ') .. table.concat(other, '; ')
+  end
+  if #lines == 0 then return 'Server OK, some internet data sources not answering' end
+  return table.concat(lines, '\n')
+end
+
 local EDGE_TEXT = {
   warn = 'Near the edge of the loaded ground: the car will be held there until the BeamNG.Earth server %s',
   hold = 'Paused at the edge of the loaded ground until the BeamNG.Earth server %s (resume to drive back)',
@@ -108,7 +133,7 @@ function M.compute(info, t)
   elseif info.note == 'offline' then
     id, level, text = 'offline', 'warn', 'Server OK, internet data sources unreachable - using cached data (areas never visited have no terrain)'
   elseif info.note == 'degraded' then
-    id, level, text = 'degraded', 'warn', 'Server OK, some internet data sources not answering: ' .. tostring(info.noteDetail or '')
+    id, level, text = 'degraded', 'warn', M.degradedText(info.noteDetail)
   else
     id, level, text = 'ok', 'ok', ''
   end

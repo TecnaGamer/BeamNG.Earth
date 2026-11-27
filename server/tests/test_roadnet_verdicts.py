@@ -1,8 +1,7 @@
 """The aerial photo's surface verdicts as _spec_inputs reads them (earthfast 392, roadnet::verdicts: the road revamp's
 R2a) against the Python they replaced, value for value: roadsurf.candidates (class, surface value, lane count,
 smoothness: cased, padded, numbers, None, non-ASCII), roadsurf.layer_verdicts' store lookup (a store of random entries,
-falsy verdicts, roads in other cells), photosurface.verdicts' selection (a stand-in measure: the photo's tiles are not
-the test's) and _spec_inputs' fill of the photo's values; short columns raise the Python's exception classes.
+falsy verdicts, roads in other cells), _spec_inputs' fill of the photo's values; short columns raise the Python's exception classes.
 
 The Python versions are kept here only as the reference (the server has no Python twin: fast.require)."""
 import os
@@ -15,7 +14,6 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import mapgeom  # noqa: E402
-import photosurface  # noqa: E402
 import roads  # noqa: E402
 import roadsurf  # noqa: E402
 
@@ -58,27 +56,6 @@ def ref_layer_verdicts(feats, vals=None):
                 out[i] = v
     feats.__dict__["_roadsurf"] = out
     return out
-
-
-def ref_photo_verdicts(feats, surface_of, root=None):
-    cls = feats.attrs.get("class")
-    out, missing = {}, False
-    if cls is None or not photosurface.ON:
-        return out, missing
-    for i in range(len(feats)):
-        if str(cls[i]) not in photosurface.PHOTO_CLASSES or surface_of(i) is not None:
-            continue
-        best = None
-        for part in feats.parts(i):
-            for ring in part:
-                st, miss = photosurface.measure(ring, root)
-                missing |= miss
-                if st is not None and (best is None or st["n"] > best["n"]):
-                    best = st
-        c = photosurface.classify(best)
-        if c is not None:
-            out[i] = c
-    return out, missing
 
 
 def ref_photo_values(vals, elig, photo_fn):
@@ -231,50 +208,6 @@ class LookupParityTest(unittest.TestCase):
             self.assertEqual(got, want, (k, cut))
 
 
-class PhotoSelectionParityTest(unittest.TestCase):
-    def test_random_layers(self):
-        rng = random.Random(3894)
-        picked = 0
-        for k in range(1500):
-            f = layer(rng)
-            measured = {"ref": [], "new": []}
-            stats = {}
-
-            def measure_for(tag):
-                def measure(ring, root=None):
-                    key = (round(float(ring[0][0]), 9), round(float(ring[0][1]), 9), len(ring))
-                    measured[tag].append(key)
-                    if key not in stats:
-                        r = random.Random(hash(key))
-                        stats[key] = (None if r.random() < 0.3 else {
-                            "n": r.randint(0, 60), "sat": r.uniform(0, 0.3), "exg": r.uniform(-0.1, 0.12),
-                            "lum": r.uniform(60, 220), "vexg": r.choice([None, r.uniform(-0.1, 0.12)])},
-                            r.random() < 0.2)
-                    st, miss = stats[key]
-                    return (dict(st) if st else None), miss
-                return measure
-            surface_of = (lambda i: roads._map_surface_value(f, i))
-            with mock.patch.object(photosurface, "ON", True):
-                with mock.patch.object(photosurface, "measure", measure_for("ref")):
-                    want = ref_photo_verdicts(f, surface_of)
-                with mock.patch.object(photosurface, "measure", measure_for("new")):
-                    got = photosurface.verdicts(f, surface_of)
-            self.assertEqual(got, want, k)
-            self.assertEqual(measured["new"], measured["ref"], k)
-            picked += len(measured["ref"])
-        self.assertGreater(picked, 1000)
-
-    def test_short_class_column_raises_alike(self):
-        f = layer(random.Random(5), 6, "class")
-        f.attrs["class"] = np.array(["track"] * 5)
-        with mock.patch.object(photosurface, "ON", True), \
-                mock.patch.object(photosurface, "measure", lambda ring, root=None: (None, False)):
-            want = outcome(lambda: ref_photo_verdicts(f, lambda i: None))
-            got = outcome(lambda: photosurface.verdicts(f, lambda i: None))
-        self.assertEqual(got, want)
-        self.assertEqual(want, ("raised", IndexError))
-
-
 class PhotoValuesParityTest(unittest.TestCase):
     def test_random_values(self):
         import fast
@@ -321,9 +254,6 @@ class VersionSkewTest(unittest.TestCase):
                          lambda: roadsurf.candidates(f)):
                 with self.assertRaises(fast.NativeMissing):
                     call()
-            with mock.patch.object(photosurface, "ON", True):
-                with self.assertRaises(fast.NativeMissing):
-                    photosurface.verdicts(f, lambda i: None)
 
 
 if __name__ == "__main__":

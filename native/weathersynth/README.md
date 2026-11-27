@@ -279,6 +279,43 @@ clean stretches ("blocks"), not events.
   22.3 / 24.0 dB louder at 0.7 / 5 / 35 mm/h than the loop the mod plays at the same volume, and it had no `rainVol`.
   The bus limiter crushed it.
 
+## Rain method B: the physical drop model (src/rainb.rs, rainb_live.rs; the Generated rain since 2026-11-26)
+
+This is the rain counterpart of thunder method B. It renders drop by drop:
+- **Drops:** a gamma drop-size distribution that carries exactly the rain rate (Marshall-Palmer D0, blending to Joss
+  thunderstorm), falling at terminal speed.
+- **Impact:** each impact is its force pulse (Gordillo et al. 2018) radiated as a vertical dipole.
+- **Surfaces:**
+  - wet roads splash above Cossali's crown threshold;
+  - puddles ring with Minnaert bubbles by Medwin/Nystuen size class;
+  - leaves ring their bending modes;
+  - metal panels ring their plate modes.
+- **Distance:** air absorption and ground scattering. The rate flickers at 0.5-8 Hz (rain is clustered).
+- **Scenes:** open road, next to the car, inside the car (the roof's modes, headliner, windscreen, body) and under an
+  open shelter.
+- **Sources:** the parameters, sources and real-take comparison are in
+  `~/bnge-tests/weather/rain_research/PARAMS.md`.
+
+Commands:
+- `rainb` / `rainb-set` render 30 s seamless loops at the current loops' loudness.
+- `rainb-stats` prints the drop statistics by rate.
+- `rainb-live-bench [--per S]` runs the live engine (rainb_live.rs, v2) through a sweep and times it.
+  `rainb-live-calibrate` measures its level tables. `click-check` measures sample jumps, HF spikes and block level
+  steps.
+- **Live engine:** the Generated rain of live-serve (audio.rs, since 2026-11-26), offered to the mod as the rain set
+  `generated_b` (liveaudio.lua LIVE_RAIN_NEEDS; an older synth's `generated` was live.rs's procedural drops). The
+  mod's Generated files are `rainb-modset`'s (SOURCES.md).
+  - **v1 was broken:** its cabin path was about 40 dB hot and clipped. Every drop in a block started on the block's
+    first sample. Heavily thinned, loud grains made crackle.
+  - **Chunks:** v2 runs in fixed 256-sample chunks, so the output is identical at any block size (a test checks it).
+  - **Drops:** distinct drops are capped per stream at their true level (sqrt(k) up to k 8), each at its own sample.
+    The dense rest is a Gaussian wash: 9 octave band-passes on one noise, their gains from the grains' measured
+    octave energies.
+  - **Levels:** static, from the calibration table, so nothing pumps.
+  - **Scenes:** equal-power crossfades over 1.5 s; the rate glides over 1 s.
+  - **Dry:** nothing runs.
+  - **Cost:** 0.19-0.37 % of one PC core outdoors and 0.56-0.61 % in the cabin, measured as thread CPU time.
+
 ## Audio rules (src/audio.rs)
 
 - **Output streams only.** On WASAPI, an input stream opened on an output device is loopback capture of the system's
