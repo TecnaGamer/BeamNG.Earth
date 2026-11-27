@@ -9266,6 +9266,8 @@ class BridgeProfiles:
             try:
                 got = hook(self.frame, lines, [k[0] for k in comp])
             except Exception as ex:
+                if SHAPED_PORTALS:
+                    raise           # (the 3D solve's deck heights or none: no fallback to the deck's own)
                 log.error("deck heights from the carriageways: %s: %s", type(ex).__name__, ex)
                 got = None
             if got is not None:

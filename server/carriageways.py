@@ -207,7 +207,7 @@ def weights(br, from_end, trust=TRUST_M):
     return np.where(br, 0.0, w)
 
 
-def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, soft=None):
+def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, soft=None, unlimited=False):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
     chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length, and optionally ds (n - 1,): the distance
@@ -280,14 +280,17 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, 
                 raise ValueError("each carriageway's ds must have one distance per segment")
             pieces.append(np.r_[np.maximum(d, MIN_SEGMENT_M), 0.0][:len(t)])
         spacing = pack(pieces)
-    budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
-    if np.isnan(budget):
-        raise ValueError("carriageway deadline must not be NaN")
-    budget = max(0.0, budget)
-    import xproc
-    left = xproc.deadline_left()        # (a pipeline step's time limit is the kernel's too: its own budget never goes past it)
-    if left is not None:
-        budget = max(0.0, min(budget, left))
+    if unlimited:                       # (the 3D solve: no time limit, its answer the converged one or none)
+        budget = float("inf")
+    else:
+        budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
+        if np.isnan(budget):
+            raise ValueError("carriageway deadline must not be NaN")
+        budget = max(0.0, budget)
+        import xproc
+        left = xproc.deadline_left()    # (a pipeline step's time limit is the kernel's too: its own budget never goes past it)
+        if left is not None:
+            budget = max(0.0, min(budget, left))
     extra = {} if spacing is None else {"spacing": spacing}
     if soft is not None:
         soft = np.ascontiguousarray(np.asarray(soft, np.float64).reshape(-1))

@@ -485,6 +485,7 @@ SHAPES_ALONG_M = 2.0 * _gsh.STEP_M    # m of a line either side of a point: of a
                             # a piece is sampled in). The nearest piece alone cannot tell a road's own piece from
                             # another of its levels, which a road winding over itself passes nearer than the chords
                             # of its own piece stand off its line
+SHAPES_CELL_STEP_M = 200.0  # m: a line's cells are read this often along it (_shape_at under the 3D solve; cells ~2 km)
 SHAPES_BLOCK = 256          # points of a line met with a piece's segments at once (_shape_at: memory on a long line)
 RAIL_WINDOW_M = 64.0        # m: the cells the railways' beds are made and kept by (_track_bed)
 RAIL_SAFE_M = railwaysmod.GRADE_REACH_M - 2 * railwaysmod.STEP_M    # m: a part this near a point is whole round it in any window
@@ -2730,8 +2731,8 @@ def _caught(e):
     complete would stay after the source was repaired. Only the few errors of _COMPUTED, in a making that read
     nothing short, leave it persistable; those are logged with the cell (WARNING), to be found and fixed: marked
     short, a place with one would never be kept, which costs speed and never a wrong world."""
-    if type(e).__name__ == "Abandoned" or STRICT:
-        raise e
+    if type(e).__name__ in ("Abandoned", "SolveMissing", "NotSolved") or STRICT:
+        raise e                 # (the 3D solve's faults: its heights or none, never a fallback)
     import revisit
     st = getattr(_MAKING, "stack", None) or revisit._stack()
     clean = not (st and (st[-1].n or st[-1].lidar))
@@ -3465,8 +3466,10 @@ class _Planner:
                     log.debug("grading: underpasses of %s: %s: %s", key, type(e).__name__, e)
             if SHAPES_ON and plans:
                 try:            # the interchanges' shapes and their embankments and cuts
-                    self._apply_shapes(plans, pspecs)
+                    self._apply_shapes(plans, pspecs, key)
                 except Exception as e:      # the passes' heights rather than no grading
+                    if GRADE3D_ON:
+                        raise           # (the 3D solve's heights or none: no fallback to the old plans')
                     _caught(e)
                     log.warning("grading: interchange shapes of %s: %s: %s", key, type(e).__name__, e)
             if JUNCTION_SNAP_ON and plans and (APPROACH_ON or UNDER_ON or SHAPES_ON):
@@ -5120,8 +5123,12 @@ class _Planner:
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         if f is not None and len(f):
             rs = roadsmod.road_specs(f, None, self.widths)
+            # (the tunnels TunnelProfiles builds: tunnel_specs, a feature all in its tunnel too, which road_specs
+            # leaves out: Suedtiroler Platz's garage aisles were built with no height from the solve)
+            ts = roadsmod.tunnel_specs(f)
             for i in range(len(f)):
-                if rs[i] is None:
+                spec = rs[i] if rs[i] is not None else ts[i]
+                if spec is None:
                     continue
                 for ring in roadsmod.tunnel_parts(f, i):
                     ring = np.asarray(ring, np.float64)
@@ -5131,8 +5138,8 @@ class _Planner:
                     line = np.stack([np.asarray(e, np.float64), np.asarray(n_, np.float64)], axis=1)
                     mid = line[len(line) // 2]
                     out.append(_gsh.Member((str(f.ids[i]), "tunnel", int(round(mid[0])), int(round(mid[1]))), line,
-                                           "tunnel", rs[i].cls + ("_link" if _is_link(rs[i]) else ""), rs[i].kmh, -1.0,
-                                           float(rs[i].width) / 2, None, self._cell_nodes(k).get(str(f.ids[i]))))
+                                           "tunnel", spec.cls + ("_link" if _is_link(spec) else ""), spec.kmh, -1.0,
+                                           float(spec.width) / 2, None, self._cell_nodes(k).get(str(f.ids[i]))))
         with self.lock:
             if len(memo) > 256:
                 memo.clear()
@@ -5378,15 +5385,25 @@ class _Planner:
                         float(x["d"][-1]), float(np.min(z - g)), float(np.max(z - g)), float(np.min(g)),
                         float(np.max(g)), ll(x["xy"][0]), ll(x["xy"][-1]))
 
-    def _shape_at(self, line, pts, fid, modes):
+    def _shape_at(self, line, pts, fid, modes, homes=None):
         """Per point of pts on road fid (its line in the frame): (height, mode) from the shapes and ramps of its cell's
         region within SHAPES_NEAR_M, else (NaN, None). Of the pieces within reach of a point, the one the line runs
         along (the least worst standoff over SHAPES_ALONG_M of the line either side), then the nearest. pts follow
         the line in order."""
         line = np.asarray(line, np.float64)[:, :2]
-        mid = line[len(line) // 2]
-        la, lo, _ = self.frame.enu_to_geodetic(np.array([mid[0]]), np.array([mid[1]]), 0.0)
-        reg = self._shape_region(mapcells.cell_of(float(la[0]), float(lo[0])))
+        if homes is None:
+            if GRADE3D_ON:      # (every cell the line runs through: a long tunnel's whole line, not its middle cell's)
+                s_ = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
+                ss = np.r_[np.arange(0.0, s_[-1], SHAPES_CELL_STEP_M), s_[-1]]
+                dense = np.c_[np.interp(ss, s_, line[:, 0]), np.interp(ss, s_, line[:, 1])]
+            else:
+                dense = line[len(line) // 2:len(line) // 2 + 1]
+            la, lo, _ = self.frame.enu_to_geodetic(dense[:, 0], dense[:, 1], 0.0)
+            homes = sorted({mapcells.cell_of(float(a), float(b)) for a, b in zip(la, lo)}, key=str)
+        reg = {}
+        for h in homes:
+            for k_, v_ in self._shape_region(h).items():
+                reg.setdefault(k_, []).extend(v_)
         # (a road's family: the shapes solve the member one_road kept, a lane section "<road>~lanes<a>-<b>" in place of
         # its road or the road itself, and the roads build either id: the A25's decks at Popoli were solved 6.8 m over
         # the streets under them as sections and built under the road's own id, so none of the solve was found and
@@ -5659,7 +5676,7 @@ class _Planner:
                         keep=[i for i, sp in enumerate(specs) if sp is not None and i not in hold])
         return out
 
-    def _apply_shapes(self, plans, specs):
+    def _apply_shapes(self, plans, specs, key=None):
         """SHAPES_ON: each plan on a shape's ramp or cut takes its height there: up to an embankment ("fill"), down to
         a cut ("cut"), onto a lerp between two shapes ("set"), each carried on at its grade to the plan (shape_reach).
         Whether any changed."""
@@ -5670,11 +5687,22 @@ class _Planner:
             xy = np.asarray(p.xy, np.float64)[:, :2]
             if len(xy) < 2:
                 continue
-            zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
-            if not np.isfinite(zs).any():
-                continue
+            if GRADE3D_ON and key is not None:
+                # (the cell's own region: a plan holds its feature's whole line, kilometres past the cell, trimmed to
+                # the cell's box after the passes; the solve's height is asked where the cell builds it)
+                import grade3d.region as _g3r
+                b0, b1 = _g3r.cell_box(self, key)
+                inside = ((xy >= b0 - _g3r.CELL_PAD_M) & (xy <= b1 + _g3r.CELL_PAD_M)).all(1)
+                if not inside.any():
+                    continue
+                zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"), homes=[key])
+                zs = np.where(inside, zs, np.nan)
+            else:
+                zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
             if GRADE3D_ON:
-                z = solved_line(xy, zs)     # (the solve's line, whole: its own height nowhere along it)
+                z = solved_line(xy, zs, "road %s" % fid)    # (the solve's line, whole: its own height nowhere along it)
+            elif not np.isfinite(zs).any():
+                continue
             else:
                 import roadlaws
                 z = shape_reach(xy, p.z, zs, modes, roadlaws.laws(sp)[0], self._ground_line(xy),
@@ -9508,14 +9536,23 @@ class PlanStore:
 _ACTIVE_STORE = None    # the process's PlanStore (the last made): the carriageways' deck heights (_deck_z_hook)
 
 
-def solved_line(xy, z):
+class SolveMissing(RuntimeError):
+    """GRADE3D_ON: a road, deck, tunnel or track the build lays has no height from the 3D solve: a fault of the solve's
+    members or pieces to fix, not one to build round (there is no fallback)."""
+
+
+def solved_line(xy, z, what=None):
     """GRADE3D_ON: z (a line's heights read on the solve's pieces, nan off them) with the points off them filled along
     the line from those on them (held level past the last): the build lays a road, deck or tunnel on the solve's line
-    whole, not on its own heights where its mapped line runs a little past a piece (an end, a fused copy). None when no
-    point is on one."""
+    whole, not on its own heights where its mapped line runs a little past a piece (an end, a fused copy). No point on
+    one: SolveMissing (what: the line's name for it), or None without what."""
     z = np.asarray(z, np.float64)
     ok = np.isfinite(z)
     if not ok.any():
+        if what is not None:
+            xy = np.asarray(xy, np.float64)[:, :2]
+            raise SolveMissing("grade3d: no solved height on %s, %d points from %s to %s" % (
+                what, len(xy), np.round(xy[0], 1).tolist(), np.round(xy[-1], 1).tolist()))
         return None
     if ok.all():
         return z
@@ -9545,7 +9582,7 @@ def _deck_z_hook(frame, lines, fids=None):
                 zz, _m = pl._shape_at(xy, xy, fid, ("deck",))
                 ok = np.isfinite(zz)
                 if GRADE3D_ON:
-                    z = solved_line(xy, zz)
+                    z = solved_line(xy, zz, "deck %s" % fid)
                 elif ok.all():
                     z = zz
                 elif ok.any():      # (the shapes solved this deck, but not all of the line the roads build: its own
@@ -9585,6 +9622,10 @@ def _track_z_hook(frame, rails):
         e, n, _ = pl.frame.geodetic_to_enu(la, lo, 0.0)
         pxy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
         z, _m = pl._shape_at(pxy, pxy, "rail:" + str(fid), ("track",))
+        if GRADE3D_ON:
+            z = solved_line(pxy, z, "track %s" % fid)
+            out.append(np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64))
+            continue
         ok = np.isfinite(z)
         if not ok.any():
             out.append(None)
@@ -9616,8 +9657,8 @@ def _tunnel_z_hook(frame, lines, fids):
         xy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
         z, _m = pl._shape_at(xy, xy, str(fid), ("cut",))
         if GRADE3D_ON:
-            z = solved_line(xy, z)
-            out.append(None if z is None else np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64))
+            z = solved_line(xy, z, "tunnel %s" % fid)
+            out.append(np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64))
             continue
         out.append(np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64) if np.isfinite(z).all() else None)
     return out

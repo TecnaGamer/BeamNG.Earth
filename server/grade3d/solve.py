@@ -28,12 +28,23 @@ class Solution:
     diagnostics: dict = field(default_factory=dict)
 
 
-def solve(problem, rounds=_cw.ROUNDS, deadline=None):
-    """The heights of the problem's samples: one solve of the whole."""
+class NotSolved(RuntimeError):
+    """The kernel ended without a converged answer: no heights are made of it (there is no fallback)."""
+
+
+def _checked(d, what):
+    if d.get("status") not in ("Solved", "Unconstrained") or not d.get("converged", True):   # (Unconstrained: nothing in it)
+        raise NotSolved("grade3d: %s not solved: %s" % (what, {k: d.get(k) for k in ("status", "converged", "rounds")}))
+
+
+def solve(problem, rounds=_cw.ROUNDS):
+    """The heights of the problem's samples: one solve of the whole, no time limit (NotSolved when it does not
+    converge)."""
     t0 = time.perf_counter()
     d = {}
-    zs = _cw.solve(problem.chains, problem.couplings, rounds=rounds, deadline=deadline, diagnostics=d,
-                   soft=problem.soft if problem.couplings else None)
+    zs = _cw.solve(problem.chains, problem.couplings, rounds=rounds, diagnostics=d,
+                   soft=problem.soft if problem.couplings else None, unlimited=True)
+    _checked(d, "the area")
     z = np.concatenate([np.asarray(x, np.float64) for x in zs]) if zs else np.zeros(0)
     return Solution(z, time.perf_counter() - t0, d)
 
@@ -189,7 +200,9 @@ def solve_block(problem, b, rounds=_cw.ROUNDS):
         chains.append(ch)
     d = {}
     s0 = time.perf_counter()
-    zs = _cw.solve(chains, b.couplings, rounds=rounds, diagnostics=d, soft=b.soft if b.couplings else None)
+    zs = _cw.solve(chains, b.couplings, rounds=rounds, diagnostics=d, soft=b.soft if b.couplings else None,
+                   unlimited=True)
+    _checked(d, "block %s" % (np.round(np.asarray(b.core, np.float64).ravel(), 0).tolist(),))
     return np.concatenate(zs), d, time.perf_counter() - s0
 
 
