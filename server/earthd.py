@@ -11905,7 +11905,7 @@ async def main_async(args, restart=None):
     mapdata = None
     manifests_wait = None
     try:
-        mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
+        mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net, use_switch=True)
                    if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
         if mapdata is not None:
             # (versions()' weekly builds decided before the first builds are keyed on them, and before the workers)

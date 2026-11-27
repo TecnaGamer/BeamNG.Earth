@@ -513,10 +513,10 @@ def switched(fetcher, cache_dir, release):
         return None
 
 
-def reader(cache_dir, fetcher, release):
+def reader(cache_dir, fetcher, release, use_switch=False):
     """The process's CIP reader of cache_dir (one per cache and release), or None when off. On by BNE_V2_CIP=on, or by
     cdn.json's "cip" when the variable is unset (its release the process's own); BNE_V2_CIP_URL / _BUILD still win."""
-    sw = None if ON else switched(fetcher, cache_dir, release)
+    sw = None if ON or not use_switch else switched(fetcher, cache_dir, release)
     if not ON and sw is None:
         return None
     k = (os.path.realpath(cache_dir), release)

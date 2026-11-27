@@ -55,27 +55,27 @@ class Bnwt(unittest.TestCase):
         with mock.patch.object(bnwt, "BASE_URL", ""), mock.patch.object(bnwt, "ENV_OFF", False), \
                 mock.patch.object(fast, "_ef", mock.Mock(VERSION=10 ** 6)), \
                 sw({"bnwt": {"enabled": True, "release": REL}}):
-            self.assertEqual(bnwt.base_for(None, "x", REL), cdn.CDN_BASE)
-            self.assertEqual(bnwt.base_for(None, "x", "2027-01-01.0"), "")
+            self.assertEqual(bnwt.base_for(None, "x", REL, True), cdn.CDN_BASE)
+            self.assertEqual(bnwt.base_for(None, "x", "2027-01-01.0", True), "")
 
     def test_environment_wins(self):
         with mock.patch.object(fast, "_ef", mock.Mock(VERSION=10 ** 6)), \
                 sw({"bnwt": {"enabled": True, "release": REL}}):
             with mock.patch.object(bnwt, "BASE_URL", "file:///x"), mock.patch.object(bnwt, "ENV_OFF", False):
-                self.assertEqual(bnwt.base_for(None, "x", REL), "file:///x")
+                self.assertEqual(bnwt.base_for(None, "x", REL, True), "file:///x")
             with mock.patch.object(bnwt, "BASE_URL", ""), mock.patch.object(bnwt, "ENV_OFF", True):
-                self.assertEqual(bnwt.base_for(None, "x", REL), "")
+                self.assertEqual(bnwt.base_for(None, "x", REL, True), "")
 
     def test_unreadable_switch_or_old_native_is_the_sources(self):
         def boom(fetcher, cache_dir):
             raise OSError("offline")
         with mock.patch.object(bnwt, "BASE_URL", ""), mock.patch.object(bnwt, "ENV_OFF", False), \
                 mock.patch.object(fast, "_ef", mock.Mock(VERSION=10 ** 6)), mock.patch.object(cdn, "switch", boom):
-            self.assertEqual(bnwt.base_for(None, "x", REL), "")
+            self.assertEqual(bnwt.base_for(None, "x", REL, True), "")
         with mock.patch.object(bnwt, "BASE_URL", ""), mock.patch.object(bnwt, "ENV_OFF", False), \
                 mock.patch.object(fast, "_ef", mock.Mock(VERSION=bnwt.NATIVE - 1)), \
                 sw({"bnwt": {"enabled": True, "release": REL}}):
-            self.assertEqual(bnwt.base_for(None, "x", REL), "")
+            self.assertEqual(bnwt.base_for(None, "x", REL, True), "")
 
 
 class CipReader(unittest.TestCase):
@@ -85,10 +85,10 @@ class CipReader(unittest.TestCase):
         cip._READERS.clear()
         self.addCleanup(cip._READERS.clear)
 
-    def read(self, doc, env="", on=False, build="", url=""):
+    def read(self, doc, env="", on=False, build="", url="", use=True):
         with mock.patch.object(cip, "ENV", env), mock.patch.object(cip, "ON", on), mock.patch.object(cip, "BUILD", build), \
                 mock.patch.object(cip, "BASE_URL", url), sw(doc):
-            return cip.reader(self.tmp.name, None, REL)
+            return cip.reader(self.tmp.name, None, REL, use)
 
     def test_off_by_default(self):
         self.assertIsNone(self.read({}))
@@ -126,7 +126,7 @@ class CipReader(unittest.TestCase):
         def boom(fetcher, cache_dir):
             raise OSError("offline")
         with mock.patch.object(cip, "ENV", ""), mock.patch.object(cip, "ON", False), mock.patch.object(cdn, "switch", boom):
-            self.assertIsNone(cip.reader(self.tmp.name, None, REL))
+            self.assertIsNone(cip.reader(self.tmp.name, None, REL, True))
 
 
 if __name__ == "__main__":

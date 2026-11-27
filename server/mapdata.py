@@ -477,7 +477,9 @@ class MapData:
     release: the Overture release (default: overture.effective(), the process's own)."""
 
     def __init__(self, cache_dir=DEFAULT_CACHE, fetcher=None, release=None,
-                 threads=overture.DUCKDB_THREADS):
+                 threads=overture.DUCKDB_THREADS, use_switch=False):
+        # use_switch: the real server's (earthd, its block workers) only: cdn.json's "bnwt" / "cip" keys. Tests and tools
+        # read the environment's switches alone, never the live switch file
         release = release or overture.effective()      # (the process's release, frozen: overture.effective)
         self.cache_dir = cache_dir
         self.fetcher = fetcher if fetcher is not None else netfetch.Fetcher()
@@ -488,12 +490,12 @@ class MapData:
         self.pmtiles = pmtiles.Reader(self.raw_dir, self.fetcher, release) if MAP_SOURCE == "pmtiles" else None
         # our prebaked input tiles (bnwt.py, BNGE_BNWT_URL) for the layers they hold: the cell its source gives, bit for
         # bit (same file, same keys), one range read for a block of cells
-        bnwt_base = bnwt.base_for(self.fetcher, cache_dir, release)     # (BNGE_BNWT_URL, else cdn.json's "bnwt")
+        bnwt_base = bnwt.base_for(self.fetcher, cache_dir, release, use_switch)     # (BNGE_BNWT_URL, else cdn.json's "bnwt")
         self.bnwt = bnwt.Reader(self.raw_dir, self.fetcher, release, base=bnwt_base) if bnwt_base else None
         # architecture v2's compact per-cell inputs (cip.py, BNE_V2_CIP=on): a cell's layers as the sources give them
         # (the roads Overture's alone: their OSM tags joined at the decode, as every cell's), one range read a cell; the
         # sources below stay every section's fallback
-        self.cip = cip.reader(cache_dir, self.fetcher, release)
+        self.cip = cip.reader(cache_dir, self.fetcher, release, use_switch)
         import picnicsource            # (OSM picnic tables: Overture's picnic_table class is unpopulated)
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
         import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)

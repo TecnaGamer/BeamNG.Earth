@@ -145,7 +145,7 @@ class _State:
         _railways.RAW_ELEV = lambda la, lo, _d=self.dem: _d.sample(la, lo, gradingmod.PROFILE_ZOOM)
         # runways graded in (--airports on): the copy the server loaded, never refreshed here
         self.airports = load_airports(cache_dir, self.dem) if airports else None
-        md = mapdatamod.MapData(cache_dir, fetcher=net) if (roads or surface or sea) else None
+        md = mapdatamod.MapData(cache_dir, fetcher=net, use_switch=True) if (roads or surface or sea) else None
         if md is not None:
             md.dem = self.dem       # (gradesep's ground)
         # the sea's and the lakes' floors carved in (--sea on)

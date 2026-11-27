@@ -87,11 +87,11 @@ def enabled():
     return bool(BASE_URL)
 
 
-def base_for(fetcher, cache_dir, release):
+def base_for(fetcher, cache_dir, release, use_switch=False):
     """The archives' base URL for a process reading Overture `release`: BNGE_BNWT_URL when set (off: none), else the
     data repo's cdn.json {"bnwt": {"enabled": true, "release": ...}} (cdn.bnwt_base), else "" (the sources). Never
     raises: a switch that cannot be read is the sources as before."""
-    if BASE_URL or ENV_OFF:
+    if BASE_URL or ENV_OFF or not use_switch:
         return BASE_URL
     if fast.AVAILABLE is False or getattr(fast._ef, "VERSION", 0) < NATIVE:
         return ""                   # (the switch's: this build of the server cannot read it)
