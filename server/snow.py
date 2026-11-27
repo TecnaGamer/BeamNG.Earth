@@ -204,12 +204,14 @@ def cover_cell(lat, lon):
 
 
 def _snowcover():
-    """W2's snowcover module when it is there, on and in its real mode (the provider's consumer), else None."""
+    """W2's consumer in real mode or a preset shared with road snow."""
     try:
         import snowcover
     except ImportError:
         return None
-    return snowcover if getattr(snowcover, "ON", False) and getattr(snowcover, "MODE", "") == "real" else None
+    mode = snowcover.MODE
+    shared = mode in PRESETS and mode in snowcover.PRESETS
+    return snowcover if snowcover.ON and (mode == "real" or shared) else None
 
 
 class Service:
@@ -236,6 +238,9 @@ class Service:
         self.table_changes = 0
         self.cover = (cover if cover is not None else _snowcover()) if self.winter else None
         if self.cover is not None:
+            preset = getattr(self.cover, "MODE", None)
+            if mode is None and self.mode == "real" and preset in PRESETS:
+                self.mode = preset
             self.cover.set_provider(self.provider)
 
     def provider(self, south, west, north, east):

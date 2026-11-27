@@ -432,8 +432,11 @@ class ServerSnowTest(test_server.ServerHarness):
         import snowcover
         import snowroad
 
-        with mock.patch.multiple(snowcover, ON=True, MODE="light", _provider=None), mock.patch.object(snowroad, "ON", True):
-            self.server.snow = snow.Service(fetch=FakeHourly(fail=True), mode="light", cover=snowcover)
+        with (mock.patch.multiple(snow, WINTER=True, MODE="real"),
+              mock.patch.multiple(snowcover, ON=True, MODE="light", _provider=None),
+              mock.patch.object(snowroad, "ON", True)):
+            self.server.snow = snow.Service(fetch=FakeHourly(fail=True))
+            self.assertEqual(self.server.snow.mode, "light")
             aid = self.anchor()
             self.pose(aid, 0, 0)
             light, _ = self.c.until(lambda m: m["type"] == "snowstate", 30)
@@ -444,6 +447,12 @@ class ServerSnowTest(test_server.ServerHarness):
             heavy, _ = self.c.until(lambda m: m["type"] == "snowstate", 30)
             self.assertEqual(heavy["src"], "heavy")
             self.assertNotEqual(heavy["look"], light["look"])
+            self.c.send({"type": "snow_mode", "mode": "light"})
+            self.c.until(lambda m: m["type"] == "snow" and m["snow"]["mode"] == "light", 10)
+            self.pose(aid, 0, 0)
+            restored, _ = self.c.until(lambda m: m["type"] == "snowstate", 30)
+            self.assertEqual(restored["src"], "light")
+            self.assertEqual(restored["look"], light["look"])
 
 
 class OffTest(unittest.TestCase):
