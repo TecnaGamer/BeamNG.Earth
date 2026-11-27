@@ -39,12 +39,23 @@ do
   local was = package.loaded['beamngEarth/groundcover']
   package.loaded['beamngEarth/groundcover'] = { setLatitude = function(la, lo) got = { la, lo } end }
   S.resetSent()
-  S.frame(net, { lat = 41.16, lon = -8.11 })
+  T.check(S.frame(net, { lat = 41.16, lon = -8.11 }, 100.0), 'frame: works')
   T.check(got and got[1] == 41.16 and got[2] == -8.11, 'frame: the anchor place to the grass')
   T.check(sent[#sent].type == 'season_date', 'frame: the date sent after a hello')
   got = nil
-  S.frame(net, nil)
-  T.check(got and got[1] == nil and got[2] == nil, 'frame: no anchor, no place')
+  T.check(not S.frame(net, nil, 100.5) and got == nil, 'frame: at most once a second (FRAME_S)')
+  T.check(S.frame(net, nil, 101.0) and got and got[1] == nil and got[2] == nil, 'frame: no anchor, no place')
+  -- 'clock': one message after a hello (the server's own date back), then no environment read at all
+  S.setSource('clock')
+  local reads = 0
+  core_environment = { getTimeOfDay = function() reads = reads + 1; return { year = 2026, month = 8, day = 15 } end }
+  S.resetSent()
+  local n0 = #sent
+  S.frame(net, nil, 102.0); S.frame(net, nil, 103.0); S.frame(net, nil, 104.0)
+  T.check(#sent == n0 + 1 and sent[#sent].doy == nil and reads == 0, 'clock: sent once, the environment never read')
+  S.setSource('game')
+  S.frame(net, nil, 105.0)
+  T.check(#sent == n0 + 2 and sent[#sent].doy == 225 and reads > 0, 'game again: the week sent')
   package.loaded['beamngEarth/groundcover'] = was
 end
 core_environment = saved

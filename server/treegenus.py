@@ -24,8 +24,16 @@ def _load():
             if not os.path.exists(PATH):
                 _data = False
             else:
+                import staticmaps
+
+                def decode():
+                    with np.load(PATH) as z:
+                        return np.asarray(z["counts"], np.uint16)
                 with np.load(PATH) as z:
-                    _data = (np.asarray(z["counts"], np.float64), float(z["north"]), float(z["west"]), float(z["res"]))
+                    north, west, res = float(z["north"]), float(z["west"]), float(z["res"])
+                # (the counts as stored, uint16, shared with the worker processes; shares() takes them to float64 at the
+                # four cells it reads: the same values as the whole array in float64 before, a quarter of its 79 MB)
+                _data = (staticmaps.mapped(PATH, decode), north, west, res)
         return _data
 
 

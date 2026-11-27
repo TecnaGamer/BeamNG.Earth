@@ -31,9 +31,13 @@ def _load():
     global _grid, _biome, _realm, _meta
     with _lock:
         if _grid is None:
-            from PIL import Image
-            with Image.open(PATH) as im:
-                g = np.asarray(im, np.uint16)
+            import staticmaps
+
+            def decode():
+                from PIL import Image
+                with Image.open(PATH) as im:
+                    return np.asarray(im, np.uint16)
+            g = staticmaps.mapped(PATH, decode)         # (shared with the worker processes)
             with open(META_PATH, encoding="utf-8") as f:
                 meta = {int(k): v for k, v in json.load(f).items()}
             n = max(int(g.max()), max(meta)) + 1

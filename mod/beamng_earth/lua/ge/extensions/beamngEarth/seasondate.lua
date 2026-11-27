@@ -53,8 +53,7 @@ function M.serverDay()
   return d - (d - 1) % M.SEND_STEP
 end
 
--- Send the server's day when it changed (net: the connection; force: after a hello). Cheap: called with seasonlook's
--- checks (every few seconds).
+-- Send the server's day when it changed (net: the connection; force: after a hello). Called by frame, once a second.
 local sent = false      -- (false: nothing sent this connection; else the last value, nil meaning 'clock')
 function M.sync(net, force)
   if force then sent = false end
@@ -67,12 +66,21 @@ function M.sync(net, force)
 end
 function M.resetSent() sent = false end
 
--- The frame's call from core (one line there, out of its busy season lines): the server's day sent when it changed
--- (sync), and the anchor's place to the grass (groundcover.setLatitude: the season's hemisphere, the Atlantic's Csb).
-function M.frame(net, anchor)
-  M.sync(net)
+-- The frame's call from core (one line there, out of its busy season lines), its work at most once every FRAME_S
+-- (the review of PR #1545: not every frame): the server's day sent when it changed (sync; with 'clock' only the one
+-- message after a hello or a switch that hands the server back its own date, no environment read), and the anchor's
+-- place to the grass (groundcover.setLatitude: the season's hemisphere, the Atlantic's Csb). now: os.clock() (tests
+-- pass their own). Returns true when it did the work.
+M.FRAME_S = 1.0
+local nextFrame = -math.huge
+function M.frame(net, anchor, now)
+  now = now or os.clock()
+  if now < nextFrame then return false end
+  nextFrame = now + M.FRAME_S
+  if M.source == 'game' or sent ~= nil then M.sync(net) end
   local ok, gc = pcall(require, 'beamngEarth/groundcover')
   if ok and type(gc) == 'table' and gc.setLatitude then gc.setLatitude(anchor and anchor.lat, anchor and anchor.lon) end
+  return true
 end
 
 return M

@@ -42,7 +42,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 59          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 60          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -102,7 +102,35 @@ VERSION = 59          # (the cached cells hold their groups: 14 for the regional
                       # 55: the veteran oaks in loose woods (veteran_oaks), the tropics' giant filler (G_TRO_GIANT)
                       # 59: this branch's 29-55 on dev's 30 (#1501's vineyards, the natural features' groups after
                       # this branch's: their oak / beech / birch / redwood this branch's)
+                      # 60: the regional rules by RESOLVE ecoregions, not coordinate boxes (Japan, the Great Lakes, the
+                      # north's conifer factor, the eucalypt plantations by the Atlantic: the review of PR #1545)
 TREE_MIN_M = 3.0
+# The species rules' prebuilt maps (SOURCES.md: their recipes and sha256). VERSION keys the code, not these: a cell's
+# folder holds data_key too (the review of PR #1545), so a map rebuilt or replaced never serves the cells of the old.
+DATA_FILES = ("ecoregions_2017_0p05.png", "ecoregions_2017.json", "leaftype_2019.png", "leaftype_cci_2020.png",
+              "treegenus_2020.npz")
+_data_key = None
+
+
+def data_key(here=None):
+    """12 hex of the SHA-256 over DATA_FILES' contents (a missing file as such), computed once per process (here: another
+    folder's files, not kept: the tests)."""
+    global _data_key
+    if _data_key is None or here is not None:
+        import hashlib
+        h = hashlib.sha256()
+        folder = here or os.path.dirname(os.path.abspath(__file__))
+        for name in DATA_FILES:
+            h.update(name.encode() + b"\0")
+            try:
+                with open(os.path.join(folder, name), "rb") as f:
+                    h.update(hashlib.sha256(f.read()).digest())
+            except OSError:
+                h.update(b"missing")
+        if here is not None:
+            return h.hexdigest()[:12]
+        _data_key = h.hexdigest()[:12]
+    return _data_key
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
 # ground: at 69 N tops were searched and thinned over radii 2.1x too small and the bushes' grids were 4.6x as dense
@@ -552,19 +580,43 @@ def _conifer_share(lat, lon, north=True):
     return m * north_conifer_factor(lat, lon) if north else m
 
 
+# Rules tied to a region name its RESOLVE ecoregions (ecoregion.ids: the names checked when first used), not a box of
+# coordinates (the review of PR #1545): a rule follows the region's own edges.
+@functools.lru_cache(maxsize=None)
+def _eco_ids(names):
+    import ecoregion as er
+    return er.ids(*names)
+
+
+def _in_eco(lat, lon, names, eco=None):
+    """Per point: in one of the ecoregions named (eco: their ECO_IDs where the caller has them)."""
+    if eco is None:
+        import ecoregion as er
+        eco = er.eco_many(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    return _in(np.asarray(eco), _eco_ids(names))
+
+
 # (49) Fennoscandia's and the Baltic's forests have more broadleaves (their birches) than the leaf type maps give: EU-Forest's
 # plots 60-68 N 69-72 % conifers where the maps made 81-84 %, 68-70 N 39 % against 55 % (the user, 2026-11-19: "the
 # birch 10 % in the game, 15 % in the data"). The conifer share there times this factor by latitude, Europe only
-# (NORTH_CONIFER_LON: west of the Urals, where the inventories are; Siberia's taiga as it was).
+# (NORTH_CONIFER_ECO: Fennoscandia's and European Russia's boreal and hemiboreal ecoregions west of the Urals, where
+# the inventories are; Siberia's taiga as it was).
 NORTH_CONIFER_FACTOR = ((57.0, 1.0), (60.0, 0.86), (66.0, 0.86), (69.0, 0.72))
-NORTH_CONIFER_LON = (-12.0, 40.0)
+NORTH_CONIFER_ECO = ("Scandinavian and Russian taiga", "Scandinavian coastal conifer forests",
+                     "Scandinavian Montane Birch forest and grasslands", "Sarmatic mixed forests", "Kola Peninsula tundra")
 
 
 def north_conifer_factor(lat, lon):
     """Per point: the factor on the conifer share in Europe's north (NORTH_CONIFER_*), 1 elsewhere."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     f = dnp.interp(lat, [a for a, _ in NORTH_CONIFER_FACTOR], [b for _, b in NORTH_CONIFER_FACTOR])
-    return np.where((lon >= NORTH_CONIFER_LON[0]) & (lon <= NORTH_CONIFER_LON[1]), f, 1.0)
+    north = lat >= NORTH_CONIFER_FACTOR[0][0]       # (no lookup where the factor is 1 anyway)
+    out = np.ones(len(np.atleast_1d(lat)))
+    if north.any():
+        idx = np.flatnonzero(np.atleast_1d(north))
+        la, lo = np.atleast_1d(lat)[idx], np.atleast_1d(lon)[idx]
+        out[idx] = np.where(_in_eco(la, lo, NORTH_CONIFER_ECO), np.atleast_1d(f)[idx], 1.0)
+    return out if np.ndim(lat) else out[0]
 
 
 CONIFER_TILT_H = 12.0           # (37) the taller trees more likely the conifers: a tree's weight its height over this,
@@ -579,7 +631,7 @@ def conifer_odds(share, height, is_tree=None):
     share = np.clip(np.asarray(share, np.float64), 0.0, 1.0)
     w = np.clip(np.asarray(height, np.float64) / CONIFER_TILT_H, *CONIFER_TILT)
     wt = w if is_tree is None else w[np.asarray(is_tree, bool)]
-    a = w / (float(np.mean(wt)) if wt.size else 1.0)
+    a = w / (math.fsum(wt.tolist()) / wt.size if wt.size else 1.0)     # (an exact sum: the same mean on every CPU)
     return 1.0 - dnp.power(1.0 - share, a)
 
 
@@ -652,7 +704,9 @@ EAST_ASIA_BEECH = 0.35                      # and pines in the south; Manchuria'
 # - the cold steppes' (BSk, BWk) broadleaves: the birch groves (kolki) of the forest steppe in the north, the planted
 #   poplars, elms and locusts (oaks stand in) of the south's towns and shelterbelts
 COLD_ARID_BIRCH_LAT = ((40.0, 0.05), (46.0, 0.15), (52.0, 0.50))
-JAPAN_BOX = (30.0, 128.5, 46.0, 146.5)      # south, west, north, east
+JAPAN_ECO = ("Taiheiyo evergreen forests", "Taiheiyo montane deciduous forests", "Nihonkai evergreen forests",
+             "Nihonkai montane deciduous forests", "Hokkaido deciduous forests", "Hokkaido montane conifer forests",
+             "Honshu alpine conifer forests")     # (Japan's main islands; the Nansei Islands are subtropical)
 JAPAN_SHARES = (0.15, 0.40, 0.45)
 # - North America outside the dry West (the USFS FIA's eastern hardwoods: oak-hickory first, maples and beech, the
 #   birches only in the north's northern hardwoods and the boreal aspen-birch): the birches' share by latitude, the
@@ -664,7 +718,8 @@ NA_BEECH = 0.42
 # spruces and firs (Canada's NFI: 85 %)
 NA_SPRUCE_LAT = ((38.0, 0.25), (42.0, 0.5), (45.0, 0.8), (48.0, 0.85))
 NA_SPRUCE_LAKES = 0.65              # (Minnesota, Wisconsin, Michigan, Ontario's south: the red, white and jack pines)
-GREAT_LAKES_BOX = (41.5, -97.5, 49.5, -78.0)    # south, west, north, east
+GREAT_LAKES_ECO = ("Western Great Lakes forests", "Upper Midwest US forest-savanna transition",
+                   "Southern Great Lakes forests", "Eastern Great Lakes lowland forests")
 # - elsewhere outside the tropics and Eurasia (the pampas', the Highveld's, the Middle East's planted and riverside
 #   trees: oaks, planes, poplars, elms; birches hardly)
 OTHER_SHARES = (0.03, 0.62, 0.35)
@@ -767,9 +822,12 @@ ECO_JUNIPER = (59, 652, 694, 695, 721, 723, 727, 730, 756, 757, 758, 792, 804, 8
 # most of them in the Atlantic lowlands north of the Tagus, few in the Alentejo's cork and holm oak montado or on the
 # interior's uplands (E. globulus is frost-tender: rare above ~700 m). West Coast USA's eucalyptus shapes, whole stands
 # (stand_u, no admixture: a plantation is one species) of the forest's trees (land cover tree, not in town).
-EUC_BOX = (36.9, -9.6, 43.8, -6.9)          # south, west, north, east: Portugal and Galicia
+EUC_ECO = ("Cantabrian mixed forests", "Northwest Iberian montane forests",
+           "Iberian sclerophyllous and semi-deciduous forests",
+           "Southwest Iberian Mediterranean sclerophyllous and mixed forests")     # (western Iberia's)
 EUC_SHARE = 0.45            # of the forest stands in the western lowlands north of EUC_SOUTH
-EUC_INLAND = (-7.8, -6.9)   # the share falls to nothing from the first longitude to the second
+EUC_SEA_DEG = (0.8, 1.6)    # the Atlantic within the first (degrees): the full share; within the second: half; farther:
+                            # none (the interior's Iberian ecoregions, the meseta's, have none: was a longitude band)
 EUC_SOUTH = ((38.5, 0.3), (39.5, 1.0))      # (latitude, the share's factor): the Alentejo's few
 EUC_ELEV = (300.0, 700.0)   # the share falls to nothing between these heights above the sea (m)
 EUC_FROM = None             # (set below: the groups a plantation replaces)
@@ -814,10 +872,16 @@ def eucalypt_share(lat, lon, elev=None):
     """Per point: the share of the forest's stands that are eucalypt plantations (Portugal and Galicia, EUC_*)."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     z = np.zeros(len(lat)) if elev is None else np.asarray(elev, np.float64)
-    inland = np.clip((EUC_INLAND[1] - lon) / (EUC_INLAND[1] - EUC_INLAND[0]), 0.0, 1.0)
-    south = dnp.interp(lat, [a for a, _ in EUC_SOUTH], [b for _, b in EUC_SOUTH])
-    up = np.clip((EUC_ELEV[1] - z) / (EUC_ELEV[1] - EUC_ELEV[0]), 0.0, 1.0)
-    return np.where(_in_box(lat, lon, EUC_BOX), EUC_SHARE * inland * south * up, 0.0)
+    out = np.zeros(len(lat))
+    cand = np.flatnonzero(_in_eco(lat, lon, EUC_ECO))
+    if not len(cand):
+        return out
+    la, lo = lat[cand], lon[cand]
+    inland = np.where(_sea_within(la, lo, EUC_SEA_DEG[0]), 1.0, np.where(_sea_within(la, lo, EUC_SEA_DEG[1]), 0.5, 0.0))
+    south = dnp.interp(la, [a for a, _ in EUC_SOUTH], [b for _, b in EUC_SOUTH])
+    up = np.clip((EUC_ELEV[1] - z[cand]) / (EUC_ELEV[1] - EUC_ELEV[0]), 0.0, 1.0)
+    out[cand] = EUC_SHARE * inland * south * up
+    return out
 
 
 def stand_u(mx, my, gx, gy, lat, salt):
@@ -885,7 +949,7 @@ def broad_shares(lat, lon, koppen, eco, montane=None, conifer=None):
     eb = dnp.interp(lat, [a for a, _ in EAST_ASIA_BIRCH_LAT], [b for _, b in EAST_ASIA_BIRCH_LAT])
     m = ea & (lon >= EAST_ASIA_LON) & ~_in(k, K_MED + K_COLD_ARID)
     sh[m] = np.stack([eb, (1.0 - eb) * (1.0 - EAST_ASIA_BEECH), (1.0 - eb) * EAST_ASIA_BEECH], axis=1)[m]
-    sh[ea & _in_box(lat, lon, JAPAN_BOX)] = JAPAN_SHARES
+    sh[ea & _in_eco(lat, lon, JAPAN_ECO, eco)] = JAPAN_SHARES
     nb = dnp.interp(lat, [a for a, _ in NA_BIRCH_LAT], [b for _, b in NA_BIRCH_LAT])
     sh[na] = np.stack([nb, (1.0 - nb) * (1.0 - NA_BEECH), (1.0 - nb) * NA_BEECH], axis=1)[na]
     sh[boreal] = BROAD_SHARES["boreal"]
@@ -1006,13 +1070,14 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         # (38) East Asia's warm temperate conifers are mostly conical ones (Japan's sugi and hinoki plantations, ~40 %
         # of its forest, against its red and black pines; southern China's and Taiwan's Chinese fir beside the Masson
         # pine): the spruces' shapes (Douglas firs) for them, not the Scots pines'
-        base = np.where(_in_box(lat, lon, JAPAN_BOX), np.maximum(base, CONICAL_JAPAN), base)
+        japan = _in_eco(lat, lon, JAPAN_ECO, eco)
+        base = np.where(japan, np.maximum(base, CONICAL_JAPAN), base)
         # (39) the Atlantic's oceanic north (Ireland, Great Britain, Denmark, the Low Countries): its conifers the
         # planted Sitka and Norway spruces first (EU-Forest's plots: Ireland's conifers 77 % spruces, Scotland's
         # 64 %, Denmark's 67 %, England's 51 %, the Netherlands' 37 %)
         atl = _in(k, K_OCEANIC) & (lat > ATLANTIC_SPRUCE_LAT) & (lon < ATLANTIC_SPRUCE_LON)
         base = np.where(atl, np.maximum(base, ATLANTIC_SPRUCE), base)
-        base = np.where((lon >= EAST_ASIA_LON) & (lat < CONICAL_CHINA_LAT) & ~_in_box(lat, lon, JAPAN_BOX),
+        base = np.where((lon >= EAST_ASIA_LON) & (lat < CONICAL_CHINA_LAT) & ~japan,
                         np.maximum(base, CONICAL_CHINA), base)
         p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
         needle = tg[:, [treegenus.LARIX, treegenus.PICEA, treegenus.PINUS, treegenus.OTHER_NEEDLE]].sum(axis=1)
@@ -1029,7 +1094,7 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     nac = _north_america(lat, lon) & (g == G_CONIFER)
     if nac.any():
         p = dnp.interp(lat, [a for a, _ in NA_SPRUCE_LAT], [b for _, b in NA_SPRUCE_LAT])
-        p = np.where(_in_box(lat, lon, GREAT_LAKES_BOX), np.minimum(p, NA_SPRUCE_LAKES), p)
+        p = np.where(_in_eco(lat, lon, GREAT_LAKES_ECO, eco), np.minimum(p, NA_SPRUCE_LAKES), p)
         g[nac] = np.where(np.asarray(u_conifer)[nac] < p[nac], G_SPRUCE, G_PINE_EU)
     # broadleaves: Italy's in the hot deserts and steppes; birch / oak / beech by the climate, more beeches uphill
     g[ea & (g == G_DECIDUOUS) & _in(k, K_HOT_ARID)] = G_MEDITERRANEAN
@@ -1455,7 +1520,8 @@ class Vegetation:
         return False
 
     def _path(self, x, y):
-        rel = f'{getattr(self.md, "release", "x")}{natural.veg_key()}'     # (a switch's cells their own folder)
+        rel = f'{getattr(self.md, "release", "x")}{natural.veg_key()}-d{data_key()}'     # (a switch's cells their own
+        # folder; the species maps' contents too, data_key)
         return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
 
     def _load(self, x, y):
@@ -2005,7 +2071,9 @@ class Vegetation:
         k = climate.koppen_many(tlat, tlon)
         need = eurasia(tlat, tlon) & np.isin(group, (G_CONIFER, G_DECIDUOUS))
         need |= _north_america(tlat, tlon) & (group == G_DECIDUOUS)      # (36) the Appalachians' beeches uphill
-        need |= _in_box(tlat, tlon, EUC_BOX) & np.isin(group, EUC_FROM)      # (35) the plantations' uplands
+        euc = np.isin(group, EUC_FROM) & ~need
+        if euc.any():               # (35) the plantations' uplands
+            need[np.flatnonzero(euc)[_in_eco(tlat[euc], tlon[euc], EUC_ECO)]] = True
         elev = None
         if need.any():
             e = self._elev(tlat[need], tlon[need])

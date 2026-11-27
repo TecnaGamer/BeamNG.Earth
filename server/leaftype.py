@@ -26,9 +26,13 @@ _lock = threading.Lock()
 def _load(path=PATH):
     with _lock:
         if path not in _grids:
-            from PIL import Image
-            with Image.open(path) as im:
-                _grids[path] = np.ascontiguousarray(np.asarray(im.convert("LA"), np.uint8))
+            import staticmaps
+
+            def decode():
+                from PIL import Image
+                with Image.open(path) as im:
+                    return np.ascontiguousarray(np.asarray(im.convert("LA"), np.uint8))
+            _grids[path] = staticmaps.mapped(path, decode)      # (shared with the worker processes)
         return _grids[path]
 
 

@@ -1,5 +1,6 @@
 """vegetation: tree tops from a canopy height model (one per crown, the tallest), never on buildings or roads,
 deterministic; tiles of items in the anchor frame."""
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -865,6 +866,39 @@ class VeteranOakTest(unittest.TestCase):
         self.assertEqual(veg.GROUPS[veg.G_OAK_VETERAN], "oak_veteran")
         self.assertEqual(veg.GROUPS[veg.G_TRO_GIANT], "tro_giant")
         self.assertEqual(len(veg.BASE_GROUPS), 62)
+
+
+class DataKeyTest(unittest.TestCase):
+    """The cells' folder holds a hash of the species maps (data_key): a changed map never serves the old cells."""
+
+    def test_key_follows_the_files(self):
+        import shutil
+        import tempfile
+        here = os.path.dirname(os.path.abspath(veg.__file__))
+        with tempfile.TemporaryDirectory() as d:
+            for n in veg.DATA_FILES:
+                shutil.copy(os.path.join(here, n), d)
+            k0 = veg.data_key(d)
+            self.assertEqual(k0, veg.data_key(), "the same files, the same key")
+            with open(os.path.join(d, "leaftype_cci_2020.png"), "ab") as f:
+                f.write(b"x")
+            self.assertNotEqual(veg.data_key(d), k0, "a changed map, another key")
+            os.remove(os.path.join(d, "treegenus_2020.npz"))
+            self.assertNotEqual(veg.data_key(d), k0, "a missing map, another key")
+        v = veg.Vegetation(FakeMapData(), tempfile.gettempdir())
+        self.assertIn(f"-d{veg.data_key()}", v._path(1, 2))
+
+    def test_sources_md_lists_each_file_hash(self):
+        import hashlib
+        import re
+        here = os.path.dirname(os.path.abspath(veg.__file__))
+        text = open(os.path.join(here, "..", "SOURCES.md"), encoding="utf-8").read()
+        for n in veg.DATA_FILES:
+            with open(os.path.join(here, n), "rb") as f:
+                sha = hashlib.sha256(f.read()).hexdigest()
+            m = re.search(r"`server/" + re.escape(n) + r"` \| `([0-9a-f]{64})`", text)
+            self.assertIsNotNone(m, f"{n} in SOURCES.md's species maps table")
+            self.assertEqual(m.group(1), sha, f"{n}: SOURCES.md's sha256 (a rebuilt map: update its row)")
 
 
 class NorthBirchTest(unittest.TestCase):
