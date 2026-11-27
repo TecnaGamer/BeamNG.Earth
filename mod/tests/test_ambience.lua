@@ -209,6 +209,10 @@ mx = amb.rainMix(0.5, 5, 1, false, false, 1)
 T.check(math.abs(mx.roof_medium - 0.5 * amb.RAIN_ROOF) < 1e-9 and mx.roofcab_medium == 0 and math.abs(mx.medium - 0.5) < 1e-9,
   'hood camera: the plain roof, the rain unmuffled')
 T.check(amb.roofNearFor('onboard', 30) == 1 and amb.roofNearFor('driver', 1) == 0, 'roofNear: hood 1, inside 0')
+T.check(amb.roofNearFor('onboard.hood', 30) == 1 and amb.roofNearFor('occupant.driver', 1) == 0
+  and amb.camKind('occupant.passenger') == 'cabin' and amb.camKind('onboard.driver') == 'cabin'
+  and amb.camKind('onboard.bumper') == 'near' and amb.camKind('orbit') == nil and amb.camKind(nil) == nil,
+  'camKind: BeamNG 0.40 seat cameras are inside, the onboard ones near')
 T.check(math.abs(amb.roofNearFor('orbit', amb.ROOF_NEAR_M) - amb.ROOF_ORBIT) < 1e-12 and amb.roofNearFor('orbit', amb.ROOF_FAR_M) == 0
   and amb.roofNearFor('orbit', 8) > 0 and amb.roofNearFor('orbit', 8) < amb.ROOF_ORBIT, 'roofNear: orbit by distance')
 -- under an open shelter (a bridge, an overpass): muffled B; enclosed or a tunnel: muffled A
