@@ -11640,13 +11640,14 @@ class _Segs:
         self.lo = np.minimum(self.a, self.b)
         self.hi = np.maximum(self.a, self.b)
 
-    def near(self, pts, gap, skip=None):
-        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). Pure."""
+    def near(self, pts, gap, skip=None, bounds=None):
+        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). bounds: the points'
+        (min, max) per axis when the caller has them (the same values pts.min(0), pts.max(0) give). Pure."""
         import fast
         pts = np.ascontiguousarray(np.asarray(pts, np.float64))
         if not len(pts) or not len(self.h):
             return np.zeros(len(pts), bool)
-        lo, hi = pts.min(0), pts.max(0)
+        lo, hi = (pts.min(0), pts.max(0)) if bounds is None else bounds
         r = self.h + gap
         keep = (self.hi[:, 0] + r >= lo[0]) & (self.hi[:, 1] + r >= lo[1]) & (self.lo[:, 0] - r <= hi[0]) & \
             (self.lo[:, 1] - r <= hi[1])
@@ -11660,11 +11661,11 @@ class _Segs:
                                                         np.ascontiguousarray(r[keep])), bool)
 
 
-def _on_carriageways(pts, others, gap):
+def _on_carriageways(pts, others, gap, bounds=None):
     """Which points (k, 2) lie on a carriageway of others {fid: (centreline (m, 2), half width)} or a _Segs of them
-    (+ gap). Pure."""
+    (+ gap). bounds: the points' (min, max) when the caller has them (_Segs.near). Pure."""
     segs = others if isinstance(others, _Segs) else _Segs(others)
-    return segs.near(pts, gap)
+    return segs.near(pts, gap, bounds=bounds)
 
 
 def _clear_depth(base, out, depth, others, own):
