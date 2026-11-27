@@ -10,7 +10,9 @@ depth by its span, a rail deck's, a tunnel's roof), gradeshapes.clearance_need.
 Every layer is a cost, not a law (the solve's soft couplings): OSM's layers can contradict the joins (a ramp merging into
 a deck mapped as crossing it, one level apart), and then the problem has no answer with every clearance held. A
 clearance short costs W_CLEAR per m^2; one the levels alone ask near an end of a path (a merge read as a crossing: the
-end of the ramp's path, not of a member a path goes on from), W_DOUBT.
+end of the ramp's path, not of a member a path goes on from), W_DOUBT, and so does one by the kinds near an end of a path
+where the map also joins the two paths within JOINED_NEAR_M (a street ending where it meets the ramp off the deck it is
+mapped under: the map has it both meet the deck and pass under it).
 At one level the two meet: their heights equal at the crossing, W_GRADE per m^2 of a step there."""
 from dataclasses import dataclass
 
@@ -21,7 +23,8 @@ import gradeshapes as _gsh
 W_CLEAR = 1.0e5         # per m^2 of a clearance short (a metre short costs what 1e5 samples a metre off their ground do)
 W_DOUBT = 1.0e3         # per m^2 of a clearance the levels alone ask within NEAR_END_M of an end
 W_GRADE = 1.0e4         # per m^2 of a step where two crossing at one level meet
-NEAR_END_M = 20.0       # m from a member's end within which an order by the levels alone is doubted
+NEAR_END_M = 20.0       # m from a path's end within which an order by the levels alone is doubted ...
+JOINED_NEAR_M = 40.0    # ... and one by the kinds too, where the map joins the two paths within this of the crossing
 
 
 @dataclass(frozen=True)
@@ -52,8 +55,29 @@ def _near_end(network, i, s):
     return min(sp, network.paths[p].length - sp) <= NEAR_END_M
 
 
-def layer(network, a, sa, b, sb, q):
-    """The Layer of members a and b of the network crossing at q."""
+def path_joins(network):
+    """{(path, path): [(s on the first, s on the second)]} of the network's joins, the lower path first."""
+    out = {}
+    for i, si, j, sj in network.joins:
+        (p, s), (r, t) = network.path_s(i, si), network.path_s(j, sj)
+        if p == r:
+            continue
+        if p > r:
+            p, s, r, t = r, t, p, s
+        out.setdefault((p, r), []).append((s, t))
+    return out
+
+
+def joined_near(network, joins, a, sa, b, sb, near_m=JOINED_NEAR_M):
+    """Whether the paths of members a and b are joined within near_m (along both) of where a at sa crosses b at sb."""
+    (p, s), (r, t) = network.path_s(a, sa), network.path_s(b, sb)
+    if p > r:
+        p, s, r, t = r, t, p, s
+    return any(abs(js - s) <= near_m and abs(jt - t) <= near_m for js, jt in joins.get((p, r), ()))
+
+
+def layer(network, a, sa, b, sb, q, joins=None):
+    """The Layer of members a and b of the network crossing at q (joins: path_joins(network), made once)."""
     net = network.net
     ma, mb = net.m[a], net.m[b]
     up = _gsh._over(ma, mb)
@@ -62,14 +86,18 @@ def layer(network, a, sa, b, sb, q):
     by_kind = _gsh.LEVEL_BAND[ma.kind] != _gsh.LEVEL_BAND[mb.kind]
     u, d = (a, b) if up == "i" else (b, a)
     need = float(_gsh.clearance_need(net, u, d, q))
-    doubt = not by_kind and (_near_end(network, a, sa) or _near_end(network, b, sb))
+    near = _near_end(network, a, sa) or _near_end(network, b, sb)
+    if joins is None:
+        joins = path_joins(network)
+    doubt = near and (not by_kind or joined_near(network, joins, a, sa, b, sb))
     return Layer(a, sa, b, sb, q, "a" if up == "i" else "b", need, "kinds" if by_kind else "levels",
                  W_DOUBT if doubt else W_CLEAR)
 
 
 def order(network):
     """[Layer] of every crossing of the network (step 1's), in its order."""
-    return [layer(network, a, sa, b, sb, q) for a, sa, b, sb, q in network.crossings]
+    joins = path_joins(network)
+    return [layer(network, a, sa, b, sb, q, joins) for a, sa, b, sb, q in network.crossings]
 
 
 def summary(layers):

@@ -9,7 +9,8 @@ use pyo3::types::PyDict;
 /// c -1: none); kind 0: z_a - z_b = 0, 1: >= value, 2: <= value. With c the coupled quantity is
 /// z_a - (1 - alpha) z_b - alpha z_c (coupling_alpha, 0 without it): b's height moved alpha of the way to c.
 /// parameters: (chains, 5) [grade, K, smoothness, step, length weight], the hard laws; or (chains, 9) with the soft
-/// laws after them [comfortable grade, its cost, comfortable K, its cost] (carriageway_solver::Parameters).
+/// laws after them [comfortable grade, its cost, comfortable K, its cost]; or (chains, 10) with the bounds' cost after
+/// those (0: hard; carriageway_solver::Parameters).
 #[pyfunction]
 #[pyo3(signature = (target, weight, lower, upper, offsets, parameters, coupling_rows, coupling_values, rounds, budget_s,
                     coupling_alpha = None, spacing = None, coupling_soft = None))]
@@ -72,7 +73,7 @@ pub fn carriageway_profiles<'py>(
         || offsets.last().copied() != Some(n as i64)
         || offsets.windows(2).any(|w| w[1] < w[0])
         || offsets.iter().any(|&v| v < 0 || v > n as i64)
-        || (params.ncols() != 5 && params.ncols() != 9)
+        || (params.ncols() != 5 && params.ncols() != 9 && params.ncols() != 10)
         || params.nrows() + 1 != offsets.len()
         || (rows.ncols() != 5 && rows.ncols() != 7)
         || rows.nrows() != values.len()
@@ -108,7 +109,7 @@ pub fn carriageway_profiles<'py>(
             ));
         }
         let mut p = Parameters::hard(row[0], row[1], row[2], row[3], row[4]);
-        if row.len() == 9 {
+        if row.len() >= 9 {
             // (the soft laws: a comfortable grade and its cost, a comfortable curve's K and its cost; 0: none)
             if row[5] < 0. || row[6] < 0. || row[7] < 0. || row[8] < 0. {
                 return Err(bad("invalid carriageway soft grade, grade cost, soft K or curve cost"));
@@ -117,6 +118,13 @@ pub fn carriageway_profiles<'py>(
             p.w_grade = row[6];
             p.soft_k = row[7];
             p.w_curve = row[8];
+        }
+        if row.len() == 10 {
+            // (the bounds' cost: 0 hard, > 0 a sample's shortfall paid for)
+            if !(row[9] >= 0.) {
+                return Err(bad("invalid carriageway bound cost"));
+            }
+            p.w_bound = row[9];
         }
         parameters.push(p);
     }
@@ -185,6 +193,7 @@ pub fn carriageway_profiles<'py>(
     diagnostics.set_item("soft_curve_excess", d.soft_curve_excess)?;
     diagnostics.set_item("soft_cost", d.soft_cost)?;
     diagnostics.set_item("soft_clearance_shortfall_m", d.soft_clearance_shortfall)?;
+    diagnostics.set_item("soft_bound_shortfall_m", d.soft_bound_shortfall)?;
     diagnostics.set_item("slack_vars", d.slack_vars)?;
     diagnostics.set_item("elapsed_s", d.elapsed_s)?;
     Ok((z.into_pyarray(py), diagnostics))

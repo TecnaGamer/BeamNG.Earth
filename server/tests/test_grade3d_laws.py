@@ -78,3 +78,13 @@ def test_the_chain_dict_is_the_kernels():
     ch = lw.chain(sm, 0)
     assert set(ch) >= {"t", "w", "lo", "hi", "grade", "K", "lam", "step", "soft_grade", "w_grade", "soft_K", "w_curve"}
     assert len(ch["t"]) == len(sm) and abs(ch["step"] - sm.h[0]) < 1e-12
+
+
+def test_no_ceiling_is_the_kernels_none(monkeypatch):
+    import carriageways as cw
+    monkeypatch.setattr(laws, "CEIL_GRADE_X", 0.0)
+    monkeypatch.setattr(laws, "CEIL_CURVE_X", 0.0)
+    _net, sm, lw = _lay([_m("a", _line(0, 0, 200, 0))])
+    ch = lw.chain(sm, 0)
+    assert ch["grade"] >= cw.NO_GRADE_CEILING and ch["K"] <= cw.NO_CURVE_CEILING
+    assert ch["soft_grade"] < ch["grade"] and ch["soft_K"] > ch["K"] and ch["w_bound"] == laws.W_BOUND

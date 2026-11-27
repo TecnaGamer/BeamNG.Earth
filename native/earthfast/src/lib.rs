@@ -7882,6 +7882,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<linenet::LineNet>()?;
     // 642: LineNet shared by the process's threads (a lock inside: lines only ever added), arclens / boxes / points
     // 643: carriageway_profiles' soft laws: parameters (chains, 9), a comfortable grade and curve each paid for past it
-    m.add("VERSION", 643)?;
+    // 644: its soft bounds: parameters (chains, 10), a sample under its floor or over its roof paid for (w_bound)
+    m.add("VERSION", 644)?;
     Ok(())
 }
