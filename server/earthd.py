@@ -1575,6 +1575,10 @@ class Server:
         if vegetation is not None:      # trees kept off the roads' drawn widths (vegetation._mask_roads)
             vegetation.surface, vegetation.widths = surface, self.road_widths
         self.grader_lock = threading.Lock()
+        # (the hooks blockworker installs in every process, grading.PROFILE_PINS and roadsys.GROUND / DISK_FN, read this
+        # server's map data, DEM, ground rules and plan store when this process grades a block itself: the first block
+        # of an anchor while driving failed without them under BNE_ROADSYS=surface, 2026-11-26)
+        blockworker.attach_main(self)
         # The download cache's bookkeeping (cache.py): every producer reports its disk hits and writes
         self.cache = cache
         self.covermap = None            # the map's cache view (covermap.CoverMap; main_async, with a Cache)

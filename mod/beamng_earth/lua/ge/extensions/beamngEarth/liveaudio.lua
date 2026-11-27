@@ -26,7 +26,11 @@ M.LIVE_KINDS = { strike = true, close = true }
 -- sound terrible and are super lound"); true the synth's, the game's fading out while the synth answers, and only when
 -- the synth lists the set in rainSets (the recorded rain needs its texture bank: without it the game plays the
 -- recorded FILES, not the synth's procedural rain). The synth keeps the thunder and its ducks either way.
-M.LIVE_RAIN = { generated = false, recorded = true }
+-- Generated is method B's live engine since 2026-11-26 (rainb_live.rs; the user, of its sweep: "Sweep sounds good"):
+-- the synth plays it only when it lists 'generated_b' (LIVE_RAIN_NEEDS: an older synth's 'generated' is the procedural
+-- drops of before, which stay off).
+M.LIVE_RAIN = { generated = true, recorded = true }
+M.LIVE_RAIN_NEEDS = { generated = 'generated_b', recorded = 'recorded' }
 -- The same for the wind, per Wind sound: the synth plays no wind yet, so the game's wind files play in both modes (the
 -- hook: a set turned true here, and listed by the synth, would hand that set to it as LIVE_RAIN does)
 M.LIVE_WIND = { generated = false, recorded = false }
@@ -51,9 +55,11 @@ function M.setRainSet(v)
   rainSet = s   -- (in the signature: the next tick sends it)
 end
 function M.rainSet() return rainSet end
--- Whether the synth plays the rain now: the set's LIVE_RAIN, and the synth offers that set (rainSets).
+-- Whether the synth plays the rain now: the set's LIVE_RAIN, and the synth offers that set (rainSets: its token in
+-- LIVE_RAIN_NEEDS).
 function M.synthRain()
-  return M.LIVE_RAIN[rainSet] == true and type(state.rainSets) == 'table' and state.rainSets[rainSet] == true
+  local need = M.LIVE_RAIN_NEEDS[rainSet] or rainSet
+  return M.LIVE_RAIN[rainSet] == true and type(state.rainSets) == 'table' and state.rainSets[need] == true
 end
 
 local function clockhp() return os.clockhp and os.clockhp() or os.clock() end

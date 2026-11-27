@@ -188,6 +188,8 @@ M.LIGHTNING = true         -- the settings' "Lightning and thunder"
 M.STREAKS = false          -- the settings' "Rain streaks" (rainstreaks.lua): off by default (real rain hardly shows as streaks by day:
                            -- the reference photos, ~/bnge-tests/weather/b/refs; one shell costs ~1.5 ms a frame on the Deck)
 M.WET_LOOK = true          -- the settings' "Wet look" (wetlook.lua)
+M.WET_GRIP = true          -- the settings' "Wet roads": the grip follows the weather shown, aquaplaning in its water
+                           -- (wetlook.lua -> winter.lua setShown; aquaplane.lua)
 M.GRAVITY_ENABLED = true
 M.GRAVITY_EPS = 1e-4       -- m/s^2; ~30 m of climb (setGravity queues Lua into every vehicle)
 M.GRAVITY_CHECK_S = 1
@@ -1600,6 +1602,7 @@ end
 -- map), the wet look (wetlook.lua: the rain shown, or W1's road state).
 local streaks = require('beamngEarth/rainstreaks')
 local wetlook = require('beamngEarth/wetlook')
+local aquaplane = require('beamngEarth/aquaplane')
 local function phaseB(e, dt)
   local rain = (M.rainNow or 0) * (S.shelter or 1)
   if (M.STREAKS and rain > 0) or streaks.shown() then
@@ -1620,10 +1623,18 @@ local function phaseB(e, dt)
     if not ok then log('W', 'beamngEarth', 'weather storm: ' .. tostring(on)) end
   end
   local wetOn = M.WET_LOOK and mode ~= 'manual' and not S.mission
-  if wetOn or S.wetActive then
-    local ok, on = pcall(wetlook.update, dt, S.cur and S.cur.rainMmH or 0, wetOn)
+  local gripOn = M.WET_GRIP and mode ~= 'manual' and not S.mission
+  local rainMmH = S.cur and S.cur.rainMmH or 0
+  if wetOn or gripOn or S.wetActive then
+    local ok, on = pcall(wetlook.update, dt, rainMmH, wetOn, gripOn)
     S.wetActive = ok and on or false
     if not ok then log('W', 'beamngEarth', 'weather wet look: ' .. tostring(on)) end
+  end
+  -- aquaplaning (the player's car over the puddles shown or the rain's film): only while there is water or it has sent
+  if (gripOn and (rainMmH > 0 or wetlook.puddleRefShown() < 255)) or S.aquaActive then
+    local ok, on = pcall(aquaplane.update, dt, wetlook.puddleRefShown(), rainMmH, gripOn)
+    S.aquaActive = ok and on or false
+    if not ok then log('W', 'beamngEarth', 'weather aquaplane: ' .. tostring(on)) end
   end
 end
 M._phaseB = function(e, dt) phaseB(e, dt) end    -- (tests)
@@ -1792,7 +1803,7 @@ function M.onDeactivateBigMapCallback()
 end
 
 local function onLevel()
-  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset)
+  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset); pcall(aquaplane.reset)
   resetState()
   S.inOurLevel = getCurrentLevelIdentifier and getCurrentLevelIdentifier() == M.LEVEL_ID
   local sk = sky()
@@ -1801,7 +1812,7 @@ end
 M.onClientStartMission = onLevel
 function M.onClientEndMission()
   pcall(wxtraffic.reset)
-  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset)
+  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset); pcall(aquaplane.reset)
   resetState()
 end
 -- A Lua reload mid-level: settings.lua loads (and applies) before this extension, and no level
@@ -1865,6 +1876,7 @@ function M.setStormLight(on) M.STORM_LIGHT = on and true or false end
 function M.setLightning(on) M.LIGHTNING = on and true or false end
 function M.setStreaks(on) M.STREAKS = on and true or false end
 function M.setWetLook(on) M.WET_LOOK = on and true or false end
+function M.setWetGrip(on) M.WET_GRIP = on and true or false end
 function M.setRainVisibility(v) choice.visibility = clamp(tonumber(v) or M.RAIN_VISIBILITY, 0.25, 3) end
 -- the parts of the real weather kept (clouds, fog, wind, precip; false: as on a clear day)
 function M.setRealPart(part, on)
@@ -1889,7 +1901,7 @@ function M.loadChoices(get)
   if g('rainVisibility') ~= nil then choice.visibility = clamp(tonumber(g('rainVisibility')) or M.RAIN_VISIBILITY, 0.25, 3) end
   if g('fogLimit') ~= nil then choice.fogLimitM = math.max(0, tonumber(g('fogLimit')) or 0) end
   for key, f in pairs({ weatherStormLight = 'STORM_LIGHT', weatherLightning = 'LIGHTNING', weatherStreaks = 'STREAKS',
-      weatherWetLook = 'WET_LOOK' }) do
+      weatherWetLook = 'WET_LOOK', weatherWetGrip = 'WET_GRIP' }) do
     if g(key) ~= nil then M[f] = g(key) ~= false end
   end
   for part, key in pairs({ clouds = 'realClouds', fog = 'realFog', wind = 'realWind', precip = 'realPrecip' }) do
@@ -2047,7 +2059,8 @@ function M.status()
     precip = M.precipState(),
     phaseB = { stormLight = M.STORM_LIGHT, exposure = S.ev, gloom = S.cur and S.cur.gloom, thunder = S.tgt and S.tgt.thunder,
       storm = storm.status(), streaks = streaks.shown(), wet = { level = wetlook.level(), wetness = wetlook.wetness(),
-      source = wetlook.source, writes = wetlook.writes } },
+      source = wetlook.source, writes = wetlook.writes, grip = wetlook.grip(), film = aquaplane.film(),
+      aquaSends = aquaplane.sends } },
     traffic = S.traffic, lights = S.lightsWant, lightsWrap = wxtraffic.installed, tint = S.tint,
     msg = lastMsg, shown = shownMsgOf(), target = S.tgt, current = S.cur, line = M.statusLine() })
 end

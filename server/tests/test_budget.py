@@ -116,13 +116,12 @@ class LeanTierTest(unittest.TestCase):
         import copy
         import farfield
         import pmtiles
-        import photosurface
         import rangeread
         import roads
         self.mods = [(m, n, getattr(m, n)) for m, n in (
             (dem, "MEM_TILES"), (imagery, "MEM_TILES"), (imagery, "MEM_FINISHED_MB"), (imagery, "MEM_DECODED"),
             (mapdata, "MEM_MB"), (seacarve, "MEM_CELLS"), (roadwidth, "WALL_CELLS"), (pmtiles, "MEM_TILES_MB"),
-            (rangeread, "MEM_BYTES"), (photosurface, "MEM_TILES"), (roads, "FACTS_MEM_KEPT"),
+            (rangeread, "MEM_BYTES"), (roads, "FACTS_MEM_KEPT"),
             (budget, "SHED_MB"), (budget, "ROTATE_MB"), (budget, "TIER"), (budget, "LOW_FREE_GB"),
             (budget, "TREE_MB"))]
         self.far = (copy.deepcopy(farfield.K_TABLE), copy.deepcopy(farfield.TEX_DEFAULT))

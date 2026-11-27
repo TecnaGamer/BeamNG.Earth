@@ -2067,7 +2067,7 @@ def street_along(rail_lines, cr, step=STEP_M):
         llo, lhi = line[:, :2].min(0) - hw, line[:, :2].max(0) + hw
         if (llo > hi).any() or (lhi < lo).any():
             continue
-        m = roads._on_carriageways(pts, {0: (line[:, :2], float(hw))}, -STREET_INSET_M)
+        m = roads._on_carriageways(pts, {0: (line[:, :2], float(hw))}, -STREET_INSET_M, (lo, hi))
         if m.sum() * step >= STREET_ALONG_M:
             out[k] = m
     return out

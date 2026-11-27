@@ -63,7 +63,7 @@ _BLD_ALL = _BLD_HEIGHT + ("class", "subtype", "name", "facade_color", "facade_ma
 _ENV = {
     "D3": {"BNE_DEM_ZOOM": "12", "BNE_HRDEM": "0", "BNE_ROADZ": "off", "BNE_LIDAR_DECKS": "off",
            "BNE_ROADZ_HK": "off", "BNE_HKDTM": "off"},
-    "D6": {"BNE_ROADSURF": "off", "BNE_PHOTO_SURFACE": "off"},
+    "D6": {"BNE_ROADSURF": "off"},
 }
 
 
