@@ -727,62 +727,62 @@ class PlanCache:
         return plans, keeps, bool(meta.get("short")), meta.get("decks")
 
 
-    # ---- carriageway regions (grading._Planner._cw_region): solved once a run, read by every process ----
+    # ---- the 3D solve's blocks (grade3d.region.block): solved once a run, read by every process ----
+    # A block is a pure function of its planning frame's grid square, the map data and the elevation: every process
+    # that plans a cell, builds a road tile's meshes or reads a road's ranges (its solved decks) needs the same blocks,
+    # and each solved them itself: Popoli's blocks 20 times each, a road tile 12 min in one block's solve and no road
+    # in the game (2026-11-27).
 
-    def _region_path(self, tag, home):
-        return os.path.join(self.dir, "cw", tag, f"{int(home[0])}_{int(home[1])}_{int(home[2])}.npz")
+    def _block_path(self, tag, bx, by):
+        return os.path.join(self.dir, "g3d", tag, f"{int(bx)}_{int(by)}.npz")
 
-    def region_load(self, tag, home):
-        """{"parts": [(key, line, is_bridge, cls, fid)], "prof": {key: (xy, z)}} of region home (planner frame tag) or
-        None."""
-        try:
-            with np.load(self._region_path(tag, home), allow_pickle=False) as f:
-                meta = json.loads(bytes(f["meta"]).decode("utf-8"))
-                lines, cx, cz = _split(f, "l"), _split(f, "x"), _split(f, "q")
-        except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile):   # (damaged: planned again)
+    def block_load(self, tag, bx, by):
+        """The grade3d.region.Block (bx, by) of planning frame tag, or None."""
+        from grade3d.region import Block
+        p = self._block_path(tag, bx, by)
+        if not os.path.exists(p):
             return None
-        parts, prof = [], {}
-        for m, ln in zip(meta["parts"], lines):
-            key = tuple([m["key"][0]] + [float(v) for v in m["key"][1:]])
-            parts.append((key, ln, bool(m["br"]), m["cls"], m["fid"], float(m.get("lv", 1.0 if m["br"] else 0.0)),
-                          float(m.get("half", 5.0))))
-            if m["chain"] >= 0:
-                prof[key] = (cx[m["chain"]], cz[m["chain"]])
-        return {"parts": parts, "prof": prof}
-
-    def region_store(self, tag, home, got):
-        chains, idx = [], {}
-        for key, (xy, z) in got["prof"].items():
-            if id(xy) not in idx:
-                idx[id(xy)] = len(chains)
-                chains.append((xy, z))
-        meta = {"parts": [{"key": list(q[0]), "br": bool(q[2]), "cls": q[3],
-                           "fid": q[4] if isinstance(q[4], (str, int, type(None))) else str(q[4]),
-                           "lv": float(q[5]) if len(q) > 5 else (1.0 if q[2] else 0.0),
-                           "half": float(q[6]) if len(q) > 6 else 5.0,
-                           "chain": idx[id(got["prof"][q[0]][0])] if q[0] in got["prof"] else -1}
-                          for q in got["parts"]]}
-        arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}
         try:
-            _pack(arrays, "l", [np.asarray(q[1], np.float64) for q in got["parts"]])
-            _pack(arrays, "x", [np.asarray(xy, np.float64) for xy, _z in chains])
-            _pack(arrays, "q", [np.asarray(z, np.float64) for _xy, z in chains])
-            p = self._region_path(tag, home)
+            with np.load(p, allow_pickle=False) as f:
+                meta = json.loads(bytes(f["meta"]).decode("utf-8"))
+                cols = [_split(f, g) for g in ("a", "b", "za", "zb")]
+                core = (np.asarray(f["core"][0], np.float64), np.asarray(f["core"][1], np.float64))
+        except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile) as e:
+            log.warning("3D block (%s, %s) of %s: its shared file %s is damaged (%s: %s): solved again", bx, by, tag,
+                        p, type(e).__name__, e)
+            return None
+        prof = {(k[0], k[1]): tuple(c[j] for c in cols) for j, k in enumerate(meta["prof"])}
+        dk = [(d[0], np.array(d[1:3], np.float64), np.array(d[3:5], np.float64)) for d in meta["decks"]]
+        return Block(core, prof, float(meta["seconds"]), meta["diagnostics"], dk)
+
+    def block_store(self, tag, bx, by, blk):
+        keys = sorted(blk.prof, key=str)
+        meta = {"prof": [list(k) for k in keys], "seconds": float(blk.seconds), "diagnostics": dict(blk.diagnostics),
+                "decks": [[f] + [float(v) for v in a] + [float(v) for v in b] for f, a, b in blk.decks]}
+        arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8),
+                  "core": np.stack([np.asarray(blk.core[0], np.float64), np.asarray(blk.core[1], np.float64)])}
+        try:
+            for j, g in enumerate(("a", "b", "za", "zb")):
+                _pack(arrays, g, [np.asarray(blk.prof[k][j], np.float64) for k in keys])
+            p = self._block_path(tag, bx, by)
             os.makedirs(os.path.dirname(p), exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
                 np.savez(fh, **arrays)
             os.replace(tmp, p)
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError) as e:
+            log.warning("3D block (%s, %s) of %s: not written (%s: %s)", bx, by, tag, type(e).__name__, e)
             return False
         return True
 
-    def region_claim(self, tag, home):
-        """As claim, for a carriageway region."""
-        return xproc.once(self._region_path(tag, home) + ".lock", lambda: self.region_load(tag, home), WAIT_S)
+    def block_claim(self, tag, bx, by):
+        """As claim, for a 3D block: waited for as long as its solver lives and works (live_s), never solved twice
+        side by side."""
+        return xproc.once(self._block_path(tag, bx, by) + ".lock", lambda: self.block_load(tag, bx, by), WAIT_S,
+                          live_s=LIVE_WAIT_S, live_note=f"3D block ({bx}, {by}) of {tag}")
 
-    def region_release(self, tag, home):
-        xproc.release(self._region_path(tag, home) + ".lock")
+    def block_release(self, tag, bx, by):
+        xproc.release(self._block_path(tag, bx, by) + ".lock")
 
     # ---- interchanges (grading._Planner._interchange): solved once a run by the process that takes the interchange's
     # lock, read by every other process, which waits for it ----

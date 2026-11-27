@@ -158,12 +158,26 @@ def _fuse(ms):
     """One kind's copies of one way: the longest kept, each other copy's stretch along a kept one dropped, what goes on
     past a kept one's end added to it, what is left a piece of its own."""
     kept = []                   # ([line], template member)
-    work = [(_dense(m.line), m) for m in sorted(ms, key=lambda m: -float(np.hypot(*np.diff(
+    # (each piece of work with the kept lines it was cut from: a copy that leaves a kept line and comes back to it
+    # mid-line leaves a stretch touching it at both ends, read against the others only. Read against its own again it
+    # was the same stretch for ever: Popoli's blocks never built, no road in the game, 2026-11-27)
+    work = [(_dense(m.line), m, frozenset()) for m in sorted(ms, key=lambda m: -float(np.hypot(*np.diff(
         np.asarray(m.line, np.float64)[:, :2], axis=0).T).sum()) if len(m.line) > 1 else 0.0)]
+    # (a stretch put back holds a point no kept line it was read against covers, and is read against one more kept
+    # line each time: no more steps than the copies' points times the lines they can be read against)
+    steps, most = 0, (sum(len(w[0]) for w in work) + len(work)) * (len(work) + 1)
     while work:
-        line, m = work.pop(0)
+        steps += 1
+        if steps > most:
+            # (each piece of work is a copy, or a stretch cut from a kept line it is no longer read against: past this
+            # many the fusing goes round in circles, a fault to fix, named, not a road tile that never comes)
+            raise RuntimeError("grade3d: way %s's %d copies not fused after %d steps (%d kept lines, %d pieces of "
+                               "work left)" % (way_of(ms[0]), len(ms), steps - 1, len(kept), len(work)))
+        line, m, cut_from = work.pop(0)
         placed = False
-        for k in kept:
+        for n_k, k in enumerate(kept):
+            if n_k in cut_from:
+                continue
             cov = near_line(line, k[0])
             if not cov.any():
                 continue
@@ -185,7 +199,7 @@ def _fuse(ms):
                 elif head_cov and np.hypot(*(run[0] - start)) <= OVERLAP_M:
                     k[0] = np.concatenate([run[::-1][:-1], k[0]])
                 else:
-                    work.append((run, m))
+                    work.append((run, m, cut_from | {n_k}))
             break
         if not placed:
             kept.append([line, m])

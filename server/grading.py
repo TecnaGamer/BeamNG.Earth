@@ -6473,6 +6473,7 @@ roadsmod.DECK_Z_HOOK = _deck_z_hook
 
 _SOLVED_DECK_FIDS = set()      # the roads a solve made a deck of (_solved_decks_hook): their decks' heights are "set"
 _TUBES_MEMO = "_solved_tubes"
+_NO_STORE_SAID = []         # (once a process: _solved_decks_hook asked with no plan store)
 
 
 def _tubes(feats):
@@ -6515,6 +6516,11 @@ def _solved_decks_hook(feats, i):
     Kept on the layer."""
     store = _ACTIVE_STORE
     if store is None:
+        if not _NO_STORE_SAID:
+            _NO_STORE_SAID.append(True)
+            log.warning("grading: a road's decks over the tubes under it asked for in a process with no plan store "
+                        "(feature %s): the 3D solve is not read here, its roads have the map's ranges alone",
+                        feats.ids[i])
         return []
     memo = feats.__dict__.setdefault("_solved_decks", {})
     got = memo.get(i)
