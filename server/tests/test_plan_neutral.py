@@ -64,7 +64,7 @@ NAME_TABLES = {("revisit", "PLAN_NEUTRAL"), ("revisit", "NOT_SWITCHES"), ("exper
                ("experimental", "IDS"), ("bakepack", "CELL_SCOPED")}
 # The Experimental switches the planning does read (each changes plans or facts): the guard must see every one
 PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARES", "BNE_EU_ROAD_DETAILS",
-              "BNE_FR_ROADS", "BNE_GRADE_GUARD", "BNE_HRDEM_NEAR", "BNE_LIDARBC", "BNE_PHOTO_SURFACE",
+              "BNE_FR_ROADS", "BNE_HRDEM_NEAR", "BNE_LIDARBC", "BNE_PHOTO_SURFACE",
               "BNE_RAIL_CURVES", "BNE_RAIL_TUNNELS", "BNE_RAIL_XING", "BNE_SUBSEA_RELAX", "BNE_TERRAIN_BUMPS",
               "BNE_TUNNEL_LIDS",
               # (grading.FOLLOW_ON: the plans' profiles)

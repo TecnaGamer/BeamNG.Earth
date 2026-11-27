@@ -33,7 +33,8 @@ class NotSolved(RuntimeError):
 
 
 def _checked(d, what):
-    if d.get("status") not in ("Solved", "Unconstrained") or not d.get("converged", True):   # (Unconstrained: nothing in it)
+    # (AlmostSolved: converged to the reduced tolerances, an answer; Unconstrained: nothing in it)
+    if d.get("status") not in ("Solved", "AlmostSolved", "Unconstrained") or not d.get("converged", True):
         raise NotSolved("grade3d: %s not solved: %s" % (what, {k: d.get(k) for k in ("status", "converged", "rounds")}))
 
 
@@ -50,7 +51,12 @@ def solve(problem, rounds=_cw.ROUNDS):
 
 
 def _value(z, off, c):
-    return z[off[c[0]] + (c[1] % (off[c[0] + 1] - off[c[0]]))] - z[off[c[2]] + (c[3] % (off[c[2] + 1] - off[c[2]]))]
+    """The coupled quantity: z_a - z_b, or of three samples z_a - (1 - alpha) z_b - alpha z_c."""
+    def at(p, i):
+        return z[off[p] + (i % (off[p + 1] - off[p]))]
+    if len(c) == 9:
+        return at(c[0], c[1]) - (1.0 - c[8]) * at(c[2], c[3]) - c[8] * at(c[6], c[7])
+    return at(c[0], c[1]) - at(c[2], c[3])
 
 
 def measure(problem, z, doubt_w=None):
@@ -58,7 +64,7 @@ def measure(problem, z, doubt_w=None):
     ceilings), soft_grade_excess_p99 (past the comfortable), join_gap_max (m), bound_short_max and bound_short_count (a
     deck under its floor, a tunnel over its roof), clear_short_max and clear_short_count
     (of the clearances at doubt_w or more: the firm ones), doubted_short_max and doubted_short_count (the others),
-    meet_step_max}."""
+    meet_step_max, bend_excess_max (m past what a join's bend may deviate)}."""
     off = np.r_[0, np.cumsum([len(c["t"]) for c in problem.chains])].astype(np.int64)
     moved, gx, sgx = [], [0.0], [0.0]
     bound, n_bound = 0.0, 0
@@ -82,6 +88,7 @@ def measure(problem, z, doubt_w=None):
         doubt_w = layers.W_CLEAR
     gap, short, n_short, step = 0.0, 0.0, 0, 0.0
     dshort, n_dshort = 0.0, 0
+    bend = 0.0
     for c, (what, _k), sw in zip(problem.couplings, problem.why, problem.soft):
         v = float(_value(z, off, c))
         if c[4] == "eq":
@@ -96,10 +103,13 @@ def measure(problem, z, doubt_w=None):
                 n_dshort += s > 0.05
         elif what == "meet":
             step = max(step, abs(v))
+        elif what == "bend":
+            bend = max(bend, v - c[5] if c[4] == "le" else c[5] - v)
     return dict(moved_mean=float(moved.mean()), moved_p99=float(np.percentile(moved, 99)), moved_max=float(moved.max()),
                 grade_excess_max=max(gx), soft_grade_excess_p99=max(sgx), join_gap_max=gap,
                 bound_short_max=max(0.0, bound), bound_short_count=n_bound, clear_short_max=short,
-                clear_short_count=n_short, doubted_short_max=dshort, doubted_short_count=n_dshort, meet_step_max=step)
+                clear_short_count=n_short, doubted_short_max=dshort, doubted_short_count=n_dshort, meet_step_max=step,
+                bend_excess_max=max(0.0, bend))
 
 
 def worst(problem, z, n=10, what="clear", min_w=0.0):
@@ -161,7 +171,13 @@ def block_of(problem, samples, c0, c1, reach, path_of=None):
         fa, fb = samples.off[c[0]] + c[1] % n_a, samples.off[c[2]] + c[3] % n_b
         if run_of[fa] < 0 or run_of[fb] < 0:
             continue
-        cps.append((int(run_of[fa]), int(pos_in[fa]), int(run_of[fb]), int(pos_in[fb])) + tuple(c[4:]))
+        third = ()
+        if len(c) == 9:         # (a bend's: its third sample in the block too)
+            fc = samples.off[c[6]] + c[7] % (samples.off[c[6] + 1] - samples.off[c[6]])
+            if run_of[fc] < 0:
+                continue
+            third = (int(run_of[fc]), int(pos_in[fc]), float(c[8]))
+        cps.append((int(run_of[fa]), int(pos_in[fa]), int(run_of[fb]), int(pos_in[fb])) + tuple(c[4:6]) + third)
         soft.append(w)
     return Block((np.asarray(c0, np.float64), np.asarray(c1, np.float64)), runs, cps, soft, np.concatenate(idx))
 

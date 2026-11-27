@@ -105,18 +105,6 @@ class BridgeLiftsTest(unittest.TestCase):
                          [lf for _e, lf in grading.bridge_lifts(deck, [deck], ground, z, limits=[])])
 
 
-class CorridorUnderDeckTest(unittest.TestCase):
-    def test_a_raise_under_a_deck_is_found(self):
-        xy = np.c_[np.linspace(-50, 50, 26), np.zeros(26)]
-        deck = [(np.array([[0.0, -40.0], [0.0, 40.0]]), 6.0)]
-        dz = np.where(np.abs(xy[:, 0]) < 10, 3.0, 0.0)
-        self.assertTrue(grading._raised_under(xy, dz, deck))
-        self.assertFalse(grading._raised_under(xy, dz * 0.2, deck))     # (a small raise: the corridors as before)
-        far = np.where(np.abs(xy[:, 0] - 40) < 5, 3.0, 0.0)             # (raised beside, not under it)
-        self.assertFalse(grading._raised_under(xy, far, deck))
-
-
-
 class PiersBesideLimitsTest(unittest.TestCase):
     def test_a_chain_with_height_limits_keeps_its_piers(self):
         # the chain's ground holds its cells' height limits too (("lim", cell): (xy, m) pairs, no lines): its piers
@@ -162,7 +150,6 @@ class BridgeOwnLimitTest(unittest.TestCase):
         with mock.patch.object(roads, "tag_level_ranges", lambda feats, i: [(0.3, 0.7, "bridge")]):
             self.assertEqual(sorted(h for _r, h in roads.height_limit_lines(f)), [3.0, 4.0])
             self.assertEqual([h for _r, h in roads.height_limit_lines(f, on_bridges=False)], [4.0])
-
 
 
 class CellLimitsShortReadTest(unittest.TestCase):

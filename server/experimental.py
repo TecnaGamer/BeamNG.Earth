@@ -66,7 +66,6 @@ FEATURES = (
     ("expRoadBumps", {"BNE_BUMPS": "1"}, None),                           # bumps.SCALE
     ("expRoughDirt", {"BNE_DIRT_BUMP": "1", "BNE_DIRT_BANK": "0.015"}, None),   # grading.DIRT_ROUGH / DIRT_BANK_M
     ("expWearStrips", {"BNE_WEAR_STRIPS": "on"}, None),                   # roadwear.STRIPS_ON
-    ("expGradeGuard", {"BNE_GRADE_GUARD": "on"}, None),                   # grading.GUARD_ON
     ("expPhotoSurface", {"BNE_PHOTO_SURFACE": "1"}, None),                # photosurface.ON
     ("expTerrainBumps", {"BNE_TERRAIN_BUMPS": "on"}, None),               # grading.TERRAIN_BUMPS_ON
     ("expRoadFollow", {"BNE_ROAD_FOLLOW": "on"}, None),                   # grading.FOLLOW_ON

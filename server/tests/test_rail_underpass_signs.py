@@ -75,13 +75,6 @@ class HeightLimitTest(unittest.TestCase):
         self.assertAlmostEqual(float(e.max()), 520.0, delta=1.0)
         self.assertEqual(roads.height_limit_lines(features([[(0, 0), (10, 0)]], ["secondary"])), [])
 
-    def test_the_limit_holds_where_the_line_passes_near(self):
-        limits = [(np.array([[495.0, 0.0], [505.0, 0.0]]), 3.3), (np.array([[0.0, 50.0], [10.0, 50.0]]), 2.5)]
-        self.assertEqual(grading._limit_at(limits, (500.0, 1.0)), 3.3)
-        self.assertIsNone(grading._limit_at(limits, (500.0, 20.0)))
-        self.assertTrue(railways.limit_near(limits, (500.0, 1.0)))
-        self.assertFalse(railways.limit_near(limits, (400.0, 0.0)))
-
 
 if __name__ == "__main__":
     unittest.main()

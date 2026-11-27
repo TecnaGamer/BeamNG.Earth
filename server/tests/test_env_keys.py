@@ -30,7 +30,7 @@ OUTPUT_MODULES = (
     "levelways", "roadsmooth", "railways", "railtags", "markings", "rampmerges", "gradesep", "roadz", "dem",
     "footbridges", "bridgetypes", "carriageways", "crossings", "roadlanes", "roadwidth", "navgraph", "plancache",
     "decisions", "l0roads", "sidewalks", "guardrails", "tunnellids", "subsea", "deckspans", "railroadseam",
-    "junctions", "roadcorners", "medians", "medianbarriers", "railprofile", "railbridges", "portals", "germanroads",
+    "junctions", "roadcorners", "medians", "medianbarriers", "railbridges", "portals", "germanroads",
     "franceroads", "europewalks", "roadsurf", "lidarz", "pmtiles", "hrdem", "lidarbc", "mtarchive", "polardem",
     "bdtopo", "blockworker", "specs", "tapers", "experimental")
 

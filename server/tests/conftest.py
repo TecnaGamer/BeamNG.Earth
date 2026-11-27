@@ -40,10 +40,7 @@ def _no_browser(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_interchanges_remembered():
-    """What the process remembers of interchanges (ix/owner.py: their solutions, their index) is cleared before each test:
-    a test that asks for one meets it solved by an earlier test otherwise."""
-    from ix import owner
-    for table in (owner.PROCESS, owner.INDEX, owner.FLIGHTS):
-        table.clear()
+    """What the process remembers of the road network is cleared before each test: a test that asks for it meets an
+    earlier test's otherwise."""
     import linenet
     linenet.reset()             # (the process's line network: an earlier test's lines)

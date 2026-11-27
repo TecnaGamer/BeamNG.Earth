@@ -65,13 +65,14 @@ def test_a_track_is_moved_less_than_a_road():
 
 def test_a_contradiction_is_answered_with_the_least_shortfall():
     # (two decks mapped as crossing one level apart, and a road 11 m long joining them 8 m from the crossing: within the
-    # ceilings no answer holds the clearance)
+    # ceilings no answer holds the clearance, and the layer step knows it (the roads connect nearer the crossing than its
+    # clearance at the climbing grade): the clearance is doubted, and it gives)
     ms = [_m("hi", _line(-300, 0, 300, 0, 61), "deck", level=2.0), _m("lo", _line(0, -300, 0, 300, 61), "deck", level=1.0),
           _m("link", _line(0, 8, 8, 0, 4))]
     _net, _sm, _lw, pr, sol, got = _run(ms)
     assert sol.diagnostics["status"] == "Solved", sol.diagnostics
     assert got["join_gap_max"] < 1e-4 and got["grade_excess_max"] < 1e-4      # (the joins and the ceilings hold ...)
-    assert got["clear_short_max"] > 0.5                                         # (... the clearance gives)
+    assert got["doubted_short_max"] > 0.5 and got["clear_short_max"] < 0.05     # (... the doubted clearance gives)
 
 
 def _hilly(xy):
@@ -146,3 +147,44 @@ def test_carriageways_side_by_side_meet_and_a_bridge_ramp_beside_its_street_does
              for p, i, r, j, _g in pairs}
     assert ("w", "side") in names or ("side", "w") in names           # (two streets side by side: a batter)
     assert not any("st" in n for n in names)                          # (the street the bridge crosses: its clearance)
+
+
+def _bend_case():
+    # (a deck over a road forks at its top: the through deck goes on, a ramp deck leaves at 40 deg and comes down to the
+    # ground; the ramp's own laws end at the fork, so only the bend law ties its grade to the deck's there)
+    a = np.radians(40.0)
+    ramp = np.stack([np.linspace(0.0, 160.0 * np.cos(a), 21), np.linspace(0.0, 160.0 * np.sin(a), 21)], axis=1)
+    end = ramp[-1]
+    return [_m("w", _line(-400, 0, -60, 0)), _m("d1", _line(-60, 0, 0, 0), "deck", level=1.0),
+            _m("d2", _line(0, 0, 60, 0), "deck", level=1.0), _m("e", _line(60, 0, 400, 0)),
+            _m("ramp", ramp, "deck", "secondary_link", level=1.0),
+            _m("rg", _line(end[0], end[1], end[0] + 300 * np.cos(a), end[1] + 300 * np.sin(a))),
+            _m("under", _line(-20, -300, -20, 300))]
+
+
+def test_a_ramp_leaving_a_deck_at_a_fork_bends_across_it_no_more_than_a_drivable_curve():
+    ms = _bend_case()
+    net, sm, _lw, pr, sol, got = _run(ms)
+    assert sol.diagnostics["status"] in ("Solved", "AlmostSolved"), sol.diagnostics
+    assert pr.summary().get("bend", 0) > 0
+    assert got["bend_excess_max"] < 0.02, got
+    # (the lift a car driving off the deck onto the ramp feels across the fork, drivability's: v^2 |z(-5) - 2 z(0) + z(5)|
+    # / 25 / g at the class's speed, at most the gate)
+    off = np.r_[0, np.cumsum([len(c["t"]) for c in pr.chains])]
+    for c, (what, _k) in zip(pr.couplings, pr.why):
+        if what != "bend" or c[4] != "le":
+            continue
+        dev = float(solve._value(sol.z, off, c))
+        assert abs(dev) <= c[5] + 0.02, (dev, c)
+
+
+def test_without_the_bend_law_the_fork_kinks():
+    ms = _bend_case()
+    w = problem.W_BEND
+    try:
+        problem.W_BEND = 1e-9        # (0 would make it hard: the kernel holds an unweighted inequality)
+        net, sm, _lw, pr, sol, got = _run(ms)
+    finally:
+        problem.W_BEND = w
+    # (the same couplings, paid next to nothing: what they measure is how far the free answer bends)
+    assert got["bend_excess_max"] > 0.02, got

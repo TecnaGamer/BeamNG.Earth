@@ -30,9 +30,9 @@ class OffTest(unittest.TestCase):
     def test_off_by_default_plans_unchanged(self):
         self.assertEqual(bumps.SCALE, 0.0)
         ll = line(600.0)
-        a = grading.plan_road(FRAME, ll, spec(), FLAT)
+        a = grading.plan_roads(FRAME, [(ll, spec())], FLAT)[0]
         with mock.patch.object(bumps, "SCALE", 0.0):
-            b = grading.plan_road(FRAME, ll, spec(), FLAT)
+            b = grading.plan_roads(FRAME, [(ll, spec())], FLAT)[0]
         np.testing.assert_array_equal(a.z, b.z)
         np.testing.assert_allclose(a.z, 100.0)
         self.assertIsNone(a.bank)
@@ -41,7 +41,7 @@ class OffTest(unittest.TestCase):
 @mock.patch.object(bumps, "SCALE", 1.0)
 class OnTest(unittest.TestCase):
     def test_plan_gets_roughness_within_bounds(self):
-        p = grading.plan_road(FRAME, line(), spec(), FLAT)
+        p = grading.plan_roads(FRAME, [(line(), spec())], FLAT)[0]
         dz = p.z - 100.0
         self.assertGreater(dz.std(), 0.02)
         self.assertLess(np.abs(dz).max(), 0.6)
@@ -51,7 +51,7 @@ class OnTest(unittest.TestCase):
         ll = line(1000.0)
         far = geodesy.EnuFrame(52.2, 21.0)
         for fr in (FRAME, far):
-            p = grading.plan_road(fr, ll, spec(), FLAT)
+            p = grading.plan_roads(fr, [(ll, spec())], FLAT)[0]
             la, lo, _ = fr.enu_to_geodetic(p.xy[:, 0], p.xy[:, 1], 0.0)
             dz, _ = bumps.offsets(la, lo, bumps._gain(spec()), "mid")
             np.testing.assert_allclose(p.z - 100.0, dz, atol=1e-9)
@@ -67,7 +67,7 @@ class OnTest(unittest.TestCase):
             self.assertLess(np.abs(np.diff(roll)).max(), 1e-4, group)
 
     def test_faded_before_a_bridge(self):
-        p = grading.plan_road(FRAME, line(300.0), spec(), FLAT)
+        p = grading.plan_roads(FRAME, [(line(300.0), spec())], FLAT)[0]
         with mock.patch.object(bumps, "SCALE", 0.0):
             q = grading.plan_roads(FRAME, [(line(300.0), spec())], FLAT, abut=[(True, True)])[0]
         r = grading.plan_roads(FRAME, [(line(300.0), spec())], FLAT, abut=[(True, True)])[0]
@@ -87,7 +87,7 @@ class OnTest(unittest.TestCase):
 
     def test_classes_rank(self):
         ll = line(3000.0)
-        rough = {c: grading.plan_road(FRAME, ll, spec(c), FLAT).z.std() for c in ("motorway", "tertiary")}
+        rough = {c: grading.plan_roads(FRAME, [(ll, spec(c))], FLAT)[0].z.std() for c in ("motorway", "tertiary")}
         self.assertLess(rough["motorway"], rough["tertiary"])
 
 

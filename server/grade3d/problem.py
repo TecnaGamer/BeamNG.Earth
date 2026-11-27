@@ -3,7 +3,10 @@ layers).
 
     pose(network, samples, laws) -> Problem
 
-- A join holds the two paths at one height (hard: a road meeting another is continuous).
+- A join holds the two paths at one height (hard: a road meeting another is continuous), and where a deck or a tunnel is
+  one of them, the road driven across it bends no more than a drivable crest or dip (soft): each path's own laws end at
+  its ends, and a deck met by another at a node sat at the right height at the wrong grade, a kink of 9-18x the drivable
+  lift at Suedtiroler Platz.
 - A layer (step 2) over: the upper path stands over the lower by its clearance, wherever the lower runs under the upper's
   carriageway (the lower's samples within the upper's half width and CLEAR_PAD_M of the crossing, across the angle they
   cross at) and the upper over the lower's (soft: its Layer's weight per m^2 short).
@@ -57,6 +60,57 @@ def _reach(samples, p, i, other, k_other, half):
         return [i]
     k = int(np.ceil(half / sin / h))
     return list(range(max(0, i - k), min(n - 1, i + k) + 1))
+
+
+BEND_CHORD_M = 5.0          # m either side of a join the bend across it is measured over (drivability's lift_g chord)
+BEND_LIFT_G = 0.10          # the lift a bend across a join gives at its class's speed, at most before it pays: half the
+                            # drivability gate (0.20 g), the rest left to the paths' own curves either side
+BEND_KMH = 50.0             # km/h: the speed of a road with none in laws.DRIVE_KMH
+W_BEND = 1.0e4              # per m^2 past it
+BEND_KINDS = ("deck", "rail_deck", "tunnel")
+
+
+def _ahead(samples, p, i, sign, reach):
+    """(sample, distance m) of path p the nearest reach along it from its sample i in direction sign (+1: on), or None
+    at the path's end that way."""
+    sl = samples.of(p)
+    s = samples.s[sl]
+    k = i + sign
+    if k < 0 or k >= len(s):
+        return None
+    while 0 <= k + sign < len(s) and abs(s[k] - s[i]) < reach and \
+            abs(abs(s[k + sign] - s[i]) - reach) < abs(abs(s[k] - s[i]) - reach):
+        k += sign
+    return k, float(abs(s[k] - s[i]))
+
+
+def bends(network, samples):
+    """[(path a, join sample i, near sample on a, path b, sample on b, alpha, value)] per join with a deck or a tunnel on
+    one side and each way across it: the join's height held within value (m) of the line through the two near samples
+    (BEND_CHORD_M along each path from the join, alpha the join's place along that line), the deviation a vertical curve
+    of BEND_LIFT_G at the faster class's speed makes over that chord."""
+    from .laws import DRIVE_KMH
+    out = []
+    for pa, ia, pb, ib in samples.joins:
+        ma = network.members[int(samples.member[samples.of(pa).start + ia])]
+        mb = network.members[int(samples.member[samples.of(pb).start + ib])]
+        if ma.kind not in BEND_KINDS and mb.kind not in BEND_KINDS:
+            continue
+        kmh = max(DRIVE_KMH.get(str(m.cls or "").replace("_link", ""), BEND_KMH) for m in (ma, mb))
+        v = kmh / 3.6
+        for sa in (-1, 1):
+            A = _ahead(samples, pa, ia, sa, BEND_CHORD_M)
+            if A is None:
+                continue
+            for sb in (-1, 1):
+                B = _ahead(samples, pb, ib, sb, BEND_CHORD_M)
+                if B is None:
+                    continue
+                (ka, da), (kb, db) = A, B
+                if da <= 0 or db <= 0:
+                    continue
+                out.append((pa, ia, ka, pb, kb, da / (da + db), da * db * BEND_LIFT_G * 9.81 / (2.0 * v * v)))
+    return out
 
 
 BESIDE_M = 8.0              # m between two carriageways' edges within which the ground between them is held to ...
@@ -149,6 +203,10 @@ def pose(network, samples, laws):
         pr.why.append(why)
     for k, (pa, ia, pb, ib) in enumerate(samples.joins):
         add((pa, ia, pb, ib, "eq", 0.0), 0.0, ("join", k))
+    for k, (pa, ia, ka, pb, kb, alpha, v) in enumerate(bends(network, samples)):
+        # (z at the join less the line from a's near sample to b's: within v either way)
+        add((pa, ia, pa, ka, "le", v, pb, kb, alpha), W_BEND, ("bend", k))
+        add((pa, ia, pa, ka, "ge", -v, pb, kb, alpha), W_BEND, ("bend", k))
     for k, (pa, ia, pb, ib, lay) in enumerate(samples.crossings):
         if lay.upper is None and lay.weight <= 0.0:
             continue

@@ -189,7 +189,7 @@ class KeysTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {}):
             fresh_keys()
             e0 = bakepack._expect_for(MD(), "w1s1")
-        with mock.patch.dict(os.environ, experimental.env_for({"expGradeGuard": True})):
+        with mock.patch.dict(os.environ, experimental.env_for({"expTerrainBumps": True})):
             fresh_keys()
             e1 = bakepack._expect_for(MD(), "w1s1")
         self.assertIn("switches", e0)
