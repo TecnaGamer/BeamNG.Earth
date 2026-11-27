@@ -614,9 +614,19 @@ def _end_meets(net, e, se, o, so, crossed):
     road cannot meet the one it passes over or under a few metres on: Gravelly Hill's level-1 M6 deck under its
     level-3 one at 29 deg, its end 5 m past their crossing)."""
     me, mo = net.m[e], net.m[o]
-    if mo.kind not in STRUCTURES or _over(me, mo) is None:
+    if _over(me, mo) is None:
         return True
-    mapped = me.nodes is None or mo.nodes is None or bool(me.nodes & mo.nodes)    # (no nodes known: as they lie)
+    # (no nodes known, None or none at all (a busway's made-up id): as they lie)
+    mapped = not me.nodes or not mo.nodes or bool(me.nodes & mo.nodes)
+    if mo.kind not in STRUCTURES:
+        # (a deck's or a tunnel's end over or under a motorway on the ground meets it only where the map joins them: a
+        # motorway has no junction at grade. Four link decks meeting over the S1 at Breitenleer, no node of it, were
+        # joined to it, the decks pulled down onto the motorway and it up to them, a sag of 37x the drivable lift at
+        # the node and the S1 at 10 %. Any other road's: as they lie, its node set too thin to say (Suedtiroler
+        # Platz's primary under seven deck ends held its two end nodes only, and its decks unjoined fell 5 m))
+        if me.kind in STRUCTURES and str(mo.cls or "") == "motorway":
+            return mapped
+        return True
     if min(so, net.L[o] - so) <= JOIN_M:
         return me.kind not in STRUCTURES or mapped or _road_of(me) == _road_of(mo)
     if me.kind not in STRUCTURES:

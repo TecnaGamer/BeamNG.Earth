@@ -21,6 +21,7 @@ off it costs, and the bounds of its kind.
 
 The weights share one unit, W_GROUND: a road sample a metre off its ground. At REF_KMH, a grade 1 % past the comfortable
 over one STEP_M segment pays what that segment's sample a metre off its ground does (W_GRADE * h * 0.01^2 = 1)."""
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -29,7 +30,8 @@ import carriageways as _cw
 import gradeshapes as _gsh
 from . import network as _network
 
-W_GROUND = 1.0              # a road's sample a metre off its ground (per m^2)
+W_GROUND = float(os.environ.get("BNE_G3D_W_GROUND", "1.0"))  # per metre of road a metre off its ground (per m^2;
+                            # a sample weighs the length it stands for: the cost of moving a road is its length's)
 RAIL_GROUND_X = 20.0        # a track's: this times a road's
 W_BOUND = 1.0e4             # a deck's sample a metre under its floor, a tunnel's over its roof
 W_GRADE = 1.0e4 / _gsh.STEP_M   # per m of path, per (grade past the comfortable)^2, at REF_KMH
@@ -194,7 +196,9 @@ def lay(network, samples, ground):
         sl = samples.of(p)
         mem = samples.member[sl]
         kk = kind[mem]
-        w[sl] = np.where(kk == "ground", W_GROUND, np.where(kk == "rail", W_GROUND * RAIL_GROUND_X, 0.0))
+        ds = np.diff(samples.s[sl])
+        span = np.r_[ds, 0.0] / 2 + np.r_[0.0, ds] / 2 if len(ds) else np.ones(1)   # (m of the path each sample stands for)
+        w[sl] = span * np.where(kk == "ground", W_GROUND, np.where(kk == "rail", W_GROUND * RAIL_GROUND_X, 0.0))
         away = inner(samples, p)
         deck = away & ((kk == "deck") | (kk == "rail_deck"))
         if deck.any():
@@ -218,7 +222,7 @@ def lay(network, samples, ground):
 
 def summary(laws):
     """Counts of what the laws hold."""
-    return dict(track_samples=int(np.count_nonzero(laws.w >= W_GROUND * RAIL_GROUND_X)),
+    return dict(track_samples=int(np.count_nonzero(laws.w >= W_GROUND * RAIL_GROUND_X * 0.5)),
                 city_tracks=int(laws.urban.sum()),
                 deck_floor=int(np.isfinite(laws.lo).sum()), tunnel_roof=int(np.isfinite(laws.hi).sum()),
                 free=int((laws.w == 0).sum()))

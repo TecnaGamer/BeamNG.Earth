@@ -153,3 +153,16 @@ def test_a_road_goes_on_through_a_fork_its_ramp_leaves_it():
     keys = [[str(net.members[i].key) for i, _f in path.parts] for path in net.paths]
     assert sorted(len(k) for k in keys) == [1, 2] and any(set(k) == {"in", "on"} for k in keys)
     assert len(net.joins) >= 1                      # (the ramp joined to the road going on)
+
+
+def test_a_decks_end_over_a_motorway_on_the_ground_joins_it_only_at_a_node_of_both():
+    def mm(key, line, kind, level, nodes, cls="secondary"):
+        return Member(key, np.asarray(line, np.float64), kind, cls, None, level, 4.0, None, nodes)
+    road = mm("road", _line(-200, 0, 200, 0), "ground", 0.0, frozenset({"a", "b", "x"}), "motorway")
+    deck = mm("deck", _line(0, 0, 0, 150), "deck", 1.0, frozenset({"y", "z"}))        # (its end over the road, no node of it)
+    net = network.build([road, deck])
+    assert net.joins == [] and len(net.paths) == 2
+    linenet.reset()
+    deck = mm("deck", _line(0, 0, 0, 150), "deck", 1.0, frozenset({"x", "z"}))        # (the map joins them at x)
+    net = network.build([road, deck])
+    assert len(net.joins) == 1

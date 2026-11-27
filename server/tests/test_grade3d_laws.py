@@ -54,7 +54,9 @@ def test_a_track_in_a_city_bends_more_and_any_track_is_dear_to_move():
     assert lw.urban[c] and not lw.urban[o]
     assert lw.soft_K[c] < lw.soft_K[o] and lw.soft_grade[c] > lw.soft_grade[o] and lw.kmh[c] < lw.kmh[o]
     s = _p(net, "s0")
-    assert np.all(lw.w[sm.of(c)] == laws.RAIL_GROUND_X * lw.w[sm.of(s)][0])
+    # (per metre: a sample weighs the length it stands for, half of it at a path's ends)
+    wc, ws = lw.w[sm.of(c)], lw.w[sm.of(s)]
+    assert np.allclose(wc[1:-1] / sm.h[c], laws.RAIL_GROUND_X * np.median(ws[1:-1] / sm.h[s]))
 
 
 def test_a_deck_stands_over_its_ground_and_a_tunnel_under_it_away_from_their_ends():
@@ -72,7 +74,8 @@ def test_a_deck_stands_over_its_ground_and_a_tunnel_under_it_away_from_their_end
     in_tube = (x > 400 + laws.ABUT_M + 4) & (x < 700 - laws.ABUT_M - 4)
     assert np.allclose(lw.hi[in_tube], 10 - gsh.COVER_M - gsh.HEADROOM_M)
     on_ground = x < 99
-    assert np.all(lw.w[on_ground] == laws.W_GROUND) and np.all(np.isinf(lw.lo[on_ground]) & np.isinf(lw.hi[on_ground]))
+    sp = np.r_[np.diff(sm.s[sm.of(p)]), 0.0] / 2 + np.r_[0.0, np.diff(sm.s[sm.of(p)])] / 2
+    assert np.allclose(lw.w[on_ground], laws.W_GROUND * sp[on_ground]) and np.all(np.isinf(lw.lo[on_ground]) & np.isinf(lw.hi[on_ground]))
     assert lw.lam[p] == laws.LAM_DECK
 
 
