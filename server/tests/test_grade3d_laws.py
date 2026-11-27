@@ -104,3 +104,8 @@ def test_a_tunnel_is_drawn_to_the_line_between_its_portals_not_to_the_mountain()
     tun = lw.w == 0.0
     assert tun.any() and np.allclose(lw.t[tun], 10.0)
     assert (lw.hi[tun] > 100.0).any()                                   # (the cover still the mountain's)
+
+
+def test_a_link_is_held_to_its_roads_drivable_ceiling():
+    net, _sm, lw = _lay([_m("ln", _line(0, 0, 60, 0), cls="secondary_link", kmh=50)])
+    assert lw.grade[_p(net, "ln")] <= laws.DRIVE_GRADE + 1e-12

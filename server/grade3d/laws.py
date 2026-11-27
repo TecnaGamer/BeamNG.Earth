@@ -129,14 +129,15 @@ DRIVE_KMH = {"motorway": 130.0, "trunk": 100.0, "primary": 90.0, "secondary": 80
 
 def drive_ceiling(network, path):
     """(grade, vertical curve radius m) a major road's path may not go past, whatever its comfortable laws: the drivable
-    ones at its fastest class's driving speed (DRIVE_KMH, not its limit: a car drives a city's 50 km/h secondary at 80);
+    ones at its fastest class's driving speed (DRIVE_KMH, not its limit: a car drives a city's 50 km/h secondary at 80;
+    a link as its road: Suedtiroler Platz's secondary links, 9 m decks, rose 2 m to a crest at 22 %);
     (None, None) for others (a link, a street, a track)."""
     best = None
     for i in path.members():
         m = network.members[i]
         if _network.family(m.kind) != "road":
             continue
-        v = DRIVE_KMH.get(str(m.cls or ""))
+        v = DRIVE_KMH.get(str(m.cls or "").replace("_link", ""))     # (a link driven as its road: drivability's)
         if v is not None and (best is None or v > best):
             best = v
     if best is None:

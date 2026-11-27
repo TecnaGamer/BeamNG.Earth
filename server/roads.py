@@ -8578,6 +8578,10 @@ ROAD_CORE_HOOK = None   # grading sets it: hook(spec) -> half m of the road's gr
                         # ground under a road is graded over, and so what a tunnel's arch cover is read under (_over_arches)
 TUNNEL_Z_HOOK = None    # grading sets it (BNE_SHAPES): hook(frame, lines, fids) -> [z (k,) or None] per tunnel line: the
                         # road's height its interchange's shape solved (TunnelProfiles._shaped), in the frame's up metres
+SHAPED_PORTALS = False      # grading sets it (the 3D solve, BNE_GRADE3D): a shaped tunnel's portals at the shape's height
+                            # too, not the ground's (the solve put them where the deck or the road they meet is: Casagranda's
+                            # portals 18 m over the gorge's DEM, its bridge between them, an 11.9 m step at each when the
+                            # portals were read on the ground)
 
 
 OBS_UNDER_ON = os.environ.get("BNE_OBS_UNDER", "on") != "off"
@@ -10999,7 +11003,10 @@ class TunnelProfiles(BridgeProfiles):
                 # and the vault stood in the seven tracks at 160.5 m the shape had cleared by 7.15 m)
                 if gc is None:
                     gc = g.copy()
-                g[1:-1] = shaped[1:-1]
+                if SHAPED_PORTALS:
+                    g = np.where(np.isfinite(shaped), shaped, g)
+                else:
+                    g[1:-1] = shaped[1:-1]
             if underwater:
                 floor = underwater_floors[k]
                 la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.)

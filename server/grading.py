@@ -785,6 +785,7 @@ if GRADE3D_ON:
     COARSE_EASE_ON = NEIGHBOUR_ON = False
     import railprofile as _railprofile
     _railprofile.ENABLED = False
+    roadsmod.SHAPED_PORTALS = True
 CW_MAX_M = 8000.0       # m: a carriageway chain is cut here (a branch point or a loose end comes long before)
 CW_HEADROOM_M = roadsmod.MIN_BRIDGE_HEADROOM_M + roadsmod.BRIDGE_HEADROOM_MARGIN_M   # m of headroom the carriageways
                         # keep over one another, the roads and the tracks under them (+ the deck's depth): the decks' own
