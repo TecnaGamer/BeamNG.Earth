@@ -129,6 +129,10 @@ SKIP_KINDS = {"30", "40"}   # Estonia's tyyp: a foundation, a ruin (no roof to r
 # the game drew as predicted roofs (flat on a large building). The faces' shape against the model's own on the same
 # tiles' typed roofs: gabled 1120 of 1121, skillion 631 of 652, flat 468 of 469, hipped 18 of 18. A roof the faces
 # say nothing clear about keeps its code (height only, as before).
+# A flat reading is not taken from them: a shapeless code with one level roof face is a block the survey gave no roof
+# (on the same tiles 155 of the 168 "other" read flat, and 95 % of those have a whole-metre height, 3.0 or 9.0 m,
+# against 11 % of all other records; a house there that the game drew with its predicted gable had turned flat, the
+# user's in-game look 2026-11-27). Such a roof stays predicted, as before.
 SHAPELESS = {"5000", "9999"}
 
 
@@ -168,6 +172,8 @@ def row(el, epsg, part):
     if (not roof or (roof in SHAPELESS and not BLIND)) and roofs:
         kept = roof                 # (validate compares the faces with the model's own shapes: it leaves them be)
         code, rise = lod2_classify.classify_rise(roofs)     # (no roofType, or one with no shape: read from the faces)
+        if kept and code == lod2_classify.FLAT:
+            code = None                                     # (a shapeless block, not a measured flat roof)
         roof = str(code) if code else kept
         if not code and kept:
             rise = None                                     # (a shapeless code kept: its roof height as before)

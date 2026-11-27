@@ -204,6 +204,18 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(r["roof"], "5000")
         self.assertAlmostEqual(r["zt"] - r["zr"], 3.0, 2)  # (its roof height as before: the faces' span)
 
+    def test_a_shapeless_roof_with_one_level_face_stays_shapeless(self):
+        """A 9999 block with one level roof face is not a measured flat roof (2026-11-27: 95 % of them have a
+        whole-metre height; a house drawn with its predicted gable turned flat): it keeps its code."""
+        from lxml import etree
+        level = [[(0, 0, 9), (0, 8, 9), (10, 8, 9), (10, 0, 9)]]
+        for code in ("5000", "9999"):
+            r = self.B.row(etree.fromstring(self.german(code, level)), 25832, False)
+            self.assertEqual(r["roof"], code)
+            self.assertAlmostEqual(r["zt"] - r["zr"], 0.0, 2)
+        r = self.B.row(etree.fromstring(self.german("", level)), 25832, False)
+        self.assertEqual(r["roof"], str(C.FLAT))            # (no roofType at all: the faces still say flat)
+
     def test_validate_leaves_the_models_shapeless_codes_be(self):
         from lxml import etree
         gable = [[(x, y, z + 6) for x, y, z in r] for r in gabled()]
