@@ -42,7 +42,7 @@ HF_API = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 LAYERS = {"modis": "MODIS_Terra_NDSI_Snow_Cover", "viirs": "VIIRS_NOAA20_NDSI_Snow_Cover"}
 # per host: seconds between requests (well under each service's limits: GIBS's server policy is 8/s, NSIDC has none
 # published, Open-Meteo 10 s apart as the server's background requests)
-RATE_S = {"noaadata.apps.nsidc.org": 2.0, "gibs.earthdata.nasa.gov": 0.35, "historical-forecast-api.open-meteo.com": 10.0}
+RATE_S = {"noaadata.apps.nsidc.org": 2.0, "gibs.earthdata.nasa.gov": 0.25, "historical-forecast-api.open-meteo.com": 10.0}
 
 CELL = 0.25                 # the pack's forcing cell (PLAN_FINAL S1b)
 DEM_RES = 0.001             # deg a DEM sample (~110 m)
@@ -484,6 +484,14 @@ def pick_dates(lines_json, places, per_place, mild_dates):
     return out
 
 
+# The fusion rules the tables command compares (snowfield.rs Fusion: bare_max, snow_min permille, two_day, fresh_snow
+# 0.01 mm): A the plan's (bare at most 25 % two days running, white from 50 %), B symmetric at 50 % two days, C symmetric
+# one day, D one day and white only from 75 %
+# (the observed rows' shift 0 here: the variants' "+150" shift them themselves; E with +150 is snowfield.rs's default)
+FUSIONS = {"A": (250, 500, True, 100, 0), "D": (499, 750, False, 100, 0), "E": (499, 750, False, 500, 0),
+           "F": (499, 750, False, 10 ** 9, 0), "G": (499, 750, True, 500, 0)}
+
+
 def cmd_tables(a, places, _dates):
     import snow as snowmod
     ef = fast._ef
@@ -496,6 +504,11 @@ def cmd_tables(a, places, _dates):
             ims = {k: ims_obs_for(a, [p], d - datetime.timedelta(days=k)) for k in (0, 1, 2)}
             gv = p.gibs_values(a.cache, LAYERS["modis"], d, cmap)
             mo = ef.snowobs_classes(gv.ravel(), "ndsi")
+            # Sentinel-2 of the day (HLS, MODIS-clear pixels), when it passed
+            s2 = hls_obs(a.cache, p, d, gv) if p.kind == "mountain" else None
+            # VIIRS of the two days before (a live source: never the reference day itself)
+            vo = {k: ef.snowobs_classes(p.gibs_values(a.cache, LAYERS["viirs"], d - datetime.timedelta(days=k),
+                                                      cmap).ravel(), "ndsi") for k in (1, 2)}
             # the region's seed: every cell's model ground and its first hour's model snow depth (mm)
             parts = [snowmod.records(om) for om in oms]
             seed = [(int(z), int(rec[0, 9]) if rec.shape[0] and rec[0, 9] != snowmod.MISSING else snowmod.MISSING)
@@ -513,8 +526,15 @@ def cmd_tables(a, places, _dates):
                     if ims[k] is not None and p.name in ims[k]:
                         c, _k = p.counts(p.ims_ground, ims[k][p.name], cell)
                         obs[k] = c.astype(np.int64)
-                variants = {"kernel": (None, None), "ims_live": (obs.get(1), obs.get(2)),
-                            "ims_oracle": (obs.get(0), obs.get(1))}
+                vc = {k: p.counts(p.gibs_ground, vo[k], cell)[0].astype(np.int64) for k in (1, 2)}
+                # (k0 shifts: the observed bands read one or two rows higher, a bias correction of +150 / +300 m;
+                # fusions: FUSIONS' rules)
+                variants = {"kernel": (None, None, 0, None), "default": (obs.get(1), obs.get(2), 0, None)}
+                for fname, fus in FUSIONS.items():
+                    variants[f"ims@{fname}"] = (obs.get(1), obs.get(2), 0, fus)
+                    variants[f"ims+150@{fname}"] = (obs.get(1), obs.get(2), 1, fus)
+                    if fname in ("A", "E"):
+                        variants[f"viirs@{fname}"] = (vc[1], vc[2], 0, fus)
                 mc, mk0 = p.counts(p.gibs_ground, mo, cell)
                 seen = seen_share(p.gibs_ground, gv, cell)
                 ml = [line_of(mc, mk0, col) for col in (0, 1)]
@@ -525,11 +545,14 @@ def cmd_tables(a, places, _dates):
                 snowmod.message(recs, upto, times[upto], 0.0, 0.0, z_cell, z_cell, 2, raw=raw)
                 w2rows, _road, _bins = snowmod.w2_table(raw, [-1] * 8)
                 rec["old_line"] = old_line(w2rows)
-                for name, (t, b) in variants.items():
+                if s2 is not None:
+                    sc_, sk0 = p.counts(s2[0], s2[1], cell)
+                    rec["s2"] = [line_of(sc_, sk0, col) for col in (0, 1)]
+                for name, (t, b, sh, fus) in variants.items():
                     if name != "kernel" and t is None:
                         continue
                     kl, rows, _states, runs = ef.snowfield_table(recs, upto, z_cell, lat_e2, zmin, zmax, seed,
-                                                        t, k0, b, k0)
+                                                                 t, k0 + sh, b, k0 + sh, fusion=fus)
                     lines = [ef.snowfield_line(kl, rows, col) for col in (0, 1)]
                     v = {"lines": [int(x[0]) for x in lines], "rows": rows}
                     if seen >= VALID_MIN:
@@ -545,7 +568,7 @@ def cmd_tables(a, places, _dates):
 
 def summarise_tables(res):
     print("\nS1 tables against MODIS Terra, same day (cells MODIS saw clear)")
-    names = ("kernel", "ims_live", "ims_oracle")
+    names = tuple(dict.fromkeys(n for r in res for n in r["v"]))
     for kind in ("mountain", "mild"):
         line_d = {n: [] for n in names + ("old",)}
         px = {n: [] for n in names}
@@ -564,15 +587,31 @@ def summarise_tables(res):
             for n in names:
                 if n in r["v"] and r["v"][n].get("px"):
                     px[n].append(r["v"][n]["px"])
+        s2_d = {n: [] for n in names + ("old",)}
+        for r in res:
+            if r["kind"] != kind or "s2" not in r:
+                continue
+            for col in (0, 1):
+                m = r["s2"][col]
+                if not usable(m):
+                    continue
+                for n in names:
+                    if n in r["v"]:
+                        s2_d[n].append(r["v"][n]["lines"][col] - m["line"])
+                if r["old_line"] is not None and r["old_line"] > -10 ** 8:
+                    s2_d["old"].append(r["old_line"] - m["line"])
         print(f" {kind}:")
         for n in ("old",) + names:
-            print(f"   line {n:10s} {_stats(line_d[n])}")
+            print(f"   line {n:12s} vs MODIS {_stats(line_d[n])}")
+        for n in ("old",) + names:
+            if s2_d[n]:
+                print(f"   line {n:12s} vs S2    {_stats(s2_d[n])}")
         for n in names:
             if px[n]:
                 w = np.array([x["n"] for x in px[n]], float)
                 fw = np.average([x["false_white"] for x in px[n]], weights=w)
                 fb = np.average([x["false_bare"] for x in px[n]], weights=w)
-                print(f"   pixels {n:10s} false white {100 * fw:5.1f} %  false bare {100 * fb:5.1f} %  "
+                print(f"   pixels {n:12s} false white {100 * fw:5.1f} %  false bare {100 * fb:5.1f} %  "
                       f"accuracy {100 * (1 - fw - fb):5.1f} %  ({len(px[n])} cells)")
 
 

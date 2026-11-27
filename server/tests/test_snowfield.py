@@ -65,8 +65,12 @@ class TableTest(unittest.TestCase):
         obs = np.array([[0, 6, 0, 6] if h >= 2700 else [6, 0, 6, 0] for h in z], np.int64)
         k, rows, _st, runs = ef.snowfield_table(f, 239, 1500, 4600, 1200, 4000, [(1500, 0)], obs, k0, obs, k0)
         self.assertTrue(all(r[:3] == [0, 0, 0] for r in runs))
+        # (the maps' rows read 150 m higher: snowfield.rs OBS_SHIFT_ROWS, P-A's bias correction)
+        self.assertEqual(ef.snowfield_line(k, rows, 0)[0], 2775)
+        self.assertTrue(all((r[2] > 0) == (r[0] >= 2850) for r in rows), rows)
+        k, rows, _st, _ = ef.snowfield_table(f, 239, 1500, 4600, 1200, 4000, [(1500, 0)], obs, k0, obs, k0,
+                                             fusion=(499, 750, False, 500, 0))
         self.assertEqual(ef.snowfield_line(k, rows, 0)[0], 2625)
-        self.assertTrue(all((r[2] > 0) == (r[0] >= 2700) for r in rows), rows)
 
     def test_bins_settle(self):
         """A one-bin move shows only when it held two evaluations (S-7); the states round-trip."""

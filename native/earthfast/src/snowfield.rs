@@ -36,13 +36,17 @@ pub const OBS_MIN_PIX: u32 = 3;
 pub const LINE_MIN_PIX: u32 = 10;
 /// ... and misclassifies at most this share of them (permille): a patchy or inverted cover has no line.
 pub const LINE_MAX_ERR: u32 = 300;
-/// Observed bare: a snow share at most this (permille) ...
-pub const BARE_MAX: i64 = 250;
-/// ... observed snow: at least this.
-pub const SNOW_MIN: i64 = 500;
+/// Observed bare: a snow share below half (permille) ...
+pub const BARE_MAX: i64 = 499;
+/// ... observed snow where the kernel has none: at least three quarters.
+pub const SNOW_MIN: i64 = 750;
 /// The kernel's snowfall in the last FRESH_H hours at a band (0.01 mm water) from which its snow stands whatever the
-/// maps say (1 mm water, about a centimetre of new snow).
-pub const FRESH_SNOW: i64 = 100;
+/// maps say (5 mm water, about 5 cm of new snow: the maps are a day late; a smaller amount kept the kernel's too low
+/// snowline, P-A).
+pub const FRESH_SNOW: i64 = 500;
+/// The IMS rows read this many rows higher (a 150 m bias correction: the 1 km pixels' snowline lies below Sentinel-2's,
+/// most on slopes facing the sun and in the melt season, P-A 2026-11-27).
+pub const OBS_SHIFT_ROWS: i32 = 1;
 pub const FRESH_H: usize = 36;
 /// The thin cover the maps' snow gives where the kernel has none (depth 0.1 mm): D1 (5 mm) under SNOW_FULL, else D2
 /// (2 cm).
@@ -239,13 +243,38 @@ pub fn settle(prev: BinState, raw: i64) -> BinState {
     }
 }
 
+/// The fusion's thresholds (S-1; probe P-A chose them against Sentinel-2, tools/snowobs_probe.py tables): a column
+/// seen bare (snow share at most bare_max permille, the day before too when two_day) with less than fresh_snow of the
+/// kernel's snowfall in FRESH_H hours loses the kernel's snow; seen white (snow_min) where the kernel has none gets
+/// the thin cover; the observed rows read shift_rows higher. P-A (35 mountain place-days, 130 lines with a clear
+/// Sentinel-2 pass): the plan's rule (25 %, two days, 1 mm, no shift) put the line 407 m below Sentinel-2's (27 %
+/// within 150 m); this one 164 m below (66 % within 150 m, 83 % within 300 m); the second day made it worse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fusion {
+    pub bare_max: i64,
+    pub snow_min: i64,
+    pub two_day: bool,
+    pub fresh_snow: i64,
+    pub shift_rows: i32,
+}
+
+impl Fusion {
+    pub const DEFAULT: Fusion = Fusion { bare_max: BARE_MAX, snow_min: SNOW_MIN, two_day: false, fresh_snow: FRESH_SNOW,
+                                         shift_rows: OBS_SHIFT_ROWS };
+}
+
 /// One column's fused depth (0.1 mm), cover (0..8), bin state and flags from the kernel's depth and fresh snowfall
 /// and the maps' shares today and the day before (S-1), the bin settled from the previous evaluation's (S-7).
 pub fn fuse(depth: i64, fresh: i64, today: Option<i64>, before: Option<i64>, prev: BinState)
             -> (i64, i64, BinState, i64) {
-    let bare = |s: Option<i64>| matches!(s, Some(v) if v <= BARE_MAX);
+    fuse_with(depth, fresh, today, before, prev, &Fusion::DEFAULT)
+}
+
+pub fn fuse_with(depth: i64, fresh: i64, today: Option<i64>, before: Option<i64>, prev: BinState, fp: &Fusion)
+                 -> (i64, i64, BinState, i64) {
+    let bare = |s: Option<i64>| matches!(s, Some(v) if v <= fp.bare_max);
     let (mut d, mut flags) = (depth, 0i64);
-    let seen_bare = bare(today) && bare(before) && fresh < FRESH_SNOW;
+    let seen_bare = bare(today) && (!fp.two_day || bare(before)) && fresh < fp.fresh_snow;
     if seen_bare {
         flags |= FLAG_BARE;
         if d > 0 {
@@ -253,7 +282,7 @@ pub fn fuse(depth: i64, fresh: i64, today: Option<i64>, before: Option<i64>, pre
             flags |= FLAG_VETO;
         }
     }
-    let added = d < BIN_EDGE[1] as i64 && !seen_bare && matches!(today, Some(s) if s >= SNOW_MIN);
+    let added = d < BIN_EDGE[1] as i64 && !seen_bare && matches!(today, Some(s) if s >= fp.snow_min);
     if added {
         d = if today.unwrap_or(0) >= SNOW_FULL { THIN_D2 } else { THIN_D1 };
         flags |= FLAG_ADDED;
@@ -281,8 +310,19 @@ pub fn cell_table(f: &[i32], upto: usize, z_cell: i32, lat_e2: i32, zmin: i32, z
                   today: &[[u32; 4]], k0_today: i32, before: &[[u32; 4]], k0_before: i32,
                   prev: &[(i32, [BinState; 3])])
                   -> (i32, Vec<[i64; ROW_COLS]>, Vec<(i32, [BinState; 3])>, Vec<BandRun>) {
+    cell_table_with(f, upto, z_cell, lat_e2, zmin, zmax, seed, today, k0_today, before, k0_before, prev,
+                    &Fusion::DEFAULT)
+}
+
+/// cell_table with the fusion's thresholds.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn cell_table_with(f: &[i32], upto: usize, z_cell: i32, lat_e2: i32, zmin: i32, zmax: i32, seed: &SeedProfile,
+                       today: &[[u32; 4]], k0_today: i32, before: &[[u32; 4]], k0_before: i32,
+                       prev: &[(i32, [BinState; 3])], fp: &Fusion)
+                       -> (i32, Vec<[i64; ROW_COLS]>, Vec<(i32, [BinState; 3])>, Vec<BandRun>) {
     let recs = snow::rows(f);
     let (k_lo, n) = band_rows(zmin, zmax);
+    let (k0_today, k0_before) = (k0_today + fp.shift_rows, k0_before + fp.shift_rows);
     let (lt, lb) = (obs_lines(today, k0_today), obs_lines(before, k0_before));
     let mut rows = Vec::with_capacity(n);
     let mut runs = Vec::with_capacity(n);
@@ -302,7 +342,7 @@ pub fn cell_table(f: &[i32], upto: usize, z_cell: i32, lat_e2: i32, zmin: i32, z
         for col in 0..2 {
             let t = obs_share(today, k0_today, k, col, lt[col]);
             let b = obs_share(before, k0_before, k, col, lb[col]);
-            let (_d, cover, s, fl) = fuse(run.depth[col], run.fresh, t, b, pb[col]);
+            let (_d, cover, s, fl) = fuse_with(run.depth[col], run.fresh, t, b, pb[col], fp);
             row[1 + 2 * col] = cover;
             row[2 + 2 * col] = s.bin;
             st[col] = s;
@@ -410,15 +450,16 @@ pub mod py {
     /// the previous evaluation's bin states [[k, then (bin, candidate, runs) facing the pole, the equator and on the
     /// forest floor]] (S-7). Returns (k_lo, rows [z, pole cover, pole bin, equator cover, equator bin, forest bin,
     /// age class, flags], the new bin states (as prev), runs [pole depth, equator depth, forest depth (0.1 mm), age h,
-    /// fresh snowfall 0.01 mm]).
+    /// fresh snowfall 0.01 mm]). fusion: (bare_max, snow_min permille, two_day, fresh_snow 0.01 mm, the observed rows'
+    /// shift) for the probe's tuning (None: the defaults, Fusion::DEFAULT).
     #[pyfunction]
     #[pyo3(signature = (forcing, upto, z_cell, lat_e2, zmin, zmax, seed, today=None, k0_today=0, before=None,
-                        k0_before=0, prev=Vec::new()))]
+                        k0_before=0, prev=Vec::new(), fusion=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn snowfield_table(forcing: PyReadonlyArray2<'_, i32>, upto: usize, z_cell: i32, lat_e2: i32, zmin: i32,
                            zmax: i32, seed: Vec<(i32, i32)>, today: Option<PyReadonlyArray2<'_, i64>>, k0_today: i32,
                            before: Option<PyReadonlyArray2<'_, i64>>, k0_before: i32,
-                           prev: Vec<Vec<i64>>) -> PyResult<TableOut> {
+                           prev: Vec<Vec<i64>>, fusion: Option<(i64, i64, bool, i64, i32)>) -> PyResult<TableOut> {
         let a = forcing.as_array();
         if a.ncols() != NF {
             return Err(PyValueError::new_err(format!("snowfield_table: forcing needs {NF} columns, has {}",
@@ -435,8 +476,12 @@ pub mod py {
                                           runs: p[3 + 3 * i].clamp(0, 1000) };
             pv.push((p[0] as i32, [s(0), s(1), s(2)]));
         }
-        let (k_lo, rows, states, runs) = cell_table(&f, upto, z_cell, lat_e2, zmin, zmax, &seed_profile(&seed), &t,
-                                                    k0_today, &b, k0_before, &pv);
+        let fp = fusion.map_or(Fusion::DEFAULT, |(bare_max, snow_min, two_day, fresh_snow, shift)| Fusion {
+            bare_max: bare_max.clamp(0, 1000), snow_min: snow_min.clamp(0, 1001), two_day, fresh_snow: fresh_snow.max(0),
+            shift_rows: shift.clamp(-4, 4),
+        });
+        let (k_lo, rows, states, runs) = cell_table_with(&f, upto, z_cell, lat_e2, zmin, zmax, &seed_profile(&seed),
+                                                         &t, k0_today, &b, k0_before, &pv, &fp);
         Ok((k_lo, rows.iter().map(|r| r.to_vec()).collect(),
             states.iter().map(|(k, s)| {
                 let mut v = vec![*k as i64];
@@ -563,6 +608,7 @@ mod tests {
     fn dry_spell_peaks_keep_observed_old_snow() {
         // ten dry, mild days at a 1,500 m model cell with no model snow: the kernel has nothing up to 4,000 m; the
         // maps see snow from 2,700 m on the pole side and 3,000 m facing the sun: thin observed cover there, none below
+        // (read OBS_SHIFT_ROWS higher: 2,850 and 3,150 m)
         let f = window(&[(246, 300, 0, 0)], 0);
         let (k_lo, n) = band_rows(1200, 4000);
         let counts: Vec<[u32; 4]> = (0..n).map(|i| {
@@ -576,8 +622,14 @@ mod tests {
         assert!(runs.iter().all(|r| r.depth == [0, 0, 0]));
         let (lp, _) = table_line(k, &rows, 0);
         let (le, _) = table_line(k, &rows, 1);
-        assert_eq!((lp, le), (2625, 2925));
-        assert!(rows.iter().filter(|r| r[0] >= 2700).all(|r| r[2] == 2 && r[7] & FLAG_ADDED != 0), "{rows:?}");
+        assert_eq!((lp, le), (2625 + BAND_M * OBS_SHIFT_ROWS, 2925 + BAND_M * OBS_SHIFT_ROWS));
+        let from = 2700 + BAND_M as i64 * OBS_SHIFT_ROWS as i64;
+        assert!(rows.iter().filter(|r| r[0] >= from).all(|r| r[2] == 2 && r[7] & FLAG_ADDED != 0), "{rows:?}");
+        // without the shift: the maps' own heights
+        let fp = Fusion { shift_rows: 0, ..Fusion::DEFAULT };
+        let (k, rows, _, _) = cell_table_with(&f, 239, 1500, 4600, 1200, 4000, &seed_profile(&[(1500, 0)]), &counts,
+                                              k_lo, &counts, k_lo, &[], &fp);
+        assert_eq!((table_line(k, &rows, 0).0, table_line(k, &rows, 1).0), (2625, 2925));
     }
 
     #[test]
@@ -604,9 +656,12 @@ mod tests {
         let (_, w2, _, _) = cell_table(&dry, 245, 1000, 4600, 1000, 1800, &seed_profile(&[(1000, 0)]), &white, k_lo,
                                        &white, k_lo, &[]);
         assert!(w2.iter().all(|r| r[2] > 0 && r[4] > 0), "{w2:?}");
-        // bare today only (yesterday unknown): kept
+        // bare today only (yesterday unknown): vetoed by the default (one day, P-A), kept by a two-day rule
         let (_, k1, _, _) = cell_table(&f, 245, 1000, 4600, 1000, 1800, &seed, &bare, k_lo, &[], 0, &[]);
-        assert_eq!(k1.last().unwrap()[2], base.last().unwrap()[2]);
+        assert!(k1.iter().all(|r| r[1] == 0 && r[3] == 0), "{k1:?}");
+        let two = Fusion { two_day: true, ..Fusion::DEFAULT };
+        let (_, k2, _, _) = cell_table_with(&f, 245, 1000, 4600, 1000, 1800, &seed, &bare, k_lo, &[], 0, &[], &two);
+        assert_eq!(k2.last().unwrap()[2], base.last().unwrap()[2]);
         // fresh snow in the last day (8 h of snow at -3 degC): stands though the maps are a day late
         let g = window(&[(232, 150, 0, 0), (8, -300, 100, 1000), (6, -300, 0, 0)], 200);
         let (_, fr, _, _) = cell_table(&g, 245, 1000, 4600, 1000, 1800, &seed, &bare, k_lo, &bare, k_lo, &[]);
