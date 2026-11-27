@@ -295,6 +295,34 @@ def ensure_mods_not_disabled(user_dir):
     return True
 
 
+# Add-ons built into the mod since 1.11 (separate zips before): their old copies in the mods folder would load the same
+# extensions a second time (the mod's addons.lua turns them off in a running game).
+BUILTIN_OLD_ZIPS = {"live_air_traffic.zip": "Live Air Traffic", "earth_power_plants.zip": "Earth Power Plants"}
+RETIRED_SUFFIX = ".bnge-builtin"        # (the game's mod manager reads only *.zip)
+
+
+def retire_builtin_addons(user_dir):
+    """The built-in add-ons' old separate zips in <user>/mods renamed to <name>.zip.bnge-builtin (kept, never
+    loaded). Only while the game is closed. Returns the add-ons' names."""
+    mods = os.path.join(user_dir, "mods")
+    try:
+        names = os.listdir(mods)
+    except OSError:
+        return []
+    done = []
+    for n in names:
+        label = BUILTIN_OLD_ZIPS.get(n.lower())
+        if not label:
+            continue
+        src = os.path.join(mods, n)
+        try:
+            os.replace(src, src + RETIRED_SUFFIX)
+            done.append(label)
+        except OSError:
+            pass
+    return done
+
+
 def install_mod(user_dir, assume_yes, dry_run, quiet=False, game_running=False):
     """Copy the mod into the user folder. Returns 'current', 'enabled' (current, but it had been turned off in the
     game's mod list), 'updated', 'installed', 'kept' or None (dry run); quiet: no messages but the notes (the launcher
@@ -311,6 +339,10 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False, game_running=False):
     if not dry_run and not game_running and ensure_mods_not_disabled(user_dir):
         say("Mods: BeamNG.drive had turned all mods off after its update; turned them back on (as its main menu's "
             "\"enable mods\" button does).")
+    if not dry_run and not game_running:
+        for label in retire_builtin_addons(user_dir):
+            say(f"Mods: {label} is part of BeamNG.Earth now; its separate copy in the mods folder was set aside "
+                f"(renamed to *{RETIRED_SUFFIX}).")
     enabled = not dry_run and ensure_mod_active(user_dir)
     if enabled:
         say("Mod: it had been turned off in the game's mod list (a BeamMP server does that); turned it back on.")

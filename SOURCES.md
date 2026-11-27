@@ -122,6 +122,8 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 | Nominatim (OpenStreetMap) | `nominatim.openstreetmap.org` | The map's street and address search, only when you press Enter (its usage policy forbids autocomplete). What you typed is sent to it, with an area around your position as a bias. |
 | Wikipedia, Wikidata | `en.wikipedia.org`, `de.wikipedia.org`, `fr.wikipedia.org`, `it.wikipedia.org`, `es.wikipedia.org`, `pt.wikipedia.org`, `nl.wikipedia.org`, `pl.wikipedia.org`, `cs.wikipedia.org`, `sk.wikipedia.org`, `sv.wikipedia.org`, `no.wikipedia.org`, `da.wikipedia.org`, `fi.wikipedia.org`, `hu.wikipedia.org`, `ro.wikipedia.org`, `el.wikipedia.org`, `tr.wikipedia.org`, `ru.wikipedia.org`, `uk.wikipedia.org`, `ja.wikipedia.org`, `ko.wikipedia.org`, `zh.wikipedia.org`, `hr.wikipedia.org`, `sl.wikipedia.org`, `bg.wikipedia.org`, `sr.wikipedia.org`, `www.wikidata.org` | Landmarks in the map's search as you type (what you typed is sent; not your position). The answers to "highest bridge in Switzerland" ship with the app (`server/superlatives_data.py`, from Wikidata, CC0). |
 | OSRM routing (FOSSGIS) | `routing.openstreetmap.de` | GPS routes over long distances on the map. | The start and the destination of the route. | No new route until it answers. | optional |
+| ADS-B Exchange-compatible networks: adsb.lol, airplanes.live, adsb.fi | `api.adsb.lol`, `api.airplanes.live`, `opendata.adsb.fi` | Live Air Traffic (built in): the real aircraft round you, every 15 s while it is on, one network at a time (the next one if it is slow or rate-limits). Off: Add-ons > Live Air Traffic > Show air traffic, or Ctrl+Alt+P. | Your position, rounded to 0.0001°, and the search radius. | The aircraft already shown keep flying on their last speed and track. | optional |
+| adsbdb.com | `api.adsbdb.com` | Live Air Traffic: where an airline flight is going (origin and destination), each callsign once, kept 6 hours. | The flight's callsign (not your position). | The label shows no route. | optional |
 | EGM2008 gravity model (SourceForge) | `downloads.sourceforge.net` | Real gravity, which differs slightly from place to place (74 MB, downloaded once). | Nothing but the download. | Standard gravity is used. | optional |
 
 ## The app itself
@@ -136,6 +138,9 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 - **Country and state borders, big town names** (Natural Earth): the world map.
 - **US Interstates and US routes** (Natural Earth): the world map's Highways layer.
+- **Thermal power plants** (WRI's Global Power Plant Database, CC BY 4.0; their status from Global Energy Monitor's
+  Global Coal Plant Tracker, CC BY 4.0, GeoNuclearData / IAEA PRIS, ODbL, and PyPSA's powerplantmatching, CC BY 4.0):
+  Earth Power Plants (built in), `mod/beamng_earth/art/earthPowerPlants/plants.json`.
 - **Climate zones** (Beck et al. Köppen-Geiger map): which trees grow where and which landscape sounds play.
 - **Oil wells and refineries** (OpenStreetMap, exported once): pump jacks, refinery sounds.
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed

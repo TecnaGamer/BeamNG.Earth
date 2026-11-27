@@ -2,6 +2,29 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### Added
+- **Add-on layers on the world map**: add-ons can now put their own markers on the map the way the gas stations and
+  EV chargers are drawn, each with its own checkbox under **Layers > Add-ons**; click a marker to set the GPS there.
+  For add-on authors: modding API 1.9, `api.mapLayer(id, def)` (docs/ADDONS.md "Map layers"). The user: "just like on
+  the map displaying fuel stations display power plants".
+- **Live Air Traffic and Earth Power Plants are built in** (they were separate add-ons). Real aircraft from live ADS-B
+  data, with 3D models, lights, contrails, sounds and labels; and the real world's thermal power plants with their
+  steam plumes and a layer on the world map. Live Air Traffic no longer needs its companion window (`run.bat`): the
+  BeamNG.Earth app fetches the aircraft itself, only while air traffic is on. Both are on the settings page's
+  **Add-ons** tab, first in the list, with their options and a switch to turn each off; Live Air Traffic's keys are
+  unchanged (Ctrl+Alt+P on / off, Ctrl+Alt+L labels, F follow). Old copies in the mods folder (`live_air_traffic.zip`,
+  `earth_power_plants.zip`) are turned off in game and set aside by the installer. The user: "combine these 2 mods
+  into beam ng earth directly so it does not need a separate companion window".
+- **Live air traffic on the maps**: a **Live air traffic** layer (off until you switch it on under **Layers >
+  Add-ons**, on the 2D map and the new Layers button of the 3D map) shows every aircraft round you as a plane pointing
+  along its track with its flight number, moving as they fly (updated every second); a click sets the GPS there.
+  Add-on layers can now be live (modding API 1.10: `refreshMs`, a marker's `heading`, `id` and `alt`), and the 3D map
+  draws the add-on layers that are on.
+- **Smoother contrails**: the trail now grows steadily behind the jet instead of pausing and catching up every second
+  or two, starts as a thin line, has a round soft haze instead of box-shaped panels, and tapers off at its old end.
+
 ## 1.10.1 beta (2026-11-15)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
