@@ -3482,19 +3482,21 @@ class _Planner:
         lims = c.get("height_limits") or []
         for (line, half, cls), gid, kmh in zip(c["ground"], c.get("ground_ids", []), gk):
             line = np.asarray(line, np.float64)[:, :2]
+            ids, at = nodes.get(str(gid[0]), (None, None))
             out.append(_gsh.Member((str(gid[0]), "ground", str(gid[1])), line, "ground", cls, kmh, 0.0, float(half),
-                                   _signs_of(line, lims), nodes.get(str(gid[0]))))
+                                   _signs_of(line, lims), ids, node_xy=at))
         nb = len(c["bridges"])
         for line, cls, fid, lv, h, kmh in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
                                               c.get("bridge_ids", [None] * nb), c.get("bridge_levels", [1.0] * nb),
                                               c.get("bridge_half", [4.0] * nb), c.get("bridge_kmh") or [None] * nb):
             line = np.asarray(line, np.float64)[:, :2]
             mid = line[len(line) // 2]
+            ids, at = nodes.get(str(fid), (None, None))
             # (held: the deck the underpasses never raise, the road under dug instead (_over_mapped_underpass); the
             # shapes raising it as an overpass over that road's ground as well cleared it twice, Popoli's 15 m)
             out.append(_gsh.Member((str(fid), "deck", int(round(mid[0])), int(round(mid[1]))), line, "deck",
-                                   cls or "road", kmh, float(lv), float(h), None, nodes.get(str(fid)),
-                                   bool(self._over_mapped_underpass(line))))
+                                   cls or "road", kmh, float(lv), float(h), None, ids,
+                                   bool(self._over_mapped_underpass(line)), at))
         nr = len(c.get("rail_bridges", ()))
         # (a track's level: the ground's on the ground, the map's on a bridge (rail_bridge_levels), as a road's: every
         # track was level 1, a viaduct on level 3 under the road bridge on level 2 it crosses over)
@@ -3542,9 +3544,10 @@ class _Planner:
                     e, n_, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
                     line = np.stack([np.asarray(e, np.float64), np.asarray(n_, np.float64)], axis=1)
                     mid = line[len(line) // 2]
+                    ids, at = self._cell_nodes(k).get(str(f.ids[i]), (None, None))
                     out.append(_gsh.Member((str(f.ids[i]), "tunnel", int(round(mid[0])), int(round(mid[1]))), line,
                                            "tunnel", spec.cls + ("_link" if _is_link(spec) else ""), spec.kmh, -1.0,
-                                           float(spec.width) / 2, None, self._cell_nodes(k).get(str(f.ids[i]))))
+                                           float(spec.width) / 2, None, ids, node_xy=at))
         with self.lock:
             if len(memo) > 256:
                 memo.clear()
@@ -3694,8 +3697,8 @@ class _Planner:
 
 
     def _cell_nodes(self, k):
-        """{road feature id: its map nodes (a frozenset of connector ids)} of cell k's roads, {} without the map's
-        connectors; made once per cell."""
+        """{road feature id: (its map nodes (a frozenset of connector ids), where each lies ((id, x, y) frame ENU, at its
+        place along the road's line))} of cell k's roads, {} without the map's connectors; made once per cell."""
         memo = self.__dict__.setdefault("_cell_nodes_memo", {})
         with self.lock:
             got = memo.get(str(k))
@@ -3706,7 +3709,19 @@ class _Planner:
         tab = f.rules.get("connectors") if f is not None and len(f) else None
         if tab is not None:
             for i in range(len(f)):
-                out.setdefault(str(f.ids[i]), frozenset(str(tab.value[r]) for r in tab.rows(i)))
+                fid = str(f.ids[i])
+                if fid in out:
+                    continue
+                rows = list(tab.rows(i))
+                r0 = int(f.ring_off[f.part_off[i]])
+                ll = np.asarray(f.lonlat[int(f.coord_off[r0]):int(f.coord_off[r0 + 1])], np.float64)
+                e, n_, _ = self.frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+                line = np.stack([np.asarray(e, np.float64), np.asarray(n_, np.float64)], axis=1)
+                s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+                at = [float(tab.start[r]) * float(s[-1]) for r in rows]
+                out[fid] = (frozenset(str(tab.value[r]) for r in rows),
+                            tuple((str(tab.value[r]), float(np.interp(a, s, line[:, 0])), float(np.interp(a, s, line[:, 1])))
+                                  for r, a in zip(rows, at)))
         with self.lock:
             if len(memo) > 256:
                 memo.clear()

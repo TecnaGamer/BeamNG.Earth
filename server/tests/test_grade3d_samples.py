@@ -35,7 +35,9 @@ def test_an_even_step_from_end_to_end_on_each_member():
 
 
 def test_a_crossing_and_a_join_at_their_nearest_samples():
-    ms = [_m("a", _line(0, 0, 200, 0)), _m("x", _line(50, -100, 50, 100), "deck", 1.0), _m("t", _line(150, 0, 150, 80))]
+    # (the T at a node of a's: its point at 150)
+    ms = [_m("a", np.array([[0.0, 0.0], [40.0, 0.0], [80.0, 0.0], [150.0, 0.0], [200.0, 0.0]])),
+          _m("x", _line(50, -100, 50, 100), "deck", 1.0), _m("t", _line(150, 0, 150, 80))]
     net = network.build(ms)
     sm = samples.sample(net, layers.order(net))
     (pa, ia, pb, ib, lay), = sm.crossings
@@ -57,8 +59,10 @@ def test_the_flat_arrays_are_the_paths_in_order():
 
 
 def test_a_join_and_a_crossing_are_exactly_at_a_sample():
-    # (a T 61.3 m along a road, a deck crossing it at 137.9 m: neither on the even 4 m grid)
-    ms = [_m("a", _line(0, 0, 301, 0, 31)), _m("t", _line(61.3, 0, 61.3, 120, 13)),
+    # (a T 61.3 m along a road (a node of both there), a deck crossing it at 137.9 m: neither on the even 4 m grid)
+    a = _line(0, 0, 301, 0, 31)
+    a = np.insert(a, np.searchsorted(a[:, 0], 61.3), [61.3, 0.0], axis=0)
+    ms = [_m("a", a), _m("t", _line(61.3, 0, 61.3, 120, 13)),
           _m("x", _line(137.9, -60, 137.9, 60, 13), "deck", 1.0)]
     net = network.build(ms)
     sm = samples.sample(net, layers.order(net))

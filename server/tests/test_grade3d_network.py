@@ -49,8 +49,8 @@ def test_a_member_drawn_backwards_is_walked_backwards():
 
 
 def test_a_fork_a_t_and_a_dead_end_end_paths_the_road_going_straight_on_goes_through():
-    ms = [_m("a", _line(0, 0, 100, 0)), _m("b", _line(100, 0, 200, 0)), _m("c", _line(100, 0, 200, 80)),   # (fork)
-          _m("d", _line(50, 0, 50, -80))]                                                                   # (T on a)
+    ms = [_m("a", _line(0, 0, 100, 0, 11)), _m("b", _line(100, 0, 200, 0)), _m("c", _line(100, 0, 200, 80)),   # (fork)
+          _m("d", _line(50, 0, 50, -80))]                                    # (T on a, at a node of a's: its point at 50)
     net = network.build(ms)
     assert sorted(_paths(net)) == [["a", "b"], ["c"], ["d"]]       # (b goes straight on from a; c leaves at 39 degrees)
     pairs = sorted(tuple(sorted((str(ms[i].key), str(ms[j].key)))) for i, _si, j, _sj in net.joins)
@@ -156,13 +156,20 @@ def test_a_road_goes_on_through_a_fork_its_ramp_leaves_it():
 
 
 def test_a_decks_end_over_a_motorway_on_the_ground_joins_it_only_at_a_node_of_both():
-    def mm(key, line, kind, level, nodes, cls="secondary"):
-        return Member(key, np.asarray(line, np.float64), kind, cls, None, level, 4.0, None, nodes)
-    road = mm("road", _line(-200, 0, 200, 0), "ground", 0.0, frozenset({"a", "b", "x"}), "motorway")
-    deck = mm("deck", _line(0, 0, 0, 150), "deck", 1.0, frozenset({"y", "z"}))        # (its end over the road, no node of it)
+    def mm(key, line, kind, level, at, cls="secondary"):
+        return Member(key, np.asarray(line, np.float64), kind, cls, None, level, 4.0, None,
+                      frozenset(c for c, _x, _y in at), node_xy=tuple(at))
+    road = mm("road", _line(-200, 0, 200, 0), "ground", 0.0, [("a", -200.0, 0.0), ("b", 200.0, 0.0), ("x", 0.0, 0.0)],
+              "motorway")
+    deck = mm("deck", _line(0, 0, 0, 150), "deck", 1.0, [("y", 0.0, 0.0), ("z", 0.0, 150.0)])    # (no node of the road)
     net = network.build([road, deck])
     assert net.joins == [] and len(net.paths) == 2
     linenet.reset()
-    deck = mm("deck", _line(0, 0, 0, 150), "deck", 1.0, frozenset({"x", "z"}))        # (the map joins them at x)
+    deck = mm("deck", _line(0, 0, 0, 150), "deck", 1.0, [("x", 0.0, 0.0), ("z", 0.0, 150.0)])    # (the map joins them at x)
     net = network.build([road, deck])
     assert len(net.joins) == 1
+    linenet.reset()
+    # (a node of both, but at the road's end, 200 m off: no join where the deck ends)
+    deck = mm("deck", _line(0, 0, 0, 150), "deck", 1.0, [("b", 200.0, 0.0), ("z", 0.0, 150.0)])
+    net = network.build([road, deck])
+    assert net.joins == []

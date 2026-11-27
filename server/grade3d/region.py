@@ -38,7 +38,7 @@ KEPT = 128                  # blocks a planner keeps
 @dataclass
 class Block:
     """A solved block: core (lo, hi); prof {(fid, mode): (a (m, 2), b (m, 2), za (m,), zb (m,))} the segments of its
-    pieces where it solved them; seconds; diagnostics (the kernel's)."""
+    pieces where it solved them; seconds; diagnostics (the solve's)."""
     core: tuple
     prof: dict
     seconds: float
@@ -98,8 +98,7 @@ def solve_block(planner, bx, by):
         zb, d, _s = solve.solve_block(pr, b)
         z[b.idx] = zb
     prof = outputs.profiles(net, sm, z)
-    return Block((c0, c1), _segments(prof), time.perf_counter() - t0,
-                 {k: d.get(k) for k in ("status", "rounds", "constraint_rows", "converged")})
+    return Block((c0, c1), _segments(prof), time.perf_counter() - t0, {k: d.get(k) for k in ("status", "rows")})
 
 
 def block(planner, bx, by):

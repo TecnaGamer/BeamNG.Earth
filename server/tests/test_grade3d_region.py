@@ -72,7 +72,7 @@ def test_two_cells_agree_and_every_line_reads_its_height(monkeypatch):
     pl.members = _city(float(lo[1]) - 300, float(hi[1]) + 300)
     prof = {c: region.cell_profiles(pl, c) for c in (home, east)}
     assert len(pl._grade3d_blocks) >= 4
-    assert all(b.diagnostics.get("converged") for b in pl._grade3d_blocks.values() if b.prof)
+    assert all(b.diagnostics.get("status") == "Solved" for b in pl._grade3d_blocks.values() if b.prof)
     # (every member over the cell reads its whole line, in its mode)
     for m in pl.members:
         if not region.touches(m.line, lo, hi):

@@ -10066,7 +10066,18 @@ class TunnelProfiles(BridgeProfiles):
                 cover_ground = np.where(np.asarray(d) > .5, np.maximum(g, lz), g)
                 kinds = np.where(cover_ground - floor >= TUNNEL_COVER - .02, 2, 0)
             else:
-                road_pts = self._road_points(xy, s, ground, pool[k][0]) if BORE_FIT or BORE_DIP else road_pts
+                road_pts = (self._road_points(xy, s, ground, pool[k][0]) if BORE_FIT or BORE_DIP or shaped is not None
+                            else road_pts)
+                if shaped is not None and len(road_pts[0]):
+                    # (a tube the 3D solve laid: its cover is what the solve laid over it too, the roads crossing over
+                    # it as graded, where they stand over the elevation's ground. Suedtiroler Platz's square lies 6 m
+                    # over the Guertel's tube and the elevation 1 m over its floor there (the square's lid left out of
+                    # it): read on the elevation alone the tube was an open road, and the square's streets crossing it
+                    # eased down onto its floor, 6.5 m steps across the square)
+                    q = np.clip(np.rint(dnp.interp(road_pts[0], s, np.arange(len(s)))).astype(np.int64), 0, len(s) - 1)
+                    up = np.full(len(s), -np.inf)
+                    np.maximum.at(up, q, np.where(np.isfinite(road_pts[1]), road_pts[1], -np.inf))
+                    gc = np.maximum(gc, up)
                 sides = tunnel_side_ground(xy, s, g_raw, pool[k][0], gfn, ground)
                 low_h = low_tube_h(pool[k][0])
                 import roadlaws

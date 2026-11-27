@@ -60,6 +60,9 @@ log = logging.getLogger("earthd.grading")
 STEP_M = 4.0                # m between a deck's or a dip's samples
 CUT_MIN_M = 0.05            # m: a join's arc this near a sample is that sample
 JOIN_M = 2.5                # m: two parts' ends (or an end and another's line) this close meet there
+NODE_M = 6.0                # m: a map node of both this near where they meet is that meeting (_mapped_at)
+NODE_EPS_M = 0.05           # m: two lines' points this close are one map node (a road whose nodes are not known: both
+#                             drawn from OpenStreetMap's coordinates of it, which agree to a centimetre)
 CROSS_END_M = 2.0           # m: a crossing this near either part's end is a joint, not a separation
 MERGE_DEG = 40.0            # deg: a deck's end on another deck's line at another level meets it only along it (a ramp's
                             # merge or diverge, its gore's taper: Vienna's A23 at 29 deg, Gravelly Hill's links at 6) and
@@ -102,14 +105,15 @@ RAILS = ("rail", "rail_deck")
 # steepest road the laws allow (gradelaw: a link in a village, 17 %), a track's grade is railways.GRADE: so a track costs
 # that ratio times a road's dip to move, the least it can cost, and it moves only where nothing cheaper closes the conflict.
 
-Member = namedtuple("Member", "key line kind cls kmh level half limit nodes held", defaults=(None, False))
+Member = namedtuple("Member", "key line kind cls kmh level half limit nodes held node_xy", defaults=(None, False, None))
 # key: hashable, unique, the same from every cell; line (k, 2) frame ENU; kind: "ground", "deck", "tunnel", "rail",
 # "rail_deck"; cls: road class ("rail" for track); kmh: speed limit or None; level: the map's level (OSM's layer) of a
 # deck or a rail deck, 0 on the ground (_over: the order of two crossing members of one kind); half: half
 # width (m); limit: the road's signed height limit (m), a callable q (x, y) -> m or None (its signs, read where it
 # crosses: grading's roads.road_sign_at, the dips' own) or None; nodes: its road's map nodes (a frozenset of connector
 # ids) or None (not known: a track); held: a deck never raised (grading's UNDER_TUNNEL_FIXED: the map has the road
-# under it in a short tunnel), its chain at its ground and the roads under it dug, whatever its length
+# under it in a short tunnel), its chain at its ground and the roads under it dug, whatever its length; node_xy: where
+# each of its nodes lies ((connector id, x, y) frame ENU; None: not known), the place a join of its road is (_mapped_at)
 
 PATHS = gradelaw.PATHS
 MINOR = {"residential", "service", "unclassified", "living_street", "road"}
@@ -556,18 +560,21 @@ def one_part(members):
 
 
 def _end_meets(net, e, se, o, so, crossed):
-    """Whether member e's end (at arc length se) on member o's line (at so) is where they meet: between parts at one
-    level (a T, a ramp onto its road, a road going on), or a road on the ground ending on a structure where the map
-    joins them (a node of both; on the structure's end always), or two structures at different levels where the map
-    joins them, end to end or a deck merging along another deck (MERGE_DEG) that it does not also cross; not where
-    two structures at different levels touch in plan with no node of both (a deck's or a tunnel's end over or under
-    another's end or middle: a separation, not a joint, its clearance kept: in Barcelona a level-2 service deck's ends
-    lay on a level-1 one's ends in plan, taken for joints at both: 13 such in one 14-deck system, most of its relaxed
-    solve's shortfall), nor a road on the ground
-    ending under a deck's middle (or over a tunnel's) with no node of it: the High Five's secondary leaving its
-    level-1 link's end 0.1 m off the line of a level-4 flyover 20 m over it, taken for that flyover's end on it, ran
-    a 290 m embankment down from the flyover's height along the street, and the street under the next flyover met its
-    deck. Two decks of one map road meet only end to end, never one's end on the other's middle: a road passing
+    """Whether member e's end (at arc length se) on member o's line (at so) is where they meet. Two parts of one map
+    road meet where they lie (a road going on). Two roads meet only where the map joins them, a node of both at that
+    place (_mapped_at), at any levels: a T, a ramp onto its road, a deck's end on the road it lands on; and between
+    two structures at different levels only end to end, or a deck merging along another deck (MERGE_DEG) that it does
+    not also cross. Not where they only lie near each other: two structures at different levels touching in plan (a
+    deck's or a tunnel's end over or under another's end or middle: a separation, not a joint, its clearance kept: in
+    Barcelona a level-2 service deck's ends lay on a level-1 one's ends in plan, taken for joints at both: 13 such in
+    one 14-deck system, most of its relaxed solve's shortfall); a deck's end over a road on the ground (four link
+    decks over the S1 at Breitenleer, no node of it, pulled down onto the motorway and it up to them; Wien
+    Hauptbahnhof's rail decks ending 0.5 m off the line of the busway they bridge, the busway held at the tracks'
+    height and 5.83 m under them at once); a road on the ground ending under a deck's middle (or over a tunnel's):
+    the High Five's secondary leaving its level-1 link's end 0.1 m off the line of a level-4 flyover 20 m over it,
+    taken for that flyover's end on it, ran a 290 m embankment down from the flyover's height along the street, and
+    the street under the next flyover met its deck. Two decks of one map road meet only end to end, never one's end
+    on the other's middle: a road passing
     over itself (Kawazu's Nanadaru loop, a spiral of one road at levels 1 to 3, its level-2 deck ending right over
     its level-1 deck on its heading where the level-3 one goes on) was taken for a merge, held at the deck under it
     there and 8.35 m over it on the level-3 deck's start: the loop infeasible. A road's own lane sections meeting end
@@ -578,27 +585,41 @@ def _end_meets(net, e, se, o, so, crossed):
     road cannot meet the one it passes over or under a few metres on: Gravelly Hill's level-1 M6 deck under its
     level-3 one at 29 deg, its end 5 m past their crossing)."""
     me, mo = net.m[e], net.m[o]
+    one = _road_of(me) == _road_of(mo)
     if _over(me, mo) is None:
-        return True
-    # (no nodes known, None or none at all (a busway's made-up id): as they lie)
-    mapped = not me.nodes or not mo.nodes or bool(me.nodes & mo.nodes)
-    if mo.kind not in STRUCTURES:
-        # (a deck's or a tunnel's end over or under a motorway on the ground meets it only where the map joins them: a
-        # motorway has no junction at grade. Four link decks meeting over the S1 at Breitenleer, no node of it, were
-        # joined to it, the decks pulled down onto the motorway and it up to them, a sag of 37x the drivable lift at
-        # the node and the S1 at 10 %. Any other road's: as they lie, its node set too thin to say (Suedtiroler
-        # Platz's primary under seven deck ends held its two end nodes only, and its decks unjoined fell 5 m))
-        if me.kind in STRUCTURES and str(mo.cls or "") == "motorway":
-            return mapped
-        return True
-    if min(so, net.L[o] - so) <= JOIN_M:
-        return me.kind not in STRUCTURES or mapped or _road_of(me) == _road_of(mo)
-    if me.kind not in STRUCTURES:
+        return one or _mapped_at(net, e, se, o)
+    mapped = one or _mapped_at(net, e, se, o)
+    if mo.kind not in STRUCTURES or me.kind not in STRUCTURES or min(so, net.L[o] - so) <= JOIN_M:
         return mapped
-    if me.kind == mo.kind == "deck" and not crossed and _road_of(me) != _road_of(mo) and mapped:
+    if me.kind == mo.kind == "deck" and not crossed and not one and mapped:
         c = abs(float(dnp.dot(_tangent(net.lines[e], net.s[e], se), _tangent(net.lines[o], net.s[o], so))))
         return c >= dmath.cos(math.radians(MERGE_DEG))
     return False
+
+
+def _mapped_at(net, e, se, o):
+    """Whether the map joins members e and o where e's end (at arc length se) lies: a map node of both there (within
+    NODE_M), not one of both somewhere else. Suedtiroler Platz's primary ended on the middle of the Guertel's tunnel
+    under it, 1.8 m off its line; the two share a node, the tunnel's portal 100 m away, and were taken for joined there:
+    the square held at the tube's height and 5.15 m over it at once. Where both members' nodes are placed (node_xy), a
+    node id of both lying there; where one's are not known (a busway the OpenStreetMap import adds has no node ids; a
+    track), a point of e's line there within NODE_EPS_M of a point of o's (one map node is one place)."""
+    me, mo = net.m[e], net.m[o]
+    q = np.array([np.interp(se, net.s[e], net.lines[e][:, 0]), np.interp(se, net.s[e], net.lines[e][:, 1])])
+    if me.node_xy and mo.node_xy:
+        at_e = {c: (x, y) for c, x, y in me.node_xy}
+        for c, x, y in mo.node_xy:
+            xe = at_e.get(c)
+            if xe is not None and math.hypot(xe[0] - q[0], xe[1] - q[1]) <= NODE_M \
+                    and math.hypot(x - q[0], y - q[1]) <= NODE_M:
+                return True
+        return False
+    le, lo = np.asarray(net.lines[e], np.float64)[:, :2], np.asarray(net.lines[o], np.float64)[:, :2]
+    pe = le[np.hypot(*(le - q).T) <= NODE_M]
+    po = lo[np.hypot(*(lo - q).T) <= NODE_M + NODE_EPS_M]
+    if not len(pe) or not len(po):
+        return False
+    return bool((np.hypot(pe[:, None, 0] - po[None, :, 0], pe[:, None, 1] - po[None, :, 1]) <= NODE_EPS_M).any())
 
 
 def _pair_relations(net, i, j):

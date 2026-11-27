@@ -9,8 +9,8 @@ import gradeshapes as _gsh
 
 from . import artifacts, cache
 
-FORMAT = 3
-LAWS = (("gradeshapes", ["JOIN_M", "CROSS_END_M", "MERGE_DEG"]),)
+FORMAT = 4
+LAWS = (("gradeshapes", ["JOIN_M", "CROSS_END_M", "MERGE_DEG", "NODE_M", "NODE_EPS_M"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 1
 
