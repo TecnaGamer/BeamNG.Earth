@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 8) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8) |
+| `version()` | `major, minor` (1, 12) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8), `'contentChanged'`, `'loadedBuildings'`, `'towns'`, `'collisionReady'` (1.12) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -173,6 +173,9 @@ end
 | `speedLimit()` | 1.5: the posted speed limit of the road the player is on: `{ms, mapped, unit}` (`ms` in m/s; `mapped` true for the map's own limit, false for the road class's default, nil where not known; `unit` `'mph'` or `'kmh'`, the country's signs). Not the AI's target speed, which is lower in bends. nil off the road, before the world is there or on another level |
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
+| `loadedBuildings(x, y, radius, limit)` | 1.12: the buildings made round a point now, at once (see "The streamed world" below) |
+| `towns(lat, lon, opts, callback)` | 1.12: the towns, villages and cities round a point (see "The streamed world") |
+| `collisionReady(x, y, radius)` | 1.12: the colliders round a point (sidewalks, kerbs, decks, buildings) made and in effect |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 ### Route maneuvers (1.7)
@@ -218,6 +221,7 @@ Events, as game hooks (any extension defining the function gets it) and as `api.
 | `onBeamNGEarthTeleported` | `teleported` | `{lat, lon}`: a teleport finished, the player is set down |
 | `onBeamNGEarthRouteArrived` | `routeArrived` | `{lat, lon, name}`: the GPS destination reached |
 | `onBeamNGEarthWaypointReached` | `waypointReached` | `{lat, lon, name, left}`: a GPS waypoint passed (1.2), `left` still ahead |
+| `onBeamNGEarthContentChanged` | `contentChanged` | `{kinds, x0, y0, x1, y1, lat0, lon0, lat1, lon1, changes}` (1.12): the streamed world changed; at most once every 3 s (see "The streamed world") |
 | `onBeamNGEarthRebased` | `rebased` | `{lat, lon, oldLat, oldLon, anchorId, purpose}` (1.7): the world's origin moved to `lat, lon` from `oldLat, oldLon` (nil at the first one), in the frame that moved the world. `purpose` is `'rebase'` (driving on), `'teleport'`, or another of the mod's own moves. Every game coordinate an add-on kept is stale: convert again with `toGame` |
 
 ### Places (1.4)
@@ -302,6 +306,97 @@ end
   box over the cap has its reach cut back to fit, with `truncated` saying so. The cut is concentric round the point
   and the same on every page, so paging by `next` stays right across it.
 - `buildings` keeps its own 500 m reach and count of 100 whatever `radius` and `cachedOnly` say.
+
+### The streamed world (1.12)
+
+For mods that scan the level the way they scan a stock map: a stock level has its buildings, roads and lamps from
+the moment it loads, so a mod that walks `scenetree.findClassObjects('TSStatic')` once at the level's start knows
+them all. BeamNG.Earth's level has none then. Its world is streamed round the player and changes as they drive,
+so a scan at the start finds nothing, and one made later goes stale as tiles come and go. 1.12 says when to look
+again and has the data so a mod need not walk the scene at all.
+
+What the scene holds, the stock way:
+
+- Each road tile's buildings are one or more TSStatic meshes (`bld_<anchor>_<x>_<y>.cdae`, up to `_4`) in the
+  SimGroup `Buildings` under `MissionGroup`, as West Coast's are. One TSStatic is a whole tile's buildings (up to
+  about 300 m across), not one building. `loadedBuildings` lists the single ones in it.
+- Roads and sidewalks are meshes (TSStatic `road_*`, `walks_*`, `deck_*`, `tunnel_*`, in `bngEarthRoads`), with
+  few DecalRoads. The road graph is the game's own (`map.getMap()`), applied with `map.reset` as the player
+  drives. `onNavgraphReloaded` is fired only when that graph really changes. A new graph with the same nodes is
+  not applied again.
+- Street lamps are the game's SpotLights, and traffic signals are `core_trafficSignals`' own.
+- The level's `police.vehGroup.json` and info.json's `region` and `country` follow the region the player is in
+  (northAmerica, europe, asiaPacific, and the USA, Germany, Italy, France or Japan as the game's traffic knows
+  them). They are rewritten only when the region changes. Outside those regions the police file is removed and the
+  game's own selection applies.
+
+`onBeamNGEarthContentChanged(info)` comes at most once every 3 s (`api.CONTENT_GAP_S`), only in BeamNG.Earth's
+level, and only after something changed. Everything that changed since the last one is merged into it:
+
+- `kinds`: a table with `buildings = true` (drawn building meshes made or deleted), `roads` (road, sidewalk,
+  deck or tunnel meshes), `collision` (colliders put in effect: sidewalks, kerbs and buildings are solid there
+  now), `graph` (the road graph applied to the game's map) and `town` (the status bar's town changed). Only the
+  kinds that changed are present.
+- `x0, y0, x1, y1`: the box round what changed, in game coordinates. `lat0, lon0, lat1, lon1` is the same box in
+  degrees. Both are nil when the box is not known: a rebase came between (the old box is in a frame that is gone),
+  or only the town changed.
+- `changes`: how many changes were merged into this one.
+
+```lua
+local M = {}
+local api = nil
+local function rescan(x, y)
+  for _, b in ipairs(api.loadedBuildings(x, y, 400) or {}) do
+    -- b.x, b.y, b.z (ground), b.top, b.height, b.sizeX, b.sizeY, b.dist
+  end
+end
+function M.onBeamNGEarthContentChanged(info)
+  api = rawget(_G, 'beamngEarth_api')
+  if not (api and api.has('loadedBuildings')) then return end
+  if info.kinds.buildings or info.kinds.collision then rescan() end   -- (nil, nil: round the player)
+end
+return M
+```
+
+`loadedBuildings(x, y, radius, limit)` (`has('loadedBuildings')`) returns the buildings made now round `x, y` in
+game coordinates (nil for both: round the player), within `radius` m (default 300, at most 2000), nearest first, at
+most `limit` (default 200, at most 2000). It answers at once from what is loaded, with no request to the app. Each
+building is `{x, y, z, top, height, sizeX, sizeY, dist}`:
+
+- `x, y`: the centre of its footprint's box.
+- `z`: its lowest ground. `top`: its roof. `height`: `top - z`.
+- `sizeX, sizeY`: the footprint's box along the game's x and y.
+- `dist`: metres from the point to the box (0 inside).
+
+It has no outline or kind: `buildings(lat, lon, ...)` has the map's footprints with their class. Open parking
+decks, bridges and the landmark frames you can drive through are left out. It walks the loaded tiles round the point
+(a few ms for 2 km of a city), so call it after `onBeamNGEarthContentChanged`, not every frame. Coordinates change at
+a rebase, so do not keep them across one.
+
+`towns(lat, lon, opts, callback)` (`has('towns')`) looks up the towns, villages and cities round a point in the
+app's own copy of Overture's divisions, the same data as the status bar's town and the 3D map's town labels. The
+options are `radius` (m, default 20000, at most 150000) and `limit` (default 50, at most 400). `callback(result)` is
+called once with:
+
+- `towns`: `{{name, lat, lon, class, population, dist}, ...}`, the largest first (towns with a class ahead of a
+  city's districts, then by population). `class` is `'megacity'`, `'city'`, `'town'`, `'village'`, `'hamlet'`, or
+  `''` for a district. `population` is 0 where it is not mapped. `dist` is in metres.
+- `complete`: every map region round the point was on disk. The app reads only regions it already has for this.
+  The status bar fetches the player's own region, so the player's surroundings are always there.
+- `error`: `'bad coordinates'`, `'timed out'` (no answer in 150 s), and so on.
+
+The call returns the request's id, or `nil, why`.
+
+`collisionReady(x, y, radius)` (`has('collisionReady')`) returns true when the road tiles' colliders round `x, y`
+(nil for both: the player), within `radius` m (default 0), are made and in the physics. These are the sidewalks
+and kerbs, bridge decks, tunnels and buildings. It returns false while they are not, and nil off BeamNG.Earth's
+level. Colliders are made near the car, so far parts of the road graph often have none yet. Something that probes
+the ground with `castRayStatic` or `be:getSurfaceHeightBelow` (a raised sidewalk beside a graph edge, for example)
+should not keep a miss where this is false, and should probe again after an `onBeamNGEarthContentChanged` with
+`kinds.collision`. The terrain's own ground is not part of it: it is always there under the road graph's nodes.
+
+Version numbers 1.9 to 1.11 are held for open pull requests: #1232 and #1249 both claim 1.9 (one of them will
+be 1.10), and #1566 claims 1.11. So these additions are 1.12. Check `has()` rather than the number.
 
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and

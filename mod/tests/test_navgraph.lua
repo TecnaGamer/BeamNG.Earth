@@ -513,4 +513,155 @@ do
   N.reset()
 end
 
+-- map.reset only when the clipped graph changed (the 2026-11-27 mod-compatibility study): a new server graph whose clip
+-- is the graph in the game's map already is not handed to map.reset (no onNavgraphReloaded for every extension); a
+-- moved node, an edge's speed, a node more, other signals or rules are; a foreign reset and a moved graph (a rebase)
+-- always are. The applied graph's region writes the level's files once per region (levelinfo.syncRegion).
+do
+  N.reset()
+  N.takeChoice(nil)
+  N.enabled = true
+  local names = { 'jsonDecode', 'readFile', 'writeFile', 'jsonEncode', 'map', 'be', 'path', 'getObjectByID',
+                  'gameplay_traffic', 'core_trafficSignals', 'extensions' }
+  local sg = {}
+  for _, k in ipairs(names) do sg[k] = rawget(_G, k) end
+  local log0 = rawget(_G, 'log')
+  if not log0 then log = function() end end
+  local tc0 = rawget(table, 'clear')
+  table.clear = tc0 or function(t) for k in pairs(t) do t[k] = nil end end
+  local clock0 = os.clock
+  local now = 2000
+  os.clock = function() return now end
+  local data
+  local function base()
+    return { nodes = { a = { 0, 0, 1, 4 }, b = { 50, 0, 1, 4 }, c = { 100, 0, 1, 3 }, far = { 9000, 0, 1, 3 } },
+      edges = { { 'a', 'b', 0, 1, 1, 11.2, 0.8, 4 }, { 'b', 'c', 0, 1, 1, 11.2, 0.8, 3 },
+                { 'c', 'far', 0, 1, 1, 11.2, 0.8, 3 } } }
+  end
+  data = base()
+  jsonDecode = function()       -- (a fresh decode each time, as the game's)
+    local d = { nodes = {}, edges = {}, signals = data.signals, rules = data.rules }
+    for k, n in pairs(data.nodes) do d.nodes[k] = { n[1], n[2], n[3], n[4] } end
+    for i, e in ipairs(data.edges) do local c = {} for j = 1, 8 do c[j] = e[j] end d.edges[i] = c end
+    return d
+  end
+  readFile = function() return '{}' end
+  writeFile = function() end
+  jsonEncode = function() return '{}' end
+  path = { getPathLevelInfo = function() return '' end }
+  core_trafficSignals = nil
+  extensions = nil
+  local world, resets, hooked = {}, 0, 0
+  map = { reset = function(n)
+            resets = resets + 1
+            for _, nd in pairs(n) do            -- (as the game's convertToSingleSided: each edge kept at one end)
+              local nl = {}
+              for lid, e in pairs(nd.links) do if e.inNode == lid then nl[lid] = e end end
+              nd.links = nl
+            end
+            world.nodes = n
+            hooked = hooked + 1                 -- (map.lua's extensions.hook('onNavgraphReloaded'))
+          end,
+          getMap = function() return world end, findClosestRoad = function() return nil end }
+  be = { getPlayerVehicleID = function() return -1 end, queueAllObjectLua = function() end,
+         sendToMailbox = function() end }
+  getObjectByID = function() return nil end
+  gameplay_traffic = { getState = function() return 'off' end, getTrafficData = function() return {} end,
+    getTrafficList = function() return {} end }
+  local box = { -500, -500, 500, 500 }
+  local serial = 0
+  local function send()
+    serial = serial + 1
+    now = now + 2               -- (past MIN_GAP_S)
+    T.check(N.onMessage({ anchorId = 1, path = 'x', serial = serial }, 1), 'skip: graph ' .. serial)
+    N.update(1, box)
+  end
+  send()
+  T.check(resets == 1 and N.status().skips == 0 and N.applies() == 1, 'skip: the first graph goes in')
+  send()
+  T.check(resets == 1 and N.status().skips == 1 and N.applies() == 1,
+    'skip: the same clipped graph again (a new serial): no map.reset, no onNavgraphReloaded')
+  T.check(N.status().compare.shared == 3 and N.status().compare.moved == 0, 'skip: its nodes all kept by name')
+  data.nodes.far = { 9500, 0, 1, 3 }      -- (a node outside the clip moved: the clip is the same)
+  send()
+  T.check(resets == 1 and N.status().skips == 2, 'skip: a change outside the block: still the same graph')
+  data.edges[2][6] = 13.4                 -- an edge's speed
+  send()
+  T.check(resets == 2, 'skip: an edge\'s speed changed: reset')
+  send()
+  T.check(resets == 2 and N.status().skips == 3, 'skip: ... then the same again: none')
+  data.nodes.b = { 50, 0.5, 1, 4 }        -- a node moved
+  send()
+  T.check(resets == 3 and N.status().compare.moved >= 1, 'skip: a node moved: reset')
+  data.nodes.d = { 100, 60, 1, 3 }        -- a road more
+  data.edges[#data.edges + 1] = { 'c', 'd', 0, 1, 1, 11.2, 0.8, 3 }
+  send()
+  T.check(resets == 4 and N.status().compare.added == 1, 'skip: a node and an edge more: reset')
+  data.signals = { { j = 'c', kind = 'stop', app = { { 'b', 95, 0, 1, 1, 0, 0 } } } }
+  send()
+  T.check(resets == 5, 'skip: other signals on the same nodes: reset')
+  send()
+  T.check(resets == 5, 'skip: the same signals decoded again: none')
+  data.rules = { rightHandDrive = true, turnOnRed = false }
+  send()
+  T.check(resets == 6, 'skip: other road rules: reset')
+  N.onReloaded()                           -- someone else rebuilt the map
+  now = now + 2
+  N.update(1, box)
+  T.check(resets == 7, 'skip: a foreign reset is undone, the same graph or not')
+  N.transform({ apply = function(_, x, y, z) return x, y, z end }, 1)   -- a rebase (here, the same frame)
+  now = now + 0.1
+  N.update(1, box)
+  T.check(resets == 8, 'skip: a moved graph is applied at once')
+  N.SKIP_SAME = false
+  send()
+  T.check(resets == 9, 'skip: off: every graph reset as before')
+  N.SKIP_SAME = true
+  T.check(hooked == resets, 'skip: onNavgraphReloaded once per reset')
+
+  -- the level's region files follow the graph's country, written once a change of region (levelinfo.syncRegion)
+  local li = require('beamngEarth/levelinfo')
+  li._reset()
+  local calls = {}
+  local sr = li.syncRegion
+  li.syncRegion = function(region, cc, make, allMods)
+    calls[#calls + 1] = { region, cc, make and make() or nil }
+    return true
+  end
+  local cms0 = rawget(_G, 'core_multiSpawn')
+  core_multiSpawn = { createGroup = function(n, p)
+    return { { model = 'fullsize', config = 'police', n = n, region = next(p.filters.Region) } } end }
+  data.rules = { rightHandDrive = false, turnOnRed = true, country = 'DE' }
+  send()
+  T.check(N._syncLevelRegion() and calls[#calls][1] == 'europe' and calls[#calls][2] == 'DE'
+    and calls[#calls][3][1].n == N.POLICE_GROUP_SIZE and calls[#calls][3][1].region ~= nil,
+    'region: the graph\'s country, the police group made for its region')
+  data.rules.country = 'BR'
+  send()
+  N._syncLevelRegion()
+  T.check(calls[#calls][1] == nil and calls[#calls][3] == nil, 'region: none outside the regions, no group')
+  li.syncRegion = sr
+  core_multiSpawn = cms0
+
+  table.clear = tc0
+  for _, k in ipairs(names) do _G[k] = sg[k] end
+  if not log0 then log = nil end
+  os.clock = clock0
+  N.reset()
+end
+
+-- the police group's params: the region's police configs, the country's first where the game knows it
+do
+  local set = { trafficAllowMods = false }
+  local get = function(k) return set[k] end
+  local p, region = N.policeGroupParams('US', get)
+  T.check(region == 'northAmerica' and p.filters.Region.northAmerica == 1 and p.filters['Config Type'].police == 1
+    and p.filters.Country['United States'] == 100 and p.allConfigs and p.minPop == 0 and not p.allMods,
+    'police params: the region, police configs, the country first')
+  T.check(N.policeGroupParams('NL', get).filters.Country == nil, 'police params: a country the game has no name for')
+  T.check(N.policeGroupParams('BR', get) == nil, 'police params: none outside the regions')
+  set.trafficAllowMods = true
+  T.check(N.policeGroupParams('JP', get).filters.Type.automation == 1, 'police params: mods as the traffic setting')
+end
+
 T.done('test_navgraph')

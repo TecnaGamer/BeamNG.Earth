@@ -280,16 +280,53 @@ local function group()
   return g
 end
 
+-- The buildings' TSStatics (bld, bld2-4, their lean collision mesh, custom 3dmr models) in a SimGroup of their own
+-- named as the stock maps name theirs (West Coast's MissionGroup/Buildings; the 2026-11-27 mod-compatibility study:
+-- scanners, the editor and other mods look there). Ours: made by us (the bngEarth field); a "Buildings" object some
+-- other mod made is left alone and ours stay in M.GROUP.
+M.BUILDINGS_GROUP = 'Buildings'
+local buildingsId = nil     -- (the group this module state made)
+local function ownGroup(g)
+  if not g or (g.class or (g.getClassName and g:getClassName())) ~= 'SimGroup' then return false end
+  return (buildingsId ~= nil and g:getID() == buildingsId) or g:getField('bngEarth', 0) == '1'
+end
+local function buildingsGroup()
+  local g = scenetree.findObject(M.BUILDINGS_GROUP)
+  if g then return ownGroup(g) and g or group() end
+  g = createObject('SimGroup')
+  g.canSave = false
+  g:setField('bngEarth', 0, '1')
+  g:registerObject(M.BUILDINGS_GROUP)
+  scenetree.MissionGroup:addObject(g)
+  buildingsId = g:getID()
+  return g
+end
+
 -- Objects of a previous Lua state deleted. Returns how many.
 function M.sweep()
-  local g = scenetree.MissionGroup and scenetree.findObject(M.GROUP)
-  if not g then return 0 end
-  local n = g:getCount()
-  if n > 0 then
-    g:deleteAllObjects()
-    be:reloadCollision()
+  if not scenetree.MissionGroup then return 0 end
+  local n = 0
+  local bg = scenetree.findObject(M.BUILDINGS_GROUP)
+  for _, g in pairs({ scenetree.findObject(M.GROUP) or false, ownGroup(bg) and bg or false }) do
+    if g then
+      local c = g:getCount()
+      if c > 0 then g:deleteAllObjects(); n = n + c end
+    end
   end
+  if n > 0 then be:reloadCollision() end
   return n
+end
+
+-- Add-ons hear of the streamed content (api.lua contentChanged, onBeamNGEarthContentChanged): the kind of each part
+-- made or deleted and its box. Only the drawn parts: the collision meshes count as 'collision' at the rebuild that puts
+-- them in effect. Per object, never per frame.
+M.CONTENT_KIND = { bld = 'buildings', bld2 = 'buildings', bld3 = 'buildings', bld4 = 'buildings', road = 'roads',
+  walk = 'roads', deck = 'roads', tunnel = 'roads' }
+-- (in M: the frame's update is at Lua's upvalue limit)
+M._contentObjs = {}         -- object id -> its content kind (so its deletion is heard too)
+function M._contentNote(kind, box)
+  local api = rawget(_G, 'beamngEarth_api')
+  if api and api._contentChanged then pcall(api._contentChanged, kind, box) end
 end
 
 -- The road surfaces drawn opaque (2026-10-14): the stock decal materials are all translucent, and inside
@@ -791,8 +828,9 @@ local function isCollider(o)
   return c == 'TSStatic' and o:getField('collisionType', 0) ~= 'None'
 end
 
--- collide: true ('Visible Mesh Final'), a collision type name, or false / nil (render only)
-local function createWalk(walk, collide)
+-- collide: true ('Visible Mesh Final'), a collision type name, or false / nil (render only); bld: a building's
+-- (into the Buildings group)
+local function createWalk(walk, collide, bld)
   require('beamngEarth/texdbg').log('shape', walk.shape)
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, walk.shape)
@@ -808,7 +846,7 @@ local function createWalk(walk, collide)
     local r = walk.rot
     o:setPosRot(walk.pos[1], walk.pos[2], walk.pos[3], r[1], r[2], r[3], r[4])
   end
-  group():addObject(o)
+  if bld then buildingsGroup():addObject(o) else group():addObject(o) end
   return o:getID()
 end
 
@@ -830,12 +868,17 @@ local function spawnCustom(key, shape, pos, rot, col)
   local collide = string.find(shape, '_deck', 1, true) and 'Collision Mesh' or col ~= false
   local walk = { shape = shape, pos = pos }
   if rot then walk.rot = rot end
-  local id = createWalk(walk, collide)
+  local building = col ~= false and not shape:find('_deck', 1, true)
+  local id = createWalk(walk, collide, building)
   t.custom = t.custom or {}
   t.custom[#t.custom + 1] = id
   -- Custom buildings replace the procedural footprints under them. Bridge
   -- sections are render-only with a separate invisible deck collider.
-  if col ~= false and not shape:find('_deck', 1, true) then M._buildingMade(id, t, key) end
+  if building then
+    M._buildingMade(id, t, key)
+    M._contentObjs[id] = 'buildings'
+    M._contentNote('buildings', objectBox(id))
+  end
   if collide then markTileCollider(t) end
   return id
 end
@@ -2791,6 +2834,11 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     local t0 = now()
     local did = table.remove(deleteQ)
     local o = scenetree.findObjectById(did)
+    local ck = M._contentObjs[did]
+    if ck then
+      M._contentObjs[did] = nil
+      if o then M._contentNote(ck, objectBox(did)) end
+    end
     if o then
       if isCollider(o) then
         if not farDeletes[did] and M.nearPlayer(o:getPosition(), M.DELETE_NEAR_M) then markDirty('delete')
@@ -2814,6 +2862,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       loadMaterials()
       local ok, id = pcall(createChunk, q.chunk)
       if ok then t.objs[#t.objs + 1] = id else lastError = tostring(id) end
+      if ok then M._contentObjs[id] = 'roads'; M._contentNote('roads', objectBox(id)) end
       if ok and M.onKeepupPart then M.onKeepupPart('road', t) end
       t.queued = t.queued - 1
       local ms = now() - t0
@@ -2883,7 +2932,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol' or (M._cliffsOn and M.isCliffCollider(q.what))) and 'Collision Mesh' or not isRoad
-      local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
+      local ok, id = pcall(createWalk, walk, staged and 'None' or collide, q.what:sub(1, 3) == 'bld')
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if ok and q.what == 'puddle' and not M.puddlesShown then          -- (dry: drawn not at all, M.setPuddles)
         local o = scenetree.findObjectById(id)
@@ -2910,6 +2959,11 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         if t.oldPartSlot and t.oldPartSlot[q.what] then slotDrop(t.oldPartSlot[q.what]); t.oldPartSlot[q.what] = nil end
       end
       if ok and q.what:match('^bld[234]?$') then M._buildingMade(id, t, q.key) end
+      local ck = ok and M.CONTENT_KIND[q.what]
+      if ck then        -- (a generation swap's staged part is heard at its deletion only: it replaces what is there)
+        M._contentObjs[id] = ck
+        if not staged then M._contentNote(ck, objectBox(id)) end
+      end
       -- (a deck or road surface: its far bridge piece hides this frame, flushFar)
       if ok and t.geo and (q.what == 'deck' or q.what == 'road') then M._markBridge(t.gkey) end
       if ok and M.onKeepupPart then M.onKeepupPart(q.what, t) end     -- (keepup.lua: a debug recorder)
@@ -2961,8 +3015,21 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     local t0 = now()
     logReload(holdActive and 'hold' or urgent and 'urgent' or (collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000)
       and 'due' or 'deletes')
+    -- (add-ons: the colliders made since the last rebuild are in effect from this one; their box, api contentChanged)
+    local cbox = nil
+    for _, c in ipairs(newColliders) do
+      local b = c[3]
+      if b then
+        if cbox then
+          cbox[1], cbox[2], cbox[3] = math.min(cbox[1], b[1]), math.min(cbox[2], b[2]), math.min(cbox[3], b[3])
+          cbox[4], cbox[5], cbox[6] = math.max(cbox[4], b[4]), math.max(cbox[5], b[5]), math.max(cbox[6], b[6])
+        else cbox = { b[1], b[2], b[3], b[4], b[5], b[6] } end
+      end
+    end
+    local madeColliders = #newColliders > 0
     noteNewColliders()
     be:reloadCollision()
+    if madeColliders then M._contentNote('collision', cbox) end
     require('beamngEarth/perfsummary').note('collision')
     lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload, extBoxes = false, false, stopwatch.new(), {}
@@ -3433,6 +3500,49 @@ function M.readyAround(aid, x, y, r)
   return true
 end
 
+-- The buildings of the road tiles whose buildings are made, within r m of (x, y) in the current anchor's world (api.lua
+-- loadedBuildings): from each tile's collider boxes (server buildings.collider_boxes: a building's footprint box from
+-- FOUNDATION_M under its lowest ground to TOP_PAD_M over its roof; not the open parking decks, bridges and landmark
+-- frames, which have none). Appends { x, y (the box's centre), z (its lowest ground), top (its roof), sizeX, sizeY (the
+-- footprint box), dist (m from (x, y) to the box, 0 inside) } to out. A read on demand: no state, nothing per frame.
+M.BLD_BOX_FOUNDATION_M, M.BLD_BOX_TOP_PAD_M = 0.6, 6.0
+function M.buildingBoxesNear(x, y, r, out)
+  out = out or {}
+  if not M.enabled or not anchorId then return out end
+  local function add(t, pp)
+    local boxes = t.colliders and t.colliders.bld
+    if type(boxes) ~= 'table' or not t.bld then return end
+    for _, b in ipairs(boxes) do
+      local cx, cy = (b[1] + b[4]) / 2, (b[2] + b[5]) / 2
+      local z0, z1 = b[3] + M.BLD_BOX_FOUNDATION_M, b[6] - M.BLD_BOX_TOP_PAD_M
+      local wx, wy, wz = cx, cy, z0
+      if pp then wx, wy, wz = pp.xf:apply(cx, cy, z0) end      -- (a geotile's: placed as its mesh)
+      local sx, sy = b[4] - b[1], b[5] - b[2]
+      local gx, gy = math.max(math.abs(wx - x) - sx / 2, 0), math.max(math.abs(wy - y) - sy / 2, 0)
+      local d = math.sqrt(gx * gx + gy * gy)
+      if d <= r then
+        out[#out + 1] = { x = wx, y = wy, z = wz, top = wz + (z1 - z0), sizeX = sx, sizeY = sy, dist = d }
+      end
+    end
+  end
+  if M.geo then
+    for _, k in ipairs(M.geoKeysNear(x, y, r)) do
+      local t = tiles[geoKey(k)]
+      local pp = t and t.pls and t.pls.bld
+      if pp and t.anchorObj == anchorObj and not t.orphan then add(t, pp) end
+    end
+    return out
+  end
+  local n = M.TILE_M
+  for gx = math.floor((x - r) / n), math.floor((x + r) / n) do
+    for gy = math.floor((y - r) / n), math.floor((y + r) / n) do
+      local t = tiles[tileKey(anchorId, gx .. '_' .. gy)]
+      if t and not t.ghost then add(t, nil) end
+    end
+  end
+  return out
+end
+
 -- Something else made colliding objects near the player (trees.lua's Forest items): rebuild collision at the
 -- next throttled slot. With box { x0, y0, z0, x1, y1, z1 } round them they are due like a collider of the roads, by the
 -- car's distance to the box as it drives (urgentColliders' NEED rule: within needReach, at once within hardReach, else
@@ -3594,6 +3704,7 @@ end
 -- The level ended: its objects are gone with it.
 function M.reset()
   M._resetBuildings()
+  M._contentObjs = {}
   M.swapCancel()            -- (a generation swap's tiles and parts go with the level)
   for _, t in pairs(tiles) do sea.release(t.waterguard) end
   for _, token in pairs(objectWater) do sea.release(token) end

@@ -53,9 +53,30 @@ local function copy(t)
   return o
 end
 
+-- The region the player is in, as the game's traffic reads a level's (2026-11-27 mod-compatibility study): its
+-- vehicle selection (gameplay/traffic/trafficUtils getLevelInfo) takes info.json's region (northAmerica, europe,
+-- asiaPacific: the Region filter with Options > Gameplay > Traffic's smart selections) and the last word of its country
+-- (usa, germany, italy, france, japan: the police's Country filter). Ours spans the Earth: the region of the road
+-- graph's country (navgraph.syncLevelRegion), kept in the text as 'Every country (USA)' so the level select still
+-- says what the level is. nil: none (outside the three regions). Until the session's first graph says (syncRegion)
+-- the file's own region is kept (M.diskRegion): the level start's write does not take it out only for the graph to
+-- put it back seconds later (two rebuilt level lists a session).
+M.COUNTRY_WORDS = { US = 'USA', DE = 'Germany', IT = 'Italy', FR = 'France', JP = 'Japan' }
+M.region = nil          -- { region = 'europe', cc = 'DE' }
+M.diskRegion = nil      -- { region, country } of the file before this session's syncRegion; false: none; nil: unread
+local regionKnown = false
+
 -- The info table for places ({ id, name, lat, lon }); hasPreview(key) -> true when that place's picture exists.
 function M.build(placeList, hasPreview)
   local info = copy(M.BASE)
+  if M.region then
+    info.region = M.region.region
+    local word = M.COUNTRY_WORDS[M.region.cc]
+    if word then info.country = M.BASE.country .. ' (' .. word .. ')' end
+  elseif not regionKnown and M.diskRegion then
+    info.region = M.diskRegion.region
+    if type(M.diskRegion.country) == 'string' then info.country = M.diskRegion.country end
+  end
   local sp = {
     { objectname = M.DEFAULT, translationId = 'Where you left off', preview = M.PREVIEW,
       description = 'The last place you teleported to.' },
@@ -73,12 +94,22 @@ function M.build(placeList, hasPreview)
 end
 
 local last = nil -- the text written last (or read back)
+local lastList = nil -- the places of the last write (syncRegion writes the info again with them)
+M.writes = 0          -- info.json writes this session
 
 -- Write the info for placeList when it differs from the file. Returns true when it wrote.
 function M.write(placeList)
+  lastList = placeList
   local enc, write, read = rawget(_G, 'jsonEncodePretty') or rawget(_G, 'jsonEncode'), rawget(_G, 'writeFile'),
     rawget(_G, 'readFile')
   if not enc or not write then return false end
+  if not regionKnown and M.diskRegion == nil then
+    local jr = rawget(_G, 'jsonReadFile')
+    local okR, d = false, nil
+    if jr and FS and FS.fileExists and FS:fileExists(M.PATH) then okR, d = pcall(jr, M.PATH) end
+    M.diskRegion = okR and type(d) == 'table' and type(d.region) == 'string' and { region = d.region, country = d.country }
+      or false
+  end
   local function hasPreview(key)
     return FS and FS.fileExists and FS:fileExists('/levels/beamng_earth/' .. M.PLACE_PREVIEWS .. key .. '.jpg') or false
   end
@@ -95,7 +126,76 @@ function M.write(placeList)
     return false
   end
   last = text
+  M.writes = M.writes + 1
   return true
+end
+
+-- The level's police vehicles (police.vehGroup.json, as the stock levels have one: the game's police role reads it
+-- with smart selections on, gameplay/police.lua -> trafficUtils.getTrafficGroupFromFile, and so does any mod that asks
+-- for the level's group by name), of the region the player is in. Ours: its "bngEarth" field is the stamp it was made
+-- for (region | country | mods); a file without it (some other mod's) is left alone.
+M.POLICE_PATH = '/levels/beamng_earth/police.vehGroup.json'
+local policeStamp = nil   -- the police file's stamp on disk: a string, false (none of ours), nil (not read yet)
+local foreignPolice = false
+local regionStamp = nil   -- the region / country / mods syncRegion last saw
+M.regionWrites = 0        -- (probes: the region changes written)
+
+local function readPolice()
+  local read = rawget(_G, 'jsonReadFile')
+  local exists = FS and FS.fileExists and FS:fileExists(M.POLICE_PATH)
+  if not exists then return false end
+  local ok, d = pcall(read or function() return nil end, M.POLICE_PATH)
+  if ok and type(d) == 'table' and type(d.bngEarth) == 'string' then return d.bngEarth end
+  foreignPolice = true
+  return false
+end
+
+-- The player's region changed (navgraph: the road graph's rules): region ('northAmerica', 'europe', 'asiaPacific' or
+-- nil), cc (ISO country code), makePolice() -> the group's { { model, config }... } (only called when the file is
+-- written; nil: no police file), allMods (the traffic's mods setting: a group with or without mods' vehicles). Writes
+-- info.json's region / country and the police file only when their region, country or mods changed (each write is a
+-- file event under /levels/: the game rebuilds its level list, so both go in the same frame); outside the regions the
+-- file goes (the game's own police group then). Returns true when it wrote or removed something.
+function M.syncRegion(region, cc, makePolice, allMods)
+  cc = type(cc) == 'string' and string.upper(cc) or nil
+  local stamp = region and (region .. '|' .. tostring(M.COUNTRY_WORDS[cc or ''] or '') .. (allMods and '|mods' or '')) or false
+  if stamp == regionStamp then return false end
+  regionStamp, regionKnown = stamp, true
+  local did = false
+  -- info.json: the region and the country word (written only when its text changes)
+  M.region = region and { region = region, cc = cc } or nil
+  local w0 = M.writes
+  if lastList == nil then          -- (no write this session yet: places.lua's, with the places list)
+    local okP, places = pcall(require, 'beamngEarth/places')
+    if okP and places and places.syncLevel then pcall(places.syncLevel) end
+  else
+    pcall(M.write, lastList)
+  end
+  did = M.writes ~= w0
+  -- the police file
+  if policeStamp == nil then policeStamp = readPolice() end
+  if not foreignPolice and policeStamp ~= stamp then
+    local write, enc = rawget(_G, 'writeFile'), rawget(_G, 'jsonEncodePretty') or rawget(_G, 'jsonEncode')
+    local data = nil
+    if stamp and makePolice then
+      local okG, g = pcall(makePolice)
+      if okG and type(g) == 'table' and g[1] then data = g end
+    end
+    if data and write and enc then
+      local group = { type = 'custom', name = 'BeamNG.Earth - Police (' .. region .. ')', tags = { 'beamng_earth', 'police', region },
+        data = data, bngEarth = stamp }
+      local okE, text = pcall(enc, group)
+      local okF, res = false, nil
+      if okE and type(text) == 'string' then okF, res = pcall(write, M.POLICE_PATH, text) end
+      if okF and res ~= false then policeStamp, did = stamp, true
+      else log('W', 'beamngEarth', 'level info: police group write failed: ' .. tostring(res)) end
+    elseif policeStamp and FS and FS.removeFile then   -- (no region, or no group made: the game's own)
+      pcall(FS.removeFile, FS, M.POLICE_PATH)
+      policeStamp, did = false, true
+    end
+  end
+  if did then M.regionWrites = M.regionWrites + 1 end
+  return did
 end
 
 -- The places whose picture is not there yet and not asked for this session: { { key, lat, lon } }, each marked asked.
@@ -175,6 +275,10 @@ function M.unhookSpawnPois()
   poiOrig, poiWrap = nil, nil
 end
 
-function M._reset() last, asked = nil, {} end -- tests
+function M._reset()      -- tests
+  last, asked, lastList, policeStamp, foreignPolice, regionStamp, M.region, M.regionWrites = nil, {}, nil, nil, false,
+    nil, nil, 0
+  M.diskRegion, regionKnown = nil, false
+end
 
 return M

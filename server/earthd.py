@@ -481,6 +481,8 @@ WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
 # the modding API's places (Connection.places): incomplete requests waiting for their cells at a time, and how long
 # each waits (tries x WHERE_PLACE_RETRY_S: 2 min, then its last answer says it is still incomplete)
 PLACES_FOLLOWUPS, PLACES_TRIES = 4, 24
+# the modding API's towns (Connection.towns): the radius and count when the request names none (placenames caps both)
+TOWNS_RADIUS_DEFAULT_M, TOWNS_LIMIT_DEFAULT = 20000.0, 50
 
 HM_CACHE = 48               # heightmaps kept, the protected ones with them (6 before 2026-10-30: a fast player's
                             # prefetched chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again;
@@ -8826,6 +8828,46 @@ class Connection:
         finally:
             self._places_followups = getattr(self, "_places_followups", 1) - 1
 
+    def _town_rows(self, lat, lon, radius, limit):
+        """api.towns' rows (worker thread): ([[name, lat, lon, class, population, dist m], ...] the largest first,
+        complete). Only the regions on disk or in memory (placenames.labels without fetch: the status bar fetches the
+        player's own); complete is False when some were missing."""
+        pn = self.s.place_names()
+        rows = pn.labels(lat, lon, radius, limit=limit)
+        complete = all(os.path.exists(pn.path(k)) for k in placenamesmod.cells_for(lat, lon, radius))
+        if not rows:
+            return [], complete
+        d = placenamesmod._dist_km(lat, lon, [r[1] for r in rows], [r[2] for r in rows]) * 1000.0
+        return [[r[0], round(r[1], 6), round(r[2], 6), r[3], int(r[4]) if math.isfinite(r[4]) else 0,
+                 round(float(m), 1)] for r, m in zip(rows, d)], complete
+
+    async def towns(self, msg):
+        """The modding API's towns {"id", "lat", "lon", "radius", "limit"} -> towns_result {"id", "towns": [[name,
+        lat, lon, class, population, dist m], ...], "complete", "error"?} (placenames.labels, the 3D map's town
+        labels; api.towns in the mod). One answer from the regions the app has; it fetches none for this."""
+        rid = msg.get("id")
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+            radius = float(msg.get("radius") or TOWNS_RADIUS_DEFAULT_M)
+            limit = int(msg.get("limit") or TOWNS_LIMIT_DEFAULT)
+        except (KeyError, TypeError, ValueError):
+            self.send({"type": "towns_result", "id": rid, "towns": [], "complete": False, "error": "bad request"})
+            return
+        if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(radius)
+                and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            self.send({"type": "towns_result", "id": rid, "towns": [], "complete": False, "error": "bad coordinates"})
+            return
+        radius = max(1000.0, min(radius, placenamesmod.LABELS_RADIUS_MAX_M))
+        limit = max(1, min(limit, placenamesmod.LABELS_MAX))
+        try:
+            rows, complete = await asyncio.get_running_loop().run_in_executor(
+                self.s.place_pool, self._town_rows, lat, lon, radius, limit)
+        except Exception as e:          # a damaged cell file, odd data: none, and why
+            log.info("towns: %s: %s", type(e).__name__, e)
+            self.send({"type": "towns_result", "id": rid, "towns": [], "complete": False, "error": type(e).__name__})
+            return
+        self.send({"type": "towns_result", "id": rid, "towns": rows, "complete": complete})
+
     async def _where_place_later(self, out, lat, lon, seq):
         """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
         never ahead of the world's own downloads), asked again every WHERE_PLACE_RETRY_S while Overture's hosts are
@@ -9563,7 +9605,9 @@ class Connection:
             self.spawn(self.map_labels(msg))
         elif kind == "places":                  # the modding API's places round a point (places.py; api.places)
             self.spawn(self.places(msg))
-        elif kind == "map_focus":               # the 3D map flying: where the view will end (map3d.flyHint)
+        elif kind == "towns":                   # the modding API's towns round a point (placenames.py; api.towns)
+            self.spawn(self.towns(msg))
+        elif kind == "map_focus":              # the 3D map flying: where the view will end (map3d.flyHint)
             self.on_map_focus(msg)
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)
             self.spawn(self.random_place(msg))
