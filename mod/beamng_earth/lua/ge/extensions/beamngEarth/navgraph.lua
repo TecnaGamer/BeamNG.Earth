@@ -1175,20 +1175,63 @@ end
 
 -- The level's region files follow the graph's country (levelinfo.syncRegion: info.json's region and country word, the
 -- police group), written once per change of region, country or the traffic's mods setting; nothing before the first
--- graph with rules.
-local function syncLevelRegion()
+-- graph with rules. A write is ~0.3 s on a Steam Deck (the police group made, two files, the game's level list
+-- rebuilt; in game 2026-11-27): only at a loading moment (M.regionWriteOk): the session's first, a teleport or an
+-- anchor still loading (core's pending, the ground not ready), the 3D map open, or the car stopped REGION_STOP_S. A
+-- border crossed while driving only marks it pending (M.regionPending) until then.
+M.REGION_STOP_S = 3.0
+M.REGION_STOP_MS = 0.5
+M.regionPending = false
+local stoppedSince = nil
+
+-- Pure: may the region files be written now? o: { first, loading, mapOpen, stoppedS }.
+function M.regionWriteOk(o)
+  return o.first == true or o.loading == true or o.mapOpen == true or (o.stoppedS or 0) >= M.REGION_STOP_S
+end
+
+-- The moment as regionWriteOk reads it (t: os.clock seconds).
+local function regionMoment(t, first)
+  local o = { first = first }
+  local c = rawget(_G, 'beamngEarth_core')
+  local st = c and c._state and c._state()
+  if st and st.pending ~= nil then o.loading = true end
+  if c and c.groundReady then
+    local ok, ready = pcall(c.groundReady)
+    if ok and ready == false then o.loading = true end
+  end
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then o.mapOpen = true end
+  local veh = getPlayerVehicle and getPlayerVehicle(0)
+  local v = veh and veh.getVelocity and veh:getVelocity()
+  local sp = v and math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) or 0
+  if sp < M.REGION_STOP_MS then
+    stoppedSince = stoppedSince or t
+    o.stoppedS = t - stoppedSince
+  else
+    stoppedSince = nil
+  end
+  return o
+end
+
+local function syncLevelRegion(t)
   local cc = graph and graph.rules and graph.rules.country
   if type(cc) ~= 'string' or cc == '' then return false end
   local st = rawget(_G, 'settings')
   local get = st and st.getValue and function(k) return st.getValue(k) end or nil
   local params, region = M.policeGroupParams(cc, get)
+  local li = require('beamngEarth/levelinfo')
+  local due, first = li.regionDue(region, cc, params and params.allMods)
+  local moment = regionMoment(t or os.clock(), first)
+  if not due then M.regionPending = false return false end
+  if not M.regionWriteOk(moment) then M.regionPending = true return false end
+  M.regionPending = false
   local make = params and function()
     if not core_multiSpawn and extensions and extensions.load then pcall(extensions.load, 'core_multiSpawn') end
     if not (core_multiSpawn and core_multiSpawn.createGroup) then return nil end
     return core_multiSpawn.createGroup(M.POLICE_GROUP_SIZE, params)
   end or nil
   local sw = stopwatch.new()
-  local did = require('beamngEarth/levelinfo').syncRegion(region, cc, make, params and params.allMods)
+  local did = li.syncRegion(region, cc, make, params and params.allMods)
   if did then
     stats.regionMs = sw()
     log('I', 'beamngEarth', string.format('level region: %s (%s): info.json and police group written in %.1f ms',
@@ -1196,7 +1239,7 @@ local function syncLevelRegion()
   end
   return did
 end
-M._syncLevelRegion = function() return syncLevelRegion() end     -- (tests)
+M._syncLevelRegion = function(t) return syncLevelRegion(t) end     -- (tests)
 
 local function regionalGroup()
   local st = rawget(_G, 'settings')
@@ -1215,7 +1258,7 @@ local function regionalGroup()
 end
 
 local function setupTraffic(gt, c)
-  pcall(syncLevelRegion)        -- (the police group the setup reads, the region its own group filters by)
+  pcall(syncLevelRegion, os.clock())   -- (the police group the setup reads, the region its own group filters by)
   local okG, group = pcall(regionalGroup)
   local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1,
     { police = c.police, vehGroup = okG and group or nil })
@@ -1237,7 +1280,7 @@ local regionCheckAt = 0
 local function checkRegion(t)
   if t < regionCheckAt then return end
   regionCheckAt = t + M.REGION_CHECK_S
-  pcall(syncLevelRegion)          -- (with traffic off too: the level's files are every mod's)
+  pcall(syncLevelRegion, t)       -- (with traffic off too: the level's files are every mod's)
   if not started or not M.trafficRegionKey then return end
   local want = M.regionOf(graph and graph.rules and graph.rules.country) or 'none'
   if want == M.trafficRegionKey then return end
@@ -1721,6 +1764,7 @@ function M.reset()
   overtake.reset()
   pendingSignals = nil
   snap = nil
+  stoppedSince, M.regionPending = nil, false
   stillSince = {}
   seenAt = {}
   lastTeleport = {}

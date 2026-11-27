@@ -664,4 +664,64 @@ do
   T.check(N.policeGroupParams('JP', get).filters.Type.automation == 1, 'police params: mods as the traffic setting')
 end
 
+-- the region files are written only at a loading moment (a write is ~0.3 s on a Steam Deck): the session's first, a
+-- teleport or an anchor loading, the 3D map open, or the car stopped REGION_STOP_S; a border crossed while driving
+-- only marks it pending until one comes
+do
+  T.check(N.regionWriteOk({ first = true }) and N.regionWriteOk({ loading = true }) and N.regionWriteOk({ mapOpen = true })
+    and N.regionWriteOk({ stoppedS = N.REGION_STOP_S }) and not N.regionWriteOk({ stoppedS = N.REGION_STOP_S - 0.1 })
+    and not N.regionWriteOk({}), 'regionWriteOk: the loading moments only')
+  N.reset()
+  local saved = { jsonDecode = rawget(_G, 'jsonDecode'), readFile = rawget(_G, 'readFile'),
+    getPlayerVehicle = rawget(_G, 'getPlayerVehicle'), beamngEarth_core = rawget(_G, 'beamngEarth_core'),
+    beamngEarth_map3d = rawget(_G, 'beamngEarth_map3d'), core_multiSpawn = rawget(_G, 'core_multiSpawn'),
+    log = rawget(_G, 'log') or false }
+  log = function() end
+  local country = 'DE'
+  jsonDecode = function() return { nodes = { a = { 0, 0, 1, 4 } }, edges = {},
+    rules = { rightHandDrive = false, turnOnRed = false, country = country } } end
+  readFile = function() return '{}' end
+  local speed = 25
+  getPlayerVehicle = function() return { getVelocity = function() return { x = speed, y = 0, z = 0 } end } end
+  local st = { pending = nil }
+  local ground = true
+  beamngEarth_core = { _state = function() return st end, groundReady = function() return ground end }
+  local mapOpen = false
+  beamngEarth_map3d = { isActive = function() return mapOpen end }
+  core_multiSpawn = { createGroup = function() return { { model = 'fullsize', config = 'police' } } end }
+  local li = require('beamngEarth/levelinfo')
+  local sr, rd = li.syncRegion, li.regionDue
+  local written, last = {}, nil
+  li.regionDue = function(region, cc) local s = tostring(region) .. cc return s ~= last, last == nil end
+  li.syncRegion = function(region, cc) last = tostring(region) .. cc written[#written + 1] = cc return true end
+  T.check(N.onMessage({ anchorId = 1, path = 'x', serial = 1 }, 1), 'region timing: a graph in Germany')
+  T.check(N._syncLevelRegion(100) and written[1] == 'DE', 'region timing: the session\'s first: written at once, driving or not')
+  country = 'FR'
+  N.onMessage({ anchorId = 1, path = 'x', serial = 2 }, 1)
+  T.check(not N._syncLevelRegion(102) and #written == 1 and N.regionPending, 'region timing: a border crossed driving: pending')
+  T.check(not N._syncLevelRegion(140) and #written == 1, 'region timing: still driving 40 s later: still pending')
+  speed = 0
+  T.check(not N._syncLevelRegion(142) and #written == 1, 'region timing: just stopped: not yet')
+  T.check(N._syncLevelRegion(142 + N.REGION_STOP_S) and written[2] == 'FR' and not N.regionPending,
+    'region timing: stopped REGION_STOP_S: written')
+  T.check(not N._syncLevelRegion(150) and #written == 2 and not N.regionPending, 'region timing: written once')
+  speed, country = 30, 'IT'
+  N.onMessage({ anchorId = 1, path = 'x', serial = 3 }, 1)
+  N._syncLevelRegion(160)
+  T.check(#written == 2 and N.regionPending, 'region timing: Italy driving: pending')
+  mapOpen = true
+  T.check(N._syncLevelRegion(162) and written[3] == 'IT', 'region timing: the 3D map open: written')
+  mapOpen, country = false, 'JP'
+  N.onMessage({ anchorId = 1, path = 'x', serial = 4 }, 1)
+  st.pending = { purpose = 'teleport' }
+  T.check(N._syncLevelRegion(170) and written[4] == 'JP', 'region timing: a teleport loading: written at once')
+  st.pending, country = nil, 'US'
+  N.onMessage({ anchorId = 1, path = 'x', serial = 5 }, 1)
+  ground = false
+  T.check(N._syncLevelRegion(180) and written[5] == 'US', 'region timing: an anchor still loading (no ground): written')
+  li.syncRegion, li.regionDue = sr, rd
+  for k, v in pairs(saved) do _G[k] = v or nil end
+  N.reset()
+end
+
 T.done('test_navgraph')

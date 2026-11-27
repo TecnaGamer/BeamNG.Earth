@@ -156,9 +156,20 @@ end
 -- info.json's region / country and the police file only when their region, country or mods changed (each write is a
 -- file event under /levels/: the game rebuilds its level list, so both go in the same frame); outside the regions the
 -- file goes (the game's own police group then). Returns true when it wrote or removed something.
-function M.syncRegion(region, cc, makePolice, allMods)
+local function stampOf(region, cc, allMods)
   cc = type(cc) == 'string' and string.upper(cc) or nil
-  local stamp = region and (region .. '|' .. tostring(M.COUNTRY_WORDS[cc or ''] or '') .. (allMods and '|mods' or '')) or false
+  return region and (region .. '|' .. tostring(M.COUNTRY_WORDS[cc or ''] or '') .. (allMods and '|mods' or '')) or false, cc
+end
+
+-- Would syncRegion write (the region, country word or mods differ from what this session last synced)? first: none
+-- synced yet this session (the level start).
+function M.regionDue(region, cc, allMods)
+  return stampOf(region, cc, allMods) ~= regionStamp, regionStamp == nil
+end
+
+function M.syncRegion(region, cc, makePolice, allMods)
+  local stamp
+  stamp, cc = stampOf(region, cc, allMods)
   if stamp == regionStamp then return false end
   regionStamp, regionKnown = stamp, true
   local did = false

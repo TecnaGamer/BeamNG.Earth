@@ -327,8 +327,9 @@ What the scene holds, the stock way:
 - Street lamps are the game's SpotLights, and traffic signals are `core_trafficSignals`' own.
 - The level's `police.vehGroup.json` and info.json's `region` and `country` follow the region the player is in
   (northAmerica, europe, asiaPacific, and the USA, Germany, Italy, France or Japan as the game's traffic knows
-  them). They are rewritten only when the region changes. Outside those regions the police file is removed and the
-  game's own selection applies.
+  them). They are rewritten only when the region changes, and only at a loading moment: the level's start, a
+  teleport, the 3D map open, or the car stopped for a few seconds. A border crossed while driving waits for one.
+  Outside those regions the police file is removed and the game's own selection applies.
 
 `onBeamNGEarthContentChanged(info)` comes at most once every 3 s (`api.CONTENT_GAP_S`), only in BeamNG.Earth's
 level, and only after something changed. Everything that changed since the last one is merged into it:
