@@ -488,7 +488,8 @@ class MapData:
         self.pmtiles = pmtiles.Reader(self.raw_dir, self.fetcher, release) if MAP_SOURCE == "pmtiles" else None
         # our prebaked input tiles (bnwt.py, BNGE_BNWT_URL) for the layers they hold: the cell its source gives, bit for
         # bit (same file, same keys), one range read for a block of cells
-        self.bnwt = bnwt.Reader(self.raw_dir, self.fetcher, release) if bnwt.enabled() else None
+        bnwt_base = bnwt.base_for(self.fetcher, cache_dir, release)     # (BNGE_BNWT_URL, else cdn.json's "bnwt")
+        self.bnwt = bnwt.Reader(self.raw_dir, self.fetcher, release, base=bnwt_base) if bnwt_base else None
         # architecture v2's compact per-cell inputs (cip.py, BNE_V2_CIP=on): a cell's layers as the sources give them
         # (the roads Overture's alone: their OSM tags joined at the decode, as every cell's), one range read a cell; the
         # sources below stay every section's fallback

@@ -67,7 +67,8 @@ ZOOM = 14
 ARCHIVE = "cells"
 PART_MB = 32               # a part's data at most: a CDN edge caches it whole on the first read
 LEVEL = 17                 # zstd: the size of 19 (within 1 %) at 2-3x its encode speed (a dense Manhattan cell: 0.24 s)
-ON = os.environ.get("BNE_V2_CIP", "off").strip().lower() == "on"
+ENV = os.environ.get("BNE_V2_CIP", "").strip().lower()      # "on" / "off" decide; unset: the data repo's cdn.json
+ON = ENV == "on"
 BASE_URL = (os.environ.get("BNE_V2_CIP_URL") or "").strip().rstrip("/")
 BUILD = (os.environ.get("BNE_V2_CIP_BUILD") or "").strip()
 WEEKLY = ("osmtags", "rails", "lanes", "stations")   # data builds a build pins (inputs()["data"])
@@ -499,15 +500,39 @@ _READERS = {}
 _RLOCK = threading.Lock()
 
 
+def switched(fetcher, cache_dir, release):
+    """(base URL, build or None) when cdn.json turns the CIP cells of this release on and the environment leaves it
+    to the switch (BNE_V2_CIP unset), else None. Never raises: a switch that cannot be read is the sources."""
+    if ENV:
+        return None
+    try:
+        import cdn
+        return cdn.cip_build(fetcher, cache_dir, release)
+    except Exception as e:      # (offline, a fetcher without the switch)
+        log.info("cip: the CDN switch not read (%s: %s): off", type(e).__name__, e)
+        return None
+
+
 def reader(cache_dir, fetcher, release):
-    """The process's CIP reader of cache_dir (one per cache and release), or None when off."""
-    if not ON:
+    """The process's CIP reader of cache_dir (one per cache and release), or None when off. On by BNE_V2_CIP=on, or by
+    cdn.json's "cip" when the variable is unset (its release the process's own); BNE_V2_CIP_URL / _BUILD still win."""
+    sw = None if ON else switched(fetcher, cache_dir, release)
+    if not ON and sw is None:
         return None
     k = (os.path.realpath(cache_dir), release)
     with _RLOCK:
         r = _READERS.get(k)
         if r is None:
-            r = _READERS[k] = Reader(os.path.join(cache_dir, "mapdata", "raw"), fetcher, release)
+            base, build = sw or (None, None)
+            try:
+                r = Reader(os.path.join(cache_dir, "mapdata", "raw"), fetcher, release,
+                           base=BASE_URL or base, build=BUILD or build)
+            except fast.NativeMissing as e:
+                if ON:
+                    raise                   # (asked for by hand: said so)
+                log.info("cip: left out (%s)", e)
+                return None                 # (the switch's: this build of the server cannot read it)
+            _READERS[k] = r
         return r
 
 

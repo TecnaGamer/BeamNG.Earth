@@ -62,6 +62,9 @@ CONTENT = {"base": 1, "transportation": 1, "buildings": 1, "places": 1}
 LAYERS = tuple(ly for v in ARCHIVES.values() for ly in v["layers"])
 ARCHIVE_OF = {ly: name for name, v in ARCHIVES.items() for ly in v["layers"]}
 BASE_URL = (os.environ.get("BNGE_BNWT_URL") or "").strip().rstrip("/")
+ENV_OFF = BASE_URL.lower() == "off"     # (BNGE_BNWT_URL=off: off whatever cdn.json says)
+if ENV_OFF:
+    BASE_URL = ""
 LEVEL = 19              # zstd level of the tiles
 HEAD_BYTES = 16384
 RETRY_S = 600.0         # an archive that could not be read (404, network, wrong version) is asked again after this
@@ -82,6 +85,22 @@ _NOT_ITS_FAULT = (netfetch.Deferred, netfetch.PolicyDenied, netfetch.BudgetExcee
 
 def enabled():
     return bool(BASE_URL)
+
+
+def base_for(fetcher, cache_dir, release):
+    """The archives' base URL for a process reading Overture `release`: BNGE_BNWT_URL when set (off: none), else the
+    data repo's cdn.json {"bnwt": {"enabled": true, "release": ...}} (cdn.bnwt_base), else "" (the sources). Never
+    raises: a switch that cannot be read is the sources as before."""
+    if BASE_URL or ENV_OFF:
+        return BASE_URL
+    if fast.AVAILABLE is False or getattr(fast._ef, "VERSION", 0) < NATIVE:
+        return ""                   # (the switch's: this build of the server cannot read it)
+    try:
+        import cdn
+        return cdn.bnwt_base(fetcher, cache_dir, release) or ""
+    except Exception as e:      # (offline, a fetcher without the switch: the sources)
+        log.info("bnwt: the CDN switch not read (%s: %s): off", type(e).__name__, e)
+        return ""
 
 
 def source_of(layer, pmt):
