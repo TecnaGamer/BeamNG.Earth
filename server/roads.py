@@ -10975,6 +10975,50 @@ class ChainView:
         ceiling's boxes asked a short chain again every PROFILE_RETRY_S, M5 r5)."""
         return self._parts(cells_feats, box, part_ids=True, retry=False)
 
+    def parts_published_short(self, cells_feats, box, max_m):
+        """parts_published of the parts of max_m or less alone (their mapped line's length): only their chains solved
+        (roadsys._kept_near: a deck end kept at its profile is one of a short chain's, so the ramps never ask the long
+        viaducts' chains solved; asking every chain near each grading query cost the wide corpus +15 % CPU, railramp
+        +51 %)."""
+        x0, y0, x1, y1 = box
+        by = {}
+        for feats in cells_feats:
+            if feats is None or len(feats) == 0:
+                continue
+            bs = self.specs_of(feats)
+            cand = []
+            for i in range(len(feats)):
+                if bs[i] is None:
+                    continue
+                fid = str(feats.ids[i])
+                for j, ring in _keyed(self.keys_of, self.parts_of, feats, i):
+                    ll = np.asarray(ring, np.float64)
+                    if len(ll) < 2:
+                        continue
+                    c = dmath.cos(math.radians(float(ll[0, 1])))
+                    seg = dnp.hypot(np.diff(ll[:, 0]) * c, np.diff(ll[:, 1])) * 111320.0
+                    if float(np.sum(seg)) <= max_m:
+                        cand.append((fid, j, ring, i))
+            if not cand:
+                continue
+            bb = mapgeom.enu_bounds(feats, self.frame, [c[2] for c in cand]).tolist()
+            for (fid, j, ring, i), (emin, emax, nmin, nmax) in zip(cand, bb):
+                if emax < x0 - NEAR_M or emin > x1 + NEAR_M or nmax < y0 - NEAR_M or nmin > y1 + NEAR_M:
+                    continue
+                st = self.cs.store_at(float(ring[0][1]), float(ring[0][0]))
+                todo = by.setdefault(st.region, (st, []))[1]
+                if all(t[0] != (fid, j) for t in todo):
+                    todo.append(((fid, j), feats, i))
+        out = []
+        for _r, (st, todo) in sorted(by.items()):
+            if self.prefer is not None:
+                pst = self.prefer.store(st.region)
+                solved = [t for t in todo if pst._has(t[0])]
+                out += self._map(pst, pst.parts_todo(solved, solved_only=True, part_ids=True, retry=False))
+                todo = [t for t in todo if t not in solved]
+            out += self._map(st, st.parts_todo(todo, part_ids=True, retry=False))
+        return out
+
     def parts_shaped(self, cells_feats, box):
         """parts() with each part's shape (roadshape, BNE_ROADSHAPE=decks; None without one) as a sixth field, from
         the store its line comes from and mapped as that line is."""

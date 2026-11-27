@@ -1500,7 +1500,7 @@ def _kept_near(g0, h0, g1, h1, cell_fn):
     with revisit.scope() as rd:
         try:
             cells = [cell_fn(k) for k in keys]
-            for key, _spec, _xy, _z, _lon in view.parts_published(cells, reg):
+            for key, _spec, _xy, _z, _lon in view.parts_published_short(cells, reg, KEEP_SHORT_M + 10.0):
                 for _e, ll, arc, dz0, ramp, half in view.kept_of_part(key):
                     kk = (ll.tobytes(), arc.tobytes(), float(dz0), float(ramp), float(half))
                     out.setdefault(kk, (ll, arc, float(dz0), float(ramp), float(half)))
