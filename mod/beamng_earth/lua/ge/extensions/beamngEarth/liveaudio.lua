@@ -21,11 +21,19 @@ M.MAX_PENDING = 32       -- thunders kept for the next message
 -- mod's files, as in Pre-recorded; the synth then only ducks its rain at each strike's crack).
 M.LIVE_THUNDER = { generated = 'ready', recorded = true }
 M.LIVE_KINDS = { strike = true, close = true }
--- Whose rain plays while Live: false (the default) the game's own rain loops, exactly as in Pre-recorded (the synth's
--- rain is off: synthRain = false in every message; the user, 2026-11-26: "the rain drops with Live sounds sound
--- terrible and are super lound"); true the synth's, the game's fading out while the synth answers (for the recorded
--- mix rain when it lands). The synth keeps the thunder and its ducks either way.
-M.LIVE_RAIN = false
+-- Whose rain plays while Live, per Rain sound: false the game's own rain loops, exactly as in Pre-recorded (the synth's
+-- rain is off: synthRain = false; the user, 2026-11-26, of the procedural live drops: "the rain drops with Live sounds
+-- sound terrible and are super lound"); true the synth's, the game's fading out while the synth answers, and only when
+-- the synth lists the set in rainSets (the recorded rain needs its texture bank: without it the game plays the
+-- recorded FILES, not the synth's procedural rain). The synth keeps the thunder and its ducks either way.
+-- Generated is method B's live engine since 2026-11-26 (rainb_live.rs; the user, of its sweep: "Sweep sounds good"):
+-- the synth plays it only when it lists 'generated_b' (LIVE_RAIN_NEEDS: an older synth's 'generated' is the procedural
+-- drops of before, which stay off).
+M.LIVE_RAIN = { generated = true, recorded = true }
+M.LIVE_RAIN_NEEDS = { generated = 'generated_b', recorded = 'recorded' }
+-- The same for the wind, per Wind sound: the synth plays no wind yet, so the game's wind files play in both modes (the
+-- hook: a set turned true here, and listed by the synth, would hand that set to it as LIVE_RAIN does)
+M.LIVE_WIND = { generated = false, recorded = false }
 -- a ready render serves a final whose distance is within this much of the one it was rendered for (the synth's
 -- READY_REL_D: a hint moved further renders again)
 M.READY_REL_D = 0.15
@@ -40,6 +48,19 @@ local fadeAt = nil
 local pending = {}           -- thunders for the next message
 local sender = nil           -- core.lua's: send(msg) -> true when sent (connected, a session)
 local thunderSet = 'generated' -- the Weather page's Thunder sound: 'generated' | 'recorded'
+local rainSet = 'generated'    -- the Weather page's Rain sound (ambience.setRainSet tells it)
+
+function M.setRainSet(v)
+  local s = (v == 'recorded') and 'recorded' or 'generated'
+  rainSet = s   -- (in the signature: the next tick sends it)
+end
+function M.rainSet() return rainSet end
+-- Whether the synth plays the rain now: the set's LIVE_RAIN, and the synth offers that set (rainSets: its token in
+-- LIVE_RAIN_NEEDS).
+function M.synthRain()
+  local need = M.LIVE_RAIN_NEEDS[rainSet] or rainSet
+  return M.LIVE_RAIN[rainSet] == true and type(state.rainSets) == 'table' and state.rainSets[need] == true
+end
 
 local function clockhp() return os.clockhp and os.clockhp() or os.clock() end
 
@@ -58,14 +79,20 @@ function M.fields(ctx)
     volume = c01(ctx.volume, 1), thunderVolume = c01(ctx.thunderVolume, 1),
     muted = ctx.muted == true, duck = c01(ctx.duck, 1), t = num(ctx.t, 0),
     thunderSet = (ctx.thunderSet == 'recorded') and 'recorded' or 'generated',
+    -- the Rain sound ('recorded': the synth's texture-bank rain) and the mod's own rain volume for its layers (RAIN_GAIN x
+    -- the rain share), so the synth plays at the files' level
+    rainSet = (ctx.rainSet == 'recorded') and 'recorded' or 'generated',
+    rainVol = c01(ctx.rainVol, 0.5),
+    -- the roof outside near the car (0..1) and whether a shelter is enclosed (muffled A) or open (B)
+    roofNear = c01(ctx.roofNear, 0), enclosed = ctx.enclosed ~= false,
   }
 end
 
 -- Pure: what decides a resend (rounded, so jitter does not send every frame).
 function M.signature(m, f)
-  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s|%s', m, f.rainMmH, f.windMs, f.shelter,
-    tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck, tostring(f.thunderSet),
-    tostring(M.LIVE_RAIN == true))
+  return string.format('%s|%.2f|%.1f|%.2f|%s|%s|%.2f|%.2f|%s|%.2f|%s|%s|%s|%.2f|%.1f|%s', m, f.rainMmH, f.windMs,
+    f.shelter, tostring(f.tunnel), tostring(f.cabin), f.volume, f.thunderVolume, tostring(f.muted), f.duck,
+    tostring(f.thunderSet), tostring(M.synthRain()), tostring(f.rainSet), f.rainVol, f.roofNear, tostring(f.enclosed))
 end
 
 -- Pure: the id of strike s ({ t, seed }): its hint and its final one share it.
@@ -199,8 +226,12 @@ function M.onAudioState(msg)
       if type(v) == 'table' and v[1] ~= nil and tonumber(v[2]) then ready[tostring(v[1])] = tonumber(v[2]) end
     end
   end
+  local rainSets = {}
+  if type(msg.rainSets) == 'table' then
+    for _, v in ipairs(msg.rainSets) do rainSets[tostring(v)] = true end
+  end
   state = { state = tostring(msg.state or 'off'), reason = msg.reason, latencyMs = tonumber(msg.latencyMs), t = clockhp(),
-    sets = sets, ready = ready }
+    sets = sets, ready = ready, rainSets = rainSets }
 end
 
 -- A new connection, its end or a level change: the server's word is gone, the pre-recorded sounds come back, and the
@@ -229,7 +260,7 @@ end
 -- plays the rain (LIVE_RAIN) and answers.
 function M.ownFactor(now)
   now = now or clockhp()
-  local target = (M.LIVE_RAIN and M.isLive(now)) and 1 or 0
+  local target = (M.synthRain() and M.isLive(now)) and 1 or 0
   local dt = fadeAt and math.max(0, math.min(now - fadeAt, 0.1)) or 0   -- (not called while inactive: no jump back)
   fadeAt = now
   local step = dt / M.FADE_S
@@ -303,7 +334,8 @@ function M.tick(now, ctx)
   local ok, sent = pcall(function()
     return send({ type = 'weather_audio', mode = mode, rainMmH = f.rainMmH, windMs = f.windMs,
       shelter = f.shelter, tunnel = f.tunnel, cabin = f.cabin, volume = f.volume, thunderVolume = f.thunderVolume,
-      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, synthRain = M.LIVE_RAIN == true,
+      muted = f.muted, duck = f.duck, t = f.t, thunderSet = f.thunderSet, synthRain = M.synthRain(),
+      rainSet = f.rainSet, rainVol = f.rainVol, roofNear = f.roofNear, enclosed = f.enclosed,
       thunders = th })
   end)
   if ok and sent then

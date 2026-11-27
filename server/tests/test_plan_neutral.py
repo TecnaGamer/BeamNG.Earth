@@ -83,8 +83,9 @@ NOT_LISTED = {
     "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "
                       "earthd.Server._base_in) stores into the server's own state and drives the photo pipeline whose "
-                      "products feed planning inputs (roadsurf's verdicts measured from photos on the disk): not "
-                      "provable by this guard",
+                      "products feed planning inputs (roadsurf's verdicts measured from photos on the disk), and it "
+                      "turns BNE_PHOTO_SURFACE's verdicts off (photosurface.ON: the road specs): not provable by this "
+                      "guard",
     "BNE_FR_HOUSES": "comes only with BNE_FR_ROADS and BNE_EU_ROAD_DETAILS (the EU scenery setting), which the plans "
                      "read; its gated code also stores into its callers' objects (buildings.tile_buildings)",
     "BNE_STALE_REVISIT": "no build switch at all (revisit.NOT_SWITCHES)",

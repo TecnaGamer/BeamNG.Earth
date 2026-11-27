@@ -111,7 +111,7 @@ fn mean(x: &[f64]) -> f64 {
     s / x.len() as f64
 }
 
-fn mean_sq(x: &[f64]) -> f64 {
+pub(crate) fn mean_sq(x: &[f64]) -> f64 {
     sumsq(x) / x.len() as f64
 }
 
@@ -121,7 +121,7 @@ fn rms_db(x: &[f64]) -> f64 {
 }
 
 /// wxlib.db: 10 log10(max(p, 1e-20)).
-fn db10(p: f64) -> f64 {
+pub(crate) fn db10(p: f64) -> f64 {
     10.0 * m::log10(p.max(1e-20))
 }
 
@@ -213,7 +213,7 @@ fn cabs2(c: C) -> f64 {
 }
 
 /// wxlib.running_median: medians on a grid every max(1, k / 8) samples, interpolated.
-fn running_median(v: &[f64], k: usize) -> Vec<f64> {
+pub(crate) fn running_median(v: &[f64], k: usize) -> Vec<f64> {
     let step = (k / 8).max(1);
     let mut cs = Vec::new();
     let mut meds = Vec::new();
@@ -253,7 +253,7 @@ pub fn decode(path: &Path) -> Result<Vec<f64>, String> {
 }
 
 /// Vorbis q5 through ffmpeg (bit-exact container: no encoder version tag, no metadata).
-fn write_ogg(path: &Path, x: &[f64]) -> Result<(), String> {
+pub(crate) fn write_ogg(path: &Path, x: &[f64]) -> Result<(), String> {
     let raw: Vec<u8> = x.iter().flat_map(|v| (*v as f32).to_le_bytes()).collect();
     let mut ch = Command::new("ffmpeg")
         .args([
@@ -441,7 +441,7 @@ pub fn env_db(x: &[f64], win_s: f64, hop_s: f64) -> Vec<f64> {
 }
 
 /// wxlib.frame_rms_db: frame mean power in dB (floored at -200), win and hop in samples.
-fn frame_rms_db(x: &[f64], win: usize, hop: usize) -> Vec<f64> {
+pub(crate) fn frame_rms_db(x: &[f64], win: usize, hop: usize) -> Vec<f64> {
     let n = (x.len() as i64 - win as i64).div_euclid(hop as i64) + 1;
     if n <= 0 {
         return vec![db10(mean_sq(x))];
@@ -635,7 +635,7 @@ pub fn soft_clip(x: &mut [f64], c: f64) {
 // ---------------------------------------------------------------- wxlib.py: screening and events
 
 /// Welch PSD (Hann, 50 % overlap): frequencies and the mean power per bin.
-fn psd(x: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
+pub(crate) fn psd(x: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
     let mut xv = x.to_vec();
     if xv.len() < n {
         xv.resize(n, 0.0);
@@ -659,7 +659,7 @@ fn psd(x: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
     (rfftfreq(n), p)
 }
 
-fn band_power(f: &[f64], p: &[f64], lo: f64, hi: f64) -> f64 {
+pub(crate) fn band_power(f: &[f64], p: &[f64], lo: f64, hi: f64) -> f64 {
     let mut s = 0.0;
     for (fk, pk) in f.iter().zip(p) {
         if *fk >= lo && *fk < hi {
@@ -670,7 +670,7 @@ fn band_power(f: &[f64], p: &[f64], lo: f64, hi: f64) -> f64 {
 }
 
 /// wxlib.bandpass_fft: zero the bins outside [lo, hi).
-fn bandpass_fft(x: &[f64], lo: f64, hi: f64) -> Vec<f64> {
+pub(crate) fn bandpass_fft(x: &[f64], lo: f64, hi: f64) -> Vec<f64> {
     let n = x.len();
     let mut xf = npx::rfft(x, n);
     let f = rfftfreq(n);
@@ -857,6 +857,9 @@ pub fn screen_window(x: &[f64], kind: &str) -> (bool, Vec<String>) {
     if (vfrac > 0.03 && !thunder) || vfrac > 0.08 {
         reasons.push("voiced/harmonic sound (voices, animals)".into());
     }
+    if !thunder {
+        non_thunder_checks(x, kind, &f, &p, &mut reasons);
+    }
     // broadband hiss floor
     let hb = frame_rms_db(&bandpass_fft(x, 6000.0, 12000.0), 220, 220);
     let steady_hf = percentile(&hb, 99.0) - percentile(&hb, 50.0);
@@ -886,6 +889,55 @@ pub fn screen_window(x: &[f64], kind: &str) -> (bool, Vec<String>) {
         }
     }
     (reasons.is_empty(), reasons)
+}
+
+fn std_pop(v: &[f64]) -> f64 {
+    let mu = mean(v);
+    m::sqrt(v.iter().map(|x| (x - mu) * (x - mu)).sum::<f64>() / v.len().max(1) as f64)
+}
+
+/// wxlib.screen_window's checks for the rain, wind, drip and hail classes (texbuild.rs): low tonal peaks (engines,
+/// fans), a slow low-frequency swell under steady rain (traffic, planes), unsteady high band, a strong <120 Hz share and
+/// low knocks without rain content (outdoor rain only). Wind classes keep only the tonal check: their low end swells
+/// and gusts by nature (texbuild has its own buffeting check).
+fn non_thunder_checks(x: &[f64], kind: &str, f: &[f64], p: &[f64], reasons: &mut Vec<String>) {
+    let lp: Vec<f64> = p.iter().map(|v| db10(*v)).collect();
+    let base = running_median(&lp, 41);
+    let mut tonal_lf = f64::NEG_INFINITY;
+    for k in 0..lp.len() {
+        if f[k] >= 20.0 && f[k] <= 500.0 && lp[k] - base[k] > tonal_lf {
+            tonal_lf = lp[k] - base[k];
+        }
+    }
+    if tonal_lf > 15.0 {
+        reasons.push("low tonal (engine/fan)".into());
+    }
+    if kind.starts_with("wind") {
+        return;
+    }
+    let half = (0.5 * SR) as usize;
+    let lf = frame_rms_db(&bandpass_fft(x, 40.0, 250.0), half, half);
+    let hf = frame_rms_db(&bandpass_fft(x, 2000.0, 8000.0), half, half);
+    let (slf, shf) = (std_pop(&lf), std_pop(&hf));
+    if slf > 3.5 && shf < 2.0 {
+        reasons.push("low-frequency swell (traffic/plane/wind)".into());
+    }
+    if shf > 4.0 && kind != "rain_light" {
+        reasons.push("unsteady (something passing or gusting)".into());
+    }
+    let outdoor = matches!(kind, "rain_light" | "rain_moderate" | "rain_heavy");
+    let lfs = db10(band_power(f, p, 20.0, 120.0) / band_power(f, p, 20.0, 16000.0).max(1e-30));
+    if lfs > -6.0 && outdoor {
+        reasons.push("strong <120 Hz rumble (wind/traffic/handling)".into());
+    }
+    let w50 = (0.05 * SR) as usize;
+    let l50 = frame_rms_db(&bandpass_fft(x, 60.0, 500.0), w50, w50);
+    let h50 = frame_rms_db(&bandpass_fft(x, 2000.0, 8000.0), w50, w50);
+    let (ml, mh) = (npx::median(&l50), npx::median(&h50));
+    let knocks = l50.iter().zip(&h50).filter(|(a, b)| **a - ml > 12.0 && **b - mh < 4.0).count();
+    if knocks > 0 && outdoor {
+        reasons.push("low knocks without rain content (handling/footsteps)".into());
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1052,7 +1104,7 @@ pub fn text_excluded(s: &Source) -> Option<&'static str> {
 }
 
 /// originals/fs<ID>.*: the first such name in sorted order.
-fn original_of(gb: &Path, sid: &str) -> Option<PathBuf> {
+pub(crate) fn original_of(gb: &Path, sid: &str) -> Option<PathBuf> {
     let od = gb.join("originals");
     let mut names: Vec<String> = std::fs::read_dir(&od)
         .ok()?
@@ -1063,7 +1115,7 @@ fn original_of(gb: &Path, sid: &str) -> Option<PathBuf> {
     names.into_iter().find(|n| n.starts_with(&pre)).map(|n| od.join(n))
 }
 
-fn read_sha_list(gb: &Path) -> Result<BTreeMap<String, String>, String> {
+pub(crate) fn read_sha_list(gb: &Path) -> Result<BTreeMap<String, String>, String> {
     let p = gb.join("originals.sha256");
     let text =
         std::fs::read_to_string(&p).map_err(|e| format!("{}: {e} (every original must be listed)", p.display()))?;
@@ -1078,7 +1130,7 @@ fn read_sha_list(gb: &Path) -> Result<BTreeMap<String, String>, String> {
 }
 
 /// Read an original, check it against originals.sha256, decode it. Returns (samples, file name, sha256).
-fn load_original(path: &Path, shas: &BTreeMap<String, String>) -> Result<(Vec<f64>, String, String), String> {
+pub(crate) fn load_original(path: &Path, shas: &BTreeMap<String, String>) -> Result<(Vec<f64>, String, String), String> {
     let name = path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -1373,7 +1425,7 @@ fn plan_source(src: &Source, x: &[f64], verbose: bool) -> (Vec<Cand>, String) {
 
 /// Run `f` over 0..n on up to `threads` workers; the results come back in index order (deterministic whatever the
 /// scheduling). `f` gets its own thread's caches; nothing is shared but the inputs.
-fn par_map<T: Send, F: Fn(usize) -> T + Sync>(n: usize, threads: usize, f: F) -> Vec<T> {
+pub(crate) fn par_map<T: Send, F: Fn(usize) -> T + Sync>(n: usize, threads: usize, f: F) -> Vec<T> {
     let threads = threads.max(1).min(n.max(1));
     if threads == 1 {
         return (0..n).map(&f).collect();
@@ -2124,7 +2176,7 @@ fn emit(v: &Out, level: usize, o: &mut String) {
     }
 }
 
-fn write_json(path: &Path, v: &Out) -> Result<(), String> {
+pub(crate) fn write_json(path: &Path, v: &Out) -> Result<(), String> {
     let mut s = String::new();
     emit(v, 0, &mut s);
     let tmp = path.with_extension("json.new");

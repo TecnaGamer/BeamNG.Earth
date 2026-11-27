@@ -310,6 +310,10 @@
     "t": {"type": "num"},
     "synthRain": {"type": "bool", "optional": true, "doc": "the synth plays the rain (liveaudio.lua LIVE_RAIN); false (the default since 2026-11-26): the game plays its own rain loops in Live too and the synth only the thunder and its ducks; absent: true"},
     "thunderSet": {"type": "str", "optional": true, "doc": "the Weather page's Thunder sound: 'generated' (the game plays the method B files; the synth only ducks its rain at each strike's crack) or 'recorded' (the synth's grain-bank renderer)"},
+    "rainSet": {"type": "str", "optional": true, "doc": "the Weather page's Rain sound: 'generated' (the synth's physical rain) or 'recorded' (its texture bank of CC0 rain recordings; the physical rain when the synth has no bank)"},
+    "roofNear": {"type": "num", "optional": true, "doc": "the recorded rain's roof heard from outside near the car, 0..1 (hood / bumper cameras 1, orbit by its distance; inside the car the roof goes through the cabin filter instead)"},
+    "enclosed": {"type": "bool", "optional": true, "doc": "under an enclosed shelter (tunnel, closed bridge, building: muffled A, the outdoor rain filtered; absent: true) or an open one (bridge, overpass: muffled B, the under-bridge takes)"},
+    "rainVol": {"type": "num", "optional": true, "doc": "the mod's own rain volume for its layers (RAIN_GAIN x the rain share, 0..1): the synth's rain plays at the files' level times this (absent: 0.5)"},
     "thunders": {"type": "list", "optional": true}
    }
   },
@@ -1053,6 +1057,7 @@
     "reason": {"type": "str", "optional": true},
     "latencyMs": {"type": "num", "optional": true},
     "thunderSets": {"type": "list", "optional": true, "doc": "the thunder sets the synth plays itself ('recorded': its grain bank, every thunder; 'generated': method B's strikes and closes it has ready, see readyThunders); for any other set the mod plays its own files"},
+    "rainSets": {"type": "list", "optional": true, "doc": "the rain sets the synth can play ('generated_b': its Generated rain is method B's live engine, rainb_live.rs; 'recorded' only when its texture bank loaded)"},
     "readyThunders": {"type": "list", "optional": true, "doc": "[[id, d m], ...]: the thunders the synth has rendered and waiting (at most 24); the mod lets the synth play a generated strike / close only when its id is listed here with d within 15 % of the strike's (else it plays its file and sends the final with play = false)"}
    }
   },

@@ -100,10 +100,16 @@ local function sendGrips(data, player, w)
         local obj = getObjectByID(id)
         if obj then
           obj:queueLuaCommand(M.gripCommand(p))
-          -- (the planning-horizon patch with the margins, taken off with them: winter.aiPatchCommand)
-          local patch = w and w.aiPatchCommand and w.aiPatchCommand(key ~= 'stock') or nil
-          if patch and (key == 'stock' or not (g and g.patched)) then obj:queueLuaCommand(patch) end
-          grips[id] = key ~= 'stock' and { key = key, at = clock, patched = patch ~= nil } or nil
+          -- (the planning-horizon patch with the margins on low grip (p.patch: snow, ice; not a wet road), taken off
+          -- when they go or the road is only wet: winter.aiPatchCommand)
+          local want, had = p ~= nil and p.patch == true, g ~= nil and g.patched == true
+          local patched = had
+          if want ~= had then
+            local patch = w and w.aiPatchCommand and w.aiPatchCommand(want) or nil
+            if patch then obj:queueLuaCommand(patch) end
+            patched = want and patch ~= nil
+          end
+          grips[id] = key ~= 'stock' and { key = key, at = clock, patched = patched } or nil
         end
       end
       -- the fallback cap while the patch is not confirmed (speeding off: the free cars' own cap path is not running)

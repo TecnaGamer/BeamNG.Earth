@@ -853,10 +853,11 @@ W.onClientEndMission()
 W.onClientStartMission()
 W.setMode('real')
 W.setChangeSpeed(0)                  -- (instant: each state at once)
-local roof, amb = false, nil
+local roof, amb, walls = false, nil, false
 core_camera.getPosition = function() return vec3(0, 0, camZ) end
 castRayStatic = function(from, dir, max)
   if dir and dir.z and dir.z > 0 then return roof and 5 or (max or 60) + 1 end
+  if dir and dir.z == 0 then return walls and 4 or nil end   -- (sideways: the walls of an enclosed roof)
   return from.z - 3990
 end
 package.loaded['beamngEarth/ambience'] = { shelterAt = function() return amb end }
@@ -887,7 +888,11 @@ roof = true
 run(0.25)
 check(rain.pct > 0 and rain.pct < W.precipPct(10), 'under a roof: fading out')
 run(0.5)
-check(rain.hidden == true and W.precipState().why == 'roof', 'under a roof: gone within FADE_OUT_S')
+check(rain.hidden == true and W.precipState().why == 'roof' and W.shelterWhy == 'roof', 'under a roof: gone within FADE_OUT_S')
+walls = true
+run(0.25)
+check(W.shelterWhy == 'roof_enclosed', 'a roof with walls both sides: enclosed (the rain sound\'s muffled A)')
+walls = false
 roof = false
 run(0.5)
 check(rain.hidden == false and rain.pct < W.precipPct(10) - 0.05, 'out again: fading back in')
@@ -1014,13 +1019,18 @@ local st0, we0, sr0 = package.loaded['beamngEarth/storm'].update, package.loaded
 package.loaded['beamngEarth/storm'].update = function(...) stormU = stormU + 1 return st0(...) end
 package.loaded['beamngEarth/wetlook'].update = function(...) wetU = wetU + 1 return we0(...) end
 package.loaded['beamngEarth/rainstreaks'].update = function(...) strU = strU + 1 return sr0(...) end
+local aqU, aq0 = 0, package.loaded['beamngEarth/aquaplane'].update
+package.loaded['beamngEarth/aquaplane'].update = function(...) aqU = aqU + 1 return aq0(...) end
 run(70)           -- (winding down: a thunder still on its way, the materials going back)
-local s1, w1, r1 = stormU, wetU, strU
+local s1, w1, r1, a1 = stormU, wetU, strU, aqU
 run(5)
-check(stormU == s1 and strU == r1 and wetU == w1, 'Off, wound down: no storm, streak or wet-look work per frame ('
-  .. stormU - s1 .. ', ' .. strU - r1 .. ', ' .. wetU - w1 .. ')')
+check(stormU == s1 and strU == r1 and wetU == w1 and aqU == a1, 'Off, wound down: no storm, streak, wet-look or '
+  .. 'aquaplaning work per frame (' .. stormU - s1 .. ', ' .. strU - r1 .. ', ' .. wetU - w1 .. ', ' .. aqU - a1 .. ')')
+local wm = package.loaded['beamngEarth/winter']
+check(wm == nil or wm.shown() == nil, 'Off: no wet grip shown')
 package.loaded['beamngEarth/storm'].update, package.loaded['beamngEarth/wetlook'].update = st0, we0
 package.loaded['beamngEarth/rainstreaks'].update = sr0
+package.loaded['beamngEarth/aquaplane'].update = aq0
 settings = nil
 -- the real weather's parts: real rain off keeps it dry with rain in the real message
 W.setMode('real')

@@ -490,12 +490,23 @@ M.RAIN_DIR = '/levels/beamng_earth/art/sound/weather/'
 M.RAIN_LAYERS = { { 'light', 'bne_rain_light.ogg', 0.7 }, { 'medium', 'bne_rain_medium.ogg', 5 },
   { 'heavy', 'bne_rain_heavy.ogg', 35 } }
 M.RAIN_ROOF_LAYERS = { light = 'bne_rain_roof_light.ogg', medium = 'bne_rain_roof.ogg', heavy = 'bne_rain_roof_heavy.ogg' }
+-- (the Generated set since method B, 2026-11-26: the roof heard inside the car, and the open shelter's own loop)
+M.RAIN_CABIN_LAYERS = { light = 'bne_rain_roof_cabin_light.ogg', medium = 'bne_rain_roof_cabin.ogg',
+  heavy = 'bne_rain_roof_cabin_heavy.ogg' }
 M.RAIN_MUFFLED = 'bne_rain_muffled.ogg'
+M.RAIN_MUFFLED_OPEN = 'bne_rain_muffled_open.ogg'
 M.RAIN_UNDER_ROOF = 0.7  -- the muffled layer's share of the rain's volume under a roof ...
 M.RAIN_IN_TUNNEL = 0.15  -- ... and in a tunnel
 M.RAIN_CABIN = 0.35      -- the outside layers in the driver's camera
 M.RAIN_ROOF = 0.9        -- the roof drumming there
-M.RAIN_CABIN_CAMS = { driver = true, onboard = true }
+-- The roof (the user, 2026-11-26: "good when close to the car"): inside the car (RAIN_CABIN_CAMS) the roof loops
+-- through the cabin filter (roofcab_*: bne_rain_rec_roof_cabin_*); outside, the plain roof loops near the car: full in
+-- the hood / bumper cameras (RAIN_NEAR_CAMS), in the others by the camera's distance to the car, ROOF_ORBIT at
+-- ROOF_NEAR_M or closer, none from ROOF_FAR_M ("lightly in orbit").
+M.RAIN_CABIN_CAMS = { driver = true }
+M.RAIN_NEAR_CAMS = { onboard = true }
+M.ROOF_ORBIT = 0.5
+M.ROOF_NEAR_M, M.ROOF_FAR_M = 4, 12
 M.RAIN_TRACK = 'amb_rain_medium'
 -- The thunder-over-rain balance (the user, 2026-11-26, on "thunder sounds can be increased in volume by alot": "Try
 -- ducking or simply turning the default rain volume down"). One name picks the option (listening mixes:
@@ -521,9 +532,78 @@ local layersOk = nil                  -- the files are there (checked once)
 M.rainVol = 0
 M.rainLayers = layerVol
 
--- Pure: the layers' weights (name -> 0..1, summing to 1) for a rain rate (mm/h): each layer a triangle in log10(rate)
--- between its neighbours' centres, the ends held.
+-- The Weather page's Rain sound: 'generated' (weathersynth's method B, a physical model drop by drop: the bne_rain_*.ogg
+-- above, 30 s loops; native/weathersynth/src/rainb.rs, SOURCES.md) or 'recorded'
+-- (CC0 field recordings, screened, cut and crossfaded by weathersynth's texture renderer: bne_rain_rec_*.ogg, the same
+-- loudness per file; credits in CREDITS.md "Weather sounds"). A set whose files are missing falls back to generated.
+M.RAIN_SET = 'generated'
+M.REC_PREFIX = 'bne_rain_rec_'
+-- The Weather page's sound sets, one row per family (the hook for more: a family's set picks its files here, and
+-- liveaudio.LIVE_RAIN / LIVE_WIND say whether the live synth plays that set itself; the settings page's entry and
+-- settings.lua's apply function call the setter). Both sets of a family play at the same loudness.
+--   rain: 'generated' bne_rain_*.ogg (weathersynth's method B; its live engine, rainb_live.rs, is
+--         liveaudio.LIVE_RAIN.generated) / 'recorded' bne_rain_rec_*.ogg (CC0 recordings mixed by texmix.rs)
+--   wind: 'generated' bne_wind_gen_*.ogg (windsynth.rs) / 'recorded' bne_wind_*.ogg (CC0 recordings); files in both
+--         weather sound modes (the live synth plays no wind: liveaudio.LIVE_WIND)
+-- The default of each is thunder's (settings.lua weatherThunderSound): 'generated'.
+M.WIND_SET = 'generated'
+M.WIND_GEN_PREFIX = 'bne_wind_gen_'
+local recOk = nil                     -- the recorded files are there (checked once)
+function M.setRainSet(v)
+  local s = (v == 'recorded') and 'recorded' or 'generated'
+  liveaudio.setRainSet(s)
+  if s == M.RAIN_SET then return end
+  M.RAIN_SET = s
+  -- the playing layers go; the next frame makes them again from the other files, at the volume they had
+  for name, e in pairs(layerEm) do if simObjectExists(e) then e:delete() end; layerEm[name] = nil end
+end
+function M.setWindSet(v)
+  local s = (v == 'recorded') and 'recorded' or 'generated'
+  if s == M.WIND_SET then return end
+  M.WIND_SET = s
+  -- the wind layers playing go; the next frame makes them again from the other files, at the volume they had
+  for name, e in pairs(layerEm) do
+    if name:match('^wind_') then
+      if simObjectExists(e) then e:delete() end
+      layerEm[name] = nil
+    end
+  end
+end
+
+local function recorded()
+  if M.RAIN_SET ~= 'recorded' then return false end
+  if recOk == nil then recOk = FS and FS.fileExists and FS:fileExists(M.RAIN_DIR .. M.REC_PREFIX .. 'medium.ogg') or false end
+  return recOk
+end
+
+-- Pure: equal-power weights (name -> 0..1, their squares summing to 1) for v over the layers L ({ name, file, centre }):
+-- each layer a triangle in log10(v) (log) or v between its neighbours' centres, the ends held, and its square root the
+-- gain. The loops are uncorrelated recordings, so equal power crossfades them without the 3 dB dip of linear weights.
+function M.layerWeights(v, L, log)
+  local w = {}
+  for _, l in ipairs(L) do w[l[1]] = 0 end
+  local f = log and function(u) return math.log10(math.max(u, 1e-3)) end or function(u) return u end
+  local x = f(tonumber(v) or 0)
+  if x <= f(L[1][3]) then w[L[1][1]] = 1 return w end
+  if x >= f(L[#L][3]) then w[L[#L][1]] = 1 return w end
+  for i = 1, #L - 1 do
+    local a, b = f(L[i][3]), f(L[i + 1][3])
+    if x <= b then
+      local t = (x - a) / (b - a)
+      w[L[i][1]], w[L[i + 1][1]] = math.sqrt(1 - t), math.sqrt(t)
+      return w
+    end
+  end
+  return w
+end
+
+-- Pure: the rain layers' weights for a rate (mm/h), equal power (M.layerWeights in log10 rate).
 function M.rainWeights(mmh)
+  return M.layerWeights(mmh, M.RAIN_LAYERS, true)
+end
+
+-- (the linear weights before 2026-11-26, kept for the record: each layer a triangle summing to 1)
+function M.rainWeightsLinear(mmh)
   local L = M.RAIN_LAYERS
   local w = {}
   for _, l in ipairs(L) do w[l[1]] = 0 end
@@ -544,23 +624,57 @@ end
 -- Pure: every layer's volume (name -> volume; 'muffled' and 'roof_light' / 'roof_medium' / 'roof_heavy' too) for the
 -- rain's overall volume v, its rate, the
 -- shelter fade (1 open .. 0 under a roof), in a tunnel, in the driver's camera.
-function M.rainMix(v, mmh, shelter, tunnel, cabin)
+-- roofNear: the plain roof's share outside (M.roofNear); open: under an open shelter (a bridge, an overpass: muffled B,
+-- 'muffled_open'), else an enclosed one or a tunnel (muffled A, 'muffled'). The roof inside is 'roofcab_*'.
+function M.rainMix(v, mmh, shelter, tunnel, cabin, roofNear, open)
   local out = {}
   local w = M.rainWeights(mmh)
   shelter = math.max(0, math.min(1, tonumber(shelter) or 1))
   if tunnel then shelter = 0 end
   local outside = v * shelter * (cabin and M.RAIN_CABIN or 1)
   for _, l in ipairs(M.RAIN_LAYERS) do out[l[1]] = outside * w[l[1]] end
-  out.muffled = v * (1 - shelter) * (tunnel and M.RAIN_IN_TUNNEL or M.RAIN_UNDER_ROOF)
-  for _, l in ipairs(M.RAIN_LAYERS) do out['roof_' .. l[1]] = cabin and v * shelter * M.RAIN_ROOF * w[l[1]] or 0 end
+  local under = v * (1 - shelter) * (tunnel and M.RAIN_IN_TUNNEL or M.RAIN_UNDER_ROOF)
+  local b = (open and not tunnel) and true or false
+  out.muffled = b and 0 or under
+  out.muffled_open = b and under or 0
+  local near = cabin and 0 or math.max(0, math.min(1, tonumber(roofNear) or 0))
+  for _, l in ipairs(M.RAIN_LAYERS) do
+    out['roof_' .. l[1]] = v * shelter * M.RAIN_ROOF * w[l[1]] * near
+    out['roofcab_' .. l[1]] = cabin and v * shelter * M.RAIN_ROOF * w[l[1]] or 0
+  end
   return out
 end
 
+-- Pure: the plain roof's share outside for a camera mode and its distance d (m) to the car.
+function M.roofNearFor(camName, d)
+  if M.RAIN_CABIN_CAMS[camName] then return 0 end
+  if M.RAIN_NEAR_CAMS[camName] then return 1 end
+  d = tonumber(d)
+  if not d then return 0 end
+  return M.ROOF_ORBIT * math.max(0, math.min(1, (M.ROOF_FAR_M - d) / (M.ROOF_FAR_M - M.ROOF_NEAR_M)))
+end
+
+-- Pure: is a shelter kind (weather.lua shelterWhy) an open one (muffled B)? Bridges' under-deck boxes and a roof with
+-- open sides; tunnels, arches, parking structures and a roof with walls both sides are enclosed (muffled A).
+M.OPEN_SHELTERS = { bridge = true, roof = true }
+function M.openShelter(kind) return M.OPEN_SHELTERS[kind] == true end
+
 local function layerFile(name)
-  if name == 'muffled' then return M.RAIN_MUFFLED end
+  local strength = name:match('^wind_(%a+)$')
+  if strength and M.WIND_SET == 'generated' then return M.WIND_GEN_PREFIX .. strength .. '.ogg' end
+  if M.EXTRA_FILES[name] then return M.EXTRA_FILES[name] end
+  local rec = recorded()
+  if name == 'muffled' then return rec and (M.REC_PREFIX .. 'muffled.ogg') or M.RAIN_MUFFLED end
+  if name == 'muffled_open' then return rec and (M.REC_PREFIX .. 'muffled_open.ogg') or M.RAIN_MUFFLED_OPEN end
   local roof = name:match('^roof_(%a+)$')
-  if roof then return M.RAIN_ROOF_LAYERS[roof] end
-  for _, l in ipairs(M.RAIN_LAYERS) do if l[1] == name then return l[2] end end
+  if roof then
+    return rec and (M.REC_PREFIX .. (roof == 'medium' and 'roof' or ('roof_' .. roof)) .. '.ogg') or M.RAIN_ROOF_LAYERS[roof]
+  end
+  local cab = name:match('^roofcab_(%a+)$')
+  if cab then
+    return rec and (M.REC_PREFIX .. (cab == 'medium' and 'roof_cabin' or ('roof_cabin_' .. cab)) .. '.ogg') or M.RAIN_CABIN_LAYERS[cab]
+  end
+  for _, l in ipairs(M.RAIN_LAYERS) do if l[1] == name then return rec and (M.REC_PREFIX .. name .. '.ogg') or l[2] end end
 end
 
 -- The file-based layers' channel: an SFXEmitter given a fileName and no description plays on no slider but Master
@@ -720,11 +834,38 @@ local function updateDucks(now)
 end
 M._updateDucks = updateDucks
 
-local function cabinCam()
+local function camName()
   local cam = rawget(_G, 'core_camera')
-  if not (cam and cam.getActiveCamName) then return false end
+  if not (cam and cam.getActiveCamName) then return nil end
   local ok, n = pcall(cam.getActiveCamName)
-  return ok and M.RAIN_CABIN_CAMS[n] or false
+  return ok and n or nil
+end
+
+local function cabinCam()
+  local n = camName()
+  return n and M.RAIN_CABIN_CAMS[n] or false
+end
+
+-- The plain roof's share outside now (M.roofNearFor: the camera's mode and its distance to the player's car).
+local function roofNear()
+  local n = camName()
+  if not n or M.RAIN_CABIN_CAMS[n] then return 0 end
+  if M.RAIN_NEAR_CAMS[n] then return 1 end
+  local cam = rawget(_G, 'core_camera')
+  local p = cam and cam.getPosition and cam.getPosition()
+  local veh = rawget(_G, 'be') and be.getPlayerVehicle and be:getPlayerVehicle(0)
+  local okv, vp = pcall(function() return veh and veh:getPosition() end)
+  if not (p and okv and vp) then return 0 end
+  local dx, dy, dz = p.x - vp.x, p.y - vp.y, p.z - vp.z
+  return M.roofNearFor(n, math.sqrt(dx * dx + dy * dy + dz * dz))
+end
+
+-- Under an open shelter now (muffled B)? weather.lua's shelter kind, kept while the shelter fades back out.
+local lastShelterKind = nil
+local function openShelterNow(w)
+  local k = w and w.shelterWhy
+  if k then lastShelterKind = k end
+  return M.openShelter(lastShelterKind)
 end
 
 -- Is (x, y, z) inside one of the road tiles' roofed spaces (tunnels, arches, parking structures: M.ROOFED)?
@@ -790,11 +931,97 @@ function M.tunnelLights()
   return out
 end
 
+-- Wind by strength, drips after rain, hail (the user, 2026-11-26: approved with the recorded rain): CC0 recordings
+-- mixed by weathersynth (texmix.rs) into seamless loops, on the Environment channel like the rain, in both weather
+-- sound modes (the live synth does not play them). Each one's emitter exists only while it is heard; calm, dry and
+-- no hail: nothing but a few comparisons a frame.
+-- wind: three loops by the weather's wind (weather.windMsNow, m/s at the ground), equal power between the centres,
+-- fading in from WIND_FROM_MS to WIND_FULL_MS; damped in the car (RAIN_CABIN) and under a roof, none in a tunnel.
+M.WIND_LAYERS = { { 'wind_light', 'bne_wind_light.ogg', 3 }, { 'wind_moderate', 'bne_wind_moderate.ogg', 8 },
+  { 'wind_strong', 'bne_wind_strong.ogg', 15 } }
+M.WIND_FROM_MS, M.WIND_FULL_MS = 1, 3
+M.WIND_GAIN = 0.5
+M.WIND_UNDER_ROOF = 0.4
+-- drips: after the rain stops, trees and eaves keep dripping for DRIPS_S, ever sparser (the user, 2026-11-26: "too
+-- fast"): three loops of single drops (bne_drips_1 / 2 / 3: 0.8, 0.3, 0.1 drops a second, each drop as loud) crossfaded
+-- by the time since it stopped (DRIPS_LAYERS centres, a share of DRIPS_S), the last fading out over DRIPS_TAIL of it;
+-- as loud as the rain was (its share, at most 1), quieter in the car and in a tunnel
+M.DRIPS_S = 600
+M.DRIPS_GAIN = 0.5
+M.DRIPS_LAYERS = { { 'drips_1', 'bne_drips_1.ogg', 0.0 }, { 'drips_2', 'bne_drips_2.ogg', 0.35 },
+  { 'drips_3', 'bne_drips_3.ogg', 0.7 } }
+M.DRIPS_TAIL = 0.2
+-- hail: weather.hailNow (the hail's share, 0..1), louder on a roof over the head (the car's, a shelter's)
+-- (the hail file is levelled by its peak, about -26 LUFS: 1.0 plays it as loud as the old -20 LUFS wash at 0.5)
+M.HAIL_GAIN = 1.0
+M.EXTRA_FADE_S = 2
+M.EXTRA_FILES = { wind_light = 'bne_wind_light.ogg', wind_moderate = 'bne_wind_moderate.ogg',
+  wind_strong = 'bne_wind_strong.ogg', drips_1 = 'bne_drips_1.ogg', drips_2 = 'bne_drips_2.ogg',
+  drips_3 = 'bne_drips_3.ogg', hail = 'bne_hail.ogg' }
+local extraVol = {}                   -- name -> volume now (faded)
+local extraOk = nil                   -- the files are there (checked once)
+local wet, dryAt = 0, nil             -- the rain's share while it fell, and when it stopped
+M.extraLayers = extraVol
+
+-- Pure: the extra layers' volumes for the wind (m/s), the drips' level (0..1), the hail's share, the shelter fade
+-- (1 open .. 0 under a roof), in a tunnel, in the driver's camera.
+function M.extraMix(windMs, drips, hail, shelter, tunnel, cabin)
+  local out = {}
+  shelter = math.max(0, math.min(1, tonumber(shelter) or 1))
+  local on = math.max(0, math.min(1, ((tonumber(windMs) or 0) - M.WIND_FROM_MS) / (M.WIND_FULL_MS - M.WIND_FROM_MS)))
+  on = on * on * (3 - 2 * on)
+  local damp = (tunnel and 0 or 1) * (cabin and M.RAIN_CABIN or 1) * (M.WIND_UNDER_ROOF + (1 - M.WIND_UNDER_ROOF) * shelter)
+  local w = M.layerWeights(windMs, M.WIND_LAYERS, false)
+  for _, l in ipairs(M.WIND_LAYERS) do out[l[1]] = M.WIND_GAIN * on * damp * w[l[1]] end
+  -- drips: { level 0..1, age 0..1 of DRIPS_S } (or a bare level: age 0)
+  local dl, age = drips, 0
+  if type(drips) == 'table' then dl, age = drips[1], drips[2] end
+  local dv = M.DRIPS_GAIN * math.max(0, math.min(1, tonumber(dl) or 0)) * (tunnel and M.RAIN_IN_TUNNEL or 1) * (cabin and M.RAIN_CABIN or 1)
+  local dw = M.layerWeights(math.max(0, math.min(1, tonumber(age) or 0)), M.DRIPS_LAYERS, false)
+  for _, l in ipairs(M.DRIPS_LAYERS) do out[l[1]] = dv * dw[l[1]] end
+  out.hail = M.HAIL_GAIN * math.max(0, math.min(1, tonumber(hail) or 0)) * (tunnel and M.RAIN_IN_TUNNEL or 1)
+  return out
+end
+
+-- Pure: the drips dryS seconds after a rain whose share was `share`: { level, age } (age = dryS / DRIPS_S, the
+-- layers' crossfade; the level the share until the last DRIPS_TAIL of DRIPS_S, then down to 0).
+function M.dripsLevel(share, dryS)
+  if not dryS then return { 0, 0 } end
+  local age = math.max(0, dryS / M.DRIPS_S)
+  local lvl = math.max(0, math.min(1, share or 0)) * math.max(0, math.min(1, (1 - age) / M.DRIPS_TAIL))
+  return { lvl, math.min(1, age) }
+end
+
+local function updateExtras(now, dt, w)
+  local windMs = w and tonumber(w.windMsNow) or 0
+  local hail = w and tonumber(w.hailNow) or 0
+  local rain = w and tonumber(w.rainNow) or 0
+  if rain > 0.02 then wet, dryAt = math.max(wet, math.min(1, rain)), nil
+  elseif wet > 0 and not dryAt then dryAt = now end
+  local dripping = dryAt ~= nil and now - dryAt < M.DRIPS_S
+  if not dripping and dryAt then wet, dryAt = 0, nil end
+  if windMs < M.WIND_FROM_MS and hail <= 0 and not dripping and not next(extraVol) then return end   -- (calm, dry: nothing)
+  if extraOk == nil then extraOk = FS and FS.fileExists and FS:fileExists(M.RAIN_DIR .. M.EXTRA_FILES.wind_light) or false end
+  if not extraOk then return end
+  local mix = M.extraMix(windMs, dripping and M.dripsLevel(wet, now - dryAt) or { 0, 0 }, hail,
+    w and tonumber(w.shelter) or 1, inTunnel(listener.x, listener.y, listener.z), cabinCam())
+  -- (each layer moves at most its full gain in EXTRA_FADE_S: a gust's change is followed, a start or stop fades)
+  local step = 0.5 * dt / M.EXTRA_FADE_S
+  for name, want in pairs(mix) do
+    local v = extraVol[name] or 0
+    v = v < want and math.min(want, v + step) or math.max(want, v - step)
+    if v <= 0.001 and want <= 0 then v = 0 end
+    setLayer(name, v)
+    extraVol[name] = v > 0 and v or nil
+  end
+end
+
 local function updateRain()
   local now = os.clockhp()
   local dt = rainAt and math.min(now - rainAt, 0.5) or 0
   rainAt = now
   local w = rawget(_G, 'beamngEarth_weather')
+  updateExtras(now, dt, w)
   local want = M.RAIN_GAIN * math.max(0, math.min(1, w and tonumber(w.rainNow) or 0))
   -- live weather sounds: the synth's message, its context (the tunnel walk, the camera, the volumes) built only when
   -- one is due (every liveaudio.SEND_S, or a thunder waiting); the mod's own rain fades out while the server says it
@@ -803,7 +1030,9 @@ local function updateRain()
     if liveaudio.due(now) then
       liveaudio.tick(now, liveaudio.mode() == 'live' and { rainMmH = w and tonumber(w.rainMmHNow) or 0,
         windMs = w and tonumber(w.windMsNow) or 0, shelter = w and tonumber(w.shelter) or 1,
-        tunnel = inTunnel(listener.x, listener.y, listener.z), cabin = cabinCam(), duck = M.duckFactor(now) } or nil)
+        rainVol = want, rainSet = M.RAIN_SET,
+        tunnel = inTunnel(listener.x, listener.y, listener.z), cabin = cabinCam(), duck = M.duckFactor(now),
+        roofNear = roofNear(), enclosed = not openShelterNow(w) } or nil)
     end
     want = want * liveaudio.ownFactor(now)
   end
@@ -817,7 +1046,8 @@ local function updateRain()
   rainVol = rainVol < want and math.min(want, rainVol + step) or math.max(want, rainVol - step)
   M.rainVol = rainVol
   if layersOk then
-    local mix = M.rainMix(rainVol * M.duckFactor(now), w and tonumber(w.rainMmHNow) or 0, w and tonumber(w.shelter) or 1, tunnel, cabinCam())
+    local mix = M.rainMix(rainVol * M.duckFactor(now), w and tonumber(w.rainMmHNow) or 0, w and tonumber(w.shelter) or 1, tunnel,
+      cabinCam(), roofNear(), openShelterNow(w))
     for name, v in pairs(mix) do setLayer(name, v) end
     return
   end
@@ -879,6 +1109,8 @@ function M.clear()
   if rainEm and simObjectExists(rainEm) then rainEm:delete() end
   for name, e in pairs(layerEm) do if simObjectExists(e) then e:delete() end; layerVol[name] = 0 end
   layerEm = {}
+  for name in pairs(extraVol) do extraVol[name] = nil end
+  wet, dryAt = 0, nil
   rainEm, rainVol, rainAt = nil, 0, nil
   tiles, dirty, builtAt, biome, current = {}, false, nil, nil, nil
   M.climate = nil

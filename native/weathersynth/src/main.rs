@@ -17,6 +17,19 @@
 //!   weathersynth grains-set --bank BIN --out DIR [--seeds A,B] [--ogg]   bne_thunder_<class>1/2 from the grain bank
 //!   weathersynth grainbank-build plan|cut --gb DIR [--plan F] [--out BANKDIR] [--threads N]   the bank v3 builder
 //!   weathersynth grainbank-compare --ref MANIFEST --new MANIFEST   a re-cut bank against a reference (SPEC 9)
+//!   weathersynth texbank-build --gb DIR --sources S.json --out BANKDIR [--threads N]   recorded rain / wind blocks
+//!   weathersynth texbank-live --bank BIN --manifest M --out-dir assets/tex [--per-class S] [--max-block S]   live pieces
+//!   weathersynth texbank-pack [--manifest assets/tex/manifest.json] [--out assets/tex_bank.bin]   the live bank
+//!   weathersynth tex-set --bank BIN --out DIR [--seed N] [--ogg] [--prefix P] [--only a,b]   the recorded loops
+//!   weathersynth livetex-bench --bank BIN --out DIR [--block N]   live recorded rain / wind, offline, timed
+//!   weathersynth tex-check FILE.wav ...              loudness, true peak, loop seam and texture statistics
+//!   weathersynth rainb --kind K --seed N [--secs S] --out F.wav   method B rain: the physical drop model (rainb.rs)
+//!   weathersynth rainb-set --out DIR [--seed N] [--ogg] [--only a,b]   its reference loops (bne_rainb_<kind>)
+//!   weathersynth rainb-modset --out DIR [--seed N]    the mod's Generated rain files (bne_rain_*.ogg, Vorbis q4)
+//!   weathersynth rainb-stats | rainb-phys            drop statistics per rain rate; unlevelled loudness by rate
+//!   weathersynth rainb-live-bench [--per S] [--block N] [--wav F]   method B live engine: the sweep, S s a state, timed
+//!   weathersynth rainb-live-calibrate                 its level tables (printed as Rust, pasted into rainb_live.rs)
+//!   weathersynth click-check [--segments S] [--skip S] FILE.wav ...   jumps, HF spikes, block level steps (clickcheck.rs)
 
 mod analyze;
 #[cfg(feature = "audio")]
@@ -25,6 +38,8 @@ mod dsp;
 mod grainbank;
 mod grainbuild;
 mod live;
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+mod livetex;
 mod loudness;
 mod m;
 #[allow(dead_code)]
@@ -44,10 +59,16 @@ mod prio;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod proto;
 mod rain;
+mod rainb;
+mod rainb_live;
+mod clickcheck;
 mod rng;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod serve;
 mod storm;
+mod texbuild;
+mod texmix;
+mod windsynth;
 mod thunder;
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 mod thunderlive;
@@ -279,7 +300,7 @@ fn run() -> Result<(), String> {
                 (r.parse().unwrap_or(5.0), f("--shelter", 1.0), f("--cabin", 0.0))
             });
             let c0 = live::Controls { rain_mm_h: 0.0, shelter: 1.0, cabin: 0.0, volume: 0.5, muted: false };
-            let out = audio::open(1, audio::Mix { rain: c0, thunder: 0.0 }, std::sync::Arc::new(thunderlive::Bus::new()), 0)?;
+            let out = audio::open(1, audio::Mix { rain: c0, thunder: 0.0, rain_rec: false, rain_vol: None, roof_near: 0.0, enclosed: true }, std::sync::Arc::new(thunderlive::Bus::new()), 0)?;
             println!("device={} rate={} channels={}", out.device_name, out.sample_rate, out.channels);
             let t0 = std::time::Instant::now();
             let mut last = -1i64;
@@ -499,6 +520,74 @@ fn run() -> Result<(), String> {
             let r = arg(&args, "--ref").ok_or("--ref MANIFEST")?;
             let n = arg(&args, "--new").ok_or("--new MANIFEST")?;
             print!("{}", grainbuild::compare(std::path::Path::new(&r), std::path::Path::new(&n))?);
+        }
+        "texbank-build" => texbuild::run(&args)?,
+        "texbank-live" => texbuild::run_live(&args)?,
+        "wind-noise" => {
+            // the stricter wind screen's measures per 5 s window of a rendered loop: the worst window of each
+            println!("file\twindows\tbird tracks (worst)\thum dB (worst)\tvoice modulation (worst)\twindows failing");
+            for f in &args[2..] {
+                let (x, _) = wav::read(f)?;
+                let n = (5.0 * 44100.0) as usize;
+                let (mut b, mut h, mut sp, mut bad) = (0.0f64, f64::NEG_INFINITY, 0.0f64, 0);
+                for w in x.chunks_exact(n) {
+                    let (bi, hi, si) = texbuild::wind_noise(w);
+                    b = b.max(bi);
+                    h = h.max(hi);
+                    sp = sp.max(si);
+                    if bi > 0.01 || hi > 10.0 || si > 0.35 {
+                        bad += 1;
+                    }
+                }
+                let name = std::path::Path::new(f).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                println!("{name}\t{}\t{:.3}\t{h:.1}\t{sp:.2}\t{bad}", x.len() / n, b);
+            }
+        }
+        "texbank-pack" => texbuild::run_pack(&args)?,
+        "tex-set" => texmix::run_set(&args)?,
+        "tex-check" => texmix::run_check(&args)?,
+        "rainb" => rainb::run_one(&args)?,
+        "rainb-set" => rainb::run_set(&args)?,
+        "rainb-modset" => rainb::run_modset(&args)?,
+        "rainb-stats" => print!("{}", rainb::stats()),
+        "click-check" => clickcheck::run(&args)?,
+        "rainb-live-bench" => {
+            let per: f64 = arg(&args, "--per").unwrap_or("10".into()).parse().map_err(|_| "bad --per")?;
+            let block: usize = arg(&args, "--block").unwrap_or("512".into()).parse().map_err(|_| "bad --block")?;
+            print!("{}", rainb_live::bench(per, block, arg(&args, "--wav").as_deref(), args.iter().any(|a| a == "--cabin")));
+        }
+        "rainb-live-calibrate" => print!("{}", rainb_live::calibrate()),
+        "rainb-live-tap" => {
+            let f = |k: &str, d: f64| arg(&args, k).and_then(|v| v.parse().ok()).unwrap_or(d);
+            rainb_live::tap_render(
+                &arg(&args, "--tap").unwrap_or("mix".into()),
+                f("--rate", 5.0),
+                f("--shelter", 1.0),
+                f("--cabin", 0.0),
+                f("--secs", 20.0),
+                &arg(&args, "--out").ok_or("--out F.wav")?,
+            )?;
+        }
+        "rainb-phys" => {
+            for r in [0.7, 5.0, 35.0] {
+                println!("rate {r} mm/h: physical loudness {:.1} LUFS (unlevelled)", rainb::physical_lufs(r, 1, 10.0));
+            }
+        }
+        "livetex-bench" => {
+            // the live recorded rain / wind through fixed conditions, no device: --bank BIN --out DIR [--block N]
+            let bank = std::sync::Arc::new(texbuild::Bank::load(&arg(&args, "--bank").ok_or("--bank BIN")?)?);
+            let dir = arg(&args, "--out").ok_or("--out DIR")?;
+            let block: usize = arg(&args, "--block").and_then(|v| v.parse().ok()).unwrap_or(512);
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let t0 = std::time::Instant::now();
+            let r = livetex::bench(bank, block);
+            let secs = t0.elapsed().as_secs_f64();
+            for (name, x) in &r {
+                wav::write_f32(&format!("{dir}/livetex_{name}.wav"), x, 44100).map_err(|e| e.to_string())?;
+                println!("{name}\t{:.2} LUFS\t{:.2} dBFS peak", loudness::integrated(x, 44100.0, false), m::db(x.iter().fold(0.0f64, |a, v| a.max(v.abs()))));
+            }
+            let audio_s = r.iter().map(|(_, x)| x.len() as f64 / 44100.0).sum::<f64>() + 3.0 * (r.len() - 1) as f64;
+            println!("render {secs:.2} s for {audio_s:.0} s of audio ({:.2} % of one core)", 100.0 * secs / audio_s);
         }
         "storm-dump" => print!("{}", storm::dump()),
         "analyze" => {

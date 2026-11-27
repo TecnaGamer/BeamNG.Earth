@@ -539,12 +539,15 @@ def keyed_env(k):
 # BNE_ROADSYS=surface 11 (M5 round 7): ... the end at its 0.1 m key and its direction to 1e-4 instead, the same
 # whichever cells were read, and a batch of pins planned with the union's landings again (9's per-part landings and
 # 10's reads of every end's own cell cost 2-5x the CPU where the map's reads are short and never kept).
+# BNE_PHOTO_SURFACE 2 (2026-11-26): no verdict with the generated ground on (photosurface.ON: no regional tile is
+# fetched then, and a few left on the disk from before gave some roads one), and a 404 the imagery fetcher remembered in
+# its column's index is known (no tile there), not waited for: the plans and facts made under 1 miss.
 ROADSYS_STRUCTURES_VERSION = 2
 ROADSYS_SURFACE_VERSION = 11
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
                    "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1,
-                   "BNE_ROADSYS_TUNNELS": 3}
+                   "BNE_ROADSYS_TUNNELS": 3, "BNE_PHOTO_SURFACE": 2}
 
 
 def keyed_value(k, v):

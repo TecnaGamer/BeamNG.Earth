@@ -11,6 +11,12 @@
 -- reload each), never per frame otherwise (SkyCycle's stutters came from refreshing materials all the time, the plan's
 -- research note 2). Dry or the weather Off: every material back to its own values (only those still holding ours).
 --
+-- Grip (the user, 2026-11-26: "grip should follow the weather shown in game", "yes, plus deep-water aquaplaning"):
+-- the own model's wetness (the rain shown, not the snowstate, which winter.lua has itself) as a road condition, dry /
+-- damp / wet (M.gripCond), handed to winter.lua at its changes only (setShown: its ground-model retune, the wetter of it
+-- and the real road, its AI margins); with the setting 'Wet roads' (weather.lua WET_GRIP) on, whether or not the wet
+-- look is. The puddles shown (their alpha step) and the rain's water film go to aquaplane.lua (the player's car).
+--
 -- Not here: the city carriageways are terrain under the aerial photo (the layer bngEarthGroundAsphalt; winter
 -- PROBES.md P10) and a terrain material change costs ~1 s (updateMaterial). Their wet look needs the block-commit route
 -- (the asphalt layer's roughness set before a block's own updateMaterial) or the terrain shader route (W9): a later job.
@@ -97,6 +103,23 @@ function M.puddleRef(step)
   if step <= 0 then return 255 end
   local a, b = M.PUDDLE_REF[1], M.PUDDLE_REF[2]
   return math.floor(a + (b - a) * (step - 1) / math.max(1, M.PUDDLE_STEPS - 1) + 0.5)
+end
+
+-- The own wetness as a road condition for the grip (winter.lua's slots): damp from GRIP_DAMP, wet from GRIP_WET (the
+-- midpoints of CONDITION_WET's damp 0.35 and wet 0.8 around dry 0), GRIP_HYST either side of a change.
+M.GRIP_DAMP = 0.18
+M.GRIP_WET = 0.57
+M.GRIP_HYST = 0.03
+
+-- Pure: the grip condition (nil dry, 'damp', 'wet') of own wetness w, the last one prev.
+function M.gripCond(w, prev)
+  w = tonumber(w) or 0
+  local h = M.GRIP_HYST
+  local rank = prev == 'wet' and 2 or prev == 'damp' and 1 or 0
+  -- (a step above the last condition needs h more, one at or below it h less)
+  if w >= M.GRIP_WET + (rank >= 2 and -h or h) then return 'wet' end
+  if w >= M.GRIP_DAMP + (rank >= 1 and -h or h) then return 'damp' end
+  return nil
 end
 
 -- W1's road conditions -> wetness (0..1)
@@ -189,7 +212,17 @@ local orig = {}           -- name -> { class, color = {...} or nil, rough = numb
 local known = nil         -- name -> class of the materials seen (nil: not scanned)
 local timer, rescan = 0, 0
 local puddle = 0          -- the puddles' step applied
+local grip = nil          -- the grip condition handed to winter.lua (nil dry)
 M.writes, M.source = 0, 'none'
+
+-- The grip condition to winter.lua, at its changes (loading it with the first wet road).
+local function setGrip(cond)
+  if cond == grip then return end
+  grip = cond
+  local wm = package.loaded['beamngEarth/winter']
+  if cond and not wm then wm = require('beamngEarth/winter') end
+  if wm and wm.setShown then pcall(wm.setShown, cond) end
+end
 
 -- The puddles to step k: the material's threshold, then shown or hidden (roads.lua setPuddles).
 local function setPuddles(k)
@@ -284,8 +317,9 @@ local function winterWet()
 end
 
 -- Every frame from weather.lua while the weather is on or a wet look is applied: rainMmH = the rain shown (mm/h, its
--- intensity included; 0 with the weather off), on = the setting. Returns true while it has work or a look applied.
-function M.update(dt, rainMmH, on)
+-- intensity included; 0 with the weather off), on = the wet look's setting, gripOn = the grip's (weather.lua
+-- WET_GRIP). Returns true while it has work, a look applied or a wet grip.
+function M.update(dt, rainMmH, on, gripOn)
   dt = tonumber(dt) or 0
   if queue then
     for _ = 1, M.BATCH do
@@ -297,9 +331,10 @@ function M.update(dt, rainMmH, on)
     return true
   end
   timer, rescan = timer + dt, rescan + dt
-  if timer < M.CHECK_S then return level > 0 or own > 0 end
-  own = on and M.wetStep(own, rainMmH, timer) or 0      -- (off: no memory of the rain kept)
+  if timer < M.CHECK_S then return level > 0 or own > 0 or grip ~= nil end
+  own = (on or gripOn) and M.wetStep(own, rainMmH, timer) or 0      -- (both off: no memory of the rain kept)
   timer = 0
+  setGrip(gripOn and M.gripCond(own, grip) or nil)
   local w, src = M.wetOf(on, winterWet(), own)
   M.source = src
   setPuddles(M.puddleStep(w))
@@ -314,7 +349,7 @@ function M.update(dt, rainMmH, on)
     for name in pairs(known) do if not (before and before[name]) or not orig[name] then queue[#queue + 1] = name end end
     if #queue == 0 then queue = nil end
   end
-  return level > 0 or own > 0 or queue ~= nil
+  return level > 0 or own > 0 or queue ~= nil or grip ~= nil
 end
 
 -- One line on what is wet (the probes' overlay, the console): materials written per class and a few names.
@@ -328,7 +363,8 @@ function M.debugLine()
   for k, n in pairs(per) do parts[#parts + 1] = k .. '=' .. n end
   table.sort(parts)
   table.sort(names)
-  return string.format('wet lvl=%d own=%.2f src=%s puddles=%d writes=%d %s | %s', level, own, tostring(M.source), puddle, M.writes,
+  return string.format('wet lvl=%d own=%.2f src=%s grip=%s puddles=%d writes=%d %s | %s', level, own, tostring(M.source),
+    tostring(grip), puddle, M.writes,
     table.concat(parts, ' '), table.concat(names, ' '))
 end
 
@@ -342,10 +378,14 @@ end
 
 function M.level() return level end
 function M.wetness() return own end
+function M.grip() return grip end
+-- The puddles' alpha threshold shown now (255: none; aquaplane.lua's water depth in them).
+function M.puddleRefShown() return M.puddleRef(puddle) end
 
 -- The level goes: nothing to restore (the materials load again with the next level); state cleared.
 function M.reset()
   own, level, queue, orig, known, timer, rescan, puddle = 0, 0, nil, {}, nil, 0, 0, 0
+  setGrip(nil)
   local roads = package.loaded['beamngEarth/roads']
   if roads and roads.setPuddles then pcall(roads.setPuddles, false) end      -- (the next level's puddles made hidden)
 end

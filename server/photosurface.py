@@ -10,7 +10,13 @@ neutral) or None (the road stays as it was: dirt); Sentinel-2's 10 m pixels, a
 source that is not a tile cache and a road in no regional box give None without a fault.
 
 The colour is measured (statistics of the samples, stats()) and classified (classify()) apart, so the rule is tuned
-on roads whose tags are known (tools/photo_surface_eval.py). BNE_PHOTO_SURFACE=1 turns it on.
+on roads whose tags are known (tools/photo_surface_eval.py). BNE_PHOTO_SURFACE=1 turns it on, unless the generated
+ground is on (BNE_GEN_GROUND, genground.py): that fetches no 1 m photo, so no regional tile would ever come to the disk
+and every candidate stayed "not known yet" for good (a player's report of 2026-11-26, downtown Baltimore inside
+Virginia's box: each read of a cell's road specs faulted, so neither they nor the lane rows, roadsys tables or plans
+made from them were kept, made again on every call: ~300,000 faults in one geotile, 3-4 times its time, the graded
+block's too; the output was the same, no verdict). As buildings._photo_sources: no regional photo is read with it on. A 404 the imagery
+fetcher remembered (missindex: its column's index, no longer a <y>.404 file) is known: no tile there.
 """
 import math
 import os
@@ -21,9 +27,11 @@ import numpy as np
 import dmath
 import dnp
 
+import genground
 import imagery_regional
+import missindex
 
-ON = os.environ.get("BNE_PHOTO_SURFACE", "").lower() in ("1", "on", "true")
+ON = os.environ.get("BNE_PHOTO_SURFACE", "").lower() in ("1", "on", "true") and not genground.ON
 TAG = "ps2"                     # in the road specs' cache key while on (roads.road_specs): bump with a rule change
 ZOOM = 17
 PHOTO_CLASSES = {"track", "service", "unclassified"}     # (a residential street is built up: the land cover's call)
@@ -110,7 +118,7 @@ def _read_tile(root, name, x, y):
                 arr = None
         except (OSError, ValueError):
             return None, False          # (half written: not known yet)
-    elif not os.path.exists(os.path.join(d, f"{y}.404")):
+    elif not missindex.known(os.path.join(d, f"{y}.404")):     # (the fetcher's remembered 404: the column's index)
         return None, False
     with _LOCK:
         _TILES[key] = arr
