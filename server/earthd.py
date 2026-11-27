@@ -12476,7 +12476,9 @@ def prune_own_caches(cache_dir, started=None):
     limit (35 GB on a Steam Deck under a 20 GB cap, 2026-10-23: players' C: drives filled). Then the older versions'
     folders of the per-cell caches (cache.prune_versions: never read again, never deleted before: 8 GB of
     vegetation/v1..v17 here, 2026-10-28) and the revisit sidecar's compaction (revisit.compact: the files written
-    before `started`, without the lines whose item the prune removed)."""
+    before `started`, without the lines whose item the prune removed). Run on a thread of its own at start, in Windows'
+    background mode (cache.background_io: its deletes behind the join's reads on a slow disk)."""
+    cachemod.background_io(True)
     try:
         n = mapdatamod.prune_mirror(cache_dir)
         if n:

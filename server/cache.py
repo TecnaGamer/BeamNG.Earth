@@ -57,6 +57,7 @@ import os
 import ioprofiler
 import missindex
 import shutil
+import sys
 import threading
 import time
 
@@ -70,6 +71,12 @@ INDEX_FILE = "index.tsv"
 # loading (py-spy, a cold teleport 2026-11-11), beside the far textures and plans that share the interpreter
 WALK_DELAY_S = float(os.environ.get("BNGE_CACHE_WALK_DELAY_S", "90"))
 WALK_YIELD_N = 500
+# On Windows the start-up walk and the sweep after it run in the thread's background mode (THREAD_MODE_BACKGROUND_BEGIN:
+# very low I/O priority, low memory priority), so on a slow disk their tens of thousands of directory reads and deletes
+# queue behind the join's reads instead of in front of them. On a cache on a 5400 rpm USB hard disk the walk took ~4 min
+# and ran right through a join (the first block late). A walk a caller waits for (walk_soon: a clear, the map's cache
+# view) leaves the mode. "0": off
+WALK_BACKGROUND = os.environ.get("BNGE_CACHE_WALK_BACKGROUND", "1") != "0"
 INDEX_HEADER = "# beamng-earth cache index 1"
 # evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
 # left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
@@ -111,6 +118,28 @@ LIFETIMES = {}              # path prefix ("imagery/xyz/") -> max age after down
 MISS_TOPS = ("dem", "imagery")      # their source folders get missindex.MIGRATED after the start-up migration
 MSG_VERSION = 1
 READ_WAITS = (0.02, 0.05, 0.1, 0.25)   # s between the tries of a read held up on Windows (NoCache.read)
+
+
+_THREAD_MODE_BACKGROUND_BEGIN = 0x00010000
+_THREAD_MODE_BACKGROUND_END = 0x00020000
+
+
+def background_io(on=True):
+    """The calling thread into (on) or out of Windows' background processing mode (low I/O and memory priority).
+    True when the mode changed; False elsewhere, when WALK_BACKGROUND is off, or when Windows refused (already in it)."""
+    if sys.platform != "win32" or not WALK_BACKGROUND:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentThread.restype = wintypes.HANDLE
+        k32.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
+        k32.SetThreadPriority.restype = wintypes.BOOL
+        mode = _THREAD_MODE_BACKGROUND_BEGIN if on else _THREAD_MODE_BACKGROUND_END
+        return bool(k32.SetThreadPriority(k32.GetCurrentThread(), mode))
+    except (OSError, AttributeError):
+        return False
 
 
 def _marker(key, size):
@@ -194,6 +223,7 @@ class Cache(NoCache):
         self._dirty = False
         self.ready = False          # the start-up walk is done
         self._walk_now = threading.Event()      # the start-up walk wanted now (walk_soon), not after WALK_DELAY_S
+        self._walk_bg = False                   # the walk's thread is in the background mode now (background_io)
         self._ready_ev = threading.Event()
         self._last_evict = None
         self._last_save = self.started
@@ -427,6 +457,9 @@ class Cache(NoCache):
                         n_seen += 1
                         if n_seen % WALK_YIELD_N == 0:
                             time.sleep(0.001)       # (the interpreter to the world's threads: WALK_YIELD_N)
+                            if self._walk_bg and self._walk_now.is_set():   # a caller waits for it now
+                                background_io(False)
+                                self._walk_bg = False
                         try:
                             if de.is_dir(follow_symlinks=False):
                                 stack.append(de.path)
@@ -740,14 +773,19 @@ class Cache(NoCache):
         return n
 
     def _run(self):
-        self._walk_now.wait(WALK_DELAY_S)       # (at once when something needs it: walk_soon)
+        urgent = self._walk_now.wait(WALK_DELAY_S)      # (at once when something needs it: walk_soon)
         if self._closed:
             return
+        self._walk_bg = not urgent and background_io(True)     # (WALK_BACKGROUND: behind the join's reads)
         try:
             self.scan()
         except Exception:
             log.exception("cache: start-up walk failed; no eviction this session")
             return
+        finally:
+            if self._walk_bg:       # (eviction and the index saves on this thread at normal priority)
+                background_io(False)
+                self._walk_bg = False
         # (its own thread: deleting ~200k old marker files, or a cleared cache, takes minutes on Windows; eviction must
         # not wait for it)
         threading.Thread(target=self._background, name="cache-sweep", daemon=True).start()
@@ -761,7 +799,8 @@ class Cache(NoCache):
 
     def _background(self):
         """After the start-up walk, on a thread of its own: the old 404 markers migrated, then what a clear_all moved
-        aside deleted."""
+        aside deleted (in the background mode too, WALK_BACKGROUND: a thread of its own that nothing waits for)."""
+        background_io(True)
         try:
             self.migrate_misses()
         except Exception:

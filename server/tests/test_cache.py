@@ -614,6 +614,71 @@ class ThreadTest(Base):
         c.close()
         self.assertFalse(c._thread.is_alive())
 
+    def _walk_modes(self, urgent):
+        """The background_io calls of the cache thread (the walk) and the sweep thread, by thread name."""
+        calls, done = [], threading.Event()
+
+        def fake(on=True):
+            calls.append((threading.current_thread().name, on))
+            if threading.current_thread().name == "cache-sweep" and on:
+                done.set()
+            return True
+        self.enterContext(mock.patch.object(cachemod, "background_io", fake))
+        self.enterContext(mock.patch.object(cachemod, "WALK_DELAY_S", 0.0 if not urgent else 30.0))
+        put(self.root, "imagery/usgs/16/1/0.jpg", MB, T0 - DAY)
+        c = cachemod.Cache(self.root, 20, now=self.clock, start=False)
+        if urgent:
+            c.walk_soon()
+        c._thread = threading.Thread(target=c._run, name="cache", daemon=True)
+        c._thread.start()
+        self.assertTrue(c._ready_ev.wait(10))
+        self.assertTrue(done.wait(10))
+        c.close()
+        return [on for name, on in calls if name == "cache"], [on for name, on in calls if name == "cache-sweep"]
+
+    def test_walk_in_background_mode(self):
+        walk, sweep = self._walk_modes(urgent=False)
+        self.assertEqual(walk, [True, False], "the walk in the background mode, eviction after it at normal")
+        self.assertEqual(sweep, [True])
+
+    def test_walk_a_caller_waits_for_stays_normal(self):
+        walk, sweep = self._walk_modes(urgent=True)
+        self.assertEqual(walk, [], "walk_soon before the walk: never in the background mode")
+        self.assertEqual(sweep, [True])
+
+    def test_walk_soon_mid_walk_leaves_background_mode(self):
+        calls = []
+        self.enterContext(mock.patch.object(cachemod, "background_io", lambda on=True: calls.append(on) or True))
+        self.enterContext(mock.patch.object(cachemod, "WALK_YIELD_N", 1))
+        for i in range(3):
+            put(self.root, f"imagery/usgs/16/1/{i}.jpg", MB, T0 - DAY)
+        c = cachemod.Cache(self.root, 20, now=self.clock, start=False)
+        c._walk_bg = True
+        c.walk_soon()
+        c.scan()
+        self.assertEqual(calls, [False])
+        self.assertFalse(c._walk_bg)
+
+    def test_background_io_off_switch_and_elsewhere(self):
+        self.enterContext(mock.patch.object(cachemod, "WALK_BACKGROUND", False))
+        self.assertFalse(cachemod.background_io(True))
+        if sys.platform != "win32":
+            self.enterContext(mock.patch.object(cachemod, "WALK_BACKGROUND", True))
+            self.assertFalse(cachemod.background_io(True), "Windows only")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows' background mode")
+    def test_background_io_on_windows(self):
+        out = []
+
+        def body():
+            out.append(cachemod.background_io(True))
+            out.append(cachemod.background_io(True))       # (already in it: Windows refuses)
+            out.append(cachemod.background_io(False))
+        t = threading.Thread(target=body)
+        t.start()
+        t.join(5)
+        self.assertEqual(out, [True, False, True])
+
 
 # --- the producers -------------------------------------------------------------------------------
 class StubFetcher:
