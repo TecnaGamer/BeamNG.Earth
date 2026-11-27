@@ -15856,6 +15856,9 @@ def shape_files(aid, tx, ty):
     if cliffsettings.SETTINGS.enabled:      # (PR #1412's cliffs, BNE_CLIFFS: no extra names, no staging stat, when off)
         import cliffscene
         out.update(cliffscene.shape_files(aid, tx, ty))
+    import barriers
+    for what in barriers.FIELDS:
+        out[what] = f"{what}_{aid}_{tx}_{ty}.cdae"
     return out
 
 
@@ -15926,7 +15929,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
                bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None,
-               walk_ground=None, speed_traps=(), bus_col=None, cliff_mesh=None):
+               walk_ground=None, speed_traps=(), bus_col=None, cliff_mesh=None, boundary_meshes=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -16035,6 +16038,14 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                    collision_only=True)
         data["buscol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         boxes["buscol"] = bus_col[1]
+    if boundary_meshes:
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        for what, (mesh, bounds) in boundary_meshes.items():
+            shape = shape_files(aid, tx, ty)[what]
+            roadmesh.write(os.path.join(out_dir, shape), mesh)
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            if what.startswith("boundary"):
+                boxes[what] = bounds
     if "walk" in boxes and data.get("walkcol"):
         boxes["walkcol"] = boxes["walk"]
     if bld is None and bld_none:

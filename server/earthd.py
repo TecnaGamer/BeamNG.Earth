@@ -3573,11 +3573,7 @@ class Server:
                                  ground=cover, parapets=parapets,
                                  low_parapet_decks=low_parapet_decks, pads=pads)
         import fences
-        try:                        # the mapped stone walls (GitHub #938), in the retaining walls' stone
-            rwalls = rwalls + fences.stone_walls(anchor.frame, infra_fn, box, elev, roads=near_roads)
-        except Exception as ex:
-            log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
-        tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
+        boundary_wall_ids = ()
         import railways
         rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
         if rail_early is not None:      # (made above, before the decks: BNE_RAIL_ROAD_FIT)
@@ -3616,11 +3612,16 @@ class Server:
             import powerlines
             powerlines.tile_lines(anchor.frame, tx, ty, self.mapdata, elev, props, wires,
                                   clearance=clearance[0] if clearance else None)    # high-voltage lines
-            import fences
+            import barriers
+            boundary_meshes = {}
             try:
+                regional = (fences.french_rows(anchor.frame, infra_fn, box, elev, near_roads)
+                            if fences.MAPPED_BOUNDARIES_ON and frontage_country == "FR" else None)
+                boundary_meshes, gate_clearance, boundary_wall_ids = barriers.tile(anchor.frame, tx, ty, self.mapdata,
+                    railways.point_ground(anchor.frame, elev), lines, props, exclude_fids=regional[1] if regional else ())
                 props.extend(fences.rows(anchor.frame, infra_fn, box, elev, decks=[
                     {"n": np.column_stack((xy, z)), "w": spec.width} for _f, spec, xy, z, _l in deck_parts] + rail_decks,
-                    roads=near_roads, french=frontage_country == "FR"))
+                    roads=near_roads, french=frontage_country == "FR", gate_clearance=gate_clearance, french_data=regional))
             except Exception as ex:
                 log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import picnic
@@ -3702,6 +3703,12 @@ class Server:
             props = (props or []) + radar_props
         import racedig              # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
         racedig.tile_clear(anchor.frame, cells, props, wires, elev, self.mapdata)
+        try:                        # the mapped stone walls (GitHub #938), in the retaining walls' stone
+            rwalls = rwalls + fences.stone_walls(anchor.frame, infra_fn, box, elev, roads=near_roads,
+                                                 exclude_fids=boundary_wall_ids)
+        except Exception as ex:
+            log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
@@ -3712,7 +3719,7 @@ class Server:
                                    turbines=turbine_rows, towns=town_faces,
                                    walk_ground=lambda x, y: roadmeshmod.drawn_ground(
                                        anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)),
-                                   speed_traps=speed_traps)
+                                   speed_traps=speed_traps, boundary_meshes=boundary_meshes if self.buildings else None)
 
     def set_dej(self, on):
         """The settings page's German junction signs switch (message german_junctions): True when it changed (the road
