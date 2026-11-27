@@ -7848,6 +7848,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
-    m.add("VERSION", 641)?;
+    // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
+    // tunnels' and the roads' branches)
+    m.add("VERSION", 644)?;
     Ok(())
 }

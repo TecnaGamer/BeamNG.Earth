@@ -12155,8 +12155,10 @@ async def main_async(args, restart=None):
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.make_fast_pool = make_fast_pool
     if snowmod.ON:      # (BNE_WINTER / BNE_WET_ROADS: from the weather's source, or a winter preset, no network)
+        # (the band table cut to each forcing cell's real relief in our DEM: snow.cell_relief)
         server.snow = snowmod.Service(fetch=lambda lat, lon, past, ahead: weathermod.fetch_hourly(lat, lon, past, ahead,
-                                                                                                 net=net))
+                                                                                                 net=net),
+                                      relief=lambda lat, lon: snowmod.cell_relief(server.dem, lat, lon))
         log.info("road surface state %s (winter %s, wet roads %s)", snowmod.MODE, snowmod.WINTER, snowmod.WET_ROADS)
     if late_pool is not None:
         server.start_late(late_pool)
