@@ -11061,6 +11061,11 @@ class TunnelProfiles(BridgeProfiles):
                     dug = self._race_dig(pool[k][0], xy, s, floor, kinds, ground)
                     if dug is not None:
                         floor, kinds, race_cap = dug
+            solved = SHAPED_PORTALS and shaped is not None and not underwater
+            if solved:
+                # (the 3D solve's line is the floor: it cleared what crosses over the tube itself; the sections' dips,
+                # fits and smoothing put Riva Pontera's floor 2.2 m under it at the portal, a 54x lift past the limit)
+                floor = np.where(np.isfinite(shaped), shaped, floor)
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -11070,7 +11075,7 @@ class TunnelProfiles(BridgeProfiles):
                 i = j + 1
             # neighbouring sections share their end sample (no gap between a portal and the open road)
             secs = [(a if n == 0 else a - 1, b, kd) for n, (a, b, kd) in enumerate(secs)]
-            if not underwater:
+            if not underwater and not solved:
                 floor = self._observed_floor(k, pool, xy, s, floor, secs,
                                              tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))))
             cover = (g if gc is None else gc) - floor

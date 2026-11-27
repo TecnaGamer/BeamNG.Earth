@@ -62,6 +62,9 @@ def _reach(samples, p, i, other, k_other, half):
 BESIDE_M = 8.0              # m between two carriageways' edges within which the ground between them is held to ...
 BATTER = 0.5                # ... rising or falling at most this (1:2) from one to the other; overlapping, one height
 W_BESIDE = 1.0e3            # per m^2 past it
+OVERLAP_M = 2.0             # m: carriageways overlapping more than this are one surface (a wall cannot stand between)...
+W_OVERLAP = 1.0e4           # ... held to one height at this per m^2 (Breitenleer's two primaries overlapping 14 m sat
+                            # 1.1 m apart, the one pulled down by a road 8 m under the other it touched by 1 m)
 BESIDE_EVERY = 2            # one pair every this many samples of a path
 LAYERED_NEAR_M = 150.0      # m along either path from where the two cross at two levels: no batter between them
 
@@ -163,6 +166,7 @@ def pose(network, samples, laws):
             add((pu, ju, pl, jl, "ge", float(lay.need)), lay.weight, ("clear", k))
     for k, (pa, ia, pb, ib, gap) in enumerate(beside(network, samples)):
         v = BATTER * max(0.0, gap)
-        add((pa, ia, pb, ib, "le", v), W_BESIDE, ("beside", k))
-        add((pa, ia, pb, ib, "ge", -v), W_BESIDE, ("beside", k))
+        w = W_OVERLAP if gap < -OVERLAP_M else W_BESIDE
+        add((pa, ia, pb, ib, "le", v), w, ("beside", k))
+        add((pa, ia, pb, ib, "ge", -v), w, ("beside", k))
     return pr

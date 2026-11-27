@@ -5673,8 +5673,12 @@ class _Planner:
             zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
             if not np.isfinite(zs).any():
                 continue
-            import roadlaws
-            z = shape_reach(xy, p.z, zs, modes, roadlaws.laws(sp)[0], self._ground_line(xy), getattr(p, "abut", None))
+            if GRADE3D_ON:
+                z = solved_line(xy, zs)     # (the solve's line, whole: its own height nowhere along it)
+            else:
+                import roadlaws
+                z = shape_reach(xy, p.z, zs, modes, roadlaws.laws(sp)[0], self._ground_line(xy),
+                                getattr(p, "abut", None))
             if np.abs(z - np.asarray(p.z, np.float64)).max() < 1e-6:
                 continue
             np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
@@ -9504,6 +9508,22 @@ class PlanStore:
 _ACTIVE_STORE = None    # the process's PlanStore (the last made): the carriageways' deck heights (_deck_z_hook)
 
 
+def solved_line(xy, z):
+    """GRADE3D_ON: z (a line's heights read on the solve's pieces, nan off them) with the points off them filled along
+    the line from those on them (held level past the last): the build lays a road, deck or tunnel on the solve's line
+    whole, not on its own heights where its mapped line runs a little past a piece (an end, a fused copy). None when no
+    point is on one."""
+    z = np.asarray(z, np.float64)
+    ok = np.isfinite(z)
+    if not ok.any():
+        return None
+    if ok.all():
+        return z
+    xy = np.asarray(xy, np.float64)[:, :2]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    return np.interp(s, s[ok], z[ok])
+
+
 def _deck_z_hook(frame, lines, fids=None):
     """roads.DECK_Z_HOOK: per deck line (frame ENU (k, 2+)), its heights (frame up m) from its carriageway's profile, or
     None where it is not one's."""
@@ -9524,7 +9544,9 @@ def _deck_z_hook(frame, lines, fids=None):
             if fid is not None:
                 zz, _m = pl._shape_at(xy, xy, fid, ("deck",))
                 ok = np.isfinite(zz)
-                if ok.all():
+                if GRADE3D_ON:
+                    z = solved_line(xy, zz)
+                elif ok.all():
                     z = zz
                 elif ok.any():      # (the shapes solved this deck, but not all of the line the roads build: its own
                     # heights would stand where the solve put the deck for its crossings' clearance)
@@ -9593,6 +9615,10 @@ def _tunnel_z_hook(frame, lines, fids):
         e, n, _ = pl.frame.geodetic_to_enu(la, lo, 0.0)
         xy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
         z, _m = pl._shape_at(xy, xy, str(fid), ("cut",))
+        if GRADE3D_ON:
+            z = solved_line(xy, z)
+            out.append(None if z is None else np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64))
+            continue
         out.append(np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64) if np.isfinite(z).all() else None)
     return out
 
