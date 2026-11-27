@@ -76,8 +76,8 @@ local function report()
     end
   end
 
-  -- GE modules are loaded through require and cached in package.loaded, rather than exposed as extension globals.
-  local code = string.format("local c=package.loaded['beamngEarth/core'];if c and c.rumbleSensorData then c.rumbleSensorData(%d,{%s}) end",
+  -- core.lua is loaded as the beamngEarth_core GE extension, so its API is a GE global rather than a required module.
+  local code = string.format("local c=rawget(_G,'beamngEarth_core');if c and c.rumbleSensorData then c.rumbleSensorData(%d,{%s}) end",
     id, table.concat(entries, ','))
   pcall(obj.queueGameEngineLua, obj, code)
 end
