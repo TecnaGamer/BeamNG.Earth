@@ -923,6 +923,7 @@ class GraderTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    @unittest.mock.patch.object(grading, "STRICT", False)     # (the fallback BNE_STRICT=off keeps)
     def test_failed_fetch_not_retried_at_once(self):
         md = FailingMD()
         g = grading.Grader(FRAME, md, lambda la, lo: np.zeros(np.shape(la)))

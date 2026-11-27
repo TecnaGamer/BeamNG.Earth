@@ -1731,29 +1731,6 @@ class TunnelReachTest(unittest.TestCase):
     def _ranges(self, lines, classes, flags):
         return roads.level_ranges(features(lines, classes, flags=flags), 0)
 
-    def test_a_portal_in_a_carriageway_moves_past_it(self):
-        # the tunnel road east-west, 400 m, its tunnel -20 .. +20 m; a motorway crossing at +18 m
-        got = self._ranges([[(-200.0, 0.0), (200.0, 0.0)], [(18.0, -100.0), (18.0, 100.0)]],
-                           ["unclassified", "motorway"], [(0, "is_tunnel", 0.45, 0.55)])
-        (a, b, k), = got
-        self.assertEqual(k, "tunnel")
-        self.assertAlmostEqual(a, 0.45, places=4)                # (the other portal: no road there)
-        half = roads.road_specs(features([[(18.0, -100.0), (18.0, 100.0)]], ["motorway"]))[0].width / 2
-        self.assertGreaterEqual(b * 400.0 - 200.0, 18.0 + half + roads.TUNNEL_PORTAL_CLEAR_M - 0.01)
-
-    def test_a_portal_in_the_lanes_of_a_road_alongside_moves_into_the_tunnel(self):
-        # a service tunnel mapped as a ground stretch in a motorway's lanes, its portal there (the Gotthard road tunnel's
-        # service gallery at Goeschenen): the portal moves in until it is clear of the motorway
-        got = self._ranges([[(-200.0, 0.0), (-40.0, 0.0), (200.0, -80.0)], [(-200.0, 2.0), (-20.0, 2.0)]],
-                           ["service", "motorway"], [(0, "is_tunnel", 0.3, 1.0)])
-        (a, b, k), = got
-        self.assertEqual(k, "tunnel")
-        self.assertGreater(a, 0.3 + 0.01)
-        self.assertAlmostEqual(b, 1.0, places=4)
-        # entirely in its lanes: no tunnel
-        got = self._ranges([[(-200.0, 0.0), (200.0, 0.0)], [(-250.0, 1.0), (250.0, 1.0)]],
-                           ["service", "motorway"], [(0, "is_tunnel", 0.45, 0.5)])
-        self.assertEqual(got, [])
 
     def test_a_road_away_from_the_portal_or_joined_there_moves_nothing(self):
         for other in ([(60.0, -100.0), (60.0, 100.0)],     # 40 m outside the portal

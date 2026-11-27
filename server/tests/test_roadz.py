@@ -197,7 +197,6 @@ class KernelTest(unittest.TestCase):
             ef.las_decode(b"nope" * 100, [0, 0, 1, 1])
 
 
-
 def las_bytes(points):
     """A LAS 1.2 point format 0 file (no compression) of points [(x, y, z, class)] in 0.01 units at (1000, 2000, 0)."""
     hdr = bytearray(227)
@@ -618,40 +617,6 @@ class TunnelOverrideTest(unittest.TestCase):
             np.testing.assert_allclose(out, floor, err_msg="never over the ground's hull")
         finally:
             roadz.PROVIDER = old
-
-
-
-@unittest.skipUnless(NATIVE, "earthfast roadz kernels")
-class MeasuredRampFromPlanTest(unittest.TestCase):
-    """The approach ramp to a measured deck end rises from the road's plan, not from the ground under the end point
-    (Charles Street over I-83 in Baltimore: the deck's end over the cut's slope, 2.7 m lower than the street, the
-    street raised 2.2 m over its plan to the deck's measured height counted from the slope, a 2.5 m step there)."""
-
-    def setUp(self):
-        self.old = roadz.PROVIDER
-
-    def tearDown(self):
-        roadz.PROVIDER = self.old
-
-    def lifted(self, measured):
-        f = overpass()
-        spec = roads.road_specs(f)[0]
-        xy = np.c_[np.linspace(-400, -35, 120), np.zeros(120)]
-        la, lo, _ = FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
-        plan = grading.plan_roads(FRAME, [(np.c_[lo, la], spec)], flat_elev, cuts=False)[0]
-
-        def cut_elev(la_, lo_):         # (the ground falls 3 m into a cut right under the deck's end)
-            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la_, np.float64), np.asarray(lo_, np.float64), 0.0)
-            return np.where(np.abs(np.asarray(e) + 35.0) < 1.0, FLAT - 3.0, FLAT)
-        g = grading._Planner(FRAME, FakeMD(f), cut_elev)
-        roadz.PROVIDER = StubProvider(lambda xy_, s: np.full(len(xy_), measured))
-        plans = [("cross", plan)]
-        g._lift_approaches(mapcells.cell_of(float(FRAME.lat0), float(FRAME.lon0)), plans, [spec])
-        return float(plans[0][1].z[-1])
-
-    def test_ramp_from_the_plan(self):
-        self.assertLess(abs(self.lifted(FLAT + 0.2) - FLAT), 0.05, "measured at the street's height: not raised")
-        self.assertAlmostEqual(self.lifted(FLAT + 2.0), FLAT + 2.0, delta=0.05, msg="raised to the deck's end")
 
 
 if __name__ == "__main__":

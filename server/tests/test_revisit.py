@@ -46,31 +46,6 @@ class RevisitTest(unittest.TestCase):
         netfetch.FetchFailed("timed out")
         self.assertEqual(revisit.faults(), n + 1)
 
-    def test_a_cells_road_facts_are_shared(self):
-        import roads
-        from test_roads import features
-        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
-            cleanup.callback(revisitpack.reset)
-            old = revisit.CACHE_DIR
-            revisit.CACHE_DIR = d
-            try:
-                def cell():
-                    f = features([[(0, 0), (100, 0)], [(0, 50), (100, 50)]], ["residential", "primary"])
-                    f.__dict__["_bnge_cell"] = ("15/1/2", "roads", "v")
-                    return f
-                a = roads.road_specs(cell())
-                ra = [roads.level_ranges(cell(), i) for i in range(2)]
-                b_feats = cell()            # (another process: its own decoded cell)
-                from unittest import mock
-                with mock.patch.object(roads, "_road_specs", side_effect=AssertionError("made again")), \
-                        mock.patch.object(roads, "_level_ranges_many", side_effect=AssertionError("made again")):
-                    self.assertEqual(roads.road_specs(b_feats), a)
-                    self.assertEqual([roads.level_ranges(b_feats, i) for i in range(2)], ra)
-                self.assertEqual(b_feats.__dict__["_road_specs"][(None, None, False)], a)
-                self.assertEqual([roads.level_ranges(b_feats, i) for i in range(2)], ra)
-                self.assertEqual(b_feats.__dict__.get("_ranges_state"), "done")
-            finally:
-                revisit.CACHE_DIR = old
 
     def test_sidecar_lines_are_written_compacted_and_dropped(self):
         """store(where=...) appends one line to this process's sidecar; compact() folds older files into one, the

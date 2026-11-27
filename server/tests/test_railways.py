@@ -830,9 +830,15 @@ class RoadUnderpassTest(unittest.TestCase):
 
     def setUp(self):
         railways._GROUND_MEMO.clear()
+        import grading
+        self._store = grading._ACTIVE_STORE
 
     def tearDown(self):
         railways._GROUND_MEMO.clear()
+        # (a Grader made here is the process's plan store, whose solve the later tests' tracks were read from: unittest
+        # runs this module without conftest's fixture)
+        import grading
+        grading._ACTIVE_STORE = self._store
 
     def features(self, split=False, tunnel=True, parallel=False, cls="trunk"):
         track = [[(-200, 100), (120, 100)], [(120, 100), (450, 100)]] if split else [[(-200, 100), (450, 100)]]

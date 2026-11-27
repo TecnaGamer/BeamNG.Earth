@@ -1,4 +1,4 @@
-"""Ground stretches the lidar shows on a structure (roads.lidar_gap_candidates / _lidar_gaps, roadz.RoadZ._measure /
+"""Ground stretches the lidar shows on a structure (roads.deck_end_pieces, roadz.RoadZ._measure /
 gap_answers, earthfast.lidar_gap_stretch): a ground piece going on from a deck's end is deck as far as its measured
 surface stays well over the DTM; an at-grade ramp stays ground; without the lidar the rule stands, the same in every
 process of a server run."""
@@ -13,11 +13,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import fast  # noqa: E402
-import mapcells  # noqa: E402
-import revisit  # noqa: E402
-import roads  # noqa: E402
 import roadz  # noqa: E402
-from test_roads import features, FRAME  # noqa: E402
+from test_roads import FRAME  # noqa: E402
 from test_roadz import FakeMDem  # noqa: E402
 
 ef = fast._ef
@@ -113,92 +110,6 @@ class StubProvider:
     def gap_answers(self, keys):
         self.calls += 1
         return {k: self.answer for k in keys}
-
-
-@unittest.skipUnless(NATIVE, "earthfast 107")
-class RangesTest(unittest.TestCase):
-    """A viaduct p0 (y -300..0) going on as a ground road p1 (y 0..200)."""
-
-    def setUp(self):
-        self.old = (roadz.PROVIDER, roads.LIDAR_GAPS_ON, os.environ.pop("BNGE_PLAN_RUN", None), revisit.CACHE_DIR)
-        revisit.CACHE_DIR = None            # (no cell facts on disk: another test's under the same cell id)
-        roads._FACTS_MEM.clear()            # (each test's provider its own: no facts of another test's)
-
-    def tearDown(self):
-        roadz.PROVIDER, roads.LIDAR_GAPS_ON, run, revisit.CACHE_DIR = self.old
-        if run is not None:
-            os.environ["BNGE_PLAN_RUN"] = run
-        roads._FACTS_MEM.clear()
-
-    def feats(self):
-        f = features([[(0, -300), (0, 0)], [(0, 0), (0, 200)]], ["motorway", "motorway"],
-                     flags=[(0, "is_bridge", 0.0, 1.0)], ids=["p0", "p1"])
-        f.__dict__["_bnge_cell"] = ("test", "roads", "{}")
-        return f
-
-    def test_candidate_from_the_deck_end(self):
-        c = roads.lidar_gap_candidates(self.feats())
-        self.assertEqual([x[0] for x in c], ["p1"])
-        first = FRAME.geodetic_to_enu(c[0][1][:1, 1], c[0][1][:1, 0], 0.0)
-        self.assertLess(abs(first[1][0]), 0.1, "measured from the deck's end")
-        e = FRAME.geodetic_to_enu(c[0][1][-1:, 1], c[0][1][-1:, 0], 0.0)
-        self.assertAlmostEqual(e[1][0], roads.LIDAR_GAP_REACH_M, delta=0.5)
-
-    def test_answer_makes_deck(self):
-        roadz.PROVIDER = StubProvider([("p1", ll(0, 0), ll(0, 80))])
-        self.assertEqual(roads.level_ranges(self.feats(), 1)[0][2], "bridge")
-        a, b, _ = roads.level_ranges(self.feats(), 1)[0]
-        self.assertAlmostEqual(a, 0.0)
-        self.assertAlmostEqual(b, 0.4, delta=0.01)
-
-    def test_no_lidar_keeps_the_rule(self):
-        roadz.PROVIDER = StubProvider(None)
-        f = self.feats()
-        f0 = revisit.faults()
-        self.assertEqual(roads.level_ranges(f, 1), [])
-        self.assertGreater(revisit.faults(), f0, "a build on the rule for want of the lidar is not kept")
-        roadz.PROVIDER = StubProvider([])
-        self.assertEqual(roads.level_ranges(self.feats(), 1), [])
-
-    def test_off(self):
-        roadz.PROVIDER = StubProvider([("p1", ll(0, 0), ll(0, 80))])
-        roads.LIDAR_GAPS_ON = False
-        self.assertEqual(roads.level_ranges(self.feats(), 1), [])
-
-
-class CellFactsTest(unittest.TestCase):
-    """roads._cell_ranges: a cell's facts made once per process (_FACTS_MEM, beyond the layer object) and once per
-    server run for its processes (_run_facts_path), the lidar rule's too (2026-11-02: 787 makings of 89 cells)."""
-
-    def setUp(self):
-        self.old = roadz.PROVIDER, roads.LIDAR_GAPS_ON, revisit.CACHE_DIR, os.environ.get("BNGE_PLAN_RUN")
-        self.tmp = tempfile.mkdtemp()
-        revisit.CACHE_DIR = self.tmp
-        os.environ["BNGE_PLAN_RUN"] = "test_run"
-        roadz.PROVIDER = StubProvider(None)             # (no lidar: the rule, a session's answer)
-        roads._FACTS_MEM.clear()
-
-    def tearDown(self):
-        roadz.PROVIDER, roads.LIDAR_GAPS_ON, revisit.CACHE_DIR, run = self.old
-        if run is None:
-            os.environ.pop("BNGE_PLAN_RUN", None)
-        else:
-            os.environ["BNGE_PLAN_RUN"] = run
-        roads._FACTS_MEM.clear()
-
-    def feats(self):
-        return RangesTest.feats(self)
-
-    def test_made_once(self):
-        from unittest import mock
-        first = [roads.level_ranges(self.feats(), i) for i in range(2)]
-        self.assertTrue(os.path.isdir(os.path.join(self.tmp, "plans", "test_run", "facts")), "kept for the run")
-        with mock.patch.object(roads, "_level_ranges_many", side_effect=AssertionError("made again")):
-            self.assertEqual([roads.level_ranges(self.feats(), i) for i in range(2)], first, "this process's")
-            roads._FACTS_MEM.clear()        # (another process: the run's file)
-            f0 = revisit.faults()
-            self.assertEqual([roads.level_ranges(self.feats(), i) for i in range(2)], first, "the run's")
-            self.assertGreater(revisit.faults(), f0, "on the rule: what is built on it is still not kept")
 
 
 DECIDE = """

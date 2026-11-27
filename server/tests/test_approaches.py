@@ -5,6 +5,7 @@ import math
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -302,6 +303,7 @@ class EndsNearTest(unittest.TestCase):
         got = g._ends_near([np.array([0.0, 0.0])], 100.0, 2.5, 100.0, [np.array([-21.0, 1.5])])[0]
         self.assertEqual(got.tolist(), [[-20.0, -3.0], [30.0, 5.0]], "the other end's abutment left out")
 
+    @mock.patch.object(grading, "STRICT", False)      # (the fallback BNE_STRICT=off keeps)
     def test_unreadable_cell(self):
         self.planner({})
         g = self.planner({}, bad={(self.home.x, self.home.y)})

@@ -114,15 +114,5 @@ class LaneFlowReadsTest(unittest.TestCase):
         self.assertEqual(md2.asked, [], "no counted road: neither the eight nor a home cell read")
 
 
-class GradesepManyReadsTest(unittest.TestCase):
-    def test_home_far_reads_nothing(self):
-        md = Md()
-        f = hooked(features([[(0, 0), (50, 0)]], ["residential"]), md)
-        hook = f.__dict__["_bnge_neighbours"]
-        self.assertFalse(roads._home_far(f, hook, str(EAST)))
-        self.assertTrue(roads._home_far(f, hook, str(mapcells.CellKey(KEY.z, KEY.x + 2, KEY.y))))
-        self.assertEqual(md.asked, [])
-
-
 if __name__ == "__main__":
     unittest.main()

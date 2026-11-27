@@ -123,4 +123,5 @@ class CrossingParityTest(unittest.TestCase):
         self.assertEqual(boundary_cases(), '66bf7a9d925a3131794e3b9929d4c2a3958cc2f7e902c125d5b8445a31f33618')
 
     def test_road_windows_and_first_copy_order(self):
-        self.assertEqual(window_cases(), 'dfbc219f2f1fddd16ad258a2f9945b5e9b330ada4ca83a998d64a4064850a9e1')
+        # (the bridge rows on the map's own ranges, none lengthened or moved: #118)
+        self.assertEqual(window_cases(), '453d403ef0552c9b92935d33c177a9fb5dc8df1c900974b75805aaffe9079070')
