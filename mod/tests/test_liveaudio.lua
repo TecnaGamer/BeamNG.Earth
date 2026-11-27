@@ -44,6 +44,11 @@ la.onAudioState({ state = 'live', thunderSets = {} })
 check(not la.liveThunder(), 'a synth without the bank: the files again')
 la.reset()
 check(la.fields({ thunderSet = 'recorded' }).thunderSet == 'recorded' and la.fields({}).thunderSet == 'generated', 'fields: the set')
+check(la.fields({ rainSet = 'recorded' }).rainSet == 'recorded' and la.fields({}).rainSet == 'generated', 'fields: the rain set')
+check(la.fields({ rainVol = 0.3 }).rainVol == 0.3 and la.fields({}).rainVol == 0.5 and la.fields({ rainVol = 7 }).rainVol == 1,
+  'fields: the rain volume, clamped, 0.5 when absent')
+check(la.signature('live', la.fields({ rainVol = 0.3 })) ~= la.signature('live', la.fields({ rainVol = 0.4 })),
+  'a changed rain volume sends again')
 la.setThunderSet('generated')
 check(la.thunder({ t = 1000.5, seed = 77 }, 1700, { delay = 4.9, kind = 'close', gain = 0.6 }, true).id == th.id, 'thunder: same id')
 check(la.thunderId({ t = 1000.5, seed = 77 }) == th.id, 'thunderId')
@@ -138,10 +143,11 @@ for i = 1, la.MAX_PENDING + 5 do la.onThunder({ id = tostring(i) }) end
 la.tick(1.64, { rainMmH = 3 })
 check(#sent[7].thunders == la.MAX_PENDING and sent[7].thunders[1].id == '6', 'live: pending capped, the oldest dropped')
 
--- Live's rain is the game's own (the default since the 2026-11-26 playtest, LIVE_RAIN false): the synth answers live,
--- the mod's rain stays full, and every message tells the synth to keep its rain off
-check(la.LIVE_RAIN == false, 'Live: the game\'s rain loops by default')
-check(sent[2].synthRain == false and sent[7].synthRain == false, 'Live: synthRain = false in every message')
+-- Live's Generated rain is method B's live engine (2026-11-26), only from a synth that lists 'generated_b': without
+-- rainSets (an older synth, or none yet) the game plays its own loops, the mod's rain stays full, and every message
+-- tells the synth to keep its rain off
+check(la.LIVE_RAIN.generated == true and la.LIVE_RAIN_NEEDS.generated == 'generated_b', 'Live: Generated is the synth\'s method B')
+check(sent[2].synthRain == false and sent[7].synthRain == false, 'Live, no rainSets: synthRain = false in every message')
 do
   local t0 = os.clockhp and os.clockhp() or os.clock()
   la.onAudioState({ state = 'live', latencyMs = 20 })
@@ -150,7 +156,22 @@ do
   check(la.isLive(t0 + 0.5) and f == 1, 'Live, the synth answering: the mod\'s rain stays full (the synth only thunders)')
   la.onAudioState({ state = 'off' })   -- (the server's word gone again for the fade below)
 end
-la.LIVE_RAIN = true     -- (the synth's rain, for when the recorded-mix rain lands: the handover fade below)
+-- the Rain sound: Recorded plays the synth's recorded rain only when the synth lists it (its texture bank); without it
+-- the game keeps its own (the recorded files)
+la.onAudioState({ state = 'live', latencyMs = 20, rainSets = { 'generated', 'recorded' } })
+check(not la.synthRain(), 'Generated, an older synth (no generated_b): the game\'s rain, not its procedural drops')
+la.onAudioState({ state = 'live', latencyMs = 20, rainSets = { 'generated', 'generated_b', 'recorded' } })
+check(la.synthRain(), 'Generated, the synth has method B: the synth\'s rain')
+la.setRainSet('recorded')
+check(la.synthRain() and la.rainSet() == 'recorded', 'Recorded, the synth has the bank: the synth\'s recorded rain')
+la.onAudioState({ state = 'live', latencyMs = 20, rainSets = { 'generated' } })
+check(not la.synthRain(), 'Recorded, no bank: the game plays the recorded files')
+la.onAudioState({ state = 'live', latencyMs = 20 })
+check(not la.synthRain(), 'an older synth (no rainSets): the game\'s rain')
+la.setRainSet('generated')
+la.onAudioState({ state = 'off' })
+local realSynthRain = la.synthRain
+la.synthRain = function() return true end   -- (the synth's rain: the handover fade below)
 
 -- the mod's own sounds: full until the server says live, faded out over FADE_S, back when it goes stale
 local now0 = os.clockhp and os.clockhp() or os.clock()

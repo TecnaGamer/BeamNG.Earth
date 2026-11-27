@@ -7620,6 +7620,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
     m.add_function(wrap_pyfunction!(roadwear::puddle_plan, m)?)?;
     m.add_function(wrap_pyfunction!(roadwear::puddle_atlas_px, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::puddle_spots, m)?)?;
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
     // where the ground bulges inside it: no dip under its lift). 495-498 are other branches'
@@ -7847,11 +7848,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // puddle_atlas_px (their masks)
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
-    // 643 (641 wet grip, 642 tunnels): roadsys_kept_ends / roadsys_approach_run / roadsys_ramp_dz (M5 round 8: a short
-    // chain keeps its profile's deck end where its approach ground lies in a hollow; the approach is ramped to it)
-    // 644: embank_lift / embank_along (embank.rs, M5 round 8: a mapped road's embankment the surface model's ground filter cut)
+    // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
+    // 643 (642 kept for tunnels): M5 round 8: roadsys_kept_ends / roadsys_approach_run / roadsys_ramp_dz (a short chain
+    // keeps its profile's deck end where its approach ground lies in a hollow; the approach is ramped to it) and
+    // embank_lift / embank_along (embank.rs: a mapped road's embankment the surface model's ground filter cut)
     m.add_function(wrap_pyfunction!(embank::embank_lift, m)?)?;
     m.add_function(wrap_pyfunction!(embank::embank_along, m)?)?;
-    m.add("VERSION", 644)?;
+    m.add("VERSION", 643)?;
     Ok(())
 }

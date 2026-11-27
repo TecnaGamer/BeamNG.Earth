@@ -1236,8 +1236,9 @@ function M.onSkin(msg, currentAnchor)
     local sl = msgSlot(msg, what)
     if M._cliffsOn and M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
+      local spots = what == 'puddle' and type(w.spots) == 'table' and w.spots or nil   -- (aquaplane.lua)
       if sl then w = { shape = sl.path, pos = w.pos }; t.slots[what] = sl end
-      t.skin[what] = { shape = w.shape, pos = w.pos }
+      t.skin[what] = { shape = w.shape, pos = w.pos, spots = spots }
       local q = { key = geoKey(msg.key), walk = w, what = what, tile = t, skin = true,
         renderOnly = (M._cliffsOn and M.isCliffStrip(what)) or what == 'road' or what == 'puddle' or what == 'bank' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
       if not q.renderOnly then t.colWant[what] = true end
@@ -1423,6 +1424,19 @@ function M.setPuddles(on)
   end
   M.puddleFlips = M.puddleFlips + 1
   return n
+end
+
+-- (aquaplane.lua) the puddle parts shown: { id = the object's id, spots = its skin's spots (flat, relative to the
+-- object: server roadwear.puddle_spots) } appended to out; none while dry. A staged swap's new part (hidden) is left
+-- out until its commit.
+function M.puddleParts(out)
+  out = out or {}
+  if not M.puddlesShown then return out end
+  for _, t in pairs(tiles) do
+    local sp = t.skin and t.skin.puddle and t.skin.puddle.spots
+    if t.puddle and type(sp) == 'table' and #sp > 0 then out[#out + 1] = { id = t.puddle, spots = sp } end
+  end
+  return out
 end
 
 -- (probes) tiles whose skin has a puddle part, those made, and the made ones shown; one made object's id and shape

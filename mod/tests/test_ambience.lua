@@ -186,7 +186,10 @@ T.check(w0.light == 1 and w0.medium == 0 and w0.heavy == 0, 'drizzle: the light 
 local w3 = amb.rainWeights(5)
 T.check(math.abs(w3.medium - 1) < 1e-9, '5 mm/h: the medium layer')
 local w6 = amb.rainWeights(10)
-T.check(w6.medium > 0 and w6.heavy > 0 and math.abs(w6.medium + w6.heavy - 1) < 1e-9 and w6.light == 0, '10 mm/h: medium into heavy')
+T.check(w6.medium > 0 and w6.heavy > 0 and math.abs(w6.medium ^ 2 + w6.heavy ^ 2 - 1) < 1e-9 and w6.light == 0,
+  '10 mm/h: medium into heavy, equal power')
+local wl = amb.rainWeightsLinear(10)
+T.check(math.abs(w6.medium - math.sqrt(wl.medium)) < 1e-12, 'equal power: the square roots of the old linear weights')
 T.check(amb.rainWeights(50).heavy == 1, 'a downpour: heavy')
 local mx = amb.rainMix(0.5, 5, 1, false, false)
 T.check(math.abs(mx.medium - 0.5) < 1e-9 and mx.muffled == 0 and mx.roof_medium == 0, 'in the open: the layer at the volume')
@@ -195,11 +198,30 @@ T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_UNDER_ROOF) < 1e
 mx = amb.rainMix(0.5, 5, 1, true, false)
 T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_IN_TUNNEL) < 1e-9, 'in a tunnel: muffled, quieter')
 mx = amb.rainMix(0.5, 5, 1, false, true)
-T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roof_medium - 0.5 * amb.RAIN_ROOF) < 1e-9
-  and mx.roof_light == 0 and mx.roof_heavy == 0, 'in the car: on the roof')
+T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roofcab_medium - 0.5 * amb.RAIN_ROOF) < 1e-9
+  and mx.roofcab_light == 0 and mx.roofcab_heavy == 0 and mx.roof_medium == 0, 'in the car: the roof through the cabin')
 mx = amb.rainMix(0.5, 13, 1, false, true)
-T.check(mx.roof_medium > 0 and mx.roof_heavy > 0 and math.abs(mx.roof_medium + mx.roof_heavy - 0.5 * amb.RAIN_ROOF) < 1e-9,
+T.check(mx.roofcab_medium > 0 and mx.roofcab_heavy > 0
+  and math.abs(math.sqrt(mx.roofcab_medium ^ 2 + mx.roofcab_heavy ^ 2) - 0.5 * amb.RAIN_ROOF) < 1e-9,
   'heavier rain on the roof: the medium and heavy roof loops crossfaded')
+-- outside: the plain roof by the camera (hood / bumper full, orbit lightly by distance), none far off
+mx = amb.rainMix(0.5, 5, 1, false, false, 1)
+T.check(math.abs(mx.roof_medium - 0.5 * amb.RAIN_ROOF) < 1e-9 and mx.roofcab_medium == 0 and math.abs(mx.medium - 0.5) < 1e-9,
+  'hood camera: the plain roof, the rain unmuffled')
+T.check(amb.roofNearFor('onboard', 30) == 1 and amb.roofNearFor('driver', 1) == 0, 'roofNear: hood 1, inside 0')
+T.check(amb.roofNearFor('onboard.hood', 30) == 1 and amb.roofNearFor('occupant.driver', 1) == 0
+  and amb.camKind('occupant.passenger') == 'cabin' and amb.camKind('onboard.driver') == 'cabin'
+  and amb.camKind('onboard.bumper') == 'near' and amb.camKind('orbit') == nil and amb.camKind(nil) == nil,
+  'camKind: BeamNG 0.40 seat cameras are inside, the onboard ones near')
+T.check(math.abs(amb.roofNearFor('orbit', amb.ROOF_NEAR_M) - amb.ROOF_ORBIT) < 1e-12 and amb.roofNearFor('orbit', amb.ROOF_FAR_M) == 0
+  and amb.roofNearFor('orbit', 8) > 0 and amb.roofNearFor('orbit', 8) < amb.ROOF_ORBIT, 'roofNear: orbit by distance')
+-- under an open shelter (a bridge, an overpass): muffled B; enclosed or a tunnel: muffled A
+mx = amb.rainMix(0.5, 5, 0, false, false, 0, true)
+T.check(mx.muffled == 0 and math.abs(mx.muffled_open - 0.5 * amb.RAIN_UNDER_ROOF) < 1e-9, 'under an open bridge: muffled B')
+mx = amb.rainMix(0.5, 5, 1, true, false, 0, true)
+T.check(mx.muffled_open == 0 and mx.muffled > 0, 'a tunnel: muffled A even when the last shelter was open')
+T.check(amb.openShelter('bridge') and amb.openShelter('roof') and not amb.openShelter('roof_enclosed')
+  and not amb.openShelter('tunnel') and not amb.openShelter('parking'), 'shelter kinds: open and enclosed')
 
 local rainParticles = S.newObject('Precipitation')
 rainParticles:registerObject('bngEarthRain')
@@ -223,8 +245,69 @@ T.check(mu and math.abs(mu.vol - amb.RAIN_GAIN * amb.RAIN_UNDER_ROOF) < 1e-9 and
   'under a roof: the muffled layer instead')
 beamngEarth_weather.rainNow = 0
 for i = 1, 12 do clock = 386 + i * 0.5; amb.update(3, seaV) end
-T.check(#S.liveOf('SFXEmitter') <= 1 and layer('bne_rain_muffled.ogg') == nil, 'the rain stopped: the layers gone')
+T.check(layer('bne_rain_muffled.ogg') == nil and layer('bne_rain_medium.ogg') == nil, 'the rain stopped: the layers gone')
+-- ... and the drips after it, fading out over DRIPS_S
+local dr = layer('bne_drips_1.ogg')
+T.check(dr and dr.vol > 0 and dr.fieldsAtRegister.description == 'AudioEnvironment' and layer('bne_drips_3.ogg') == nil,
+  'after the rain: the drips, the densest loop first')
+local d1 = amb.dripsLevel(1, amb.DRIPS_S * 0.7)
+T.check(math.abs(d1[1] - 1) < 1e-12 and math.abs(d1[2] - 0.7) < 1e-12, 'drips at 70 %: full level, the sparsest layer')
+local em3 = amb.extraMix(0, d1, 0, 1, false, false)
+T.check(em3.drips_3 > 0 and em3.drips_1 == 0, 'drips at 70 %: drips_3')
+T.check(amb.dripsLevel(1, amb.DRIPS_S * 0.9)[1] < 1 and amb.dripsLevel(1, amb.DRIPS_S)[1] == 0, 'the drips fade out at the end')
+clock = 386 + 6 + amb.DRIPS_S + 1; amb.update(3, seaV)
+for i = 1, 8 do clock = clock + 0.5; amb.update(3, seaV) end
+T.check(layer('bne_drips_1.ogg') == nil and layer('bne_drips_2.ogg') == nil and layer('bne_drips_3.ogg') == nil,
+  'the drips stop after DRIPS_S')
+-- wind by strength: none when calm, the layer of the speed when windy, gone when calm again
+beamngEarth_weather = { rainNow = 0, rainMmHNow = 0, shelter = 1, windMsNow = 0.5 }
+clock = clock + 0.5; amb.update(3, seaV)
+T.check(layer('bne_wind_gen_light.ogg') == nil and next(amb.extraLayers) == nil, 'calm: no wind layer')
+beamngEarth_weather.windMsNow = 8
+for i = 1, 8 do clock = clock + 0.5; amb.update(3, seaV) end
+local wm = layer('bne_wind_gen_moderate.ogg')
+T.check(wm and math.abs(wm.vol - amb.WIND_GAIN) < 1e-9 and layer('bne_wind_gen_strong.ogg') == nil, '8 m/s: the moderate wind (generated, the default)')
+beamngEarth_weather.windMsNow = 0
+for i = 1, 12 do clock = clock + 0.5; amb.update(3, seaV) end
+T.check(layer('bne_wind_gen_moderate.ogg') == nil and next(amb.extraLayers) == nil, 'calm again: the wind layer gone')
+-- hail
+beamngEarth_weather.hailNow = 1
+for i = 1, 8 do clock = clock + 0.5; amb.update(3, seaV) end
+T.check(layer('bne_hail.ogg') and math.abs(layer('bne_hail.ogg').vol - amb.HAIL_GAIN) < 1e-9, 'hail: its layer')
+beamngEarth_weather.hailNow = 0
+for i = 1, 12 do clock = clock + 0.5; amb.update(3, seaV) end
+T.check(layer('bne_hail.ogg') == nil, 'the hail stopped')
+-- the pure mix: equal-power wind between the centres, damped in the car, none in a tunnel
+local em = amb.extraMix(5, 0, 0, 1, false, false)
+T.check(math.abs(math.sqrt(em.wind_light ^ 2 + em.wind_moderate ^ 2) - amb.WIND_GAIN) < 1e-9, 'wind 5 m/s: light into moderate')
+T.check(amb.extraMix(8, 0, 0, 1, true, false).wind_moderate == 0, 'in a tunnel: no wind')
+T.check(math.abs(amb.extraMix(8, 0, 0, 1, false, true).wind_moderate - amb.WIND_GAIN * amb.RAIN_CABIN) < 1e-9, 'in the car: damped')
+T.check(amb.extraMix(0.5, 0, 0, 1, false, false).wind_light == 0, 'under WIND_FROM_MS: silent')
+T.check(math.abs(amb.dripsLevel(0.8, amb.DRIPS_S / 2)[1] - 0.8) < 1e-12 and amb.dripsLevel(1, amb.DRIPS_S + 1)[1] == 0, 'drips fade')
+-- the Wind sound: generated plays bne_wind_gen_*, recorded bne_wind_*; a change swaps the playing layer
+amb.setWindSet('generated')
+beamngEarth_weather = { rainNow = 0, rainMmHNow = 0, shelter = 1, windMsNow = 8 }
+for i = 1, 8 do clock = clock + 0.5; amb.update(3, seaV) end
+T.check(layer('bne_wind_gen_moderate.ogg') ~= nil and layer('bne_wind_moderate.ogg') == nil, 'Wind sound generated: bne_wind_gen_moderate')
+amb.setWindSet('recorded')
+clock = clock + 0.5; amb.update(3, seaV)
+T.check(layer('bne_wind_moderate.ogg') ~= nil and layer('bne_wind_gen_moderate.ogg') == nil, 'Wind sound recorded: bne_wind_moderate')
+beamngEarth_weather.windMsNow = 0
+for i = 1, 12 do clock = clock + 0.5; amb.update(3, seaV) end
+amb.setWindSet('generated')
+-- the Rain sound: recorded swaps the layers' files (the same names, bne_rain_rec_*)
+amb.setRainSet('recorded')
+beamngEarth_weather = { rainNow = 1, rainMmHNow = 5, shelter = 1 }
+for i = 1, 6 do clock = clock + 0.5; amb.update(3, seaV) end
+T.check(layer('bne_rain_rec_medium.ogg') ~= nil and layer('bne_rain_medium.ogg') == nil, 'recorded: bne_rain_rec_medium')
+amb.setRainSet('generated')
+clock = clock + 0.5; amb.update(3, seaV)
+T.check(layer('bne_rain_medium.ogg') ~= nil and layer('bne_rain_rec_medium.ogg') == nil, 'generated again: the generated file')
+beamngEarth_weather.rainNow = 0
+for i = 1, 12 do clock = clock + 0.5; amb.update(3, seaV) end
+amb.clear()
 beamngEarth_weather = nil
+clock = 392; amb.update(3, seaV)   -- (the clock and the last update as the tests below expect them)
 
 -- the stock loop (no layer files): fades in with the weather's rain, out inside a tunnel's space, goes when it stops
 -- the duck under a strike: down at once, the last second easing back
@@ -325,6 +408,24 @@ do
   T.check(#set >= 2 and math.abs(set[#set][2] - 0.7) < 1e-9, 'clear: the music back')
   T.check(math.abs(amb.duckFactor(c + 10) - 1) < 1e-9, 'clear: no duck left')
   Engine.Audio = nil
+end
+
+-- the Generated rain (method B, 2026-11-26): every file the layers name is shipped, the cabin and the open shelter
+-- with their own loops (not the outside roof's / the enclosed muffled loop as before)
+do
+  local base = dir .. '/../beamng_earth/levels/beamng_earth/art/sound/weather/'
+  local files = { amb.RAIN_MUFFLED, amb.RAIN_MUFFLED_OPEN }
+  for _, l in ipairs(amb.RAIN_LAYERS) do files[#files + 1] = l[2] end
+  for _, f in pairs(amb.RAIN_ROOF_LAYERS) do files[#files + 1] = f end
+  for _, f in pairs(amb.RAIN_CABIN_LAYERS) do files[#files + 1] = f end
+  local missing = {}
+  for _, f in ipairs(files) do
+    local h = io.open(base .. f, 'rb')
+    if h then h:close() else missing[#missing + 1] = f end
+  end
+  T.check(#files == 11 and #missing == 0, 'Generated rain: all 11 files shipped (missing: ' .. table.concat(missing, ', ') .. ')')
+  T.check(amb.RAIN_CABIN_LAYERS.medium ~= amb.RAIN_ROOF_LAYERS.medium and amb.RAIN_MUFFLED_OPEN ~= amb.RAIN_MUFFLED,
+    'Generated rain: own cabin and open-shelter loops')
 end
 
 T.done('test_ambience')

@@ -236,6 +236,25 @@ class WatchTest(unittest.TestCase):
         self.assertFalse(memwatch.status()["tooLow"])
         self.assertEqual(memwatch.too_low(), "")
 
+    def test_too_low_names_the_pc_when_free_memory_held_it(self):
+        # (a 32 GB setting held to a few GB because the PC itself was short of memory: the note must not say "raise
+        # Max RAM", the user 2026-11-27)
+        with memwatch._lock:
+            saved = dict(memwatch._state)
+            memwatch._state.update(limit=32768.0, setting=32.0, eff=4096.0, tooLow=True)
+        try:
+            msg = memwatch.too_low()
+            self.assertIn("low on free memory", msg)
+            self.assertIn("4.0 GB of its Max RAM (32 GB)", msg)
+            self.assertNotIn("raise it", msg)
+            with memwatch._lock:
+                memwatch._state.update(eff=32768.0)
+            self.assertIn("is too low for this place", memwatch.too_low())
+        finally:
+            with memwatch._lock:
+                memwatch._state.clear()
+                memwatch._state.update(saved)
+
     def test_status_and_live_setting(self):
         with mock.patch.dict(os.environ, {budget.SETTING_ENV: ""}), \
                 mock.patch.object(budget, "total_gb", return_value=64.0), \

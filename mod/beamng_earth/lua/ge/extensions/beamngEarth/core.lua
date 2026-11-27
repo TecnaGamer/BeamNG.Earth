@@ -3323,9 +3323,12 @@ local function onUpdate(dtReal, dtSim)
       if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
     end
     t = mark('speeding', t)
-    if M._winter then                -- (winter grip: its once-a-second check; nil unless the server sent a snowstate)
-      local ok, err = pcall(M._winter.update, dtReal)
-      if not ok then log('E', 'beamngEarth', 'winter: ' .. tostring(err)) end
+    do                               -- (road grip: its once-a-second check; loaded by a snowstate or a wet road shown)
+      local wm = M._winter or package.loaded['beamngEarth/winter']
+      if wm then
+        local ok, err = pcall(wm.update, dtReal)
+        if not ok then log('E', 'beamngEarth', 'winter: ' .. tostring(err)) end
+      end
     end
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)

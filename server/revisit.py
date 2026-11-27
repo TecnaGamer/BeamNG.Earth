@@ -390,6 +390,7 @@ def all_source_id(here):
 NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
                 "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_NETSTATS_PROC", "BNE_LIDAR_GAPS_WAIT",
                 "BNE_TELEMETRY",
+                "BNE_PHOTO_SURFACE",        # (retired 2026-11-26: a player's old setting is ignored, the default's keys)
                 "BNE_ROADSHAPE_DEBUG",      # (v2 P2a's fork records written beside the build: nothing built reads them)
                 "BNE_ROADSURF_V3_DEBUG",    # (v3 S1's lane graphs written beside the build: nothing built reads them)
                 # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
@@ -542,7 +543,7 @@ def keyed_env(k):
 # BNE_ROADSYS=surface 12 (M5 round 8, earthfast 643): a short chain keeps its profile's deck end where the plans' ground
 # past it lies more than 0.75 m off, and its approach is ramped to it at its class grade, ending short of its first
 # junction (roadsys._keep_ends, pins_near's ramps; native/roadsys endmatch.rs kept_ends / approach_run / ramp_dz).
-# BNE_ROADSYS=surface 13 (M5 round 8, earthfast 644): a road's plans read the surface model's ground plus the ground
+# BNE_ROADSYS=surface 13 (M5 round 8, earthfast 643): a road's plans read the surface model's ground plus the ground
 # filter's cut where that cut is the road's own embankment (grading._Planner._embank_obs, earthfast embank_lift).
 ROADSYS_STRUCTURES_VERSION = 2
 ROADSYS_SURFACE_VERSION = 13

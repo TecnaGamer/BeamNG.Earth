@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -244,8 +245,11 @@ class TeleportWhileBusyTest(unittest.TestCase):
             busy = pool.submit(slow_block, 1, 0.5)      # (ends within the grace)
             while not busy.running():
                 time.sleep(0.01)
-            s.cancel_place(1)
-            self.assertEqual(busy.result(timeout=120), ("slow", 1))
+            # (a grace well past the job's 0.5 s: on a loaded machine the result's trip back took over the stock 1.5 s,
+            # gate batch401 2026-11-26, and the job was preempted although it ended by itself)
+            with mock.patch.object(pools, "PREEMPT_GRACE_S", 15.0):
+                s.cancel_place(1)
+                self.assertEqual(busy.result(timeout=120), ("slow", 1))
             self.assertEqual(pool.preempts, 0)
         finally:
             v2host._sched = old

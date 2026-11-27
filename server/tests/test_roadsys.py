@@ -7,6 +7,7 @@ its bytes, and two squares agree inside their shared band."""
 import importlib
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -314,6 +315,45 @@ class SquareTest(unittest.TestCase):
             roadsys._squares.clear()
             roadsys._short_sq.clear()
         self.assertEqual(a, b)
+
+
+class CellsShortTableTest(unittest.TestCase):
+    def test_a_table_built_during_a_fault_faults_again_when_reused(self):
+        """_Cells.table kept a table built short (a read failed meanwhile) for good: a square solved later in a clean
+        scope was taken as complete (kept on disk). Now each use inside SHORT_TTL_S faults, then it is read again."""
+        import roadsys
+        import lanegraph
+        feats = type("F", (), {"_road_revision": 3, "__len__": lambda self: 1})()
+        calls = []
+        short = [True]
+
+        def lane_rows(key, cell_fn, memo):
+            calls.append(1)
+            if short[0]:
+                revisit.fault(lidar=True)
+            return {}, None
+
+        cc = roadsys._Cells(cell_fn=lambda k: feats)
+        with mock.patch.object(lanegraph, "_cell_lane_segments", lane_rows), \
+                mock.patch.object(roadsys, "_table", lambda key, f, rows: ("tab", len(calls))):
+            with revisit.scope() as b1:
+                first = cc.table("k")
+            self.assertFalse(b1.complete)
+            with revisit.scope() as b2:
+                again = cc.table("k")
+            self.assertFalse(b2.complete)           # (failed before: the cached table hid the fault)
+            self.assertEqual(again, first)
+            self.assertEqual(len(calls), 1)
+            short[0] = False
+            with mock.patch.object(roadsys.time, "monotonic", return_value=time.monotonic() + roadsys.SHORT_TTL_S + 1):
+                with revisit.scope() as b3:
+                    fresh = cc.table("k")
+            self.assertTrue(b3.complete)
+            self.assertEqual(len(calls), 2)
+            with revisit.scope() as b4:
+                self.assertEqual(cc.table("k"), fresh)
+            self.assertTrue(b4.complete)
+            self.assertEqual(len(calls), 2)
 
 
 class ChainEndsTest(unittest.TestCase):

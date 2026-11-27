@@ -38,7 +38,6 @@ import fast
 import junctions
 import mapcells
 import mapgeom
-import photosurface
 import racedig
 import roadmesh
 import roadsurf
@@ -2001,39 +2000,9 @@ def _surface_rules():
 
 
 def _surface_value(feats, i):
-    """Feature i's surface value: the map's (_map_surface_value), else, for a road the map says nothing about, what the
-    regional photo's colour says (photosurface.py, BNE_PHOTO_SURFACE=1: "asphalt" for a road that is grey like it, "grass"
-    for a lane as green as its verges, "gravel" for a pale neutral one)."""
-    v = _map_surface_value(feats, i)
-    if v is None and photosurface.ON:
-        v = _photo_surface(feats).get(i)
-    return v
-
-
-def _photo_surface(feats):
-    """{feature index: "asphalt", "grass" or "gravel"} of feats' roads the photo says are paved, grass lanes or gravel, remembered on feats. A candidate whose photo
-    tile is not on the disk yet is not known: the verdicts stand for FACTS_SHORT_S s and revisit.fault says nothing
-    built from them is kept (the specs' disk cache included: PR #634's idiom), so they are made again once it is."""
-    st = feats.__dict__
-    got = st.get("_photo_surface")
-    if got is not None and (got[1] is None or time.monotonic() < got[1]):
-        if got[1] is not None:
-            import revisit
-            revisit.fault()
-        return got[0]
-    if st.get("_photo_busy"):           # (asked again from inside its own making: the map's value alone)
-        return {}
-    st["_photo_busy"] = True
-    try:
-        v, missing = photosurface.verdicts(feats, lambda i: _map_surface_value(feats, i))
-    finally:
-        st["_photo_busy"] = False
-    v = {i: {"paved": "asphalt"}.get(k, k) for i, k in v.items()}     # ("grass" and "gravel" are surface values as they are)
-    if missing:
-        import revisit
-        revisit.fault()
-    st["_photo_surface"] = (v, time.monotonic() + FACTS_SHORT_S if missing else None)
-    return v
+    """Feature i's surface value: the map's (_map_surface_value). (The regional photo's colour once filled in a road the
+    map says nothing about, BNE_PHOTO_SURFACE, retired 2026-11-26: roadsurf.py's aerial verdict does that.)"""
+    return _map_surface_value(feats, i)
 
 
 def _map_surface_value(feats, i):
@@ -2474,7 +2443,7 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
         keep = True             # (specs made while a download failed are not remembered: asked again, PR #634)
         import germanroads
         extra = (widths is not None, bool(left_hand)) + ((franceroads.VERSION,) if franceroads.ON else ()) + (
-            (photosurface.TAG,) if photosurface.ON else ()) + ((europewalks.VERSION,) if europewalks.enabled() else ()) + (
+            ()) + ((europewalks.VERSION,) if europewalks.enabled() else ()) + (
             (germanroads.VERSION,) if germanroads.ON else ()) + roadsurf.layer_tags(feats)
         cid = feats.__dict__.get("_bnge_cell")
         # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
@@ -3983,7 +3952,7 @@ def _raw_flat(feats):
 def _spec_inputs(feats):
     """A layer's columns as the spec kernels read them (earthfast.RoadRules): geometry, class codes, the rules' and
     OpenStreetMap's values, lane evidence, surface kinds (surface_kind of each class and surface value), the sidewalk
-    tag, Sweden's and the European tests; kept on feats (not with BNE_PHOTO_SURFACE: its verdicts expire)."""
+    tag, Sweden's and the European tests; kept on feats."""
     st = feats.__dict__
     got = st.get("_spec_inputs")
     if got is not None:
@@ -4018,15 +3987,9 @@ def _spec_inputs(feats):
         r = ring_radius(feats, i)
         if r is not None:
             radius[i] = r
-    # surfaces: the map's value (BNE_PHOTO_SURFACE: the photo's for a road the map says nothing of), its kind by
+    # surfaces: the map's value, its kind by
     # surface_kind and its token by surface_token, each pair worked out once
-    import photosurface
-    vals = _map_surface_values(feats)
-    if photosurface.ON:         # (earthfast roadnet::verdicts: the photo asked only where an eligible road has none)
-        fast.require(392, "photo_values")
-        vals = fast._ef.photo_values(vals, np.ascontiguousarray(elig, bool), lambda: _photo_surface(feats))
-    else:
-        vals = list(vals)
+    vals = list(_map_surface_values(feats))
     good = sc["good"]
     name = sc["name"]
     # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
@@ -4059,8 +4022,7 @@ def _spec_inputs(feats):
             "region": _width_regions(feats)}
     got = {"geo": (ll, co, ro, po), "cols": cols, "built": [k in BUILT for k in _KINDS], "names": names, "pos": pos,
            "tokens": tokens}
-    if not photosurface.ON:
-        st["_spec_inputs"] = got
+    st["_spec_inputs"] = got
     return got
 
 
@@ -11654,13 +11616,14 @@ class _Segs:
         self.lo = np.minimum(self.a, self.b)
         self.hi = np.maximum(self.a, self.b)
 
-    def near(self, pts, gap, skip=None):
-        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). Pure."""
+    def near(self, pts, gap, skip=None, bounds=None):
+        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). bounds: the points'
+        (min, max) per axis when the caller has them (the same values pts.min(0), pts.max(0) give). Pure."""
         import fast
         pts = np.ascontiguousarray(np.asarray(pts, np.float64))
         if not len(pts) or not len(self.h):
             return np.zeros(len(pts), bool)
-        lo, hi = pts.min(0), pts.max(0)
+        lo, hi = (pts.min(0), pts.max(0)) if bounds is None else bounds
         r = self.h + gap
         keep = (self.hi[:, 0] + r >= lo[0]) & (self.hi[:, 1] + r >= lo[1]) & (self.lo[:, 0] - r <= hi[0]) & \
             (self.lo[:, 1] - r <= hi[1])
@@ -11674,11 +11637,11 @@ class _Segs:
                                                         np.ascontiguousarray(r[keep])), bool)
 
 
-def _on_carriageways(pts, others, gap):
+def _on_carriageways(pts, others, gap, bounds=None):
     """Which points (k, 2) lie on a carriageway of others {fid: (centreline (m, 2), half width)} or a _Segs of them
-    (+ gap). Pure."""
+    (+ gap). bounds: the points' (min, max) when the caller has them (_Segs.near). Pure."""
     segs = others if isinstance(others, _Segs) else _Segs(others)
-    return segs.near(pts, gap)
+    return segs.near(pts, gap, bounds=bounds)
 
 
 def _clear_depth(base, out, depth, others, own):

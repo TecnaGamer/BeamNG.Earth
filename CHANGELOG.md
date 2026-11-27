@@ -41,12 +41,20 @@ What changed in each release of BeamNG.Earth, newest first.
 - **Puddles**: in rain, water collects in the low points of roads, along the kerbs and in the wheel ruts of worn
   roads: mirror-like water that reflects the sky and the street. They grow as it keeps raining and shrink as the road
   dries.
+- **Wet roads**: roads lose grip in the rain you see, also with the winter road conditions off: a little when damp,
+  more when wet (stopping from 50 mph takes about 129 ft instead of 108 ft), and they stay slippery while they dry.
+  At speed, deep water in the puddles and the water on the road in heavy rain can make the tyres aquaplane (in deep
+  water from about 60 mph with typical tyre pressures, earlier with soft tyres). Traffic drives a little more
+  carefully on wet roads. A "Wet roads" switch on the Weather page turns it off.
 - **Rain sounds**: light, steady and heavy rain by the rain's strength, muffled under roofs and bridges and in tunnels,
-  and rain drumming on the roof in the driver's view.
+  and rain drumming on the roof in the driver's view. The Generated rain (the Weather page's Rain sound) is made drop
+  by drop by our own physical model of rain: light rain is a sparse patter, heavy rain a dense roar, and the car's
+  roof heard from inside is its own muffled drumming.
 - **Weather sounds: Live** (experimental, on the Weather page; Pre-recorded stays the default): the BeamNG.Earth app
   makes the thunder as you hear it and plays it through your default audio device at the game's volume. Nearby
   strikes are made fresh for each strike (with the Recorded thunder, every strike); distant thunder, and any strike
-  the app couldn't make in time, plays from the pre-recorded set. The rain stays the pre-recorded loops for now. If
+  the app couldn't make in time, plays from the pre-recorded set. With either Rain sound the app makes the rain too
+  (the Generated rain outdoors, under shelters and inside the car; the Recorded rain from its recordings). If
   the live sound can't start or stops, the pre-recorded sounds come back by themselves, and the page says why.
 - Each of these can be switched off on the Weather page.
 
@@ -69,6 +77,14 @@ What changed in each release of BeamNG.Earth, newest first.
 - Reduced the chance of trees losing their leaves as you get closer (with Winter on): far trees showed summer green
   while the near ones had turned or gone bare.
 - Reduced the chance of streets staying dry in a rain preset with Winter on where the real weather is dry.
+- Reduced the chance of the world stopping loading with Revamped roads (Experimental) on: after driving a while, the
+  ground ahead could fail to build again and again.
+
+### Changed
+- Retired the Experimental "Road surface from aerial photos" setting (`BNE_PHOTO_SURFACE`). Roads should look the same as they do by default, and an old setting or variable is now ignored.
+- **BeamMP hosting:** the releases no longer carry the Windows and Linux host bundles with BeamMP's own server program
+  inside. Get the server from BeamMP's own releases and add `BeamNG.Earth-BeamMP-Server-<version>.zip` (the mod and
+  the server plugin). The Docker image is unchanged.
 
 ## 1.10.1 beta (2026-11-15)
 

@@ -236,6 +236,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     # itself). Data, not a binary: PyInstaller copies it as it is
     if IS_WIN and os.path.isfile(GRAIN_BANK):
         cmd += ["--add-data", f"{GRAIN_BANK}{SEP}."]
+    # and the recorded rain / wind texture bank (`weathersynth texbank-pack`, the same job)
+    if IS_WIN and os.path.isfile(TEX_BANK):
+        cmd += ["--add-data", f"{TEX_BANK}{SEP}."]
     cmd.append(os.path.join(ROOT, "launcher.py"))
     subprocess.run(cmd, check=True, cwd=ROOT)
     return os.path.join(work, "dist")
@@ -244,6 +247,8 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
 WEATHERSYNTH = os.path.join(ROOT, "build", "weathersynth", "weathersynth.exe" if IS_WIN else "weathersynth")
 # the thunder grain bank (`weathersynth grainbank-pack`; the release workflow's grains job packs it once)
 GRAIN_BANK = os.path.join(ROOT, "build", "weathersynth", "thunder_grains.bin")
+# the recorded rain / wind texture bank (`weathersynth texbank-pack`; packed in the same job)
+TEX_BANK = os.path.join(ROOT, "build", "weathersynth", "tex_bank.bin")
 
 
 def bundle_weathersynth(dist):
@@ -259,6 +264,8 @@ def bundle_weathersynth(dist):
     os.chmod(dst, 0o755)
     if os.path.isfile(GRAIN_BANK):
         shutil.copy2(GRAIN_BANK, os.path.join(folder, "thunder_grains.bin"))
+    if os.path.isfile(TEX_BANK):
+        shutil.copy2(TEX_BANK, os.path.join(folder, "tex_bank.bin"))
     return dst
 
 
@@ -317,6 +324,10 @@ def main():
         if a.require_weathersynth:
             sys.exit(f"no {GRAIN_BANK}: run `weathersynth grainbank-pack --out {GRAIN_BANK}` in native/weathersynth")
         print("WARNING: no thunder grain bank: the live thunder falls back to the procedural model")
+    if not os.path.isfile(TEX_BANK):
+        if a.require_weathersynth:
+            sys.exit(f"no {TEX_BANK}: run `weathersynth texbank-pack --out {TEX_BANK}` in native/weathersynth")
+        print("WARNING: no texture bank: the Recorded rain plays from the mod's files, not live")
     if IS_WIN:
         boot = None if a.stock_bootloader else own_bootloader()
         if boot:

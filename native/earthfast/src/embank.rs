@@ -1,4 +1,4 @@
-//! (644, M5 round 8, BNE_ROADSYS=surface 13; road shape first) A mapped road's embankment in the surface model's ground.
+//! (643, M5 round 8, BNE_ROADSYS=surface 13; road shape first) A mapped road's embankment in the surface model's ground.
 //!
 //! Outside the national lidar the elevation is Copernicus GLO-30, a surface model, and dsmground's opening takes out what
 //! is narrower than its window: buildings and tree stands, and also a road's own embankment, a ridge 30-80 m wide in the

@@ -337,7 +337,7 @@ pub(crate) fn drop_event(rng: &mut Rng, surf: Surf, d: f64, v: f64, film: f64) -
 }
 
 /// `pitch`: drips (tone C) sound lower: their leaf modes and bubbles scaled by it.
-fn drop_event_pitched(rng: &mut Rng, surf: Surf, d: f64, v: f64, film: f64, pitch: f64) -> Vec<f64> {
+pub(crate) fn drop_event_pitched(rng: &mut Rng, surf: Surf, d: f64, v: f64, film: f64, pitch: f64) -> Vec<f64> {
     let a = impact_amp(d, v);
     let tn = tone();
     let mut ev: Vec<f64> = match surf {

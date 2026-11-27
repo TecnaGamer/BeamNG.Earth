@@ -11,7 +11,8 @@
 //!   `<Namespace>.dll`): cpal's WASAPI backend uses Win32 COM (CoCreateInstance) only, and this module uses nothing
 //!   else.
 
-use crate::live::{Controls, LiveRain, FS as ENGINE_FS};
+use crate::live::{Controls, FS as ENGINE_FS};
+use crate::rainb_live::LiveRainB;
 use crate::thunderlive::{utc_now, Bus};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -85,6 +86,13 @@ impl Ring {
 pub struct Mix {
     pub rain: Controls,
     pub thunder: f64,
+    /// the rain from the recorded texture bank (livetex.rs) instead of the procedural engine, when the bank loaded
+    pub rain_rec: bool,
+    /// the mod's rain volume for its layers (proto rainVol; None: RAIN_BED_GAIN x the share)
+    pub rain_vol: Option<f64>,
+    /// the recorded rain's roof outside near the car, and the shelter's kind (proto roofNear, enclosed)
+    pub roof_near: f64,
+    pub enclosed: bool,
 }
 
 /// The ring's fill target: fill_target's (about one callback and a margin), more after each underrun (from GROW_AFTER_S in), at
@@ -390,7 +398,12 @@ impl Worker {
         // above the game's threads where the system allows it (prio.rs): a starved worker is an underrun
         self.prio.store(crate::prio::raise_current_thread(), Ordering::Relaxed);
         let (sr, ch) = (self.sr, self.ch as usize);
-        let mut lr = LiveRain::new(self.seed);
+        // the Generated rain: method B (rainb_live.rs, 2026-11-26; live.rs's procedural drops before)
+        let mut lr = LiveRainB::new(self.seed);
+        // the recorded rain (texture bank next to the program; none: the procedural rain plays whatever is asked)
+        let mut tex = crate::texbuild::default_bank()
+            .and_then(|p| crate::texbuild::Bank::load(&p).ok())
+            .map(|b| crate::livetex::LiveTex::new(Arc::new(b), self.seed));
         let mut src = vec![0.0f32; 512];
         let mut blk = vec![0.0f64; 512];
         let mut lim = Limiter::new(ENGINE_FS);
@@ -428,7 +441,35 @@ impl Worker {
             }
             let m = self.mix.lock().map(|m| *m).ok();
             if let Some(m) = m {
-                lr.set(m.rain);
+                let rec = m.rain_rec && tex.is_some();
+                // the Generated rain (method B, levelled to the loops x the mod's rain volume), silent while the recorded
+                // one plays
+                let c = m.rain;
+                lr.set(crate::rainb_live::Controls {
+                    rain_mm_h: c.rain_mm_h,
+                    shelter: c.shelter,
+                    cabin: c.cabin,
+                    volume: c.volume,
+                    muted: c.muted || rec,
+                });
+                lr.set_rain_volume(m.rain_vol);
+                if let Some(t) = tex.as_mut() {
+                    let r = m.rain;
+                    t.set(crate::livetex::Controls {
+                        rain_mm_h: r.rain_mm_h,
+                        // (wind and drips stay with the mod's files in both modes for now)
+                        wind_ms: 0.0,
+                        shelter: r.shelter,
+                        cabin: r.cabin,
+                        roof_near: m.roof_near,
+                        enclosed: m.enclosed,
+                        // the loops' loudness x the mod's rain volume (as the game plays its files)
+                        rain_volume: r.volume
+                            * m.rain_vol.unwrap_or_else(|| crate::live::RAIN_BED_GAIN * crate::live::rain_share(r.rain_mm_h)),
+                        wind_volume: 0.0,
+                        muted: r.muted || !rec,
+                    });
+                }
             }
             let want_thunder = m.map(|m| m.thunder as f32).unwrap_or(0.0);
             frame.clear();
@@ -447,6 +488,9 @@ impl Worker {
                             *v = 0.0;
                         }
                         lr.process(&mut src);
+                        if let Some(t) = tex.as_mut() {
+                            t.process(&mut src);
+                        }
                         // the rain under the strike ducks: the gain from the block's start to its end
                         let d1 = self.bus.duck_gain(t_out + block_s);
                         let n = src.len() as f32;

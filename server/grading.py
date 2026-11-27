@@ -152,6 +152,8 @@ PROFILE_PINS = None
 PIN_TAPER_M = 12.0          # m (T_MAX) past an approach's road edge its change fades out over (the plans' own)
 PIN_GATE_M = (1.0, 3.0)     # m: a point this far from the approach's height today keeps its change in full / none
 PIN_STATS = {"calls": 0, "pinned": 0, "pins_s": 0.0, "field_s": 0.0}      # (measurements: _pin_field's calls, seconds)
+_PIN_FAILED = set()         # exception type names of the PROFILE_PINS failures logged (_pin_field: once each)
+_PIN_FAILED_LOCK = threading.Lock()
 SPREAD_CELLS = 16           # plans(): more map cells in the points' bbox: only the cells around the points
 T_MIN, T_MAX = 5.0, 12.0    # m, transition back to the natural ground (5: roads close together meet gently)
 SLOPE_RUN = 2.0             # transition = SLOPE_RUN x the height difference (1:2 slope)
@@ -751,10 +753,10 @@ ABUT_MAX_M = 8.0            # m filled at most
 # bridge near Rostock is 10 m deep and wider than the mapped bridge: filled 8 m at most, both ends stood 2 m low and
 # the 16-19 m decks joined them at 13-20 % (5.35 g); the A7 over the B 27 at Thulba ran 1.2 m into its hole 4 m short of
 # its deck (a 9 % deck, 1.5 g). BNE_FAST_GAP=on.
-# (M5 round 8, BNE_ROADSYS=surface 13, earthfast 644) A road's embankment in the surface model's ground: the plans of a
+# (M5 round 8, BNE_ROADSYS=surface 13, earthfast 643) A road's embankment in the surface model's ground: the plans of a
 # road of these classes read their ground plus dsmground's cut where that cut is the road's own (_Planner._embank_obs):
 EMBANK_CLASSES = ("motorway", "trunk", "primary", "secondary", "tertiary")
-EMBANK_KERNEL = 644
+EMBANK_KERNEL = 643
 EMBANK_MATCH_M = 0.5        # m: the sample's ground within this of the filtered z12 (the filter's ground, no lidar)
 EMBANK_CUT_MIN = 0.5        # m: a cut at least this ...
 EMBANK_MAX_M = 10.0         # ... and at most this (deeper: a tree stand's or a town's, no embankment)
@@ -3573,7 +3575,7 @@ class _Planner:
         return both
 
     def _embank_obs(self):
-        """(M5 round 8, BNE_ROADSYS=surface 13, earthfast 644) plan_roads' obs of a road's embankment in the surface model's
+        """(M5 round 8, BNE_ROADSYS=surface 13, earthfast 643) plan_roads' obs of a road's embankment in the surface model's
         ground, or None (off; no DEM with the ground filter and its raw z12; no buildings to tell an embankment from
         a town): at each sample of a road of EMBANK_CLASSES, its ground plus the filter's cut there where that cut is
         the road's own (earthfast embank_lift: the sample's ground the filtered z12's within EMBANK_MATCH_M, the raw
@@ -7572,7 +7574,26 @@ class _Planner:
         if e is None:
             e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
         pad = PIN_TAPER_M + roadshape.PIN_HALF_MAX_M + 1.0
-        pins = PROFILE_PINS(self, float(lat.min()), float(lon.min()), float(lat.max()), float(lon.max()), pad)
+        try:
+            pins = PROFILE_PINS(self, float(lat.min()), float(lon.min()), float(lat.max()), float(lon.max()), pad)
+        except Exception as ex:
+            import pools
+            import revisit
+            if isinstance(ex, (pools.Abandoned, revisit.StaleMiss)):    # (the build's own control flow: not a fault)
+                raise
+            # (graded on the first stage alone, never kept (a fault: built again on a later visit), logged at ERROR with
+            # its traceback once per exception type (a bounded set, whatever the messages): a block whose pins threw
+            # failed whole, and an anchor's first block with it, asked again every 6 s for ever; the server's own
+            # process's missing state, a player's log 2026-11-26. Everything is caught, programming errors too: the
+            # player gets a world whichever bug it is; tests see the ERROR line (assertNoLogs))
+            revisit.fault()
+            sig = type(ex).__name__
+            with _PIN_FAILED_LOCK:
+                first = sig not in _PIN_FAILED
+                _PIN_FAILED.add(sig)
+            if first:
+                log.error("road profile pins failed (%s: %s): graded without them, not kept", sig, ex, exc_info=True)
+            return None
         t1 = time.perf_counter()
         PIN_STATS["calls"] += 1
         PIN_STATS["pins_s"] += t1 - t0      # (the chains' solves it asked included)
