@@ -141,6 +141,41 @@ class DeriveTest(unittest.TestCase):
         self.assertEqual((m["code"], m["rainMmH"], m["visM"], m["tempC"]), (0, 0, None, 15.0))
         self.assertNotIn("aloft", m)
         self.assertNotIn("utcOffsetS", m)
+        self.assertNotIn("hist", m)
+
+    def test_rain_history(self):
+        """BNE_PUDDLES=v2 (the puddle plan R1): the past day of hourly liquid rain (rain + showers) and ET0 as integer um,
+        the completed hours only (each value is the hour before its time), oldest first; the aloft wind and ET0 now of
+        the hour in progress."""
+        now = 1764201234
+        h = now - now % 3600
+        times = [h - 3600 * k for k in range(24, -1, -1)] + [h + 3600]      # 24 h back .. this hour, the next
+        rain = [0.0] * 26
+        rain[20], rain[21] = 1.2, 3.0004
+        showers = [0.0] * 26
+        showers[21] = 0.5
+        et0 = [0.05] * 25 + [0.31]
+        om = synthetic(63, rain=0.5)
+        om["current"]["time"] = now
+        om["hourly"] = {"time": times, "rain": rain, "showers": showers, "et0_fao_evapotranspiration": et0,
+                        "wind_speed_700hPa": list(range(26)), "wind_direction_700hPa": [180.0] * 26}
+        m = weather.derive(om)
+        hist = m["hist"]
+        self.assertEqual(hist["t0"], times[0] - 3600)
+        self.assertEqual(len(hist["rain"]), 25)
+        self.assertEqual((hist["rain"][20], hist["rain"][21], hist["rain"][0]), (1200, 3500, 0))
+        self.assertEqual(hist["et0"][0], 50)
+        self.assertTrue(all(isinstance(v, int) for v in hist["rain"] + hist["et0"]))
+        self.assertEqual(m["et0Umh"], 310)                             # the hour in progress
+        self.assertEqual(m["aloft"]["ms"], 24.0)                       # this hour's, not 24 h ago
+        # no history in the block (BNE_PUDDLES off): none sent, the aloft wind its one entry as before
+        om["hourly"] = {"time": [h], "wind_speed_700hPa": [7.0], "wind_direction_700hPa": [90.0]}
+        m = weather.derive(om)
+        self.assertNotIn("hist", m)
+        self.assertNotIn("et0Umh", m)
+        self.assertEqual(m["aloft"]["ms"], 7.0)
+        self.assertIsNone(weather.history({"time": [now + 10], "rain": [1.0]}, now))    # nothing completed yet
+        self.assertEqual(weather.history({"time": [h], "rain": [None], "showers": "x"}, now)["rain"], [0])
 
 
 class RequestTest(unittest.TestCase):
@@ -160,6 +195,15 @@ class RequestTest(unittest.TestCase):
         later = {"cape", "lightning_potential"}
         for name in ("baltimore", "whitney"):
             self.assertEqual(set(fixture(name)["current"]) - {"time", "interval"}, set(weather.CURRENT) - later)
+
+    def test_url_history(self):
+        """BNE_PUDDLES=v2: the same request with the history's hourly variables and past_hours; off, as before."""
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(weather.url(39.29, -76.53, history=True)).query)
+        self.assertEqual(q["hourly"][0].split(","), list(weather.HOURLY + weather.HIST_HOURLY))
+        self.assertEqual((q["past_hours"], q["forecast_hours"]), ([str(weather.HIST_HOURS)], ["1"]))
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(weather.url(39.29, -76.53, history=False)).query)
+        self.assertEqual(q["hourly"][0].split(","), list(weather.HOURLY))
+        self.assertNotIn("past_hours", q)
 
     def test_thunder_fields(self):
         """CAPE always (0 without it), the lightning potential only where the model has one (ICON-D2)."""

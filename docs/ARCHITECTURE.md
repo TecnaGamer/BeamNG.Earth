@@ -724,7 +724,20 @@ in 2026-10-10-weather-probe-results.md.
   (roadwear.rs: sags of the centre line's profile, kerb gutters, worn wheel paths; seeded per road) -> chunks marked
   `puddle` that `roadmesh.build` leaves out of the road mesh; the geotile skin draws them as its own `puddle` part
   (`bne_puddle`: alpha-tested depth atlas `bne_puddle_o`, roughness 0.06, sky-grey), hidden while dry (`roads.setPuddles`), its
-  alphaRef stepped by wetness (`wetlook.puddleStep`). Grip (setting `weatherWetGrip`, weather.lua `WET_GRIP`):
+  alphaRef stepped by wetness (`wetlook.puddleStep`). The new puddle look (puddle plan R1, setting `weatherPuddleLook`,
+  default off, `wetlook.v2`): `wetstate.lua` owns one integer wet state (film w per mille, lagged flow i um/h, standing
+  water h in 1/120 um) stepped on 30 s ticks of the UTC clock (`os.time`), adds and floor divisions only (the same on
+  every CPU, any frame rate); inputs the weather SHOWN (weather.lua `wetInputs`, at wetlook's 2 s checks): liquid rain
+  (none at or below 0 C), ET0 (`et0Umh` from the server, else by code). Seeds: real weather from the server's 24 h
+  `hist` (weather.py with `BNE_PUDDLES=v2`: hourly rain + showers and ET0 as integer um, the same Open-Meteo request
+  with past_hours), again only after a 25 km move; presets their steady state (soaked; a steady state stays, so
+  late joiners of a server preset agree); BeamMP `real-host` clients the host's snapshot `wet` {t, w, i, h} on the
+  relayed message (mpsession.sendHostWeather; sanitized by weather.sanitizeMsg and the plugin's G.weatherMsg), caught
+  up with that message's rain. The wet look's level and the grip come from w; the puddles' 12 fill steps from h
+  (`H_STEPS_UM`, 0.3 to 9 mm), at most one step a check, none under W1's packed snow or ice; the material becomes dark
+  smooth water with a normalized sky cubemap (`wetsky.materials.json`, `bne_wetsky_<overcast|clear>_<city|open>`,
+  tools/make_wet_cubemaps.py; the horizon by 8 level rays round the camera every 10 s); its own values back when off.
+  With it on, `aquaplane.coverCheck`: no rain film under `ambience.shelterAt` cover. Grip (setting `weatherWetGrip`, weather.lua `WET_GRIP`):
   `wetlook.gripCond` (the own rain model as dry / damp / wet, with hysteresis) -> `winter.setShown` at changes only:
   winter.lua (loaded by it when no snowstate came; core's once-a-second `update` runs whichever loaded it) retunes the
   same ground models with its slots, the road row the wetter of the snowstate's and the shown one (`winter.mergeShown`;
