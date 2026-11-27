@@ -18,7 +18,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 SERVER = os.path.join(REPO, "server")
-STEPS = ("network",)
+STEPS = ("network", "layers")
 
 
 def junction(a):
@@ -79,7 +79,7 @@ def main(argv=None):
     import numpy as np
     import blockworker
     import mapcells
-    from grade3d import network
+    from grade3d import layers, network
 
     aid, anchor, at = junction(a)
     clock = Clock()
@@ -109,8 +109,11 @@ def main(argv=None):
                   median="%.0f m" % lens[len(lens) // 2], members_per_path="%.2f" % (len(members) / max(1, len(paths))))
         t0 = time.perf_counter()
         whole = network.build(members, net.network)
-        clock("network", "build (all)", t0, paths=len(whole.paths), joins=len(whole.joins),
-              crossings=len(whole.crossings))
+        t = clock("network", "build (all)", t0, paths=len(whole.paths), joins=len(whole.joins),
+                  crossings=len(whole.crossings))
+    if "layers" in steps:
+        lay = layers.order(whole)
+        t = clock("layers", "order", t, **layers.summary(lay))
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
             json.dump(clock.rows, f, indent=1)
