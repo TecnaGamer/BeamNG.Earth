@@ -884,18 +884,19 @@ class Style:
     core: with one_storey, the tile coverage above which a tile is a town centre, where only mapped houses are homes;
     wall_paints: [(weight, (r, g, b))] the plain walls' tints (None: wall_tints); roof_paints: [(weight, roof
     material, (r, g, b))] the tints of unmapped pitched roofs (None: roofs); eaves: (share of pitched-roof houses
-    with wide eaves, least width m, most width m) (None: every roof EAVE_M).
+    with wide eaves, least width m, most width m) (None: every roof EAVE_M); house_brick: the share of detached houses
+    in brick (None: 0.35 of brick).
     Coarse boxes by region until a facade-material map; the US ones keep their earlier behaviour."""
 
     def __init__(self, name, brick, walls, porch, flat, hipped, roofs, pitch=None, paint=0.3, wall_tints=None,
                  wood=False, attached=0.0, barn_red=0.0, stone=0.0, one_storey=None, core=1.0, wall_paints=None,
-                 roof_paints=None, eaves=None):
+                 roof_paints=None, eaves=None, house_brick=None):
         self.name, self.brick, self.walls, self.porch, self.flat = name, brick, walls, porch, flat
         self.barn_red, self.stone = barn_red, stone
         self.hipped, self.roofs, self.pitch, self.paint, self.wall_tints = hipped, roofs, pitch, paint, wall_tints
         self.wood, self.attached = wood, attached
         self.one_storey, self.core, self.wall_paints, self.roof_paints = one_storey, core, wall_paints, roof_paints
-        self.eaves = eaves
+        self.eaves, self.house_brick = eaves, house_brick
 
 
 _US_ROOFS = ((ROOF_SLATE, (0, 1, 2, 3)), (ROOF_SHINGLE, (0, 1, 2, 3)))
@@ -928,13 +929,28 @@ NZ_ROOF_PAINTS = (
     (0.032, ROOF_CORRUGATED, (0.65, 0.44, 0.43)),                                                    # red
     (0.008, ROOF_CORRUGATED, (0.44, 0.59, 0.50)),                                                    # green
 )
-# weatherboard and plaster: whites, creams and greys, with a few deeper greys, blue-greys and greens
+# walls, as seen (2026-11-28): the colour noted by eye for 220 houses' walls other than brick, in Mapillary street
+# photos (https://www.mapillary.com) of suburbs in the same nine towns, each town weighted roughly by its population.
+# Only these proportions are kept; the tints are this generator's own for each named colour. (weight, tint)
 NZ_WALL_PAINTS = (
-    (0.26, (0.96, 0.95, 0.92)), (0.17, (0.93, 0.89, 0.79)), (0.13, (0.82, 0.82, 0.80)),
-    (0.13, (0.80, 0.75, 0.66)), (0.12, (0.66, 0.68, 0.70)), (0.08, (0.42, 0.44, 0.46)),
-    (0.06, (0.52, 0.60, 0.68)), (0.05, (0.52, 0.60, 0.50)),
+    (0.250, (0.93, 0.89, 0.79)),    # cream
+    (0.199, (0.96, 0.95, 0.92)),    # white
+    (0.127, (0.80, 0.75, 0.66)),    # beige, tan
+    (0.096, (0.52, 0.60, 0.50)),    # green
+    (0.072, (0.52, 0.60, 0.68)),    # blue
+    (0.068, (0.82, 0.82, 0.80)),    # light grey
+    (0.059, (0.66, 0.68, 0.70)),    # mid grey
+    (0.057, (0.55, 0.43, 0.34)),    # brown
+    (0.041, (0.90, 0.79, 0.50)),    # yellow
+    (0.020, (0.42, 0.44, 0.46)),    # charcoal
+    (0.011, (0.62, 0.34, 0.29)),    # red
 )
 
+
+# materials, as seen in the same photos (260 houses, towns weighted as above): weatherboard 66 %, plaster 18 %,
+# brick 16 %
+NZ_HOUSE_BRICK = 0.16                                   # Style.house_brick
+NZ_HOUSE_WALLS = ((SIDING, 0.78), (STUCCO, 0.22))       # Style.walls: of the houses not brick
 
 # the other buildings outside town centres, mapped as none of these or one of NZ_LOW_CLASSES: Wellington's lidar puts
 # the walls of 67 % of its suburbs' 400-900 m2 ones under 5.5 m (57 % of 900-2500 m2, 48 % larger, 85 % of schools'),
@@ -983,10 +999,10 @@ STYLES = {
     "oceania": Style("oceania", 0.55, ((STUCCO, 0.5), (SIDING, 0.3)), 0.25, 0.05, 0.7, (_CLAY, (ROOF_METAL, (0, 1, 4))),
                      pitch=24.0, paint=0.1),
     # New Zealand: single-storey weatherboard and plaster houses, some brick, painted steel roofs (NZ_* above)
-    "new_zealand": Style("new_zealand", 0.2, ((SIDING, 0.65), (STUCCO, 0.25)), 0.25, 0.05, 0.7,
+    "new_zealand": Style("new_zealand", 0.2, NZ_HOUSE_WALLS, 0.25, 0.05, 0.7,
                          ((ROOF_CORRUGATED, (0, 1, 4)),), pitch=24.0, paint=0.0, one_storey=NZ_ONE_STOREY,
                          core=NZ_CORE_COVERAGE, wall_paints=NZ_WALL_PAINTS, roof_paints=NZ_ROOF_PAINTS,
-                         eaves=NZ_EAVES),
+                         eaves=NZ_EAVES, house_brick=NZ_HOUSE_BRICK),
     # South Asia (India, Pakistan, Bangladesh, Sri Lanka, Nepal): a concrete frame and brick under plaster, flat terrace
     # roofs, pastel and whitewashed walls, metal roofs on sheds (OmdevShastri, PR #146)
     "south_asia": Style("south_asia", 0.08, ((STUCCO, 0.92),), 0.0, 0.94, 0.2, (_CLAY, (ROOF_METAL, (0, 1, 3))),
@@ -1467,7 +1483,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             u_brick = _hash01(seed, "brick")
             detached = home or ((cls in HOUSE_CLASSES or (area < 260 and not shop)) and not row and neighbours == 0)
-            brick = u_brick < brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0) * ERA_BRICK.get(ep, 1.0)
+            share = brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0)
+            if detached and not row and style.house_brick is not None:
+                share = style.house_brick
+            brick = u_brick < share * ERA_BRICK.get(ep, 1.0)
             if brick:
                 band = BAND_BRICK
                 facade = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)]

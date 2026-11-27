@@ -227,13 +227,18 @@ class NewZealandStyleTest(unittest.TestCase):
             self.assertLess(self.single(specs), 0.4, kw)
 
     def test_walls(self):
+        self.assertAlmostEqual(sum(w for w, _c in bld.NZ_WALL_PAINTS), 1.0, places=3)
         paints = {c for _w, c in bld.NZ_WALL_PAINTS}
         specs = self.plans(neighbours=1, n=1000)
         walls = [bld.LOOKS[s.wall] for s in specs if s.wall]
         self.assertGreater(len(walls) / len(specs), 0.75)
         self.assertEqual({m for m, _ in walls}, {bld.SIDING, bld.STUCCO})
         self.assertTrue({c for _, c in walls} <= paints)
-        self.assertLess(sum(s.band == bld.BAND_BRICK for s in specs) / len(specs), 0.12)
+        # as seen: weatherboard 66 %, plaster 18 %, brick 16 %
+        shares = [sum(m == kind for m, _ in walls) / len(specs) for kind in (bld.SIDING, bld.STUCCO)]
+        shares.append(sum(s.band == bld.BAND_BRICK for s in specs) / len(specs))
+        for share, seen in zip(shares, (0.66, 0.18, 0.16)):
+            self.assertAlmostEqual(share, seen, delta=0.05)
         sheds = self.plans(w=4, d=6, n=100)
         self.assertTrue({bld.LOOKS[s.facade][1] for s in sheds} <= paints)
 
