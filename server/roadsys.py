@@ -937,7 +937,8 @@ RAMP_CLEAR_M = 20.0         # (the pin field's reach past a road's half width: g
 RAMP_MAX_M = 100.0         # (with RAMP_CLEAR_M: the decks the ramps are read from lie within the ceiling's own read, so
                             # its solves serve them: at 150 m they asked chains no one else did, Springfield +53 % CPU)
 RAMP_STEP_M = 2.0
-RAMP_RIDE_A = 0.3 * 9.81    # m/s^2: a ramp's curve at its road's design speed (_class_speed) takes at most this
+RAMP_RIDE_A = 0.2 * 9.81    # m/s^2: a ramp's curve at its road's design speed (_class_speed) takes at most this (0.3 g: 0bff
+                            # one sample over 0.5 g at 70 mph more than dev)
 
 
 def _class_speed(spec):
