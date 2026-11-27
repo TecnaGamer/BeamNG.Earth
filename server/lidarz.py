@@ -30,7 +30,7 @@ change while it runs, and a cell is checked when it is read from disk into it.
 The key (staleness: nothing measured under other rules or another DEM may stand in). The version key (lkey: sha256
 of lkey_doc) holds this product's layout (FORMAT), roadz.VERSION (the local cells' folder: any change of what the lidar
 read gives bumps it), the roadz kernels' versions, every roadz constant the measuring reads (params), the ground
-stretches' switch (roads.LIDAR_GAPS_ON) and the DEM's decoding (dem.DECODED_VERSION) and sampling zoom. Not the
+stretches' switch (always on: the products' key kept) and the DEM's decoding (dem.DECODED_VERSION) and sampling zoom. Not the
 Overture release, the weekly datasets or the server's version: each item's key holds the digest of the inputs this
 server's own map gives the cell (lz_inputs_digest), so a new map release misses exactly the cells whose bridges or
 candidates changed, and a server update keeps the product unless roadz.VERSION changes.
@@ -87,10 +87,9 @@ def _base():
 def lkey_doc():
     """What every record's key holds besides its cell and inputs (see the module docstring)."""
     import dem
-    import roads
     import roadz
     return {"lz": FORMAT, "roadz": roadz.VERSION, "native": [roadz.NATIVE, roadz.GAP_NATIVE],
-            "params": {k: getattr(roadz, k) for k in PARAMS}, "gaps": bool(roads.LIDAR_GAPS_ON),
+            "params": {k: getattr(roadz, k) for k in PARAMS}, "gaps": True,
             "dem": [dem.DECODED_VERSION, roadz.DEM_ZOOM], "cell": int(fast._ef.LZ_CELL_FORMAT)}
 
 

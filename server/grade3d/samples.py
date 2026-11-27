@@ -2,10 +2,10 @@
 
     sample(network, layers) -> Samples
 
-A path of length L has n = max(1, round(L / STEP_M)) intervals of h = L / n (the kernel takes one step per chain), its
-samples at s = 0, h, ..., L, each on the member the path is on there (its kind: a deck's samples are the deck's). A join
-or a crossing is the nearest sample of each path (off by at most h / 2: STEP_M / 2 and a little); a crossing's samples
-carry its Layer. The samples of every path are also one flat array (off[p]: path p's first), as the ground is read for
+A path of length L has n = max(1, round(L / STEP_M)) intervals of h = L / n, its samples at s = 0, h, ..., L, each on
+the member the path is on there (its kind: a deck's samples are the deck's), with a sample exactly at each join and
+crossing (grid: the nearest moved there, or one put in; the spacing then uneven, the kernel's ds). A join or a crossing
+is that sample of each path; a crossing's samples carry its Layer. The samples of every path are also one flat array (off[p]: path p's first), as the ground is read for
 them in one call."""
 from dataclasses import dataclass
 
@@ -14,6 +14,8 @@ import numpy as np
 import gradeshapes as _gsh
 
 STEP_M = _gsh.STEP_M        # m: the target step along a path (a deck's and a dip's, as the interchange solve)
+EVENT_MERGE_M = 0.05        # m: a join or crossing this near a sample (or another) is at it
+MIN_GAP = 0.25              # of the step: a sample moved to an event keeps this far from its neighbours
 
 
 @dataclass
@@ -65,21 +67,62 @@ def _along(net, path, s):
     return xy, mem
 
 
-def locate(network, h, i, s):
-    """(path, sample index) nearest member i's arc length s."""
+def locate(network, path_s, i, s):
+    """(path, sample index) nearest member i's arc length s (path_s: each path's samples' arc lengths)."""
     p, sp = network.path_s(i, s)
-    n = int(round(network.paths[p].length / h[p])) if h[p] > 0 else 0
-    return p, int(min(n, max(0, round(sp / h[p])))) if h[p] > 0 else 0
+    sv = path_s[p]
+    k = int(np.clip(np.searchsorted(sv, sp), 1, max(1, len(sv) - 1))) if len(sv) > 1 else 0
+    if len(sv) > 1 and abs(sv[k - 1] - sp) <= abs(sv[k] - sp):
+        k -= 1
+    return p, k
+
+
+def grid(length, events, step=STEP_M):
+    """The arc lengths of a path's samples: an even step (intervals), with a sample exactly at each event (a join's or
+    a crossing's place on it): the nearest even sample moved there where that keeps it more than MIN_GAP of the step
+    from its neighbours, else one put in (events within EVENT_MERGE_M of each other are one)."""
+    n, h = intervals(length, step)
+    s = np.linspace(0.0, length, n + 1) if length > 0 else np.zeros(1)
+    if length <= 0 or not len(events):
+        return s
+    ev = np.unique(np.clip(np.asarray(events, np.float64), 0.0, length))
+    ev = ev[np.r_[True, np.diff(ev) > EVENT_MERGE_M]]
+    moved = np.zeros(len(s), bool)
+    extra = []
+    for e in ev.tolist():
+        k = int(round(e / h))
+        if abs(s[k] - e) <= EVENT_MERGE_M:
+            moved[k] = True
+            continue
+        lo = s[k - 1] if k > 0 else -np.inf
+        hi = s[k + 1] if k < n else np.inf
+        if 0 < k < n and not moved[k] and e - lo > MIN_GAP * h and hi - e > MIN_GAP * h:
+            s[k] = e
+            moved[k] = True
+        else:
+            extra.append(e)
+    if extra:
+        s = np.unique(np.r_[s, extra])
+    return s
 
 
 def sample(network, layers=()):
     """The Samples of the network's paths (step 1) and its crossings' Layers (step 2; their order is the network's
-    crossings')."""
+    crossings'), a sample exactly at each join and crossing."""
     net = network.net
+    events = [[] for _ in network.paths]
+    for a, sa, b, sb in network.joins:
+        for i, si in ((a, sa), (b, sb)):
+            p, sp = network.path_s(i, si)
+            events[p].append(sp)
+    for x in layers:
+        for i, si in ((x.a, x.sa), (x.b, x.sb)):
+            p, sp = network.path_s(i, si)
+            events[p].append(sp)
     xys, ss, mems, hs, off = [], [], [], [], [0]
-    for path in network.paths:
+    for path, ev in zip(network.paths, events):
         n, h = intervals(path.length)
-        s = np.linspace(0.0, path.length, n + 1) if path.length > 0 else np.zeros(1)
+        s = grid(path.length, ev)
         xy, mem = _along(net, path, s)
         xys.append(xy)
         ss.append(s)
@@ -89,10 +132,10 @@ def sample(network, layers=()):
     h = np.asarray(hs, np.float64)
     joins = []
     for a, sa, b, sb in network.joins:
-        joins.append(locate(network, h, a, sa) + locate(network, h, b, sb))
+        joins.append(locate(network, ss, a, sa) + locate(network, ss, b, sb))
     crossings = []
     for x in layers:
-        crossings.append(locate(network, h, x.a, x.sa) + locate(network, h, x.b, x.sb) + (x,))
+        crossings.append(locate(network, ss, x.a, x.sa) + locate(network, ss, x.b, x.sb) + (x,))
     cat = (lambda v, w: np.concatenate(v) if v else np.zeros(w))
     return Samples(cat(xys, (0, 2)).reshape(-1, 2), np.asarray(off, np.int64), cat(ss, 0), h,
                    cat(mems, 0).astype(np.int64), joins, crossings)

@@ -1,33 +1,32 @@
-"""Step 6 of the 3D solve: the kernel's problem, its chains (one per path: the laws) and its couplings (the joins and the
-layers).
+"""Step 6 of the 3D solve: the problem, its chains (one per path: its law and its earthwork) and its couplings (the joins
+and the clearances), every coupling a constraint.
 
     pose(network, samples, laws) -> Problem
 
-- A join holds the two paths at one height (hard: a road meeting another is continuous).
-- A layer (step 2) over: the upper path stands over the lower by its clearance, wherever the lower runs under the upper's
+- A join holds the two paths at one height: a road meeting another in the map is continuous.
+- A clearance (step 2) holds the upper path over the lower by its need, wherever the lower runs under the upper's
   carriageway (the lower's samples within the upper's half width and CLEAR_PAD_M of the crossing, across the angle they
-  cross at) and the upper over the lower's (soft: its Layer's weight per m^2 short).
-- A layer at one level: the two meet (two soft inequalities, a step either way paid at its weight).
-- A path shorter than a sample step (a stub of a few cm between two members) has no soft laws: its two samples are held
-  within its comfortable grade outright (the kernel's slack over a few cm is ill-conditioned)."""
+  cross at) and the upper over the lower's.
+- A path shorter than MIN_STEP_M a step (a stub of a few cm between two members) has no vertical curve: its samples
+  are too close for one."""
 from dataclasses import dataclass, field
 
 import numpy as np
 
 CLEAR_PAD_M = 1.5           # m past the upper's half width the lower is held under it (a shoulder, a parapet)
-MIN_STEP_M = 0.5            # m: a path whose step is shorter has no soft laws
+MIN_STEP_M = 0.5            # m: a path whose step is shorter has no vertical curve
 MIN_SIN = 0.25              # the sine of the angle two paths cross at, at least (a crossing at 15 deg reaches 4x as far)
 
 
 @dataclass
 class Problem:
-    """chains: [dict] the kernel's, one per path; couplings: [(chain a, sample i, chain b, sample j, kind, value)];
-    soft: [weight] one per coupling (0: hard); why: [(what, index)] one per coupling: ("join", k) of samples.joins,
-    ("clear", k) and ("meet", k) of samples.crossings."""
+    """chains: [dict] one per path (laws.chain); couplings: [(chain a, sample i, chain b, sample j, kind, value)], kind
+    "eq" (z_a = z_b) or "ge" (z_a - z_b >= value); why: [(what, index)] one per coupling: ("join", k) of samples.joins,
+    ("clear", k) of samples.crossings; names: one per path, what it is made of (a contradiction is named by them)."""
     chains: list
     couplings: list = field(default_factory=list)
-    soft: list = field(default_factory=list)
     why: list = field(default_factory=list)
+    names: list = field(default_factory=list)
 
     def summary(self):
         kinds = {}
@@ -59,26 +58,35 @@ def _reach(samples, p, i, other, k_other, half):
     return list(range(max(0, i - k), min(n - 1, i + k) + 1))
 
 
+def name(network, path):
+    """What a path is made of: its members' keys, kinds, classes and levels."""
+    out = []
+    for i in path.members():
+        m = network.members[i]
+        k = m.key if not isinstance(m.key, tuple) else m.key[2] if m.key[0] == "rail" else m.key[0]
+        s = "%s %s %s level %g" % (k, m.kind, m.cls, m.level)
+        if s not in out:
+            out.append(s)
+    return "; ".join(out)
+
+
 def pose(network, samples, laws):
     """The Problem of the network (step 1) on its samples (step 3) at its laws (step 5)."""
     chains = []
     for p in range(len(network.paths)):
         ch = laws.chain(samples, p)
         if samples.h[p] < MIN_STEP_M:
-            ch.update(grade=ch["soft_grade"], K=ch["soft_K"], w_grade=0.0, w_curve=0.0)
+            ch["R"] = 0.0
         chains.append(ch)
-    pr = Problem(chains)
+    pr = Problem(chains, names=[name(network, path) for path in network.paths])
 
-    def add(c, w, why):
+    def add(c, why):
         pr.couplings.append(c)
-        pr.soft.append(float(w))
         pr.why.append(why)
     for k, (pa, ia, pb, ib) in enumerate(samples.joins):
-        add((pa, ia, pb, ib, "eq", 0.0), 0.0, ("join", k))
+        add((pa, ia, pb, ib, "eq", 0.0), ("join", k))
     for k, (pa, ia, pb, ib, lay) in enumerate(samples.crossings):
         if lay.upper is None:
-            add((pa, ia, pb, ib, "ge", 0.0), lay.weight, ("meet", k))
-            add((pa, ia, pb, ib, "le", 0.0), lay.weight, ("meet", k))
             continue
         (pu, iu, mu), (pl, il, ml) = ((pa, ia, lay.a), (pb, ib, lay.b)) if lay.upper == "a" else \
             ((pb, ib, lay.b), (pa, ia, lay.a))
@@ -87,5 +95,5 @@ def pose(network, samples, laws):
         pairs = {(iu, j) for j in _reach(samples, pl, il, pu, iu, half_u)}
         pairs |= {(j, il) for j in _reach(samples, pu, iu, pl, il, half_l)}
         for ju, jl in sorted(pairs):
-            add((pu, ju, pl, jl, "ge", float(lay.need)), lay.weight, ("clear", k))
+            add((pu, ju, pl, jl, "ge", float(lay.need)), ("clear", k))
     return pr

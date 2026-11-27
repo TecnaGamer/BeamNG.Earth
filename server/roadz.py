@@ -31,9 +31,9 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   put it on the ground), the dataset's heights brought onto our DEM's (the median of its ground points' difference;
   feet found by the scale that fits). The EPT nodes of one octree depth (the first with LIDAR_DENSITY points a m2)
   along the bridges only: ~0.3 MB a node, a few per bridge. Then the drawn roads' ground pieces going on from a deck
-  end that the lidar shows elevated (roads.lidar_gap_candidates: an untagged viaduct stretch), read where the
-  deck's measured end stands over the DTM only (the nodes the decks' read had not): their elevated start is a deck
-  in roads.level_ranges (gap_answers, one decision per cell and server run; BNE_LIDAR_GAPS=off: none).
+  end that the lidar shows elevated (roads.deck_end_pieces: an untagged viaduct stretch), read where the
+  deck's measured end stands over the DTM only (the nodes the decks' read had not): measured heights of those pieces
+  (a structure's range stays the map's own: roads.level_ranges; gap_answers, one decision per cell and server run).
   Before any point is read, a cell's answer is asked of the project's CDN (lidarz.py, BNGE_LIDARZ: the same answer
   measured by the project's builder along the same map lines and DEM, signed; a planning process that would take the
   rule waits lidarz.WAIT_S for it); any miss reads the point clouds as below.
@@ -158,7 +158,7 @@ DATUM_NEAR_M = 300.0        # m round a part's ends its source's ground roads gi
 DATUM_NEAR_MIN = 5
 DEM_ZOOM = 15
 MEM_CELLS = 96
-# The elevated ground stretches (roads.lidar_gap_candidates / _lidar_gaps): measured in the decks' own lidar read, a
+# The elevated ground stretches (roads.deck_end_pieces / _lidar_gaps): measured in the decks' own lidar read, a
 # stretch is elevated from the deck's end while its surface stays LIDAR_GAP_RISE_M or more over our DTM (the first
 # station within LIDAR_GAP_END_TOL_M of the deck's measured end), LIDAR_GAP_MISS stations without passed over; kept when
 # LIDAR_GAP_MIN_M or longer. gap_answers waits LIDAR_GAPS_WAIT_S at most for a cell's lidar (the rule meanwhile, for the
@@ -838,16 +838,13 @@ class RoadZ:
         """The cell's answer file of source src (None: not kept). A German cell's measured decks (dedom.py, through the
         "lidar" source) are kept under their build's folder (dedom.identity): an answer is never read for another
         build. network false: None while the run's dedecks manifest is not decided."""
-        import roads
         if src == "lidar" and DE_ON:
             la, lo = key.center()
             if dedom.service_at(la, lo) is not None:
                 ident = dedom.identity(network)
                 if ident is None:
                     return None
-                src = "dedecks-" + ident + ("" if roads.LIDAR_GAPS_ON else "-nogaps")
-        if src == "lidar" and not roads.LIDAR_GAPS_ON:
-            src = "lidar-nogaps"            # (built without the ground stretches: not the cells with them)
+                src = "dedecks-" + ident
         if src == "hk":
             src = HK_CELLS
         elif src == "tlm":
@@ -1340,8 +1337,8 @@ class RoadZ:
         pad_lat = CLIP_PAD_M / 111320.0
         pad_lon = pad_lat / max(0.05, dmath.cos(math.radians((lat0 + lat1) / 2)))
         out = []
-        # (the rule's ranges: roads.level_ranges asks this provider for the lidar's stretches, gap_answers)
-        for i, rr in sorted(roads.rule_level_ranges_near(feats).items()):
+        for i in range(len(feats)):
+            rr = roads.level_ranges(feats, i)
             if not any(k == "bridge" for _, _, k in rr):
                 continue
             w = roads._structure_width(feats, i)
@@ -1356,16 +1353,16 @@ class RoadZ:
         return out
 
     def _gap_candidates(self, key):
-        """roads.lidar_gap_candidates of the cell whose deck end (the line's first point) lies in its box: [(fid, lonlat
-        (k, 2), half width)] ([] off)."""
+        """roads.deck_end_pieces of the cell whose deck end (the line's first point) lies in its box: [(fid, lonlat
+        (k, 2), half width)]."""
         import roads
-        if not roads.LIDAR_GAPS_ON or not self.md:
+        if not self.md:
             return []
         feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
         if feats is None or not len(feats):
             return []
         lon0, lat0, lon1, lat1 = key.bounds()
-        return [c for c in roads.lidar_gap_candidates(feats)
+        return [c for c in roads.deck_end_pieces(feats)
                 if lon0 <= c[1][0, 0] < lon1 and lat0 <= c[1][0, 1] < lat1]
 
     def lidar_inputs(self, key):
@@ -1631,7 +1628,7 @@ class RoadZ:
 
     def _lidar_from(self, name, key, frame, parts, local, nb=None, fids=()):
         """The cell's decks from dataset name, or None when it has no usable points there. parts[nb:] are ground
-        stretches from a deck's end (roads.lidar_gap_candidates, of the features fids): read (the EPT nodes the decks'
+        stretches from a deck's end (roads.deck_end_pieces, of the features fids): read (the EPT nodes the decks'
         read had not) only where a deck's measured end stands LIDAR_GAP_RISE_M or more over the DTM; the elevated ones
         go in as decks (their measured lines) and in the result's gaps [(fid, lon / lat from, lon / lat to)]."""
         nb = len(parts) if nb is None else nb
@@ -1952,8 +1949,8 @@ class RoadZ:
         (the lidarz builder: where the measuring read the DEM, and what it read there, lidarz.measure)."""
         d = getattr(self.md, "dem", None) if self.md is not None else None
         if d is None and self.md is not None:
-            import gradesep
-            d = gradesep._dem(self.md)
+            import dem as demmod
+            d = self.md.dem = demmod.Dem(os.path.join(self.md.cache_dir, "dem"), fetcher=self.md.fetcher)
         if d is None:
             out = np.full(len(np.atleast_1d(la)), np.nan)
         else:

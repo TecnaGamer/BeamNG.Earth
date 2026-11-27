@@ -73,14 +73,12 @@ def main(argv=None):
     ap.add_argument("--steps", default=",".join(STEPS), help="the steps to run, in order: " + ", ".join(STEPS))
     ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "beamng-earth"))
     ap.add_argument("--json", help="write the lines here")
-    ap.add_argument("--worst", type=int, default=0, help="list the N clearances most short after the solve")
-    ap.add_argument("--firm", action="store_true", help="--worst: the firm clearances only (not the doubted)")
+    ap.add_argument("--worst", type=int, default=0, help="list the N samples furthest off their terrain after the solve")
     ap.add_argument("--block", type=float, default=1500.0, help="m: the solve's block core (0: the whole in one solve)")
     ap.add_argument("--slowest", type=int, default=6, help="list the N slowest blocks")
-    ap.add_argument("--workers", type=int, default=0, help="threads solving blocks (0: solve.WORKERS)")
-    ap.add_argument("--classify", action="store_true", help="the firm crossings short, grouped by what they are")
+    ap.add_argument("--workers", type=int, default=0, help="blocks solved at once (0: solve.WORKERS)")
     ap.add_argument("--law", action="append", default=[], metavar="NAME=VALUE",
-                    help="set a grade3d law for this run, e.g. laws.CEIL_GRADE_X=0 (no grade ceiling)")
+                    help="set a grade3d law for this run, e.g. laws.STACK_M=12")
     a = ap.parse_args(argv)
     os.environ.update(BNE_SHAPES="1", BNGE_PLANCACHE="off", BNGE_BLOCKCACHE="off")
     sys.path.insert(0, SERVER)
@@ -110,6 +108,42 @@ def main(argv=None):
     lo, hi = c - a.size / 2.0, c + a.size / 2.0
     t = clock("setup", "planner", t, at="%.5f,%.5f" % at, size="%.0f m" % a.size)
     steps = [s for s in a.steps.split(",") if s]
+    if "region" in steps:
+        # (the build's way: the junction's cell and its east neighbour, each from the blocks round it; where both have a
+        # road, the heights each gives its points)
+        from grade3d import region
+        import grading
+        home = mapcells.cell_of(*at)
+        east = mapcells.CellKey(home.z, home.x + 1, home.y)
+        profs = {}
+        for cell in (home, east):
+            nb = len(planner.__dict__.get("_grade3d_blocks", {}))
+            profs[cell] = region.cell_profiles(planner, cell)
+            t = clock("region", "cell %s" % (cell,), t, fids=len(profs[cell]),
+                      blocks_solved=len(planner.__dict__.get("_grade3d_blocks", {})) - nb,
+                      **{k: v for k, v in outputs.summary(profs[cell]).items() if k != "fids"})
+        for b_ in sorted(planner.__dict__.get("_grade3d_blocks", {}).values(), key=lambda b_: -b_.seconds)[:a.slowest]:
+            print("  block %s  %.1f s  %s" % (np.round(b_.core[0]).tolist(), b_.seconds, b_.diagnostics))
+
+        class _Region:
+            frame = planner.frame
+
+            def __init__(self, prof):
+                self.prof = prof
+
+            def _shape_region(self, _home):
+                return self.prof
+        diffs = []
+        for fid, lst in profs[home].items():
+            if fid not in profs[east]:
+                continue
+            for xy, zz, mode in lst:
+                zb, _md = grading._Planner._shape_at(_Region(profs[east]), xy, xy, fid, (mode,))
+                ok = np.isfinite(zb)
+                diffs.append(np.abs(zb[ok] - zz[ok]))
+        dd = np.concatenate(diffs) if diffs else np.zeros(1)
+        t = clock("region", "seam", t, shared_points=len(dd), max_m="%.3f" % dd.max(),
+                  p99_m="%.3f" % np.percentile(dd, 99))
     if "network" in steps:
         members = network.area(planner, lo, hi)
         t = clock("network", "area (read)", t, members=len(members), points=sum(len(m.line) for m in members))
@@ -152,14 +186,11 @@ def main(argv=None):
             sol = solve3d.solve_blocks(pr, sm, block_m=a.block, workers=a.workers or None)
             t = clock("solve", "blocks", t, **sol.diagnostics)
             for b in sorted(sol.per_block, key=lambda b: -b["seconds"])[:a.slowest]:
-                print("  block %s  chains %d samples %d couplings %d rows %s  %.2f s %s rounds %s" % (
-                    np.round(b["core"]).tolist(), b["chains"], b["samples"], b["couplings"], b["rows"], b["seconds"],
-                    b["status"], b["rounds"]))
+                print("  block %s  chains %d samples %d couplings %d rows %s  %.2f s" % (
+                    np.round(b["core"]).tolist(), b["chains"], b["samples"], b["couplings"], b["rows"], b["seconds"]))
         else:
             sol = solve3d.solve(pr)
-            d = sol.diagnostics
-            t = clock("solve", "kernel", t, status=d.get("status"), rounds=d.get("rounds"),
-                      rows=d.get("constraint_rows"), slack=d.get("slack_vars"))
+            t = clock("solve", "whole", t, **sol.diagnostics)
         got = solve3d.measure(pr, sol.z)
         t = clock("solve", "measure", t, **{k: round(v, 3) if isinstance(v, float) else v for k, v in got.items()})
         if "outputs" in steps:
@@ -185,43 +216,11 @@ def main(argv=None):
                       points_missing=sum(x[2] for x in miss))
             for x in miss[:a.worst]:
                 print("  missing", x)
-        if a.classify:
-            # (per firm crossing short by 5 cm or more: its kinds, whether its two paths are joined anywhere, whether
-            # it lies within 20 m of an end of either path)
-            short_of = {}
-            for (short, k) in solve3d.worst(pr, sol.z, len(pr.couplings), min_w=layers.W_CLEAR):
-                xk = pr.why[k][1]
-                short_of[xk] = max(short_of.get(xk, 0.0), short)
-            joined = {(min(pa, pb), max(pa, pb)) for pa, _ia, pb, _ib in sm.joins}
-            groups = {}
-            for xk, short in short_of.items():
-                if short < 0.05:
-                    continue
-                pa, ia, pb, ib, lay_ = sm.crossings[xk]
-                na, nb = sm.off[pa + 1] - sm.off[pa], sm.off[pb + 1] - sm.off[pb]
-                near = min(ia, na - 1 - ia) * sm.h[pa] <= 20 or min(ib, nb - 1 - ib) * sm.h[pb] <= 20
-                u, d_ = (lay_.a, lay_.b) if lay_.upper == "a" else (lay_.b, lay_.a)
-                key = (whole.members[u].kind, whole.members[d_].kind, "joined" if (min(pa, pb), max(pa, pb)) in joined
-                       else "-", "near end" if near else "-")
-                g = groups.setdefault(key, [0, 0, 0.0])
-                g[0] += 1
-                g[1] += short > 1.0
-                g[2] = max(g[2], short)
-            print("  firm crossings short: %d" % sum(g[0] for g in groups.values()))
-            for key, (n_, big, mx) in sorted(groups.items(), key=lambda kv: -kv[1][0]):
-                print("    %-48s %4d  (%d over 1 m, max %.2f m)" % (" / ".join(key), n_, big, mx))
-        for short, k in solve3d.worst(pr, sol.z, a.worst, min_w=layers.W_CLEAR if a.firm else 0.0):
-            pu, iu, pl, il, _kind, need = pr.couplings[k]
-            _w, xk = pr.why[k]
-            lay_ = sm.crossings[xk][4]
-            zu, zl = sol.z[sm.off[pu] + iu], sol.z[sm.off[pl] + il]
-            mu, ml = (lay_.a, lay_.b) if lay_.upper == "a" else (lay_.b, lay_.a)
-            nu, nl = sm.off[pu + 1] - sm.off[pu], sm.off[pl + 1] - sm.off[pl]
-            print("  short %6.2f m  need %5.2f  w %g (%s)  upper %s %s %s [%d/%d] z %.2f t %.2f lo %.2f   lower %s %s %s [%d/%d] z %.2f t %.2f hi %.2f  at %s" % (
-                short, need, lay_.weight, lay_.why, whole.members[mu].key, whole.members[mu].kind, whole.members[mu].cls,
-                iu, nu, zu, lw.t[sm.off[pu] + iu], lw.lo[sm.off[pu] + iu], whole.members[ml].key, whole.members[ml].kind,
-                whole.members[ml].cls, il, nl, zl, lw.t[sm.off[pl] + il], lw.hi[sm.off[pl] + il],
-                np.round(sm.xy[sm.off[pl] + il], 1)))
+        off_t = np.where(lw.w > 0, np.abs(sol.z - lw.t), 0.0)
+        for i in np.argsort(-off_t)[:a.worst]:
+            m = whole.members[sm.member[i]]
+            print("  %+6.2f m off its terrain %.2f  %s %s %s  at %s" % (
+                sol.z[i] - lw.t[i], lw.t[i], m.key, m.kind, m.cls, np.round(sm.xy[i], 1)))
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
             json.dump(clock.rows, f, indent=1)

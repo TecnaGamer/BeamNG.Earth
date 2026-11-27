@@ -40,10 +40,22 @@ def _no_browser(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_interchanges_remembered():
-    """What the process remembers of interchanges (ix/owner.py: their solutions, their index) is cleared before each test:
-    a test that asks for one meets it solved by an earlier test otherwise."""
-    from ix import owner
-    for table in (owner.PROCESS, owner.INDEX, owner.FLIGHTS):
-        table.clear()
+    """What the process remembers of the road network is cleared before each test: a test that asks for it meets an
+    earlier test's otherwise."""
     import linenet
     linenet.reset()             # (the process's line network: an earlier test's lines)
+
+
+def _store_kept():
+    """The process's plan store (grading._ACTIVE_STORE, the last one made: the tracks', decks' and tunnels' heights
+    are read from it) as it was before, handed back after: a test, class or module that made one leaves none behind.
+    An earlier test's store answered a later test's rails, which it never planned (strict: SolveMissing, #118)."""
+    import grading
+    was = grading._ACTIVE_STORE
+    yield
+    grading._ACTIVE_STORE = was
+
+
+_no_plan_store_remembered = pytest.fixture(autouse=True)(_store_kept)
+_no_plan_store_remembered_by_class = pytest.fixture(autouse=True, scope="class")(_store_kept)
+_no_plan_store_remembered_by_module = pytest.fixture(autouse=True, scope="module")(_store_kept)

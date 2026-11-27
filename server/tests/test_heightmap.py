@@ -187,8 +187,8 @@ class HeightmapTest(unittest.TestCase):
                     self.assertTrue((q0[a] == q1[b]).all())
                 else:
                     self.assertTrue((q0[a] - q1[b] == (info["zBase"] - base["zBase"]) / info["q"]).all())
-        # Stored heights are Q * round(u / Q) for any zBase.
-        u = heightmap.grid_u(self.frame, rough, 0.0, 0.0, self.n)
+        # Stored heights are Q * round(u / Q) for any zBase (u despiked, as generate builds every block).
+        u = heightmap.grid_u(self.frame, heightmap.despiked(self.frame, rough), 0.0, 0.0, self.n)
         self.assertTrue((h0 == heightmap.quantise(u, base["q"]) * base["q"]).all())
 
     def test_overlap_identical_through_dem_mosaic(self):

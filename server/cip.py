@@ -103,12 +103,11 @@ def code_inputs(release):
     import maprasters
     import mapdata
     import osmtags
-    import roads
     return {"cip": [FORMAT, CONTENT], "pipeline": mapdata.VERSION, "layer_versions": dict(mapdata.LAYER_VERSIONS),
             "overture": release, "mapsrc": pmtiles.source_key() if mapdata.MAP_SOURCE == "pmtiles" else "parquet",
             "pmtiles": pmtiles.FORMAT, "worldcover": maprasters.WORLDCOVER_RELEASE, "canopy": maprasters.CHM_RELEASE,
             "osm_columns": list(osmtags.COLUMNS), "osm_poi": mapdata.OSM_POI_VERSION,
-            "lidar": lidarz.lkey_doc(), "lidar_gaps": bool(roads.LIDAR_GAPS_ON), "dem": [dem.ELEVATION_ID]}
+            "lidar": lidarz.lkey_doc(), "lidar_gaps": True, "dem": [dem.ELEVATION_ID]}
 
 
 def build_id(inputs):

@@ -11,10 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fast  # noqa: E402
 import geodesy  # noqa: E402
-import gradesep  # noqa: E402
 import racedig  # noqa: E402
 import roads  # noqa: E402
-from test_gradesep import cross, hooked  # noqa: E402
 from test_roads import features  # noqa: E402
 
 
@@ -32,38 +30,6 @@ class Switch:
 
 def flat(e, n):
     return np.zeros_like(e)
-
-
-class GradeSepTest(unittest.TestCase):
-    """GitHub #1352 / #1220: a service road's short tunnel under the oval (Daytona's, Talladega's) was taken for an
-    underpass: opened to the ground and the oval given a 16-19 m deck over it."""
-
-    def test_off_the_raceway_bridges_the_tunnel_as_before(self):
-        with Switch(False):
-            f = hooked(cross(("raceway", "service"), flags=[(1, "is_tunnel", 0.45, 0.55)]), flat)
-            self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
-            self.assertEqual(roads.level_ranges(f, 1), [])
-
-    def test_on_no_bridge_on_the_raceway_and_its_tunnel_kept(self):
-        with Switch(True):
-            f = hooked(cross(("raceway", "service"), flags=[(1, "is_tunnel", 0.45, 0.55)]), flat)
-            self.assertEqual(roads.level_ranges(f, 0), [])
-            self.assertEqual([k for _, _, k in roads.level_ranges(f, 1)], ["tunnel"])
-
-    def test_on_a_tunnel_under_a_raceway_and_a_road_stays_a_tunnel(self):
-        # the infield road crossing over the same tunnel piece would make it an underpass: under a track never
-        with Switch(True):
-            f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -200.0), (0.0, 200.0)],
-                                 [(-200.0, 12.0), (200.0, 12.0)]], ["raceway", "service", "secondary"],
-                                flags=[(1, "is_tunnel", 0.45, 0.55)]), flat)
-            self.assertEqual([k for _, _, k in roads.level_ranges(f, 1)], ["tunnel"])
-            self.assertEqual(roads.level_ranges(f, 0), [])
-
-    def test_on_other_roads_unchanged(self):
-        with Switch(True):
-            f = hooked(cross(("motorway", "secondary"), flags=[(1, "is_tunnel", 0.45, 0.55)]), flat)
-            self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
-            self.assertEqual(roads.level_ranges(f, 1), [])
 
 
 class DigTest(unittest.TestCase):

@@ -56,24 +56,16 @@ LAMBDA = 2.0e4          # smoothness (a curve of ~40 m per metre of bend where n
 # road between those points that keeps to its grade and curve limits and its clearances). Tune with the environment:
 # BNE_CW_LENGTH, BNE_CW_GROUND, BNE_CW_ANCHOR (BNE_CW_LENGTH=0 BNE_CW_GROUND=1 is the earthworks fit as it was).
 LENGTH_BIAS = float(os.environ.get("BNE_CW_LENGTH", "200"))
-GROUND_W = float(os.environ.get("BNE_CW_GROUND", "0.2"))
-ANCHOR_W = float(os.environ.get("BNE_CW_ANCHOR", "5"))
-END_W = ANCHOR_W        # (the name before)
 ROUNDS = 150            # sparse QP iterations at most
 # s one region's solves may take at most: exhaustion is reported and the region is not persisted. A worker past
 # earthd's road-tile timeout (300 s) is restarted, its work lost, and the tile built again from the start.
 BUDGET_S = float(os.environ.get("BNE_CW_BUDGET_S", "30"))
 # a system whose laws contradict is solved again with what contradicts eased (ix/relax.py): the harder problem (the interior point
 # gets slow where the feasible set is thin), so its budget is its own
-BUDGET_RELAXED_S = float(os.environ.get("BNE_CW_BUDGET_RELAXED_S", "150"))
-RELAXED_ROUNDS = 4 * ROUNDS     # (its iterations too: 5444 roads' 173 where the same laws, not contradicting, take under 60)
 SOFT_KEYS = ("soft_grade", "w_grade", "soft_K", "w_curve")     # a chain's soft laws (solve), in the kernel's order
 NO_GRADE_CEILING = 1.0      # a chain with a soft grade law and a grade this steep has no hard grade rows (the kernel's)
 NO_CURVE_CEILING = 1.0e-3   # ... with a soft curve law and a K this small, no hard curve rows
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
-COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
-                        # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
-                        # deck 6 m up, and its surface pulled the ground under the deck's approach 2 m down)
 FAMILY = ("motorway", "trunk")
 # per class: steepest grade, K (m of vertical curve per 1 % of grade change: crest and sag alike)
 LIMITS = {"motorway": (0.05, 30.0), "trunk": (0.06, 25.0), "motorway_link": (0.07, 12.0), "trunk_link": (0.08, 10.0)}
@@ -172,34 +164,6 @@ def chains(parts, tol=TOUCH_M):
     return out
 
 
-def branch_ties(xys, brs, tol=COUPLE_M):
-    """[(chain a, its end sample, chain b, b's sample)]: each chain end (xys: per chain its samples (m, 2); brs: per chain
-    bool (m,), bridge) that lies within tol of another chain's inner sample on the ground (a slip road ending at the
-    joint of an overpass road's parts, or alongside the road it joins, at the road's node or a little short of it: no
-    other chain end meets it there, so the road is no branch point to `chains` and the slip road would be left at its
-    own ground). Held to that sample's height; its chain is solved with the one it meets. Pure."""
-    boxes = [(q.min(0) - tol, q.max(0) + tol) for q in xys]
-    out = []
-    for na, xy in enumerate(xys):
-        for ia in (0, len(xy) - 1):
-            p = xy[ia]
-            best = None
-            for nb, q in enumerate(xys):
-                if nb == na or len(q) < 3 or (p < boxes[nb][0]).any() or (p > boxes[nb][1]).any():
-                    continue
-                if float(np.min(dnp.hypot(*(q[[0, -1]] - p).T))) <= tol:
-                    continue                    # (an end meeting an end: a branch point, coupled as such)
-                d = dnp.hypot(*(q[1:-1] - p).T)
-                j = int(np.argmin(d)) + 1
-                if d[j - 1] > tol or (brs[nb][j - 1] and brs[nb][j] and brs[nb][j + 1]):
-                    continue                    # (too far, or on a deck: a road under a bridge is no branch of it)
-                if best is None or d[j - 1] < best[0]:
-                    best = (float(d[j - 1]), nb, j)
-            if best is not None:
-                out.append((na, ia, best[1], best[2]))
-    return out
-
-
 def weights(br, from_end, trust=TRUST_M):
     """0 on a bridge, rising (smoothstep) to 1 trust m from a bridge's end on the ground. Pure."""
     u = np.clip(from_end / trust, 0.0, 1.0)
@@ -207,7 +171,7 @@ def weights(br, from_end, trust=TRUST_M):
     return np.where(br, 0.0, w)
 
 
-def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, soft=None):
+def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, soft=None, unlimited=False):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
     chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length, and optionally ds (n - 1,): the distance
@@ -280,14 +244,17 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, 
                 raise ValueError("each carriageway's ds must have one distance per segment")
             pieces.append(np.r_[np.maximum(d, MIN_SEGMENT_M), 0.0][:len(t)])
         spacing = pack(pieces)
-    budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
-    if np.isnan(budget):
-        raise ValueError("carriageway deadline must not be NaN")
-    budget = max(0.0, budget)
-    import xproc
-    left = xproc.deadline_left()        # (a pipeline step's time limit is the kernel's too: its own budget never goes past it)
-    if left is not None:
-        budget = max(0.0, min(budget, left))
+    if unlimited:                       # (the 3D solve: no time limit, its answer the converged one or none)
+        budget = float("inf")
+    else:
+        budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
+        if np.isnan(budget):
+            raise ValueError("carriageway deadline must not be NaN")
+        budget = max(0.0, budget)
+        import xproc
+        left = xproc.deadline_left()    # (a pipeline step's time limit is the kernel's too: its own budget never goes past it)
+        if left is not None:
+            budget = max(0.0, min(budget, left))
     extra = {} if spacing is None else {"spacing": spacing}
     if soft is not None:
         soft = np.ascontiguousarray(np.asarray(soft, np.float64).reshape(-1))

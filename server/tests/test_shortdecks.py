@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import grading  # noqa: E402
 import roadmesh  # noqa: E402
 import roads  # noqa: E402
-from test_approaches import overpass, flat_elev, FLAT, switch  # noqa: E402
+from test_approaches import overpass, flat_elev, FLAT  # noqa: E402
 from test_roads import FRAME  # noqa: E402
 from test_grading import FakeMD  # noqa: E402
 
@@ -138,32 +138,27 @@ class FlushTest(unittest.TestCase):
         # from one edge of the road to the other. (The step is read where the approach road meets the deck: its height
         # 0.5 m and 1.5 m past the end, carried along its own grade to the end. The legacy ramp falls 5 % from its
         # abutment, 2.5 cm in the first half metre; an embankment of the shapes falls at its road's max grade, 10 % on
-        # a secondary, 5 cm: a grade is not a step.) With BNE_SHAPES=1 the legacy approach pass is not turned on over
-        # the shapes' embankments (that mixture stood the approach 15.93 m against a 14.92 m deck end).
-        old = switch("APPROACH_ON", True)
-        try:
-            f = overpass()
-            g = grading.Grader(FRAME, FakeMD(f), flat_elev)
+        # a secondary, 5 cm: a grade is not a step.)
+        f = overpass()
+        g = grading.Grader(FRAME, FakeMD(f), flat_elev)
 
-            def elev(la, lo):
-                return g.apply(la, lo, flat_elev(la, lo), grading.ROAD_LIFT)
-            bp = roads.BridgeProfiles(FRAME, lambda key: f, elev)
-            (_fid, spec, xy, z, _lon), = bp.parts([f], (-100, -100, 100, 100))
-            xy = np.asarray(xy)[:, :2]
-            for e, i in ((0, 1), (-1, -2)):
-                t = xy[e] - xy[i]
-                t /= np.hypot(*t)
-                n = np.array([-t[1], t[0]])
-                at = []
-                for d in (0.5, 1.5):
-                    q = xy[e] + t * d
-                    pts = np.array([q + n * k * spec.width / 2 for k in (-1.0, -0.5, 0.0, 0.5, 1.0)])
-                    la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-                    at.append(FRAME.geodetic_to_enu(la, lo, np.asarray(elev(la, lo)))[2])
-                road = at[0] + (at[0] - at[1]) * 0.5        # (at the end: 0.5 m back along the approach's grade)
-                self.assertLess(float(np.max(np.abs(road - z[e]))), 0.1, (road, z[e]))
-        finally:
-            grading.APPROACH_ON = old
+        def elev(la, lo):
+            return g.apply(la, lo, flat_elev(la, lo), grading.ROAD_LIFT)
+        bp = roads.BridgeProfiles(FRAME, lambda key: f, elev)
+        (_fid, spec, xy, z, _lon), = bp.parts([f], (-100, -100, 100, 100))
+        xy = np.asarray(xy)[:, :2]
+        for e, i in ((0, 1), (-1, -2)):
+            t = xy[e] - xy[i]
+            t /= np.hypot(*t)
+            n = np.array([-t[1], t[0]])
+            at = []
+            for d in (0.5, 1.5):
+                q = xy[e] + t * d
+                pts = np.array([q + n * k * spec.width / 2 for k in (-1.0, -0.5, 0.0, 0.5, 1.0)])
+                la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+                at.append(FRAME.geodetic_to_enu(la, lo, np.asarray(elev(la, lo)))[2])
+            road = at[0] + (at[0] - at[1]) * 0.5        # (at the end: 0.5 m back along the approach's grade)
+            self.assertLess(float(np.max(np.abs(road - z[e]))), 0.1, (road, z[e]))
 
 
 if __name__ == "__main__":

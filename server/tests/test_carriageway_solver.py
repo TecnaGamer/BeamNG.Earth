@@ -173,34 +173,6 @@ class NativeProfilesTest(unittest.TestCase):
             np.testing.assert_allclose(np.concatenate(z), reference.x, atol=2e-5)
 
 
-class GradingConsumerTest(legacy.StackTest):
-    def test_failed_region_is_not_persisted(self):
-        f = test_roads.features([[(-200., 0.), (200., 0.)]], ["motorway"])
-        g = grading.Grader(test_roads.FRAME, test_grading.FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.))
-        planner = g.store.planners_of(np.array([test_roads.FRAME.lat0]),
-                                     np.array([test_roads.FRAME.lon0]))[0][0]
-        home = mapcells.cell_of(test_roads.FRAME.lat0, test_roads.FRAME.lon0)
-        shared = mock.Mock()
-        shared.region_claim.return_value = (None, True)
-        planner.shared = shared
-        faults = revisit.thread_faults()
-        def exhausted(chains, couplings=(), diagnostics=None, **kwargs):
-            diagnostics.update(converged=False, feasible=False, status="MaxTime")
-            return [np.asarray(c["t"]).copy() for c in chains]
-        with mock.patch.object(cw, "solve", side_effect=exhausted):
-            region = planner._cw_region(home)
-        self.assertTrue(region["failed"])
-        self.assertEqual(region["prof"], {})
-        self.assertGreater(revisit.thread_faults(), faults)
-        shared.region_store.assert_not_called()
-        shared.region_release.assert_called_once()
-        with mock.patch.object(planner, "_cw_region", return_value=region):
-            for _ in range(2):
-                faults = revisit.thread_faults()
-                self.assertIsNone(planner._cw_z_at(np.array([[0., 0.], [4., 0.]]), np.array([[2., 0.]])))
-                self.assertGreater(revisit.thread_faults(), faults)
-
-
 class SegmentSpacingTest(unittest.TestCase):
     """A segment's grade bound and a window's curve bound are its own spacings' (kernel VERSION 309), not the chain's one
     closest-two-samples step: a dip piece with two samples 0.3 m apart was held to 0.3 m of grade over its whole length."""

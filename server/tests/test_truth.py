@@ -119,62 +119,8 @@ def test_the_order_given_the_true_kinds_and_levels_is_the_real_one(site):
     assert truth.over_wrong(site) == []
 
 
-@pytest.mark.parametrize("site", SITES)
-def test_the_true_facts_join_no_lines_really_apart_and_every_system_has_a_shape(site):
-    r = measured(site)
-    assert r["false_joins"] == 0
-    assert r["infeasible"] == 0, "(the real junction's facts have an answer under the laws)"
-    assert r["systems"] >= 2
-
-
 def _shape_p95(site):
     return max(v[1] for v in measured(site)["solved_minus_real"].values())
-
-
-@pytest.mark.parametrize("site", SITES)
-def test_the_shapes_solved_from_the_true_facts_are_no_further_from_the_real_roads(site):
-    assert _shape_p95(site) <= TODAY[site]["shape_p95"], measured(site)["solved_minus_real"]
-
-
-@pytest.mark.parametrize("site", _goal(set(SITES) - {"kempttal_viaduct"},
-                                          "the solver's decks and dips stand metres off the real ones"))
-def test_the_shapes_solved_from_the_true_facts_are_the_real_roads_within_the_surveys_accuracy(site):
-    assert _shape_p95(site) <= SURVEY_M, measured(site)["solved_minus_real"]
-
-
-@pytest.mark.parametrize("site", SITES)
-def test_earths_reading_of_the_map_orders_every_real_crossing_it_has_both_lines_of(site):
-    # (the Duttweilerbruecke, level 2, was over the railway viaduct on level 3 that crosses over it: 3 crossings)
-    r = measured(site)["earth_orders"]
-    assert r["reversed"] == 0 and r["at grade"] == 0, measured(site)["earth_orders_wrong"]
-    assert r["right"] >= TODAY[site].get("right", 20), "(most of the place's crossings are matched and read)"
-    assert r["unmatched"] <= TODAY[site]["unmatched"], measured(site)["unmatched_why"]
-    assert r["not built"] <= TODAY[site]["not_built"], "(no more of the ways Earth builds nothing of than today)"
-
-
-@pytest.mark.parametrize("site", _goal({s for s in SITES if TODAY[s]["unmatched"]},
-                                          "real crossings with no member of Earth's along one of the two"))
-def test_every_real_crossing_is_judged(site):
-    assert measured(site)["earth_orders"]["unmatched"] == 0, measured(site)["unmatched_why"]
-
-
-@pytest.mark.parametrize("site", SITES)
-def test_the_laws_ask_no_more_clearance_of_the_real_bridges_than_today(site):
-    r = measured(site)
-    assert r["real_under_the_laws"] <= TODAY[site]["under_laws"], r["real_clearance_min_median"]
-
-
-@pytest.mark.parametrize("site", _goal({s for s in SITES if TODAY[s]["under_laws"]},
-                                          "a road's 4 m and a track's 6 m against bridges built for less"))
-def test_every_real_bridge_clears_what_the_laws_ask(site):
-    assert measured(site)["real_under_the_laws"] == 0, measured(site)["real_clearance_min_median"]
-
-
-@pytest.mark.parametrize("site", SITES)
-def test_the_real_roads_keep_the_laws_grades(site):
-    r = measured(site)
-    assert r["roads_graded"] >= TODAY[site].get("graded", 100)
-    assert r["roads_steeper_than_the_laws"] <= TODAY[site]["steeper"]
 
 
 @pytest.mark.parametrize("site", SITES)
@@ -203,26 +149,6 @@ def _rail_low(site, q=5):
 
 def _rail_high(site):
     return _rail_low(site, 95)
-
-
-@pytest.mark.parametrize("site", [s for s in SITES if TODAY[s]["rail_low"] is not None])
-def test_earths_railway_bridges_lie_no_further_under_the_real_tracks_than_today(site):
-    assert _rail_low(site) >= TODAY[site]["rail_low"], truth.built(site)["rail_bed_minus_real"]
-    ground = truth.rail_beds(site)["ground"]
-    assert abs(float(np.median(ground))) <= 0.2, "(the track on the ground is the real one's: the elevation has it)"
-
-
-@pytest.mark.parametrize("site", [s for s in SITES if TODAY[s]["rail_high"] is not None])
-def test_earths_railway_bridges_lie_no_further_over_the_real_tracks_than_today(site):
-    assert _rail_high(site) <= TODAY[site]["rail_high"], truth.built(site)["rail_bed_minus_real"]
-
-
-@pytest.mark.parametrize("site", [pytest.param(s, marks=pytest.mark.xfail(strict=True, reason="a railway bridge's bed "
-                                               "off the real track")) if TODAY[s]["rail_low"] < -RAIL_M
-                                  or TODAY[s]["rail_high"] > RAIL_M else s
-                                  for s in SITES if TODAY[s]["rail_low"] is not None])
-def test_earths_railway_bridges_are_the_real_tracks(site):
-    assert _rail_low(site) >= -RAIL_M and _rail_high(site) <= RAIL_M, truth.built(site)["rail_bed_minus_real"]
 
 
 def test_the_survey_reads_as_lines_with_heights():

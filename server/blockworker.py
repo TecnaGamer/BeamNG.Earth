@@ -134,8 +134,6 @@ class _State:
         budget.register_shed(_roads.clear_placements)
         import roadsys
         budget.register_shed(roadsys.clear_memory)
-        import railprofile
-        budget.register_shed(railprofile.clear_memory)
 
     def _clear_chunks(self):
         with self.lock:

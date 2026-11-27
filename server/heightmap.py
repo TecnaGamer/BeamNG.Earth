@@ -136,6 +136,75 @@ def surface(frame, elev_fn, xs, ys, keep=None):
     return elev, u
 
 
+SPIKE_M = 1.0       # m: a sample this far over (or under) both its neighbours on a line through it is one sample thick
+
+
+def despike(z, spike_m=SPIKE_M):
+    """The heights of the inside of grid z (r + 2, c + 2) with every sample one sample thick taken out: one standing
+    more than spike_m over both of its neighbours, or under both, along any of the four lines through it (across, up
+    and down, the two diagonals) takes the mean of the two on the line where it stands out most. A wall or a post one
+    sample wide is no more than the grid can hold (the user 2026-11-27: "remove single point spikes that may happen
+    since we don't have enough resolution for thin walls"). Each sample from the unfiltered heights round it alone, so
+    every grid that holds it gives it the same height. Pure."""
+    z = np.asarray(z, np.float64)
+    c = z[1:-1, 1:-1]
+    pairs = ((z[1:-1, :-2], z[1:-1, 2:]), (z[:-2, 1:-1], z[2:, 1:-1]), (z[:-2, :-2], z[2:, 2:]), (z[:-2, 2:], z[2:, :-2]))
+    best = np.zeros(c.shape)
+    out = c.copy()
+    for a, b in pairs:
+        over = np.maximum(c - np.maximum(a, b), np.minimum(a, b) - c)
+        take = (over > spike_m) & (over > best)
+        out = np.where(take, (a + b) / 2, out)
+        best = np.where(take, over, best)
+    return out
+
+
+def despiked(frame, elev_fn, spike_m=SPIKE_M):
+    """elev_fn for a block's grid (grid_u, grid_u_chunked: a whole block's lattice (n, n), or whole chunks of it, flat)
+    with its spikes taken out (despike): each grid read with a ring of lattice samples round it, at the coordinates
+    every block computes for them (block_coordinates: index x SQUARE), so a block's edge sample is the same as in the
+    block next to it."""
+    def lattice(lat, lon):
+        x, y, _ = frame.geodetic_to_enu(lat, lon, 0.0)
+        return (np.rint(np.asarray(x, np.float64) / SQUARE).astype(np.int64),
+                np.rint(np.asarray(y, np.float64) / SQUARE).astype(np.int64))
+
+    def ring(lat, lon):
+        """(lat, lon) of the grid (n, m) of lattice samples lat / lon with a ring of one more sample round it."""
+        kx, ky = lattice(lat[0, :], lon[0, :]), lattice(lat[:, 0], lon[:, 0])
+        xs = lattice_coords(int(kx[0][0]) - 1, lat.shape[1] + 2)
+        ys = lattice_coords(int(ky[1][0]) - 1, lat.shape[0] + 2)
+        if type(frame) is geodesy.EnuFrame:
+            la, lo = fast._ef.block_coordinates(xs, ys, frame.origin, frame.rot)
+        else:
+            la, lo, _ = frame.enu_to_geodetic(xs, ys[:, None], 0.0)
+            la, lo = (np.broadcast_to(np.asarray(v, np.float64), (len(ys), len(xs))) for v in (la, lo))
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        if not (np.array_equal(la[1:-1, 1:-1], lat) and np.array_equal(lo[1:-1, 1:-1], lon)):
+            raise ValueError("despiked: the grid's samples are not the lattice's")
+        return la, lo
+
+    def fn(lat, lon):
+        lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+        if lat.ndim == 2:
+            grids = [(lat, lon)]
+        else:
+            side = CHUNK
+            n = lat.size // (side * side)
+            if n * side * side != lat.size:
+                raise ValueError("despiked: %d samples are not whole chunks of %d" % (lat.size, side))
+            grids = [(lat.reshape(n, side, side)[j], lon.reshape(n, side, side)[j]) for j in range(n)]
+        rings = [ring(a, b) for a, b in grids]
+        flat = np.asarray(elev_fn(np.concatenate([r[0].ravel() for r in rings]),
+                                  np.concatenate([r[1].ravel() for r in rings])), np.float64)
+        out, k = [], 0
+        for (a, _b), (ra, _rb) in zip(grids, rings):
+            out.append(despike(flat[k:k + ra.size].reshape(ra.shape), spike_m))
+            k += ra.size
+        return out[0] if lat.ndim == 2 else np.concatenate([o.ravel() for o in out])
+    return fn
+
+
 def grid_u(frame, elev_fn, cx=0.0, cy=0.0, size=SIZE, keep=None):
     """ENU z for every grid sample, indexed [gy, gx] (gy = north), all from real data. keep: as
     surface()."""
@@ -341,7 +410,9 @@ def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEF
     dict, optional) receives "lat", "lon" and "u" of the grid ([gy, gx], gy = north) and write_png's
     "qgrid". chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added).
     post(u, keep): the grid's heights changed before they are written (a provisional block's L0 roads, l0roads.py;
-    needs keep, never with chunks: the chunks keep the heights as computed). disk: grid_u_chunked's (with chunks)."""
+    needs keep, never with chunks: the chunks keep the heights as computed). disk: grid_u_chunked's (with chunks).
+    Every block's heights despiked (despiked: the chunks keep them so)."""
+    elev_fn = despiked(frame, elev_fn)
     if chunks is None:
         u = grid_u(frame, elev_fn, cx, cy, size, keep)
     else:

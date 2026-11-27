@@ -175,6 +175,7 @@ class PlanCacheTest(unittest.TestCase):
         os.utime(lock, (old, old))
         self.assertEqual(c.claim(KEY), (None, True))
 
+    @mock.patch.object(grading, "STRICT", False)      # (the fallbacks: BNE_STRICT=off's)
     def test_failed_fetch_not_stored(self):
         class Failing:
             def cell(self, key, layers=None, kind=None):
@@ -472,6 +473,7 @@ class RoadStageTest(unittest.TestCase):
             self.assertTrue(b.shared.is_short(key), "plans from a short stage are short")
             self.assertFalse(revisit.has(self.dir, "plans", b.shared._revisit_key(key)), "and not kept for later visits")
 
+    @mock.patch.object(grading, "STRICT", False)      # (the fallbacks: BNE_STRICT=off's)
     def test_deck_patches_say_they_are_short_at_every_read(self):
         """A deck's correction made while something it read failed is remembered as short: every later read of it
         (another cell's stage, the same cell's again) is short too, and an error while they are prepared is one."""
@@ -868,41 +870,6 @@ class RoadStageTest(unittest.TestCase):
             pl._decks_in([key])
         self.assertEqual(b4.n, 0)
 
-    def test_kept_answers_made_short_say_so_again(self):
-        """The planner's kept answers (_marked: chain candidates, pin heights, junction and abutment lifts, crossing
-        solves, grade matches, carriageway cells and regions, the decks near a cell) made while a read failed are short
-        for every later reader; one made complete is not."""
-        import revisit
-        f = features([[(-300, 20), (300, 20)]], ["residential"])
-        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
-        g = self.grader(FakeMD(f))
-        pl = g.store.planner_of_cell(self.cells(g, la, lo)[0])
-        fail = {"v": True, "calls": 0}
-
-        def calc(planner, xy):
-            fail["calls"] += 1
-            if fail["v"]:
-                revisit.fault(lidar=True)
-            return None
-        with mock.patch.object(grading._Planner, "_end_lift_calc", calc), \
-                mock.patch.object(grading._Planner, "_grade_match_calc", calc):
-            for ask in (pl._end_lift, pl._grade_match):
-                fail["v"] = True
-                with revisit.scope() as b1:
-                    ask(np.array([5.0, 7.0]))
-                with revisit.scope() as b2:
-                    ask(np.array([5.0, 7.0]))
-                self.assertTrue(b1.lidar and b2.lidar)
-                fail["v"] = False
-                with revisit.scope() as b3:
-                    ask(np.array([50.0, 70.0]))
-                    ask(np.array([50.0, 70.0]))
-                self.assertEqual((b3.n, b3.lidar), (0, 0))
-        self.assertEqual(fail["calls"], 4, "each made once")
-        for name in ("_chain_cands", "_stronger_z", "_junction_lift", "_cw_cell_parts", "_cw_region", "_end_lift",
-                     "_decks_near", "_xsolve", "_grade_match", "_end_lift_raw"):
-            self.assertEqual(getattr(grading._Planner, name).__name__, name)
-            self.assertTrue(getattr(getattr(grading._Planner, name), "marked", None), name + " keeps its marks")
 
     def test_both_pin_ends_kept_by_one_making_carry_its_marks(self):
         """A part planned whole keeps the pin heights of both its ends (_strong_keep): made while a read failed, the
@@ -959,57 +926,6 @@ class RoadStageTest(unittest.TestCase):
                 pl3._stronger_z(pl3._chain_cands(key)[0], True, key)
             self.assertEqual(b6.n, 0)
 
-    def test_a_fallback_after_an_error_is_short_when_it_is_the_datas(self):
-        """A handler that goes on with a fallback (grading._caught): any error makes what is kept and built on it
-        short, with no fault raised before it (a read's, or a ValueError / IndexError / KeyError of malformed data
-        deep in a kernel); only the few errors of the computation itself (grading._COMPUTED) on complete inputs do
-        not (logged with the cell), and in a making that had read something short they do too; pools.Abandoned goes
-        on up."""
-        import revisit
-        import pools
-        f = features([[(-300, 20), (300, 20)]], ["residential"])
-        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
-        g = self.grader(FakeMD(f))
-        pl = g.store.planner_of_cell(self.cells(g, la, lo)[0])
-        err = {"e": None, "fault": False}
-
-        def calc(planner, xy):
-            if err["fault"]:
-                revisit.fault(lidar=True)
-            raise err["e"]
-        with mock.patch.object(grading._Planner, "_end_lift_calc", calc), \
-                mock.patch.object(grading._Planner, "_grade_match_calc", calc), \
-                mock.patch.object(grading._Planner, "_xsolve_calc", lambda planner, bridge: calc(planner, bridge)):
-            asks = (lambda v: pl._end_lift(np.array([v, 7.0])), lambda v: pl._grade_match(np.array([v, 7.0])),
-                    lambda v: pl._xsolve(np.array([[v, 0.0], [v + 20.0, 0.0]])))
-            for n, ask in enumerate(asks):
-                for m, e in enumerate((OSError("read failed"), TimeoutError("slow"), LookupError("a cell unread"),
-                                       ValueError("operands could not be broadcast"), IndexError("index 9 is out of bounds"),
-                                       KeyError("bridges"))):
-                    err["e"], err["fault"] = e, False
-                    v = 100.0 * n + 10.0 * m
-                    with revisit.scope() as b1:
-                        self.assertIsNone(ask(v))
-                    with revisit.scope() as b2:         # (the kept fallback, read again)
-                        self.assertIsNone(ask(v))
-                    self.assertTrue(b1.n and b2.n, (n, type(e).__name__))
-                err["e"] = ZeroDivisionError(f"a part of no length {n}")    # (the computation's own, complete inputs)
-                with self.assertLogs("earthd.grading", "WARNING") as logs, revisit.scope() as b3:
-                    self.assertIsNone(ask(100.0 * n + 85.0))
-                    self.assertIsNone(ask(100.0 * n + 85.0))
-                self.assertEqual((b3.n, b3.lidar), (0, 0))
-                self.assertTrue(any("complete inputs" in ln for ln in logs.output))
-                err["fault"] = True                             # (the same error after a short read: short)
-                with revisit.scope() as b4:
-                    ask(100.0 * n + 90.0)
-                with revisit.scope() as b5:
-                    ask(100.0 * n + 90.0)
-                self.assertTrue(b4.n and b4.lidar and b5.n and b5.lidar)
-                err["e"], err["fault"] = pools.Abandoned(), False
-                with self.assertRaises(pools.Abandoned):
-                    ask(100.0 * n + 95.0)
-        self.assertEqual(grading.log.name, "earthd.grading")
-        self.assertEqual(set(grading._COMPUTED), {ZeroDivisionError, FloatingPointError, OverflowError})
 
     def test_the_marks_said_are_those_of_the_entry_returned(self):
         """A reader takes a kept answer made short of something; before it has said so, the entry is put out and a
@@ -1054,13 +970,13 @@ class RoadStageTest(unittest.TestCase):
             self.assertEqual(b2.n, 0, "the complete entry put in its place says nothing")
         # (every kept answer's marks are read where its entry is taken out)
         import inspect
-        for name in ("_chain_cands", "_stronger_z", "_junction_lift", "_cw_cell_parts", "_cw_region", "_end_lift",
-                     "_decks_near", "_xsolve", "_grade_match", "_end_lift_raw"):
+        for name in ("_chain_cands", "_stronger_z", "_end_lift", "_decks_near", "_xsolve", "_end_lift_raw"):
             fn = getattr(grading._Planner, name)
             memo = fn.marked[0]
             src = inspect.getsource(fn.__closure__[[c for c in fn.__code__.co_freevars].index("fn")].cell_contents)
             self.assertIn(f'_marks_seen("{memo}"', src, name)
 
+    @mock.patch.object(grading, "STRICT", False)      # (the fallbacks: BNE_STRICT=off's)
     def test_malformed_survey_arrays_are_refused_or_short(self):
         """A survey's arrays that do not fit each other are refused where they come in (roadz.Lines: a data error,
         read again from the source); should such lines reach the kernels all the same, the ValueError / IndexError

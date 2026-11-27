@@ -1,4 +1,4 @@
-"""Step 2 of the 3D solve: at each crossing, which path is over and the clearance it needs; at one level, they meet.
+"""Step 2 of the 3D solve: at each crossing, which path is over and the clearance it needs.
 
     order(network) -> [Layer]
 
@@ -7,31 +7,30 @@ kind (OSM's layer: stacked decks, a viaduct over a bridge, a track in a tunnel u
 clearance is the headroom the lower needs (its sign's, a truck's 4 m, a train's 6 m) and the upper's structure (a deck's
 depth by its span, a rail deck's, a tunnel's roof), gradeshapes.clearance_need.
 
-Every layer is a cost, not a law (the solve's soft couplings): OSM's layers can contradict the joins (a ramp merging into
-a deck mapped as crossing it, one level apart), and then the problem has no answer with every clearance held. A
-clearance short costs W_CLEAR per m^2; one the levels alone ask near an end of a path (a merge read as a crossing: the
-end of the ramp's path, not of a member a path goes on from), W_DOUBT, and so does one by the kinds near an end of a path
-where the map also joins the two paths within JOINED_NEAR_M (a street ending where it meets the ramp off the deck it is
-mapped under: the map has it both meet the deck and pass under it).
-At one level the two meet: their heights equal at the crossing, W_GRADE per m^2 of a step there."""
+A clearance is a constraint of the solve: the upper is over the lower by it at least. A crossing is no clearance where
+the map does not put one path over the other there:
+- at one level ("grade"): the map has no node of both there, so it says nothing of their heights;
+- two tunnels at one level ("apart"): the one under the other, and the map does not say which;
+- by the levels alone within NEAR_END_M of an end of a path ("merge"): a ramp merging into a deck, mapped crossing it
+  one level apart, its end the merge;
+- by the kinds within NEAR_END_M of an end of a path where the map joins the two paths within JOINED_NEAR_M ("joined"):
+  a street ending where it meets the ramp off the deck it is mapped under, the map having it both meet the deck and
+  pass under it."""
 from dataclasses import dataclass
 
 import numpy as np
 
 import gradeshapes as _gsh
 
-W_CLEAR = 1.0e5         # per m^2 of a clearance short (a metre short costs what 1e5 samples a metre off their ground do)
-W_DOUBT = 1.0e3         # per m^2 of a clearance the levels alone ask within NEAR_END_M of an end
-W_GRADE = 1.0e4         # per m^2 of a step where two crossing at one level meet
-NEAR_END_M = 20.0       # m from a path's end within which an order by the levels alone is doubted ...
+NEAR_END_M = 20.0       # m from a path's end within which an order by the levels alone is a merge ...
 JOINED_NEAR_M = 40.0    # ... and one by the kinds too, where the map joins the two paths within this of the crossing
 
 
 @dataclass(frozen=True)
 class Layer:
-    """A crossing of members a and b (at sa, sb; at q): upper "a", "b" or None (at grade); need (m) the upper's road
-    over the lower's at least (0 at grade); why "kinds", "levels" or "grade"; weight: what a metre short (or of step)
-    squared costs."""
+    """A crossing of members a and b (at sa, sb; at q): upper "a", "b" or None (no clearance); need (m) the upper's road
+    over the lower's at least (0 without a clearance); why "kinds", "levels" (a clearance), "grade", "apart", "merge"
+    or "joined" (none)."""
     a: int
     sa: float
     b: int
@@ -40,10 +39,9 @@ class Layer:
     upper: object
     need: float
     why: str
-    weight: float
 
     def over(self):
-        """(upper member, its s, lower member, its s), or None at grade."""
+        """(upper member, its s, lower member, its s), or None without a clearance."""
         if self.upper is None:
             return None
         return (self.a, self.sa, self.b, self.sb) if self.upper == "a" else (self.b, self.sb, self.a, self.sa)
@@ -82,16 +80,16 @@ def layer(network, a, sa, b, sb, q, joins=None):
     ma, mb = net.m[a], net.m[b]
     up = _gsh._over(ma, mb)
     if up is None:
-        return Layer(a, sa, b, sb, q, None, 0.0, "grade", W_GRADE)
+        return Layer(a, sa, b, sb, q, None, 0.0, "apart" if ma.kind == mb.kind == "tunnel" else "grade")
     by_kind = _gsh.LEVEL_BAND[ma.kind] != _gsh.LEVEL_BAND[mb.kind]
+    if _near_end(network, a, sa) or _near_end(network, b, sb):
+        if not by_kind:
+            return Layer(a, sa, b, sb, q, None, 0.0, "merge")
+        if joined_near(network, path_joins(network) if joins is None else joins, a, sa, b, sb):
+            return Layer(a, sa, b, sb, q, None, 0.0, "joined")
     u, d = (a, b) if up == "i" else (b, a)
-    need = float(_gsh.clearance_need(net, u, d, q))
-    near = _near_end(network, a, sa) or _near_end(network, b, sb)
-    if joins is None:
-        joins = path_joins(network)
-    doubt = near and (not by_kind or joined_near(network, joins, a, sa, b, sb))
-    return Layer(a, sa, b, sb, q, "a" if up == "i" else "b", need, "kinds" if by_kind else "levels",
-                 W_DOUBT if doubt else W_CLEAR)
+    return Layer(a, sa, b, sb, q, "a" if up == "i" else "b", float(_gsh.clearance_need(net, u, d, q)),
+                 "kinds" if by_kind else "levels")
 
 
 def order(network):
@@ -101,10 +99,8 @@ def order(network):
 
 
 def summary(layers):
-    """{why: count, "doubted": count}: what the layers rest on."""
+    """{why: count}: what the layers rest on."""
     out = {}
     for x in layers:
         out[x.why] = out.get(x.why, 0) + 1
-        if x.weight == W_DOUBT:
-            out["doubted"] = out.get("doubted", 0) + 1
     return out

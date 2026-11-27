@@ -184,19 +184,16 @@ def measure(name, threads=1, approach=None, plans_format=None):
 
 
 def _hook_cells(site, md, name):
-    """Each replayed roads cell as MapData.cell hands it to the game (mapdata._decoded_layer): its grade separations
-    (gradesep.hook: the bridges the map leaves out, at BNE_GRADESEP's mode, the DEM read from the replay's ground) and
-    its eight neighbours (gradesep.neighbours_hook: lane flow, a road's home cell, regional classes, the other cells'
-    separations). Without them a replay planned other roads than the game builds (2026-11-12: S1 Rautenweg 176.9
+    """Each replayed roads cell as MapData.cell hands it to the game (mapdata._decoded_layer): its eight neighbours
+    (neighbours.neighbours_hook: lane flow, a road's home cell, regional classes). Without them a replay planned other roads than the game builds (2026-11-12: S1 Rautenweg 176.9
     against the game's 212.6). The cell id (_bnge_cell: roads._FACTS_MEM keeps a cell's facts by it) names the site and
     its kept radius: a pool process measures one site after another."""
-    import gradesep
     import mapcells
+    import neighbours
     tag = f"drivability:{name}:{KEEP_M_SITE.get(name, KEEP_M)}"
     for key, f in site.cells.items():
         k = mapcells.CellKey(*(int(v) for v in key.split("/")))
-        f.__dict__.update(_bnge_cell=(key, "roads", tag), _bnge_gradesep=gradesep.hook(md, k),
-                          _bnge_neighbours=gradesep.neighbours_hook(md, k))
+        f.__dict__.update(_bnge_cell=(key, "roads", tag), _bnge_neighbours=neighbours.neighbours_hook(md, k))
 
 
 APPROACH_HALF_M = 150.0  # m: the square graded first round an approach point

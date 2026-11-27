@@ -27,10 +27,10 @@ import revisit  # noqa: E402
 # The modules whose output is road plans, cell facts, road tiles, paint or the elevation under them.
 OUTPUT_MODULES = (
     "roads", "grading", "roadmesh", "surface", "mapdata", "overture", "osmtags", "oneway_joins", "lanesections",
-    "levelways", "roadsmooth", "railways", "railtags", "markings", "rampmerges", "gradesep", "roadz", "dem",
+    "levelways", "roadsmooth", "railways", "railtags", "markings", "rampmerges", "neighbours", "roadz", "dem",
     "footbridges", "bridgetypes", "carriageways", "crossings", "roadlanes", "roadwidth", "navgraph", "plancache",
     "decisions", "l0roads", "sidewalks", "guardrails", "tunnellids", "subsea", "deckspans", "railroadseam",
-    "junctions", "roadcorners", "medians", "medianbarriers", "railprofile", "railbridges", "portals", "germanroads",
+    "junctions", "roadcorners", "medians", "medianbarriers", "railbridges", "portals", "germanroads",
     "franceroads", "europewalks", "roadsurf", "lidarz", "pmtiles", "hrdem", "lidarbc", "mtarchive", "polardem",
     "bdtopo", "blockworker", "specs", "tapers", "experimental")
 

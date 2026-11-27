@@ -100,7 +100,7 @@ def key(code, stamp, rails, lanes, switches, osm):
 
 def encode(f):
     """(arrays {name: ndarray}, meta dict) of Features f, or raises Unkept."""
-    extra = set(f.__dict__) - set(FIELDS) - set(STATE) - set(MEMOS) - {"_bnge_gradesep", "_bnge_neighbours", "_bnge_cell"}
+    extra = set(f.__dict__) - set(FIELDS) - set(STATE) - set(MEMOS) - {"_bnge_neighbours", "_bnge_cell"}
     if extra:
         raise Unkept("state " + ",".join(sorted(extra)))
     arrays, objs = {}, {}

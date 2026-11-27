@@ -39,12 +39,9 @@ Pure: members in, shapes and ramps out. grading.py reads the members from its ce
 plans (the decks through roads.DECK_Z_HOOK, the tunnels' floors through roads.TUNNEL_Z_HOOK); the terrain follows the
 plans (cut and fill).
 """
-import hashlib
 import heapq
 import math
-import os
 import threading
-import time
 from collections import OrderedDict, namedtuple
 
 import numpy as np
@@ -59,13 +56,13 @@ import railways
 import logging
 
 log = logging.getLogger("earthd.grading")
-_PROF = threading.local()      # (BNE_IX_PROFILE: _ramp_reaches' counters, one line per find; a thread's own: cells are planned side by side)
-_PHASE = [""]              # (BNE_IX_PROFILE: find_interchanges' phase being timed)
 
 STEP_M = 4.0                # m between a deck's or a dip's samples
 CUT_MIN_M = 0.05            # m: a join's arc this near a sample is that sample
-SEGMENT_STEP_ON = os.environ.get("BNE_SEGMENT_STEP", "1").strip().lower() not in ("0", "off", "no", "false")
 JOIN_M = 2.5                # m: two parts' ends (or an end and another's line) this close meet there
+NODE_M = 6.0                # m: a map node of both this near where they meet is that meeting (_mapped_at)
+NODE_EPS_M = 0.05           # m: two lines' points this close are one map node (a road whose nodes are not known: both
+#                             drawn from OpenStreetMap's coordinates of it, which agree to a centimetre)
 CROSS_END_M = 2.0           # m: a crossing this near either part's end is a joint, not a separation
 MERGE_DEG = 40.0            # deg: a deck's end on another deck's line at another level meets it only along it (a ramp's
                             # merge or diverge, its gore's taper: Vienna's A23 at 29 deg, Gravelly Hill's links at 6) and
@@ -86,7 +83,6 @@ DECK_SPAN_RATIO = 22.0
 RAIL_DECK_DEPTH_M = 1.68
 COVER_M = 1.0               # m of structure over an underpass's headroom (the roof under a road or track at grade)
 TUNNEL_MAX_M = 300.0        # m: a longer road tunnel is a tunnel network of its own (tunnels.py), not an underpass
-CONNECT_M = 400.0           # m: a road on the ground this short between two structures' ends is named by the audits (it joins
 #                             nothing: an interchange takes in a road as far as its ramps reach, _ramp_reaches)
 RAMP_MAX_M = 600.0          # m: the longest embankment or cut followed along a road
 REACH_MAX_M = 1800.0        # m: how far from its end a deck's reach is followed, the junctions' chains included (a
@@ -98,33 +94,26 @@ DIP_MARGIN_M = 3.0          # m past the upper part's edge a road going under ho
 FOOT_STEP_M = 1.0           # m between the points of a crossing's footprint (under_pairs)
 DECK_MAX_GRADE = 0.06       # a deck climbs no steeper than this (the game's: roads.DECK_MAX_GRADE, grading sets it from there)
 DECK_AIR_M = 0.5            # m: a span over the ground keeps its girders this far off it (past its abutments: _abutments)
-SOFT_M = 0.6                # m: the rounding where an embankment meets the ground (a soft maximum)
-OFF_GROUND_M = 0.1          # m: a road this far over (under) its ground is off it: an embankment (a cut); less, it is on it
 
 CLEAR_PATH_M = 3.0          # m: a path's headroom (no vehicle on it)
 
-W_END = 1.0                 # a system end's embankment (per m, squared)
 W_HOLD = 100.0              # a short deck chain (a road dug under it) at its ground
-W_DIP = 0.5                 # a road's dip under its crossing
 RAILS = ("rail", "rail_deck")
 # A track held at the bed the railways lay (its distance from it, per sample, squared). What moving a way costs is the earth,
 # and findground's law has it as the run of its ramp, lack / grade (findground.dip_run): a way that may climb only at a
 # track's grade runs longer for the same move than any road, by the ratio of their grades. The cheapest way to move is the
 # steepest road the laws allow (gradelaw: a link in a village, 17 %), a track's grade is railways.GRADE: so a track costs
 # that ratio times a road's dip to move, the least it can cost, and it moves only where nothing cheaper closes the conflict.
-W_TRACK = W_DIP * gradelaw.road_grade("service", 20) / railways.GRADE
-W_SMOOTH = 0.2
-W_STIFF = 3.0e3             # a deck's line (per sample, squared: its bends), see _solve_shape_qp
-W_JOIN = 300.0
 
-Member = namedtuple("Member", "key line kind cls kmh level half limit nodes held", defaults=(None, False))
+Member = namedtuple("Member", "key line kind cls kmh level half limit nodes held node_xy", defaults=(None, False, None))
 # key: hashable, unique, the same from every cell; line (k, 2) frame ENU; kind: "ground", "deck", "tunnel", "rail",
 # "rail_deck"; cls: road class ("rail" for track); kmh: speed limit or None; level: the map's level (OSM's layer) of a
 # deck or a rail deck, 0 on the ground (_over: the order of two crossing members of one kind); half: half
 # width (m); limit: the road's signed height limit (m), a callable q (x, y) -> m or None (its signs, read where it
 # crosses: grading's roads.road_sign_at, the dips' own) or None; nodes: its road's map nodes (a frozenset of connector
 # ids) or None (not known: a track); held: a deck never raised (grading's UNDER_TUNNEL_FIXED: the map has the road
-# under it in a short tunnel), its chain at its ground and the roads under it dug, whatever its length
+# under it in a short tunnel), its chain at its ground and the roads under it dug, whatever its length; node_xy: where
+# each of its nodes lies ((connector id, x, y) frame ENU; None: not known), the place a join of its road is (_mapped_at)
 
 PATHS = gradelaw.PATHS
 MINOR = {"residential", "service", "unclassified", "living_street", "road"}
@@ -311,20 +300,9 @@ def _is_seed(net, i):
     return False            # (a rail deck: the railways', held at its bed; in a system only as what a seed crosses)
 
 
-def _tunnel_network(net, j):
-    """Whether member j is a road tunnel longer than TUNNEL_MAX_M: tunnels.py's own (its bore laid under the ground
-    over it), no part of any system, neither a seed nor a road going under one. A deck crossing it took it for an
-    underpass and dug it as a dip held under its ground while tunnels.py buried the bore it draws: Porte Maillot's two
-    Avenue de Neuilly decks ended over the 349 m Tunnel Grand-Maillot and rose 6.2 m over the square to clear a dip at
-    37.3 m that was never drawn (the bore at 34 m), the street between their ends and its ramps on a 6 m fill."""
-    return net.m[j].kind == "tunnel" and net.L[j] > TUNNEL_MAX_M
-
-
 _LINE_ID = {}              # (repr(key), len(line)) -> a member's line id: a growth's rounds each make a new net, and
 _LINE_ID_MAX = 100000      # (62,000 members hashed a round was a second of each: Yokohama; ~35 MB at the cap)
-RAMP_MEMO_MAX = 4000       # ramps kept in the process's memo (_RAMPS, _Ramper.memo: their samples, ground and curve; ~11 KB a
                            # ramp, 44 MB at most; a giant interchange lays 1,200 a round)
-_RAMPS = {}                # the ramps laid by every growth of the process, by what a ramp is made of (_Ramper.ramp_from's key):
 #                            the growths of the interchanges in one district lay the same ramps off the same decks, each from
 #                            the start (Yokohama: 44 growths in one region, 40 of its 57 s in the ramps' reaches)
 
@@ -361,16 +339,6 @@ def _relations(net, i):
     for j, hits, ends in linenet.geometry(net, i):
         out.extend((j,) + r_ for r_ in _pair_from(net, i, j, hits, ends))
     return out
-
-
-class Scan:
-    """What a growth's rounds keep (find_interchanges scan=): the ramps' memo (_ramp_reaches' across the rounds and
-    growths: _Ramper.memo) and the line network their nets are bound to (one for the whole growth)."""
-
-    def __init__(self):
-        import linenet
-        self.ramps = _RAMPS
-        self.network = linenet.current()
 
 
 def _tangent(line, s, sq):
@@ -592,18 +560,21 @@ def one_part(members):
 
 
 def _end_meets(net, e, se, o, so, crossed):
-    """Whether member e's end (at arc length se) on member o's line (at so) is where they meet: between parts at one
-    level (a T, a ramp onto its road, a road going on), or a road on the ground ending on a structure where the map
-    joins them (a node of both; on the structure's end always), or two structures at different levels where the map
-    joins them, end to end or a deck merging along another deck (MERGE_DEG) that it does not also cross; not where
-    two structures at different levels touch in plan with no node of both (a deck's or a tunnel's end over or under
-    another's end or middle: a separation, not a joint, its clearance kept: in Barcelona a level-2 service deck's ends
-    lay on a level-1 one's ends in plan, taken for joints at both: 13 such in one 14-deck system, most of its relaxed
-    solve's shortfall), nor a road on the ground
-    ending under a deck's middle (or over a tunnel's) with no node of it: the High Five's secondary leaving its
-    level-1 link's end 0.1 m off the line of a level-4 flyover 20 m over it, taken for that flyover's end on it, ran
-    a 290 m embankment down from the flyover's height along the street, and the street under the next flyover met its
-    deck. Two decks of one map road meet only end to end, never one's end on the other's middle: a road passing
+    """Whether member e's end (at arc length se) on member o's line (at so) is where they meet. Two parts of one map
+    road meet where they lie (a road going on). Two roads meet only where the map joins them, a node of both at that
+    place (_mapped_at), at any levels: a T, a ramp onto its road, a deck's end on the road it lands on; and between
+    two structures at different levels only end to end, or a deck merging along another deck (MERGE_DEG) that it does
+    not also cross. Not where they only lie near each other: two structures at different levels touching in plan (a
+    deck's or a tunnel's end over or under another's end or middle: a separation, not a joint, its clearance kept: in
+    Barcelona a level-2 service deck's ends lay on a level-1 one's ends in plan, taken for joints at both: 13 such in
+    one 14-deck system, most of its relaxed solve's shortfall); a deck's end over a road on the ground (four link
+    decks over the S1 at Breitenleer, no node of it, pulled down onto the motorway and it up to them; Wien
+    Hauptbahnhof's rail decks ending 0.5 m off the line of the busway they bridge, the busway held at the tracks'
+    height and 5.83 m under them at once); a road on the ground ending under a deck's middle (or over a tunnel's):
+    the High Five's secondary leaving its level-1 link's end 0.1 m off the line of a level-4 flyover 20 m over it,
+    taken for that flyover's end on it, ran a 290 m embankment down from the flyover's height along the street, and
+    the street under the next flyover met its deck. Two decks of one map road meet only end to end, never one's end
+    on the other's middle: a road passing
     over itself (Kawazu's Nanadaru loop, a spiral of one road at levels 1 to 3, its level-2 deck ending right over
     its level-1 deck on its heading where the level-3 one goes on) was taken for a merge, held at the deck under it
     there and 8.35 m over it on the level-3 deck's start: the loop infeasible. A road's own lane sections meeting end
@@ -614,17 +585,41 @@ def _end_meets(net, e, se, o, so, crossed):
     road cannot meet the one it passes over or under a few metres on: Gravelly Hill's level-1 M6 deck under its
     level-3 one at 29 deg, its end 5 m past their crossing)."""
     me, mo = net.m[e], net.m[o]
-    if mo.kind not in STRUCTURES or _over(me, mo) is None:
-        return True
-    mapped = me.nodes is None or mo.nodes is None or bool(me.nodes & mo.nodes)    # (no nodes known: as they lie)
-    if min(so, net.L[o] - so) <= JOIN_M:
-        return me.kind not in STRUCTURES or mapped or _road_of(me) == _road_of(mo)
-    if me.kind not in STRUCTURES:
+    one = _road_of(me) == _road_of(mo)
+    if _over(me, mo) is None:
+        return one or _mapped_at(net, e, se, o)
+    mapped = one or _mapped_at(net, e, se, o)
+    if mo.kind not in STRUCTURES or me.kind not in STRUCTURES or min(so, net.L[o] - so) <= JOIN_M:
         return mapped
-    if me.kind == mo.kind == "deck" and not crossed and _road_of(me) != _road_of(mo) and mapped:
+    if me.kind == mo.kind == "deck" and not crossed and not one and mapped:
         c = abs(float(dnp.dot(_tangent(net.lines[e], net.s[e], se), _tangent(net.lines[o], net.s[o], so))))
         return c >= dmath.cos(math.radians(MERGE_DEG))
     return False
+
+
+def _mapped_at(net, e, se, o):
+    """Whether the map joins members e and o where e's end (at arc length se) lies: a map node of both there (within
+    NODE_M), not one of both somewhere else. Suedtiroler Platz's primary ended on the middle of the Guertel's tunnel
+    under it, 1.8 m off its line; the two share a node, the tunnel's portal 100 m away, and were taken for joined there:
+    the square held at the tube's height and 5.15 m over it at once. Where both members' nodes are placed (node_xy), a
+    node id of both lying there; where one's are not known (a busway the OpenStreetMap import adds has no node ids; a
+    track), a point of e's line there within NODE_EPS_M of a point of o's (one map node is one place)."""
+    me, mo = net.m[e], net.m[o]
+    q = np.array([np.interp(se, net.s[e], net.lines[e][:, 0]), np.interp(se, net.s[e], net.lines[e][:, 1])])
+    if me.node_xy and mo.node_xy:
+        at_e = {c: (x, y) for c, x, y in me.node_xy}
+        for c, x, y in mo.node_xy:
+            xe = at_e.get(c)
+            if xe is not None and math.hypot(xe[0] - q[0], xe[1] - q[1]) <= NODE_M \
+                    and math.hypot(x - q[0], y - q[1]) <= NODE_M:
+                return True
+        return False
+    le, lo = np.asarray(net.lines[e], np.float64)[:, :2], np.asarray(net.lines[o], np.float64)[:, :2]
+    pe = le[np.hypot(*(le - q).T) <= NODE_M]
+    po = lo[np.hypot(*(lo - q).T) <= NODE_M + NODE_EPS_M]
+    if not len(pe) or not len(po):
+        return False
+    return bool((np.hypot(pe[:, None, 0] - po[None, :, 0], pe[:, None, 1] - po[None, :, 1]) <= NODE_EPS_M).any())
 
 
 def _pair_relations(net, i, j):
@@ -715,319 +710,6 @@ Interchange = namedtuple("Interchange", "sysm paths_s extent_s parts", defaults=
 # the interchange is the one system
 
 
-def find_systems(members, reader=None, trace=None):
-    """The interchanges among members: [System], each closed, in a deterministic order. See find_interchanges."""
-    net, found = find_interchanges(members, reader, trace)
-    return net, [p.sysm for x in found for p in (x.parts or (x,))]
-
-
-def find_interchanges(members, reader=None, trace=None, want=None, skip=None, scan=None, reach=True):
-    """(net, [Interchange]): the interchanges among members, each closed, in a deterministic order, each with the seconds
-    its relations and its closing took (a merge's or a dip's seconds go to the interchange they ended up in). An interchange
-    is the systems whose ramps meet (_ramp_reaches; Interchange.parts), each system the structures that join, cross or dig
-    one road among themselves. want(net,
-    seeds) -> bool: whether an interchange is asked for; one that is not is found (it may merge others) but not closed.
-    skip(net, i) -> bool: member i is a piece of an interchange already solved: it is not a seed here, nor scanned for
-    relations (it stays a member: what others cross). scan (a Scan): a growth's, whose rounds' nets are bound to one line network (only the lines a round
-    brings are added and paired) and lay ramps from one memo. reach: True, the ramps' reaches are computed (_ramp_reaches: the interchange's one growth, whose
-    result is stored with its extent); False, none: the systems alone, as a region's find needs them; a list of sets of
-    member keys (str), the reaches as that growth stored them: the seeds of a set are one interchange. reader(net) ->
-    (ground, fixed): the
-    elevation the cost of a move is read from (_Verdicts); None, flat ground. trace (a dict, the audit's: interchange_audit):
-    filled with what merged the seeds, [(a, b, why, detail)] in the order they were united (why "relation": a join or a
-    crossing of two seeds, detail (kind, s on a, s on b); "dip": two seeds over one road they dig, detail None), with the
-    seeds; nothing else about the answer. "ramp": two seeds whose ramps meet on a road on the ground (detail the road): they
-    stay systems of their own, in one interchange."""
-    net = Net(members, None if scan is None else scan.network)
-    n = len(members)
-    prof = {} if os.environ.get("BNE_IX_PROFILE") else None
-    tp = [time.perf_counter()]
-
-    def lap():
-        if prof is None:
-            return
-        now = time.perf_counter()
-        name = _PHASE[0]
-        prof[name] = prof.get(name, 0.0) + now - tp[0]
-        tp[0] = now
-    if trace is not None:
-        trace["seeds"], trace["merges"] = [], []
-    cand = [i for i in range(n) if _is_seed(net, i) and len(net.lines[i]) >= 2 and not (skip is not None and skip(net, i))]
-    lap()
-    t_rel = {}
-    rel = {}
-    import xproc
-    _PHASE[0] = "relations"
-    for k_, i in enumerate(cand):
-        if not k_ % 32:
-            xproc.check_cancel()        # (the growth's step time limit, ix/limits.py, and a place a teleport left)
-        t0 = time.perf_counter()
-        rel[i] = [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])]
-        t_rel[i] = time.perf_counter() - t0
-    # a deck chain is part of an interchange only if one of its decks crosses a road, a track or a tunnel (over or
-    # under): a bridge over a river or a valley alone is the bridges' own (roads.py), not a grade separation's
-    _PHASE[0] = "net"
-    lap()
-    crosses = {i for i in cand if any(kind == "cross" and _over(members[i], members[j]) is not None
-                                      for j, kind, _a, _b, _q in rel[i])}
-    dpar = {i: i for i in cand if members[i].kind == "deck"}
-
-    def droot(i):
-        while dpar[i] != i:
-            dpar[i] = dpar[dpar[i]]
-            i = dpar[i]
-        return i
-    for i in dpar:
-        for j, kind, _a, _b, _q in rel[i]:
-            if kind == "join" and j in dpar:
-                dpar[droot(i)] = droot(j)
-    live = {droot(i) for i in dpar if i in crosses}
-    seeds = [i for i in cand if (i in dpar and droot(i) in live) or (i not in dpar and i in crosses)]
-    if not seeds:
-        return net, []
-    seed_set = set(seeds)
-    for i in seeds:
-        rel[i] = [r_ for r_ in rel[i] if r_[0] in seed_set or not _is_seed(net, r_[0])]
-    if trace is not None:
-        trace["seeds"] = list(seeds)
-    par = {i: i for i in seeds}
-
-    def root(i):
-        while par[i] != i:
-            par[i] = par[par[i]]
-            i = par[i]
-        return i
-
-    def unite(a, b, why=None, detail=None):
-        if trace is not None:
-            trace["merges"].append((a, b, why, detail))
-        ra, rb = root(a), root(b)
-        if ra != rb:
-            par[max(ra, rb, key=lambda x: str(members[x].key))] = min(ra, rb, key=lambda x: str(members[x].key))
-    # (structures meet one another: a joint or a crossing. A road leaving a structure belongs to the interchange as far as
-    # its ramp reaches (_ramp_reaches, below): an interchange ends where that road is back on its ground, which is not
-    # where the structure's end is. A road on the ground beyond the reach is a boundary held at its own ground, not
-    # followed on to the next structure)
-    for i in seeds:
-        for j, kind, si, sj, q in rel[i]:
-            if j in par:
-                unite(i, j, "relation", (kind, si, sj))
-    dig = _Verdicts(net, rel, droot, reader)
-    _PHASE[0] = "verdicts"
-    lap()
-    t_dip = {}
-    for a, b in _shared_dips(net, seeds, rel, dig, t_dip):
-        unite(a, b, "dip")
-    _PHASE[0] = "dips"
-    lap()
-    groups = {}
-    for i in seeds:
-        groups.setdefault(root(i), []).append(i)
-    # (the systems are those the structures make among themselves; an interchange is the systems whose ramps meet. Each
-    # system is solved as it is, by the one that owns the interchange, and the interchange's embankments are laid at once:
-    # where two ramps meet on a road one lays what the other does, and the pairing of ramps toward each other is theirs)
-    cpar = {r: r for r in groups}
-
-    def croot(r):
-        while cpar[r] != r:
-            cpar[r] = cpar[cpar[r]]
-            r = cpar[r]
-        return r
-    if reach is True:
-        reaches = _ramp_reaches(net, seeds, rel, dig, t_dip, None if scan is None else scan.ramps)
-    elif not reach:
-        reaches = []
-    else:
-        reaches = []
-        for grp in reach:
-            ss = sorted((i for i in seeds if str(members[i].key) in grp), key=lambda x: str(members[x].key))
-            reaches += [(ss[0], i, -1) for i in ss[1:]]
-    _PHASE[0] = "reach"
-    lap()
-    for a, b, j in reaches:
-        if trace is not None:
-            trace["merges"].append((a, b, "ramp", j))
-        ra, rb = croot(root(a)), croot(root(b))
-        if ra != rb:
-            cpar[max(ra, rb, key=lambda x: str(members[x].key))] = min(ra, rb, key=lambda x: str(members[x].key))
-    cgroups = {}
-    for r in groups:
-        cgroups.setdefault(croot(r), []).append(r)
-    found = []
-    for c in sorted(cgroups, key=lambda x: str(members[x].key)):
-        xproc.check_cancel()        # (each interchange's systems closed: the step's time limit)
-        seeds_c = sorted((i for r in cgroups[c] for i in groups[r]), key=lambda x: str(members[x].key))
-        if want is not None and not want(net, seeds_c):
-            continue
-        parts = []
-        _PHASE[0] = "close"
-        for r in sorted(cgroups[c], key=lambda x: str(members[x].key)):
-            t0 = time.perf_counter()
-            seeds_r = sorted(groups[r], key=lambda x: str(members[x].key))
-            parts.append(Interchange(_system(net, seeds_r, rel, dig), sum(t_rel[i] for i in seeds_r),
-                                     time.perf_counter() - t0 + sum(t_dip.get(i, 0.0) for i in seeds_r)))
-        lap()
-        if len(parts) == 1:
-            found.append(parts[0])
-            continue
-        whole = dict(seeds=seeds_c, dips=[d for p in parts for d in p.sysm["dips"]],
-                     crossings=[x for p in parts for x in p.sysm["crossings"]],
-                     ends=[e for p in parts for e in p.sysm["ends"]])
-        found.append(Interchange(whole, sum(p.paths_s for p in parts), sum(p.extent_s for p in parts), tuple(parts)))
-    _PHASE[0] = "rest"
-    lap()
-    if prof is not None:
-        big = max((len(x.parts or (x,)) for x in found), default=0)
-        log.warning("ix profile: find of %d members, %d seeds, %d interchanges (the largest %d systems): %s s; line "
-                    "network %d lines, %d points, %d near pairs", n, len(cand), len(found), big,
-                    ", ".join("%s %.2f" % (k, prof[k]) for k in ("net", "relations", "verdicts", "dips", "reach",
-                                                                 "close", "rest") if k in prof),
-                    len(net.network.ln), net.network.ln.points, net.network.ln.pairs)
-    return net, found
-
-
-def _ramp_reaches(net, seeds, rel, dig, clock=None, memo=None):
-    """[(seed, seed, road)] of the structures whose ramps meet on a road on the ground. An interchange ends where its road
-    is back on its ground, which is the end of the ramp, not the end of the structure: from each end of a deck that rises
-    for a road under it, onto a road on the ground, the ramps it may leave by, laid as the embankment step lays them
-    (_Ramper: the road's grade and curve laws, through the junctions they meet) over the stretches of the roads they run
-    along: an embankment from the height the structure needs (clearance_need: the headroom and its depth) falling away at
-    the deck's grade, and a cut from the ground at that grade, the end standing anywhere between. What the solve picks is
-    not known before it is made, so both are followed, as far as either goes (and no further than REACH_MAX_M from
-    the end they left, the junctions' chains included). A structure that digs the road under it, or
-    that rises for nothing, has no ramp. Two structures whose ramps run along one stretch of a road are one interchange
-    (the road is not on its ground between them, and the ramps meeting there are laid together). A deck every end of
-    which is further than that from every other rising deck's is not laid at all: its spans can overlap no other deck's
-    (each deck's laying is its own — the claims stop no ramp of another deck's), so it pairs nothing.
-    clock: {seed: seconds},
-    to each seed the seconds spent for it added. memo (a growth's Scan.ramps): the ramps laid by the rounds before,
-    laid again by their samples, ground and curve (ix/owner.grow)."""
-    members = net.m
-    ground = dig.read()[0]
-    prof = {} if os.environ.get("BNE_IX_PROFILE") else None
-    _PROF.__dict__.update(ramp_calls=0, jr_calls=0, jr_pts=0, jr_cand=0, jr_secs=0.0, jr_may=0, memo_hits=0,
-                          ground_calls=0, ground_pts=0, ground_secs=0.0, rise_secs=0.0, lay_secs=0.0, span_secs=0.0)
-    P = _PROF.__dict__
-
-    def ground_of(x):
-        P["ground_calls"] = P.get("ground_calls", 0) + 1
-        P["ground_pts"] = P.get("ground_pts", 0) + len(x["mem"])
-        _t = time.perf_counter()
-        got = np.zeros(len(x["mem"])) if ground is None else np.asarray(ground(x["xy"]), np.float64)
-        P["ground_secs"] = P.get("ground_secs", 0.0) + time.perf_counter() - _t
-        return got
-
-    rise = {}               # (deck, 0 its start | 1 its end) -> how far over its ground the structure's end stands
-    for i in seeds:
-        mi = members[i]
-        if mi.kind != "deck" or dig.digs(i):
-            continue
-        for j, kind, si, sj, q in rel[i]:
-            if kind != "cross" or _over(mi, members[j]) != "i":
-                continue
-            if dig.lift(i, si, j, sj, q) <= 0.0:
-                continue        # (a deck that does not rise for the road under it stands on its ground)
-            ends = dig.run(i, si)
-            for dist, end in zip(ends[0], ends[1]):
-                if end is not None and math.isfinite(dist):
-                    rise[end] = max(rise.get(end, 0.0), clearance_need(net, i, j, q))
-    # (the ends a reach is laid from, and the decks that can meet: a deck's every ramp stays within REACH_MAX_M of
-    # the end it left, so two decks whose ends are all further apart than both reaches never overlap a span, and —
-    # the laying is each deck's own, its claims stop no other deck's ramp — skipping one changes no pair. A deck
-    # alone in its reach is the common case: a bridge over a valley with a town's grid under it)
-    ends_at = {}
-    for i, e in rise:
-        ends_at.setdefault(i, []).append(net.lines[i][-1 if e else 0])
-    with_another = {i for i, ps in ends_at.items()
-                    if any(k != i
-                           and min(float(np.linalg.norm(p - q)) for q in qs) <= 2.0 * REACH_MAX_M + 2.0 * JOIN_M + STEP_M
-                           for k, qs in ends_at.items() for p in ps)}
-    pieced = {int(i): [(0.0, float(net.L[i]))] for i in seeds}
-    spans = {}
-    for i in seeds:
-        mi = members[i]
-        if mi.kind != "deck" or i not in with_another:
-            continue
-        import xproc
-        xproc.check_cancel()        # (the growth's step time limit, ix/limits.py: asked per deck here, per ramps below)
-        t0 = time.perf_counter()
-        lay = _Ramper(net, ground_of, pieced, memo)
-        _t = time.perf_counter()
-        P["rise_secs"] = P.get("rise_secs", 0.0) + _t - t0
-        for j, kind, si, sj, q in rel[i]:
-            mj = members[j]
-            if kind != "join" or mj.kind != "ground" or min(si, net.L[i] - si) > JOIN_M:
-                continue
-            over = rise.get((i, int(si > net.L[i] / 2)))
-            if over is None:
-                continue
-            if min(sj, net.L[j] - sj) > JOIN_M and any(
-                    k2 == "join" and j2 != i and members[j2].kind in ("deck", "rail_deck") and abs(s2 - si) < 1.0
-                    for j2, k2, s2, _t, _q in rel[i]):
-                continue        # (the bridge goes on past this end over the road's middle: no end onto it)
-            for sign_, over_ in ((1.0, over), (-1.0, 0.0)):
-                lay.ramp_from(j, sj, sj < net.L[j] / 2, None, -deck_grade(mi), over=over_, sign=sign_,
-                              left=REACH_MAX_M)
-        n0, n = len(lay.ramps), 0
-        P["lay_secs"] = P.get("lay_secs", 0.0) + time.perf_counter() - _t
-        while n < len(lay.ramps):
-            rp = lay.ramps[n]
-            if not n % 32:
-                xproc.check_cancel()        # (a deck's ramps branch: thousands of them, each reading the ground)
-            if n >= n0:
-                lay.cover(rp[4], rp[9])
-            P["ramp_calls"] += 1
-            _t = time.perf_counter()
-            jr = _junction_roads(net, rp, lay.done, pieced)
-            P["jr_secs"] += time.perf_counter() - _t
-            P["jr_calls"] += 1
-            P["jr_pts"] += 16 * min(int(rp[9]), len(rp[5]))
-            for jj, s_, ways, z0, surface, at_d in jr:
-                lay.done.setdefault(jj, []).append((s_ - JOIN_M, s_ + JOIN_M))
-                left = None if rp[11] is None else rp[11] - at_d - STEP_M
-                if left is not None and left <= 0.0:
-                    continue        # (the reach's budget spent: no ramp of this deck runs further from its end)
-                for toward_end in ways:
-                    tb = _tangent(net.lines[jj], net.s[jj], s_) * (1.0 if toward_end else -1.0)
-                    _t = time.perf_counter()
-                    lay.ramp_from(jj, s_, toward_end, z0, float(surface[0] * tb[0] + surface[1] * tb[1]), branch=True,
-                                  left=left)
-                    P["lay_secs"] = P.get("lay_secs", 0.0) + time.perf_counter() - _t
-            n += 1
-        for rp in lay.ramps:
-            _t = time.perf_counter()
-            for m_, (lo, hi) in _stretches(rp[4], rp[9]).items():
-                spans.setdefault(m_, []).append((lo, hi, i))
-            P["span_secs"] = P.get("span_secs", 0.0) + time.perf_counter() - _t
-        if clock is not None:
-            clock[i] = clock.get(i, 0.0) + time.perf_counter() - t0
-    if prof is not None:
-        log.warning("ix profile: _ramp_reaches of %d seeds: %d ramps, %d _junction_roads calls, %.1f s in them "
-                    "(%.3f s a call), %d points projected, %d candidate pairs, may cells %d; ground %d calls %d pts %.2f s",
-                    len(seeds), P["ramp_calls"], P["jr_calls"], P["jr_secs"],
-                    P["jr_secs"] / max(1, P["jr_calls"]), P["jr_pts"], P["jr_cand"], P["jr_may"],
-                    P.get("ground_calls", 0), P.get("ground_pts", 0), P.get("ground_secs", 0.0))
-        if memo is not None:
-            log.warning("ix profile:   ramps laid again from the growth's memo: %d of %d (%d kept)", P.get("memo_hits", 0),
-                        P["ramp_calls"], len(memo))
-        log.warning("ix profile:   of it: rise %.2f s, ramps laid %.2f s (%d ground calls, %.2f s), junctions %.2f s, "
-                    "spans %.2f s", P.get("rise_secs", 0.0), P.get("lay_secs", 0.0), P.get("ground_calls", 0),
-                    P.get("ground_secs", 0.0), P["jr_secs"], P.get("span_secs", 0.0))
-    out = []
-    for m_, lst in spans.items():
-        lst.sort()
-        hi, who = lst[0][1], lst[0][2]
-        for lo_, b_, i in lst[1:]:
-            if lo_ <= hi + JOIN_M:
-                if i != who:
-                    out.append((min(i, who), max(i, who), m_))
-                if b_ > hi:
-                    hi, who = b_, i
-            else:
-                hi, who = b_, i
-    return out
-
-
 def _stretches(x, ks):
     """{member: (s from, s to)} the stretches of the members a ramp's first ks samples run along (its joints included: the
     stretch runs to the end of a member the ramp enters by)."""
@@ -1039,233 +721,6 @@ def _stretches(x, ks):
         sv += [s0_ for kk, jj, s0_ in x.get("joints", ()) if jj == j_ and kk < k]
         out[int(j_)] = (float(min(sv)), float(max(sv)))
     return out
-
-
-def _dip_half(net, u, su, d, sd, q=None):
-    """m along road d each side of its crossing under u (u at su, d at sd, at q) that it dips over (the clearance at
-    its grade, the curves, the stretch of it under u (under_pairs) and the margin): _system's window."""
-    memo = net.__dict__.setdefault("_dip_half", {})
-    key = (u, round(float(su), 6), d, round(float(sd), 6))
-    if key not in memo:
-        md = net.m[d]
-        g = max_grade(md)
-        under = max(abs(s_d - sd) for _s_u, s_d in under_pairs(net, u, su, d, sd))
-        memo[key] = clearance_need(net, u, d, q) / g + curve_radius(md) * g + under + DIP_MARGIN_M
-    return memo[key]
-
-
-class _Verdicts:
-    """Who moves at each crossing of a deck over a road on the ground: findground's cost law (findground.leaves), asked
-    with what only the elevation tells, the lack: how far the line between the ends of the deck's whole chain falls
-    short of the clearance over the road's ground there (the elevation's own evidence under the span: a deck over a
-    valley or a cut that already clears has none, and nothing moves). reader(net) -> (ground(xy (k, 2)) -> z (k,), fixed(i,
-    s) -> z): the elevation as the solve reads it (None: flat ground, every clearance lacking in full).
-
-    A deck that already goes up over a road at the clearance's whole lack needs no reading: more lack only moves the
-    verdict toward the road going down (more to fill against the same rule), so the whole clearance as the lack is asked
-    first (the bridge going up then, it goes up), and the elevation read only for a deck that might leave the ground
-    under it. A chain whose roads under it all go down is held at its natural height (a deck is one line); one with a road it
-    rises for rises, and a road beside that goes down dips what the rise does not carry; a map's short tunnel under a
-    deck (Member.held: the findground tunnel rule) holds the chain at its ground whatever."""
-
-    def __init__(self, net, rel, droot, reader):
-        self.net, self.rel, self.droot, self.reader = net, rel, droot, reader
-        self.memo, self.chain_memo, self.lacks = {}, {}, {}
-        self._read = None
-        self._links = None
-
-    def read(self):
-        if self._read is None:
-            self._read = self.reader(self.net) if self.reader else (None, None)
-        return self._read
-
-    def links(self):
-        """({(deck, 0 its start | 1 its end): [(deck, end)]} the decks' ends joined end to end, {(deck, end)} the ends a
-        road on the ground leaves from: where the structure leaves the ground. A deck's end on another's middle (a merge,
-        a ramp onto a viaduct) joins nothing here: the structure's ends are not looked for through it. A deck's end
-        on a tunnel's end is where the structure goes under the ground, as on a road: the joint is the same relation
-        (_end_meets: JOIN_M, and between structures a node of the map they share), the tunnel's end the same end-to-end
-        test as a deck's. Left out, La Defense's deck at a tunnel mouth (a 67-piece system) had no end to find, the
-        whole chain's lack was asked of it, 4.7 m of rise in 20 m at the mouth (z 50.5), and the system was
-        infeasible."""
-        if self._links is None:
-            net, out, leave = self.net, {}, set()
-            for i, rs in self.rel.items():
-                if net.m[i].kind != "deck":
-                    continue
-                for j, kind, si, sj, _q in rs:
-                    if kind != "join" or j == i or min(si, net.L[i] - si) > JOIN_M:
-                        continue
-                    e = int(si > net.L[i] / 2)
-                    if net.m[j].kind == "ground" or (net.m[j].kind == "tunnel" and min(sj, net.L[j] - sj) <= JOIN_M):
-                        leave.add((i, e))
-                    elif net.m[j].kind == "deck" and min(sj, net.L[j] - sj) <= JOIN_M:
-                        out.setdefault((i, e), []).append((j, int(sj > net.L[j] / 2)))
-            self._links = (out, leave)
-        return self._links
-
-    def run(self, u, su):
-        """(m from the crossing along the structure to the nearest end each way (its start side, its end side; inf: none
-        that way, a dead end or a loop), the end each way as (deck, end) or None, whether the way there passed a joint
-        of three decks or more): an end is where a road on the ground leaves the structure, no deck going on there."""
-        net = self.net
-        links, leave = self.links()
-        out = []
-        for e in (0, 1):
-            heap, seen, got = [(float(su) if e == 0 else float(net.L[u] - su), u, e, False)], set(), (math.inf, None, False)
-            while heap:
-                d, m, en, br = heapq.heappop(heap)
-                if (m, en) in seen:
-                    continue
-                seen.add((m, en))
-                nxt = links.get((m, en))
-                if not nxt:
-                    if (m, en) in leave:
-                        got = (d, (m, en), br)
-                        break
-                    continue                # (a dead end: nothing leaves the ground there)
-                for j, f in nxt:
-                    if (j, 1 - f) not in seen:
-                        heapq.heappush(heap, (d + net.L[j], j, 1 - f, br or len(nxt) > 1))
-            out.append(got)
-        return (out[0][0], out[1][0]), (out[0][1], out[1][1]), out[0][2] or out[1][2]
-
-    def free(self, u):
-        """((m from deck u's start to the nearest end of its structure that way, that end (deck, 0 | 1)), (the same from
-        its end)): findground's rule 1, the structure's ends. Where the decks joined end to end meet three at a joint (a
-        viaduct and its ramps) the nearest end each way: the ramp's end on the ground is where the structure leaves it. A
-        deck with no end that way (a loop), or whose way to it passes a joint of three decks (a fork, whose branches
-        are no one line: measured at Gotthard's motorway links, a chord from the branch's far end lifted the deck 0.5 m
-        off the real one), is its own: its own ends."""
-        got = self.chain_memo.get(("free", u))
-        if got is None:
-            (d0, _), (f0, _), b0 = self.run(u, 0.0)
-            (_, d1), (_, f1), b1 = self.run(u, float(self.net.L[u]))
-            got = ((d0, f0), (d1, f1))
-            if not (math.isfinite(d0) and math.isfinite(d1)) or f0 == f1 or b0 or b1:
-                got = ((0.0, (u, 0)), (0.0, (u, 1)))
-            self.chain_memo[("free", u)] = got
-        return got
-
-    def natural(self, u, su, ground):
-        """The deck's natural height at su on u (findground, rule 1: the line between the ground at the two ends of its
-        structure, over its length)."""
-        net = self.net
-        (da, fa), (db, fb) = self.free(u)
-        pa, pb = (net.lines[m][0 if e == 0 else -1] for m, e in (fa, fb))
-        za, zb = ground(np.array([pa, pb], np.float64))
-        return float(za + (zb - za) * (su + da) / max(net.L[u] + da + db, 1e-9))
-
-    def crossing(self, u, su, d, sd, q):
-        """"down", "up" or "none" (nothing lacks: the elevation's own evidence already clears it): the road d on the
-        ground at sd under deck u at su."""
-        key = (u, round(float(su), 3), d, round(float(sd), 3))
-        got = self.memo.get(key)
-        if got is None:
-            net = self.net
-            mu, md = net.m[u], net.m[d]
-            need = clearance_need(net, u, d, q)
-            lower = findground.TUNNEL if mu.held and md.kind == "ground" else WAY[md.kind]
-            ends = self.run(u, su)[0]
-            args = (ends, deck_grade(mu), max_grade(md))
-            who, lack = findground.leaves(lower, findground.BRIDGE, need, *args), need
-            if who == "lower" and lower != findground.TUNNEL and self.reader:
-                ground, fixed = self.read()
-                zd = fixed(d, sd)
-                if zd is not None and np.isfinite(zd):
-                    lack = need - (self.natural(u, su, ground) - float(zd))
-                    who = findground.leaves(lower, findground.BRIDGE, lack, *args)
-            got = self.memo[key] = "down" if who == "lower" else "up" if lack > 0.0 else "none"
-            self.lacks[key] = lack if got == "up" else 0.0
-        return got
-
-    def lift(self, u, su, d, sd, q):
-        """How far deck u at su must rise over its natural height to clear road d at sd (crossing): the lack the verdict
-        was read on; 0 where it does not rise."""
-        if self.crossing(u, su, d, sd, q) != "up":
-            return 0.0
-        return self.lacks[(u, round(float(su), 3), d, round(float(sd), 3))]
-
-    def digs(self, i):
-        """Whether deck i's chain is held at its natural height with the roads under it dug: where the map has a road under
-        it in a short tunnel (Member.held), or where its roads under it all say the road goes down (none says the deck
-        rises: a deck is one line, and one that rises for a road clears the roads beside it as far as it goes)."""
-        key = self.droot(i)
-        got = self.chain_memo.get(key)
-        if got is None:
-            states, held = [], False
-            for m, rs in self.rel.items():
-                if self.net.m[m].kind != "deck" or self.droot(m) != key:
-                    continue
-                held = held or bool(self.net.m[m].held)
-                for j, kind, si, sj, q in rs:
-                    if kind == "cross" and self.net.m[j].kind == "ground" and _over(self.net.m[m], self.net.m[j]) == "i":
-                        states.append(self.crossing(m, si, j, sj, q))
-            got = self.chain_memo[key] = held or ("down" in states and "up" not in states)
-        return got
-
-    def moves(self, u, su, d, sd, q):
-        """"down" or "up": who moves at this crossing: the road under a chain held at its ground, or the road findground
-        says goes down (under a deck that rises for the others: it dips what that rise does not carry)."""
-        return "down" if self.digs(u) or self.crossing(u, su, d, sd, q) == "down" else "up"
-
-
-def _shared_dips(net, seeds, rel, dig, clock=None):
-    """Pairs of seeds over one road on the ground within its dip under one of them: [(a, b)]. A road dug under one
-    structure (a short rail deck, a short deck) is that low under the other too: two systems solved apart had it at
-    its ground under one and dug under the other. Perth's Tonkin Highway: a trunk road dug 7 m under the railway in the
-    median and, 6 m on, a motorway deck lifted 7.3 m over its ground, its carriageway and the track's fill raised into
-    the trains. The road is followed through its joints, as the dip's piece is. clock: {seed: seconds}, to each seed
-    the seconds of the pairs looked at for it added."""
-    members = net.m
-    under = {}              # ground member -> [(seed over it, s on the seed, s on it, the crossing)]
-    for i in seeds:
-        for j, kind, si, sj, q in rel[i]:
-            if kind == "cross" and members[j].kind == "ground" and _over(members[i], members[j]) == "i":
-                under.setdefault(j, []).append((i, si, sj, q))
-    if not under:
-        return []
-    out = []
-    far = max(_dip_half(net, i, si, j, sj, qq) for j, ls in under.items() for i, si, sj, qq in ls)
-    import xproc
-    for d, lst in under.items():
-        xproc.check_cancel()        # (the growth's step time limit, ix/limits.py, and a place a teleport left)
-        for u, su, sd, qd in lst:
-            t0 = time.perf_counter()
-            mu = members[u]
-            if not (mu.kind == "deck" and dig.moves(u, su, d, sd, qd) == "down"):
-                if clock is not None:
-                    clock[u] = clock.get(u, 0.0) + time.perf_counter() - t0
-                continue        # (this crossing does not dig the road)
-            w = _dip_half(net, u, su, d, sd, qd)
-            reach = w + far
-            for j, s0, s1 in path_of(net, d, sd - reach, sd + reach):
-                lo, hi = min(s0, s1), max(s0, s1)
-                for i, si, sj, qi in under.get(j, ()):
-                    if i == u or not (lo - 1e-6 <= sj <= hi + 1e-6):
-                        continue
-                    along = abs(sj - sd) if j == d else _path_dist(net, d, sd, j, sj, reach)
-                    if along is None:
-                        continue
-                    mi = members[i]
-                    digs = mi.kind == "deck" and dig.moves(i, si, j, sj, qi) == "down"
-                    if along <= w + (_dip_half(net, i, si, j, sj, qi) if digs else 0.0):
-                        out.append((u, i))
-            if clock is not None:
-                clock[u] = clock.get(u, 0.0) + time.perf_counter() - t0
-    return out
-
-
-def _path_dist(net, d, sd, j, sj, reach):
-    """Distance along the road from member d's arc length sd to member j's sj, followed through its joints (reach m
-    each way at most), or None."""
-    for toward_end in (True, False):
-        left = net.L[d] - sd if toward_end else sd
-        for m_, s0, s1 in walk(net, d, toward_end, reach):
-            if m_ == j and min(s0, s1) - 1e-6 <= sj <= max(s0, s1) + 1e-6:
-                return left + abs(sj - s0)
-            left += abs(s1 - s0)
-    return None
 
 
 def _system(net, seeds, rel, dig):
@@ -1363,65 +818,7 @@ def _system(net, seeds, rel, dig):
     return dict(seeds=seeds, joins=joins, crossings=crossings, ends=ends, dips=dips, tracks=tracks, digs=digs, free=free)
 
 
-def system_key(net, sysm):
-    """A system's identity: its parts' keys (the same from whichever cell found it)."""
-    h = hashlib.sha1()
-    for i in sorted(set(sysm["seeds"]) | {x[0] for x in sysm["dips"]}, key=lambda i: str(net.m[i].key)):
-        h.update(repr(net.m[i].key).encode())
-    return h.hexdigest()[:20]
-
-
 KEY_DEG = 1.0e-4            # deg (about 11 m): the grid an interchange's centre is placed on in its key
-
-
-def canonical_id(m):
-    """A member's id the same from every region and every planning frame: its map feature's id and its kind. The keys
-    members carry hold the middle of the line in the planner's own frame (a deck's, a tunnel's) or its ends' (a track's),
-    different by metres from one frame to the next; a road's several parts of one kind share this id, which is all an
-    interchange's identity needs (which roads and tracks it is made of)."""
-    k = m.key
-    if isinstance(k, tuple) and k and k[0] == "rail" and len(k) > 2:
-        return "%s:%s" % (m.kind, k[2])
-    return "%s:%s" % (m.kind, k[0] if isinstance(k, tuple) else k)
-
-
-def system_ids(net, sysm):
-    """The canonical ids (canonical_id) of a system's seeds and of the roads it digs under its crossings, as a set: what
-    makes it the interchange it is, found from whichever region and cut however its box cut it."""
-    return {canonical_id(net.m[i]) for i in sysm["seeds"]} | {canonical_id(net.m[d]) for d, _a, _b in sysm["dips"]}
-
-
-def interchange_key(ids, centre, version=""):
-    """An interchange's key: the hash of its sorted member ids (canonical_id), of where its centre is (lat, lon, to
-    KEY_DEG: a road's parts over two places are two interchanges of the same roads, and its centre, found from the whole
-    system whatever region found it, is the same to far less than that) and of the version of what a solve of it is made
-    from (the plans' format: a solve made by other rules is another interchange's)."""
-    h = hashlib.sha1(str(version).encode("utf-8"))
-    h.update(b"\0%d,%d" % (round(centre[0] / KEY_DEG), round(centre[1] / KEY_DEG)))
-    for i in sorted(ids):
-        h.update(b"\0" + i.encode("utf-8"))
-    return h.hexdigest()
-
-
-def interchange_rank(ids, centre):
-    """Where an interchange stands among the others: its sorted member ids (canonical_id), then where its centre is (the
-    key's grid, KEY_DEG), as lists so that a stored solution gives back the same. What the key is made of without the
-    version, and not the key: a key is a hash that changes with the plans' format, and nothing between interchanges may
-    be decided by it (the order of the pieces of a road that several of them give, where two of them tie). Two
-    interchanges of the same rank are the same interchange."""
-    return [sorted(ids), [round(centre[0] / KEY_DEG), round(centre[1] / KEY_DEG)]]
-
-
-def system_centre(net, sysm):
-    """The middle of a system's seeds' bounding box (frame ENU): the point whose map cell owns the interchange."""
-    pts = np.concatenate([net.lines[i] for i in sysm["seeds"]])
-    return (pts.min(0) + pts.max(0)) / 2.0
-
-
-def system_size(net, sysm):
-    """(pieces, crossings) of a system: its decks and the roads dug under it, and its crossings."""
-    return (sum(1 for i in sysm["seeds"] if net.m[i].kind == "deck") + len(sysm["dips"]) + len(sysm.get("tracks", ())),
-            len(sysm["crossings"]))
 
 
 # ---- paths: a road followed through its joints (a roundabout's ring, a street split at its junctions) ----
@@ -1635,41 +1032,6 @@ def _locate(smp, p, i, s_):
     return int(k[r]), int(k[r + 1]), t
 
 
-def _var(pcs, smp, i, s_):
-    """(piece, sample a, sample b, weight of b) of member i's unknown height at arc length s_, or None."""
-    for p in _pieces_of(smp, i):
-        got = _locate(smp, p, i, s_)
-        if got is not None:
-            return (p,) + got
-    return None
-
-
-def _vars(pcs, smp, i, sv):
-    """_var for many arc lengths sv on member i: (piece, sample a, sample b, weight of b) arrays, piece -1 where none
-    holds it."""
-    sv = np.asarray(sv, np.float64)
-    n = len(sv)
-    P, A, B, T = np.full(n, -1, np.int64), np.zeros(n, np.int64), np.zeros(n, np.int64), np.zeros(n)
-    for p in _pieces_of(smp, i):
-        got = _loc_sorted(smp[p], i)
-        if got is None:
-            continue
-        k, ms, lo_, hi_ = got
-        m = (P < 0) & (sv >= lo_ - 1e-6) & (sv <= hi_ + 1e-6)
-        if not m.any():
-            continue
-        r = np.clip(np.searchsorted(ms, sv[m]) - 1, 0, len(ms) - 2)
-        P[m], A[m], B[m] = p, k[r], k[r + 1]
-        T[m] = np.clip((sv[m] - ms[r]) / np.maximum(ms[r + 1] - ms[r], 1e-9), 0.0, 1.0)
-    return P, A, B, T
-
-
-def _weighted(A, B, T):
-    """The samples a point's height is made of ((sample, mask) of _vars' a and b; a sample on the point itself alone):
-    each held to a law that holds at the point holds it there."""
-    return ((A, T < 1.0 - 1e-9), (B, T > 1e-9))
-
-
 def _overlaps(pcs, smp):
     """Samples of two pieces on the same stretch of road (two dips along one road): [(p, k, q, k2)] to hold equal."""
     out = []
@@ -1719,89 +1081,6 @@ def deck_depth(span):
     return got
 
 
-def _law(net, pc):
-    m = net.m[pc["main"]]
-    return (deck_grade(m) if pc["kind"] == "deck" else max_grade(m)), curve_radius(m)
-
-
-def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
-    """The shape: per piece its heights. The laws (grade, vertical curve by speed, clearance, joints) are hard
-    constraints of one quadratic programme (the Rust kernel's, carriageways.solve); the costs: the embankment at the
-    shape's ends on the ground, a deck's line kept (its stiffness), the depth a road goes under to, a short deck held at
-    its ground. None where the
-    kernel finds no answer (laws that cannot all hold): no stand-in, the system is left as it is and the caller says
-    so (the conflict is the thing to fix). fixed_z(i, s): member i's height where the shape does not move it, at arc
-    length s (None: not known), or at an array of them (an array, NaN: not known).
-
-    BNE_STAGED=1 (measurement only, nothing is built from it unless asked): the heights come from the staged solver's stage 5
-    (staged_heights: the same problem, our own deterministic ADMM, no kernel), the answer in the same form."""
-    if os.environ.get("BNE_STAGED", "").strip().lower() in ("1", "on", "yes", "true"):
-        import staged_heights
-        return staged_heights.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
-    import pools
-    import xproc
-    try:
-        return _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
-    except (xproc.TimeLimit, pools.Abandoned):      # (the step's time limit, or a place a teleport left: not "no answer")
-        raise
-    except Exception as e:      # (no kernel, or it failed)
-        if diagnostics is not None:
-            diagnostics["qp_error"] = f"{type(e).__name__}: {e}"
-        return None
-
-
-def _natural_lines(net, sysm, pcs, smp, ground):
-    """{deck piece: its natural height at its samples} (findground, rule 1): the line between the ground at the two
-    ends of its structure (the decks joined end to end are one structure: the line over their total length), the ends
-    being where the structure leaves the ground, the nearest each way where a viaduct has ramps (_Verdicts.free)."""
-    piece_of = {pc["main"]: p for p, pc in enumerate(pcs) if pc["kind"] == "deck"}
-    out = {}
-    for i, p in piece_of.items():
-        (da, fa), (db, fb) = sysm["free"][i]
-        za, zb = (float(np.asarray(ground[piece_of[m]], np.float64)[-e]) if m in piece_of else None
-                  for m, e in ((fa[0], fa[1]), (fb[0], fb[1])))
-        d = np.asarray(smp[p]["d"], np.float64)
-        if za is None or zb is None:
-            t = np.asarray(ground[p], np.float64)
-            za, zb, da, db = float(t[0]), float(t[-1]), 0.0, 0.0
-        out[p] = za + (zb - za) * (d + da) / max(float(d[-1]) + da + db, 1e-9)
-    return out
-
-
-def _deck_targets(net, sysm, pc, t, natural):
-    """A deck's target and weights: toward its natural height (_natural_lines), held there if a road is dug under its
-    chain (a chain that digs: _Verdicts.digs). Only its ends on the road on the ground weigh (W_END: the embankment
-    there; where it goes on in another deck of its chain it has no end), its middle weighs nothing: what keeps its line
-    is its stiffness (W_STIFF), so the deck rises or falls as a whole by what its
-    clearances ask, not by a bump over each of them with its ends dropping from it at their grade."""
-    i = pc["main"]
-    n = len(t)
-    joined = [s_ for a, sa, b, sb in sysm["joins"] for s_, m_ in ((sa, a), (sb, b)) if m_ == i]
-    short = i in sysm["digs"]
-    w = np.full(n, W_HOLD if short else 0.0)
-    for k, s_end in ((0, 0.0), (n - 1, net.L[i])):
-        if not any(abs(s_ - s_end) <= JOIN_M for s_ in joined):
-            w[k] = W_HOLD if short else W_END
-    return natural, w
-
-
-def _tunnel_mouths(net, sysm, i):
-    """(start, end): whether deck i's start / end is where it goes into a tunnel (a join with a tunnel member at that end). A
-    bridge that becomes a tunnel along one road lands on the ground at the mouth as it does at any end on the ground: no
-    void under it there to keep its girders out of (its floor over the ground it spans is for the span, not for the road's
-    way into the hill). It weighs nothing there (the tunnel's own height is the joint's), but its girders' floor must not hold
-    it up over the tunnel's ceiling, the ground."""
-    out = [False, False]
-    for a, sa, b, sb in sysm["joins"]:
-        for m_, s_, o in ((a, sa, b), (b, sb, a)):
-            if m_ == i and net.m[o].kind == "tunnel":
-                if s_ <= JOIN_M:
-                    out[0] = True
-                if net.L[i] - s_ <= JOIN_M:
-                    out[1] = True
-    return out
-
-
 def _abutments(t, natural, depth, at_start, at_end):
     """Bool per sample of a deck: in an abutment, the stretch from either end where its natural height stays within
     the girders' depth of the ground (over it by up to depth + DECK_AIR_M, or under by the air): the deck lies on the
@@ -1833,17 +1112,6 @@ def _near_line(pts, line, reach):
                     0.0, 1.0)
         d = dnp.hypot(*(a[None] + t[..., None] * ab[None] - pts[near, None, :]).transpose(2, 0, 1))
         out[near] = d.min(axis=1) <= reach
-    return out
-
-
-def _over_dips(net, pcs, smp, x):
-    """Bool per sample x of a deck: over a road the system digs (within that road's half width and DIP_MARGIN_M of
-    its dip): the ground under the deck there is the road's cut, not the elevation's."""
-    out = np.zeros(len(x["xy"]), bool)
-    for pc, y in zip(pcs, smp):
-        if pc["kind"] == "dip":
-            out |= _near_line(np.asarray(x["xy"], np.float64), np.asarray(y["xy"], np.float64),
-                              float(net.m[pc["main"]].half) + DIP_MARGIN_M)
     return out
 
 
@@ -1894,305 +1162,6 @@ def _deck_paths(net, sysm):
                 best = min(best, dist[b] + abs(sb - sj))
         return best
     return along
-
-
-def _stacked(net, sysm, pcs, smp):
-    """Where a deck of the system runs over another one along a stretch, not only across it (a road winding over
-    itself, one deck stacked on another): [(upper piece, its sample, lower piece, its sample, the clearance)], for each
-    sample of the lower deck's line under the upper deck's carriageway (within its half width of its line), the
-    upper's two samples round the point over it. The crossings' clearance, held at the samples between them: Kawazu's
-    Nanadaru loop winds over its own turns 1.6-3.1 m off their lines for 20-135 m at a time, crossing them only at
-    shallow angles here and there. Two samples nearer each other along the decks than the clearance takes at their max
-    grade are one stretch of road, not one over the other (a joint, a deck going on from another at another level)."""
-    decks = [p for p, pc in enumerate(pcs) if pc["kind"] == "deck"]
-    out = []
-    along = None
-    gone = sysm.get("order", {}).get("gone", ())    # (pairs whose order the order step gave up: ix/s3_order.py)
-    # (each deck's samples' box, to name for every upper deck the decks whose box meets its own: a deck with no sample in
-    # the upper's box has no sample near its carriageway, and a system's decks are hundreds, each against each)
-    with_box = [p for p in decks if len(smp[p]["xy"])]
-    dlo = np.array([np.asarray(smp[p]["xy"], np.float64).min(0) for p in with_box]).reshape(-1, 2)
-    dhi = np.array([np.asarray(smp[p]["xy"], np.float64).max(0) for p in with_box]).reshape(-1, 2)
-    dk = np.array(with_box, np.int64)
-    for q in decks:                         # (the upper)
-        mu = pcs[q]["main"]
-        xu = np.asarray(smp[q]["xy"], np.float64)
-        if len(xu) < 2:
-            continue
-        a, ab = xu[:-1], np.diff(xu, axis=0)
-        L2 = np.maximum((ab * ab).sum(1), 1e-12)
-        half = float(net.m[mu].half)
-        lo_u, hi_u = xu.min(0) - half, xu.max(0) + half
-        for p in dk[((dhi >= lo_u) & (dlo <= hi_u)).all(1)].tolist():       # (the lower, in order)
-            md = pcs[p]["main"]
-            if p == q or _over(net.m[mu], net.m[md]) != "i" or frozenset((mu, md)) in gone:
-                continue
-            xd = np.asarray(smp[p]["xy"], np.float64)
-            near = np.flatnonzero(((xd >= lo_u) & (xd <= hi_u)).all(1))
-            if not len(near):
-                continue
-            t = np.clip(((xd[near, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
-            dist = dnp.hypot(*(a[None] + t[..., None] * ab[None] - xd[near, None, :]).transpose(2, 0, 1))
-            k = np.argmin(dist, axis=1)
-            under = np.flatnonzero(dist[np.arange(len(near)), k] <= half)
-            g = max(deck_grade(net.m[mu]), deck_grade(net.m[md]))
-            for r_ in under.tolist():
-                n_, kk = int(near[r_]), int(k[r_])
-                tt = float(t[r_, kk])
-                su = float(smp[q]["ms"][kk] + tt * (smp[q]["ms"][kk + 1] - smp[q]["ms"][kk]))
-                need = clearance_need(net, mu, md, xd[n_])
-                if along is None:
-                    along = _deck_paths(net, sysm)
-                if along(md, float(smp[p]["ms"][n_]), mu, su, need / g) < need / g:
-                    continue
-                out += [(q, kk, p, n_, need), (q, kk + 1, p, n_, need)]
-    return out
-
-
-def _crossing_vars(pcs, smp, c):
-    """What the problem asks of crossing c's footprint (under_pairs): the arcs on its upper and lower member, and the
-    unknowns of the pieces there (_vars of each; piece -1: the member's height is not the shape's)."""
-    uv = np.array([p_[0] for p_ in c["under"]])
-    dv = np.array([p_[1] for p_ in c["under"]])
-    return uv, dv, _vars(pcs, smp, c["u"], uv), _vars(pcs, smp, c["d"], dv)
-
-
-def fixed_reads(sysm, pcs, smp):
-    """{member: ascending arcs}: where the problem reads the height of a member the shape does not move (a road on the
-    ground under a deck, a deck or a track over a road that goes under): shape_problem's `fixed`, asked at exactly these.
-    The terrain step reads them once (ix/s4_terrain.py); the problem is then made from what it read."""
-    out = {}
-    tracks = {int(pc["main"]) for pc in pcs if pc["kind"] == "track"}
-    for c in sysm["crossings"]:
-        uv, dv, (xp, _xa, _xb, _xt), (yp, _ya, _yb, _yt) = _crossing_vars(pcs, smp, c)
-        for member, sv, m in ((c["d"], dv, (xp >= 0) & (yp < 0)), (c["u"], uv, (xp < 0) & (yp >= 0))):
-            if m.any():
-                out.setdefault(int(member), set()).update(np.unique(sv[m]).tolist())
-        for member, sv in ((c["d"], dv), (c["u"], uv)):     # (a track is read where a crossing asks it, when the tracks are held)
-            if int(member) in tracks and len(sv):
-                out.setdefault(int(member), set()).update(np.unique(sv).tolist())
-    for pc, x in zip(pcs, smp):         # (a track piece is drawn to the bed the railways lay, at each of its samples)
-        if pc["kind"] == "track":
-            mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"], np.float64)
-            for i in np.unique(mem).tolist():
-                out.setdefault(int(i), set()).update(ms[mem == i].tolist())
-    return {i: np.array(sorted(v), np.float64) for i, v in sorted(out.items())}
-
-
-def _track_tops(x, fixed):
-    """The rails' top the railways lay at the samples x of a track piece (NaN where they lay none)."""
-    top = np.full(len(x["ms"]), np.nan)
-    mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"], np.float64)
-    for i in np.unique(mem).tolist():
-        sel = mem == i
-        top[sel] = fixed(int(i), ms[sel])
-    return top
-
-
-def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None, pin_tracks=False):
-    """The system's constraints as the kernel is given them: (chains, couplings) of carriageways.solve (a chain per
-    piece: its target, weights, floor and ceiling per sample, grade, curve, step; the couplings: joints, overlaps,
-    clearances). trace (a dict, the audit's: interchange_audit): filled with where each constraint came from, "cp"
-    (one per coupling: ("join", index in sysm["joins"]), ("overlap",), ("clear", index in sysm["crossings"]),
-    ("stacked",)) and "bound" ({(piece, sample, "lo" | "hi"): (the bound, the crossing's index)} of the bounds a crossing
-    with a road the shape does not move set). pin_tracks: the crossings read every track as the heights the railways lay (fixed_z,
-    as a road on the ground under a deck is read), never as unknowns: the problem as it was when a track was no member of the
-    shape (the track's own chain is then drawn to its bed, free of anything else: its window ends are not held either, a short
-    window's bed is the railways' own and may be steeper than the track's grade at its two ends, and the roads' problem would
-    have no heights for it; _solve_shape_qp asks it first)."""
-    chains = []
-    is_track = np.array([pc["kind"] == "track" for pc in pcs], bool)
-    natural = _natural_lines(net, sysm, pcs, smp, ground)
-    clear, fz, clear_by = {}, {}, {}
-
-    def fixed(i, sv):
-        new = [s_ for s_ in sv.tolist() if (i, s_) not in fz]
-        if new:
-            for s_, z_ in zip(new, np.asarray(fixed_z(i, np.array(new)), np.float64).tolist()):
-                fz[(i, s_)] = z_
-        return np.array([fz[(i, s_)] for s_ in sv.tolist()])
-    for p, (pc, x, t) in enumerate(zip(pcs, smp, ground)):
-        t = np.asarray(t, np.float64)
-        n = len(t)
-        lo, hi = np.full(n, -np.inf), np.full(n, np.inf)
-        if pc["kind"] == "deck":
-            target, w = _deck_targets(net, sysm, pc, t, natural[p])
-            # (a span over the ground: its girders off it past its abutments (_abutments), a deck that crosses a road, a
-            # track or another deck too: a crossing holds a deck up only where it crosses. Kawazu's Nanadaru loop, one
-            # road's three decks crossing each other and two streets, had no floor at all: between its crossings each
-            # deck went the straight way between its ends' ground, its lowest turn 18 m inside the hill it winds round.
-            # A deck a road is dug under stays at its ground (a chain that digs: _Verdicts.digs), and over a road the system digs the ground is
-            # that road's cut, the crossing's clearance its floor: _over_dips)
-            if pc["main"] not in sysm["digs"]:
-                depth = deck_depth(net.L[pc["main"]])
-                mouth = _tunnel_mouths(net, sysm, pc["main"])
-                inner = (~_abutments(t, target, depth, w[0] > 0.0 or mouth[0], w[-1] > 0.0 or mouth[1])
-                         & ~_over_dips(net, pcs, smp, x))
-                lo = np.where(inner, t + depth + DECK_AIR_M, -np.inf)
-        elif pc["kind"] == "track":
-            # (a track held at the bed the railways lay, its rails' top over it: the weight is what moving it costs against a
-            # road's (W_TRACK). Held there at both ends of its window: the track outside it is the railways' own, and the
-            # two must meet. Where the railways lay no bed (a stub they leave out) there is no track to hold)
-            top = _track_tops(x, fixed)
-            ok = np.isfinite(top)
-            target, w = np.where(ok, top, t), np.where(ok, W_TRACK, 0.0)
-            for k in (() if pin_tracks else (0, n - 1)):      # (held, the crossings read the tracks: no law of a track's own may
-                if ok[k]:                                     # contradict the roads', the problem is as it was without them)
-                    lo[k] = hi[k] = top[k]
-        else:
-            target, w = t.copy(), np.full(n, W_DIP)
-            hi = t.copy()                                   # (a road going under never rises over its ground)
-        g, rad = _law(net, pc)
-        # (the grade law per step on the closest two samples: a piece through joints has them closer than its mean
-        # step, and held at the mean its grade ran 1.8 % over the law there)
-        dd = np.diff(np.asarray(x["d"], np.float64))
-        step = float(dd[dd > 1e-6].min()) if (dd > 1e-6).any() else float(STEP_M)
-        # (SEGMENT_STEP_ON: each segment held to the law by its own spacing, the kernel's `ds`: one closest pair of samples,
-        # 0.3 m apart where a joint falls beside a lattice sample, held a 232 m dip piece to 0.3 m of grade all along)
-        own = dict(ds=dd) if SEGMENT_STEP_ON else {}
-        # (a deck keeps its line, a road going under only its depth: W_STIFF is the least that makes a deck rise as a whole
-        # by what it lacks (with the deck's own grade law, deck_grade): on a bridge over a motorway with the embankments'
-        # top 6 m up its ends stand 14.92 m with the line free (1e-3), 15.42 with the deck law alone, 15.76 at 1000, on
-        # the embankment's 15.95 at 3000. Stiffer, a deck cannot bend toward its ends' ground at all: at 2e4 (the road
-        # shapes' own, carriageways.LAMBDA) a 515 m deck's end stood 1.8 m over the real road's, which Earth filled up
-        # to, and the ground roads filled or dug against the survey went from 39 / 0 / 0 to 44 / 3 / 2 per mille
-        # (Brunau, Europabruecke, Duettweilerbruecke), at 3000 to 40 / 0 / 0)
-        chains.append(dict(t=target, w=w, lo=lo, hi=hi, grade=g, K=rad / 100.0, lam=W_STIFF if pc["kind"] == "deck" else 1e-3,
-                           step=step, length=0.0, **own))
-    cps, why = [], []
-    for n_, (i, si, j, sj) in enumerate(sysm["joins"]):
-        x, y = _var(pcs, smp, i, si), _var(pcs, smp, j, sj)
-        if x and y:
-            cps.append((x[0], x[1] if x[3] < 0.5 else x[2], y[0], y[1] if y[3] < 0.5 else y[2], "eq", 0.0))
-            why.append(("join", n_))
-    for p, a, q, b in _overlaps(pcs, smp):
-        cps.append((p, a, q, b, "eq", 0.0))
-        why.append(("overlap",))
-    # (the clearance wherever the road runs under the upper part, under_pairs: its whole carriageway under the deck's)
-    bound = {} if trace is not None else None
-    crossing = []           # (the audit's trace: each crossing's upper part and the clearance it asks)
-    for ci, c in enumerate(sysm["crossings"]):
-        need = clearance_need(net, c["u"], c["d"], c["q"])
-        crossing.append((c["u"], need))
-        uv, dv, (xp, xa, xb, xt), (yp, ya, yb, yt) = _crossing_vars(pcs, smp, c)
-        if pin_tracks:          # (a track is read where a crossing asks it, not solved for)
-            xp = np.where((xp >= 0) & is_track[np.maximum(xp, 0)], -1, xp)
-            yp = np.where((yp >= 0) & is_track[np.maximum(yp, 0)], -1, yp)
-        both = (xp >= 0) & (yp >= 0)
-        for kx, mx in _weighted(xa, xb, xt):
-            for ky, my in _weighted(ya, yb, yt):
-                m = both & mx & my
-                for key in set(zip(xp[m].tolist(), kx[m].tolist(), yp[m].tolist(), ky[m].tolist())):
-                    if need > clear.get(key, -math.inf):
-                        clear[key] = need
-                        clear_by[key] = ci
-        m = (xp >= 0) & (yp < 0)            # (the road under read, fixed_z: the deck over it held over it)
-        if m.any():
-            u_s, inv = np.unique(dv[m], return_inverse=True)
-            zd = fixed(c["d"], u_s)[inv]
-            for kx, mx in _weighted(xa[m], xb[m], xt[m]):
-                ok = mx & np.isfinite(zd)
-                for p_ in np.unique(xp[m][ok]).tolist():
-                    q_ = ok & (xp[m] == p_)
-                    np.maximum.at(chains[p_]["lo"], kx[q_], zd[q_] + need)
-                    if bound is not None:
-                        for k_, v_ in zip(kx[q_].tolist(), (zd[q_] + need).tolist()):
-                            if v_ >= bound.get((p_, k_, "lo"), (-math.inf,))[0]:
-                                bound[(p_, k_, "lo")] = (v_, ci)
-        m = (xp < 0) & (yp >= 0)            # (the part over read: the road under it held under it)
-        if m.any():
-            u_s, inv = np.unique(uv[m], return_inverse=True)
-            zu = fixed(c["u"], u_s)[inv]
-            for ky, my in _weighted(ya[m], yb[m], yt[m]):
-                ok = my & np.isfinite(zu)
-                for p_ in np.unique(yp[m][ok]).tolist():
-                    q_ = ok & (yp[m] == p_)
-                    np.minimum.at(chains[p_]["hi"], ky[q_], zu[q_] - need)
-                    if bound is not None:
-                        for k_, v_ in zip(ky[q_].tolist(), (zu[q_] - need).tolist()):
-                            if v_ <= bound.get((p_, k_, "hi"), (math.inf,))[0]:
-                                bound[(p_, k_, "hi")] = (v_, ci)
-    for (p, kx, q, ky), need in sorted(clear.items()):
-        cps.append((p, kx, q, ky, "ge", need))
-        why.append(("clear", clear_by[(p, kx, q, ky)]))
-    for q, kq, p, kp, need in _stacked(net, sysm, pcs, smp):
-        cps.append((q, kq, p, kp, "ge", need))
-        why.append(("stacked",))
-    if trace is not None:
-        trace["cp"], trace["bound"], trace["crossing"] = why, bound, crossing
-    return chains, cps
-
-
-def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
-    import carriageways as _cw
-    import xproc
-    # (a track keeps its bed wherever the interchange has heights with it there; only if it has none the tracks are free to
-    # move, each at what it costs: W_TRACK, the least of the laws' costs of a move that closes the conflict)
-    pin = any(pc["kind"] == "track" for pc in pcs)
-    while True:
-        # (with its trace: where the laws contradict, the relaxation below is made on this very problem, which is not made again)
-        trace = {}
-        chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace, pin_tracks=pin)
-        info = {}
-        xproc.check_cancel()
-        _cw.PROBE.on = pin          # (the tracks held is a try: its miss is not the answer's, the tracks are freed next)
-        try:
-            zs = _cw.solve(chains, cps, diagnostics=info)
-        finally:
-            _cw.PROBE.on = False
-        xproc.check_cancel()
-        if pin and not info.get("feasible", True) and not info.get("timed_out"):
-            pin = False
-            continue
-        break
-    if diagnostics is not None and any(pc["kind"] == "track" for pc in pcs):
-        diagnostics["tracks_moved"] = not pin
-    if not info.get("feasible", True) and not info.get("timed_out"):
-        # (laws that cannot all hold: not the interchange left as it is. What contradicts is eased by the least it takes, in
-        # the order the laws are given up (ix/relax.py), and said so: the answer's diagnostics name each. The first attempt's
-        # miss is the answer's `first`, not a log line of its own: the line of the answer is the last solve's)
-        import ix.relax as _relax
-        first = {k: info[k] for k in ("status", "grade_excess", "curve_excess", "lower_shortfall_m", "upper_excess_m",
-                                      "junction_gap_m", "clearance_shortfall_m") if k in info}
-        chains, cps, done, touched = _relax.relax(net, pcs, smp, chains, cps, trace)
-
-        def feasible(ch, cp):
-            probe = {}
-            xproc.check_cancel()        # (each trial solve: the step's time limit, ix/limits.py)
-            _cw.PROBE.on = True
-            try:
-                _cw.solve(ch, cp, diagnostics=probe)
-            finally:
-                _cw.PROBE.on = False
-            return bool(probe.get("feasible"))
-        # (the vertical curves are no difference of two heights, so the graph does not see them: where the laws were eased the
-        # curve law of those roads is looked at next, on the few roads round them, before the whole is solved; then, if the
-        # whole still has no heights, on more of them. Each solve of eased laws is the harder problem: its budget is its own)
-        for hops in (2, 4, 8, len(chains)):
-            eased, more = _relax.ease_curves(net, pcs, chains, cps, touched, feasible, hops)
-            info = {}
-            xproc.check_cancel()
-            zs = _cw.solve(eased, cps, rounds=_cw.RELAXED_ROUNDS, deadline=time.monotonic() + _cw.BUDGET_RELAXED_S,
-                           diagnostics=info)
-            if info.get("feasible", True) or info.get("timed_out"):
-                break
-        done = list(done) + more
-        info["relaxed"] = [dict(kind=r.kind, amount=round(float(r.amount), 6), at=[[int(m), round(float(s), 3)] for m, s in r.at],
-                                text=r.text) for r in done]
-        info["first"] = first
-    if diagnostics is not None:
-        diagnostics.update(info)
-    if not info.get("converged") or not info.get("feasible"):
-        return None
-    if pin:
-        # (a track that stays is at the bed the railways lay, as the roads were solved against: its chain, drawn to the bed and
-        # held to its laws, is not the answer. Where the railways lay none the chain stands)
-        zs = list(zs)
-        for p, (pc, x) in enumerate(zip(pcs, smp)):
-            if pc["kind"] == "track":
-                top = _track_tops(x, lambda i, sv: np.asarray(fixed_z(int(i), sv), np.float64))
-                zs[p] = np.where(np.isfinite(top), top, np.asarray(zs[p], np.float64))
-    return [np.asarray(z, np.float64) for z in zs]
 
 
 def ramp(z0, g0, sign, g, rad, d, ground):
@@ -2271,19 +1240,6 @@ def ramp(z0, g0, sign, g, rad, d, ground):
     return out, max(k2, t + 1)
 
 
-def _onward(net, j, s_from, toward_end):
-    """The road from member j's arc length s_from on, away from the shape (toward j's end at L if toward_end), followed
-    through its joints, RAMP_MAX_M at most: segments."""
-    L = net.L[j]
-    if toward_end:
-        segs = [(j, s_from, min(L, s_from + RAMP_MAX_M))]
-        left = RAMP_MAX_M - (segs[0][2] - s_from)
-        return segs + (walk(net, j, True, left) if left > 1e-6 else [])
-    segs = [(j, s_from, max(0.0, s_from - RAMP_MAX_M))]
-    left = RAMP_MAX_M - (s_from - segs[0][2])
-    return segs + (walk(net, j, False, left) if left > 1e-6 else [])
-
-
 def _split(net, x, z, k_end, mode, out):
     """A ramp's or dip's samples (x from sample()) up to k_end, per member: out[member] += (s ascending, z, mode)."""
     mem, ms = x["mem"][:k_end], x["ms"][:k_end]
@@ -2301,352 +1257,3 @@ def _split(net, x, z, k_end, mode, out):
         out.setdefault(int(j), []).append((sv[o], zv[o], mode))
 
 
-def _junction_roads(net, rp, done, pieced):
-    """[(member, arc length, [toward its end L?], height, slope)]: the roads on the ground that ramp rp (embankments'
-    tuple) meets before it is back on its ground (their lines within JOIN_M: a junction, an end on it or its on them,
-    or a crossing at grade), other than where done ({member: [(s from, s to)]}: set by a shape or a ramp already) has
-    them; the arc on that road where they meet, the ways along it away from there (both, mid-road; one, at its end),
-    the ramp's height there and the slope of its surface there (the grade along the ramp as a vector: rise per m east
-    and north). pieced: {member: [(s from, s to)]} of the shapes' pieces (decks, dips). The height is the ramp's
-    between its samples, at the point nearest the road's line: the nearest sample is up to half a step (2 m) from the
-    junction, 0.14 m of a 7 % ramp. A ramp that never gets OFF_GROUND_M off its ground has no junctions: a cut 0.04 m
-    deep at the end of a deck laid the trunk meeting it 0.04 m down at the junction, the deck's approach beside it a
-    bump (Storrow Drive, Boston)."""
-    _j, _s0, _d, _z0, x, z, _k, sign, gr, ks, _g0, _left = rp
-    k = min(int(ks), len(z))
-    if k < 1:
-        return []
-    z = np.asarray(z, np.float64)[:k]
-    off = sign * (z - np.asarray(gr, np.float64)[:k])
-    if off.max() <= OFF_GROUND_M:
-        return []
-    xy = np.asarray(x["xy"], np.float64)[:k]
-    mem = np.asarray(x["mem"])[:k]
-    ms = np.asarray(x["ms"])[:k]
-    # (the ramp's height only where it is the road's: not inside a shape's piece on it, a dip Perth's ramp ran
-    # through at 3.5 m over it, its junction's side road raised to the ramp)
-    own = np.array([not any(a + 0.5 < v < b - 0.5 for a, b in pieced.get(int(i), ())) for i, v in zip(mem, ms)])
-    # (... and only while it is off its ground: past its touch the ramp is the ground, and a junction there put the
-    # roads meeting it down on it — one on an embankment of its own 2 m over it was cut to it)
-    own &= off > 0.0
-    if not own.any():
-        return []
-    # (the ramp's surface at each sample: its grade along its line, as the direction of fall)
-    lo_, hi_ = np.maximum(np.arange(k) - 1, 0), np.minimum(np.arange(k) + 1, k - 1)
-    v = xy[hi_] - xy[lo_]
-    run = np.maximum(dnp.hypot(v[:, 0], v[:, 1]), 1e-9)
-    surface = ((z[hi_] - z[lo_]) / run)[:, None] * (v / run[:, None])
-    # (the ramp's line every 1/16 step between its samples, over the stretches that are its own)
-    u = np.linspace(0, k - 1, (k - 1) * 16 + 1) if k > 1 else np.zeros(1)
-    i0, i1 = np.floor(u).astype(int), np.minimum(np.ceil(u).astype(int), k - 1)
-    keep = own[i0] & own[i1]
-    pt = np.stack([np.interp(u, np.arange(k), xy[:, 0]), np.interp(u, np.arange(k), xy[:, 1])], axis=1)[keep]
-    zt = np.interp(u, np.arange(k), z)[keep]
-    at = np.rint(u).astype(int)[keep]
-    lo, hi = pt.min(0) - JOIN_M, pt.max(0) + JOIN_M
-    bx = net.box
-    cand = np.flatnonzero((bx[:, 0] <= hi[0]) & (bx[:, 2] >= lo[0]) & (bx[:, 1] <= hi[1]) & (bx[:, 3] >= lo[1]))
-    out = []
-    _PROF.__dict__["jr_cand"] = _PROF.__dict__.get("jr_cand", 0) + int(len(cand))
-    for j in cand.tolist():
-        mj = net.m[j]
-        if mj.kind != "ground" or len(net.lines[j]) < 2:
-            continue
-        _PROF.__dict__["jr_may"] = _PROF.__dict__.get("jr_may", 0) + len(pt) * (len(net.lines[j]) - 1)
-        sj, dist = _proj_many(net.lines[j], net.s[j], pt, near=JOIN_M)
-        q = int(np.argmin(dist))
-        if dist[q] > JOIN_M:
-            continue
-        s_ = float(sj[q])
-        if any(a - JOIN_M <= s_ <= b + JOIN_M for a, b in done.get(j, ())):
-            continue
-        ways = [w for w in (True, False) if (net.L[j] - s_ if w else s_) > JOIN_M]
-        if ways:
-            # (the parent's arc at the junction too: the reach's budget spends it, ix's _ramp_reaches)
-            out.append((j, s_, ways, float(zt[q]), surface[at[q]], float(x["d"][at[q]])))
-    return sorted(out, key=lambda o: str(net.m[o[0]].key))
-
-
-def _x_by_id(net, x):
-    """A ramp's samples (sample()) with their members named by line id (_line_id) in place of the net's indices."""
-    at = {}
-    mem = []
-    for i in x["mem"].tolist():
-        q = at.get(i)
-        if q is None:
-            q = at[i] = _line_id(net, i)
-        mem.append(q)
-    return dict(x, mem=mem, joints=[(kk, _line_id(net, jj), s0) for kk, jj, s0 in x.get("joints", ())])
-
-
-def _x_by_index(net, x, segs):
-    """The same samples back in a net's indices. x names its members by line id; the ramp's segments (segs: _onward's,
-    the same members by their line ids as the key's) carry every member it runs along or joints to, so the map is made
-    of them: without it a stale index was another road's stretch (_ramp_reaches' done, pieced, spans)."""
-    at = {_line_id(net, q): q for q, _a, _b in segs}
-    mem = np.array([at[q] for q in x["mem"]], np.int64)
-    return dict(x, mem=mem, joints=[(kk, at[jj], s0) for kk, jj, s0 in x.get("joints", ())])
-
-
-def _memo_check(ramper, net, segs, j, z0, g_along, over, sign, key, got):
-    """BNE_IX_MEMO_CHECK: a memo hit recomputed and compared (the growth's rounds laid the same ramps whole, before the
-    memo: any difference is a key that names two ramps)."""
-    xs = sample(net, [dict(segs=segs)])[0]
-    x, gr = _x_by_id(net, xs), ramper.ground_of(xs)
-    z0_ = float(gr[0]) + over if z0 is None else z0
-    sign_ = (1.0 if z0_ >= gr[0] else -1.0) if sign is None else sign
-    g_max, rad = max_grade(net.m[j]), curve_radius(net.m[j])
-    z, k = ramp(z0_, g_along, sign_, g_max, rad, x["d"] - x["d"][0], gr)
-    x0, gr0, z00, sign0, g_max0, rad0, z0k, k0 = got
-    bad = (not np.array_equal(x["xy"], x0["xy"]) or not np.array_equal(np.asarray(x["mem"]), np.asarray(x0["mem"]))
-           or not np.array_equal(np.asarray(x["ms"]), np.asarray(x0["ms"])) or not np.array_equal(x["d"], x0["d"])
-           or not np.array_equal(gr, gr0) or z0_ != z00 or sign_ != sign0
-           or (g_max, rad) != (g_max0, rad0) or not np.array_equal(z, z0k) or k != k0)
-    if bad:
-        log.error("ix memo check: the ramp %s laid again differs from the one kept: z0 %s/%s sign %s/%s k %s/%s "
-                  "xy %s mem %s ms %s d %s ground %s z %s laws %s", str(key)[:160], z0_, z00, sign_, sign0, k, k0,
-                  np.array_equal(x["xy"], x0["xy"]), np.array_equal(np.asarray(x["mem"]), np.asarray(x0["mem"])),
-                  np.array_equal(np.asarray(x["ms"]), np.asarray(x0["ms"])), np.array_equal(x["d"], x0["d"]),
-                  np.array_equal(gr, gr0), np.array_equal(z, z0k), (g_max, rad) == (g_max0, rad0))
-    else:
-        log.warning("ix memo check: a hit laid again, the same ramp (%s)", str(key)[:120])
-
-
-class _Ramper:
-    """The ramps off the ends of shapes, laid one at a time: embankments' (from the solved shapes' ends and what they reach)
-    and the reach's (_ramp_reaches: from the height the laws ask of an end, before anything is solved), one laying for
-    both. ramps: (first member, s0, direction +1/-1, z0, samples, z, touch index, sign, ground, split index, leaving
-    grade, reach budget left) of each laid; started: (member, direction, s0, sign, z0) of the ends a ramp has left; pieced: {member: [(s
-    from, s to)]} the shapes' pieces (decks, dips); done: {member: [(s from, s to)]} the stretches set (the shapes' pieces
-    first, then every ramp's as it is laid: a road's own ramp through a junction is its height there, not another's).
-    ground_of(samples) -> the ground's heights at them."""
-
-    def __init__(self, net, ground_of, pieced, memo=None):
-        self.net, self.ground_of, self.pieced = net, ground_of, pieced
-        self.ramps, self.started = [], []
-        self.done = {j: list(v) for j, v in pieced.items()}
-        self.memo = memo        # (a growth's rounds: {key: (samples, ground, z0, sign, g_max, rad, z, k)} of the ramps laid before, _ramp_reaches)
-
-    def cover(self, x, ks):
-        """done: the stretches of the members a ramp's first ks samples run along."""
-        for j_, ab in _stretches(x, ks).items():
-            self.done.setdefault(j_, []).append(ab)
-
-    def ramp_from(self, j, s0, toward_end, z0, g_along, branch=False, over=0.0, sign=None, left=None):
-        """The ramp from height z0 (None: over its own ground by over) on member j at arc length s0 away from there (toward
-        j's end if toward_end), leaving at grade g_along; branch: it is a junction's, off a ramp's. sign: +1 an embankment,
-        -1 a cut (None: by z0 against the ground there). left: the arc length left of the reach's budget
-        (REACH_MAX_M less what its chain has run from the deck's end; None: none, the embankments' own laying)."""
-        net, started, pieced, done = self.net, self.started, self.pieced, self.done
-        segs = _onward(net, j, s0, toward_end)
-        d_ = 1 if toward_end else -1
-        memo, key = self.memo, None
-        if memo is not None:
-            # (a growth's rounds lay the same ramps again from the same ends along the same roads: the samples, the
-            # ground under them and the ramp's curve are the same whenever every member it runs along is, over the same
-            # stretch of each (another growth's walk through a joint can run another stretch of the same members), and the
-            # height and grade it leaves with are. The key names them all, to the last bit: a member added by a round where the ramp runs changes it. Yokohama's stacked viaducts: 1,200
-            # ramps a round for 820 seeds, the last rounds adding 2 roads, each round the same 1,200 ground reads)
-            key = (_line_id(net, j), float(s0), d_, tuple((_line_id(net, q), float(a), float(b)) for q, a, b in segs),
-                   None if z0 is None else float(z0), float(g_along), None if sign is None else sign,
-                   None if z0 is not None else float(over))
-            got = memo.get(key)
-            if got is not None and os.environ.get("BNE_IX_MEMO_CHECK"):
-                _memo_check(self, net, segs, j, z0, g_along, over, sign, key, got)
-            if got is not None:
-                x, gr, z0, sign, g_max, rad, z, k = got
-                memo.pop(key, None)       # (move to the end: the least recently used is the first to go)
-                memo[key] = got
-                # (the samples name their members by line id, the round's net's indices made now: a later round's net
-                # numbers them otherwise, and a stretch looked up by a stale index was another road's)
-                x = _x_by_index(net, x, segs)
-                _PROF.__dict__["memo_hits"] = _PROF.__dict__.get("memo_hits", 0) + 1
-        if key is None or got is None:
-            import revisit
-            f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
-            x = sample(net, [dict(segs=segs)])[0]
-            mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
-            gr = self.ground_of(x)
-            if z0 is None:
-                z0 = float(gr[0]) + over
-            if sign is None:
-                sign = 1.0 if z0 >= gr[0] else -1.0
-            g_max, rad = max_grade(net.m[j]), curve_radius(net.m[j])
-            z, k = ramp(z0, g_along, sign, g_max, rad, x["d"] - x["d"][0], gr)
-            if memo is not None and revisit.thread_faults() == f0 and revisit.thread_lidar_faults() == l0:
-                # (the ground read short of something (a tile not there yet) is this laying's alone, as a plan's)
-                if len(memo) >= RAMP_MEMO_MAX:
-                    for old in list(memo)[:RAMP_MEMO_MAX // 4]:
-                        memo.pop(old, None)
-                memo[key] = (_x_by_id(net, x), gr, z0, sign, g_max, rad, z, k)
-        else:
-            mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
-        if branch:
-            # (a junction's ramp never rises past the crest it leaves it with (a fill) nor falls below the trough (a
-            # cut): the junction is the top of the embankment it starts, the bottom of the cut, or where its grade
-            # carries it on from there (the height its curve to the max grade reaches: 0.5 rad g^2). Left to follow
-            # the ground past where it touches it — a road climbing a hill away from the junction, its grade read
-            # across the climb — the ramp carried a fill 5 m up it, over the road's own way up to its tunnel)
-            crest = z0 + sign * 0.5 * rad * max(sign * float(np.clip(g_along, -g_max, g_max)), 0.0) ** 2
-            z = np.minimum(z, crest) if sign > 0 else np.maximum(z, crest)
-        twin = any(jj == j and dd == d_ and sg == sign and abs(ss - float(s0)) <= JOIN_M and zz == float(z0)
-                   for jj, dd, ss, sg, zz in started) and k >= len(z)
-        started.append((j, d_, float(s0), sign, float(z0)))
-        ks = k
-        # (a ramp of a junction stops where a stretch a shape or another ramp already sets begins: over that stretch
-        # its height is the other's, and the two, laid one to the other's end, meet in a step. And a ramp whose end
-        # another has already left — the same road, way and height, within JOIN_M of it: parallel carriageways'
-        # decks end together, each with its ramp. Where the one met its ground and the other's landing runs past all it
-        # had to land on — the one end's embankment laid twice, the second running on over the plan's own grading past
-        # the ground the first met — the second stops at once: the one end has the one ramp, the first. Its reach for
-        # the junctions it meets is still its touch, the ramp the road's height that far. A deck's or a dip's own ramp
-        # stops where it enters a shape's piece it did not start in: the road there is the shape's, and a fill's floor
-        # laid over a dip's ceiling has no height to be (Gravelly Hill: a deck's end at the start of a road's dip laid
-        # 12 samples of fill, 3.7 m over the dip's 92 m, over its first 44 m)
-        if twin:
-            ks = min(ks, 1)
-        else:
-            for i in range(1, len(z)):
-                m_, v_ = int(mem[i]), float(ms[i])
-                if branch:
-                    stop = any(a + 0.5 < v_ < b - 0.5 for a, b in done.get(m_, ()))
-                else:
-                    stop = any(a + 0.5 < v_ < b - 0.5 and not (m_ == j and a + 0.5 < s0 < b - 0.5)
-                               for a, b in pieced.get(m_, ()))
-                if stop:
-                    ks = min(ks, i)
-                    break
-        if left is not None and ks > 1:      # (the reach's budget: no sample of this ramp runs further along than it)
-            ks = max(1, min(ks, int(np.searchsorted(x["d"], left)) + 1))
-        self.ramps.append((j, s0, d_, z0, x, z, k, sign, gr, ks, g_along, left))
-        if not branch:
-            self.cover(x, ks)
-
-
-def embankments(net, systems, shapes, ground_along, beside=()):
-    """The roads' heights round the shapes: per member, [(s (m,), z (m,), mode)] with mode "fill" (the plan rises to
-    it: an embankment), "cut" (the plan goes down to it) or "set" (the plan takes it: a road between two shapes whose
-    ramps meet before the ground does, lerped). shapes: per system (pieces, samples, heights);
-    ground_along(member, s) -> ground heights. beside: the pieces (pieces()) of other systems of net that are not among
-    systems (solved elsewhere, as interchanges are, each by its owner): what the shapes hold of the roads there is theirs
-    too, so no ramp of these runs on through it."""
-    out = {}
-    pieced = {}                 # (member: the stretches [(s from, s to)] of the shapes' pieces)
-    for _pcs in [sh[0] for sh in shapes] + list(beside):
-        for pc in _pcs:
-            for j, a, b in pc["segs"]:
-                pieced.setdefault(int(j), []).append((min(a, b), max(a, b)))
-
-    def ground_of(x):
-        """The ground under a ramp's samples (each member's in one read, not a read a sample)."""
-        mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
-        gr = np.empty(len(mem))
-        for m_ in np.unique(mem):
-            sel = mem == m_
-            gr[sel] = ground_along(int(m_), ms[sel])
-        return gr
-
-    lay = _Ramper(net, ground_of, pieced)
-    ramps, done, cover, ramp_from = lay.ramps, lay.done, lay.cover, lay.ramp_from
-
-    for sysm, (pcs, smp, zs) in zip(systems, shapes):
-        def shape_z(i, s_):
-            got = _var(pcs, smp, i, s_)
-            if got is None:
-                return None, 0.0
-            p, a, b, t = got
-            z = zs[p]
-            dd = smp[p]["d"]
-            zz = z[a] + (z[b] - z[a]) * t
-            g = (z[b] - z[a]) / max(dd[b] - dd[a], 1e-6)
-            return float(zz), float(g)
-
-        # a deck's end on a road on the ground: the embankment (or cut) down (up) to the ground along it
-        for i, si, j, sj in sysm["ends"]:
-            if net.m[i].kind != "deck":
-                continue
-            z0, g = shape_z(i, si)
-            if z0 is None:
-                continue
-            leaving = -g if si < net.L[i] / 2 else g        # (the deck's grade on the way out of it)
-            ramp_from(j, sj, sj < net.L[j] / 2, z0, leaving)
-        # a road going under: its dip (cut), and on from its ends if they are not back on the ground
-        for pc, x, z in zip(pcs, smp, zs):
-            if pc["kind"] != "dip":
-                continue
-            _split(net, x, np.asarray(z, np.float64), len(z), "cut", out)
-            for e in (0, len(z) - 1):
-                j, s_ = int(x["mem"][e]), float(x["ms"][e])
-                gr = ground_along(j, np.array([s_]))[0]
-                if abs(z[e] - gr) < 0.05:
-                    continue
-                k2 = 1 if e == 0 else len(z) - 2
-                g = (z[e] - z[k2]) / max(abs(x["d"][e] - x["d"][k2]), 1e-6)
-                toward_end = (x["ms"][e] - x["ms"][k2] > 0) if int(x["mem"][k2]) == j else s_ > net.L[j] / 2
-                ramp_from(j, s_, bool(toward_end), float(z[e]), g)
-    # a junction a ramp reaches before the ground is at the ramp's height there, for every road that meets it: each
-    # other road leaves it from that height on its own ramp to its ground (and so on through the junctions those
-    # reach). Followed along one road only, a deck's embankment put the six-road square at its end 1.28 m over
-    # its ground on the two roads it went through, the four others left on the ground there and the square laid
-    # at theirs: the deck's last 5.4 m fell 1.6 m to it (Porte Maillot, 48.8781 N 2.2826 E)
-    n0 = len(ramps)
-    n = 0
-    while n < len(ramps):
-        if n >= n0:
-            cover(ramps[n][4], ramps[n][9])
-        for j, s_, ways, z0, surface, _at_d in _junction_roads(net, ramps[n], done, pieced):
-            done.setdefault(j, []).append((s_ - JOIN_M, s_ + JOIN_M))    # (the junction taken: another ramp
-            #                                                         of the one shape meets its roads a few metres
-            #                                                         along, at a height of its own descent — a second
-            #                                                         group there, lerped to the first, stepped
-            #                                                         between the two)
-            for toward_end in ways:
-                # (a road leaves the junction at the grade of the embankment's surface along its own direction: level
-                # across the ramp's fall line, at the ramp's grade along it — a fork's other branch, running up the same
-                # embankment beside the ramp, rises with it; left level it fell 1 m under the climb of the road beside
-                # it, the two carriageways' pavements overlapping)
-                tb = _tangent(net.lines[j], net.s[j], s_) * (1.0 if toward_end else -1.0)
-                ramp_from(j, s_, toward_end, z0, float(surface @ tb), branch=True)
-        n += 1
-    # two ramps on one road toward each other that meet before the ground: the line between their ends. Between two
-    # junctions' ramps, the curve through their heights that leaves each at its grade (a cubic: the straight line
-    # between them ignored the climb the one leaves with, the road laid 0.6 m under the crest the laws made of it)
-    used = set()
-    for a in range(len(ramps)):
-        for b in range(len(ramps)):
-            if a == b or a in used or b in used:
-                continue
-            ja, sa, da, za, xa, _z_a, _ka, _sa, _ga, ka, g0a, _la = ramps[a]
-            jb, sb, db, zb, xb, _z_b, _kb, _sb, _gb, kb, g0b, _lb = ramps[b]
-            if ja != jb or da != 1 or db != -1 or sb <= sa:
-                continue
-            reach_a = sa + xa["d"][min(ka, len(xa["d"]) - 1)]
-            reach_b = sb - xb["d"][min(kb, len(xb["d"]) - 1)]
-            if reach_a >= reach_b:
-                k = max(2, int(math.ceil((sb - sa) / STEP_M)) + 1)
-                sv = np.linspace(sa, sb, k)
-                t = (sv - sa) / max(sb - sa, 1e-6)
-                if a >= n0 and b >= n0:
-                    run = max(sb - sa, 1e-6)
-                    zv = ((2 * t ** 3 - 3 * t ** 2 + 1) * za + (t ** 3 - 2 * t ** 2 + t) * run * g0a
-                          + (-2 * t ** 3 + 3 * t ** 2) * zb + (t ** 3 - t ** 2) * run * -g0b)
-                else:
-                    zv = za + (zb - za) * t
-                out.setdefault(ja, []).append((sv, zv, "set"))
-                used |= {a, b}
-    for n, (j, s0, d, z0, x, z, k, sign, gr, ks, _g0, _left) in enumerate(ramps):
-        if n in used:
-            continue
-        k_end = min(ks, len(z))
-        if sign < 0:
-            # (a cut is the road under its ground: past where its ramp meets the ground, a ceiling over it is no cut, and
-            # it holds the roads that land on it down: Porte Maillot's side road ended at a landing curve 0.16 m over
-            # its ground, 39.56 under the 39.64 floor of the road it joins. The ceiling ends on the ground, at the first
-            # sample the ramp is not under it)
-            on = np.flatnonzero(np.asarray(z)[1:k_end] >= np.asarray(gr)[1:k_end])
-            if len(on):
-                k_end = int(on[0]) + 2
-                z = np.array(z, np.float64)
-                z[k_end - 1] = min(z[k_end - 1], gr[k_end - 1])
-        _split(net, x, z, k_end, "fill" if sign > 0 else "cut", out)
-    return out

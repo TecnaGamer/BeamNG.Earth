@@ -224,19 +224,6 @@ class RecordTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 lidarz.decode(bad)
 
-    def test_key_follows_the_rules_not_the_release(self):
-        doc = lidarz.lkey_doc()
-        self.assertEqual(doc["roadz"], roadz.VERSION)
-        self.assertNotIn("overture", json.dumps(doc))
-        k0 = lidarz.lkey()
-        with mock.patch.object(roadz, "LIDAR_STEP_M", roadz.LIDAR_STEP_M + 1):
-            self.assertNotEqual(lidarz.lkey(), k0, "a measuring constant is in the key")
-        with mock.patch.object(roadz, "VERSION", roadz.VERSION + 1):
-            self.assertNotEqual(lidarz.lkey(), k0, "the local cells' version")
-        with mock.patch.object(roads, "LIDAR_GAPS_ON", not roads.LIDAR_GAPS_ON):
-            self.assertNotEqual(lidarz.lkey(), k0, "the ground stretches' switch")
-        self.assertEqual(lidarz.lkey(), k0)
-
 
 @unittest.skipUnless(HAVE, f"earthfast {lidarz.NATIVE} not built")
 class ProductTest(unittest.TestCase):

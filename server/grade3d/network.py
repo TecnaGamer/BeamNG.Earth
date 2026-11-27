@@ -263,9 +263,53 @@ def _end(net, i, s):
     return None
 
 
+THROUGH_COS = np.cos(np.radians(30.0))     # two ends at a fork this near straight on are one road going on through
+END_LOOK_M = 10.0           # m into a member its direction at an end is read over
+
+
+def _out(net, e):
+    """Unit direction from end e (2 i: member i's start, 2 i + 1 its end) into its member, over END_LOOK_M."""
+    ln = np.asarray(net.lines[e // 2], np.float64)[:, :2]
+    if e % 2:
+        ln = ln[::-1]
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln, axis=0).T))]
+    k = int(min(len(ln) - 1, max(1, np.searchsorted(s, END_LOOK_M))))
+    d = ln[k] - ln[0]
+    n = float(np.hypot(*d))
+    return d / n if n > 0 else None
+
+
+def through(net, ends):
+    """(a, b): of the ends meeting at a fork or merge (three or more, of one family), the two of different members that
+    go on most nearly straight (their directions into their members within 30 degrees of opposite), the fastest class's
+    first; None when no two do. The motorway through a diverge is one path, its ramp leaving it: two paths ending there
+    joined it at a height only, and its decks kinked there (S1 at Breitenleer and Rautenweg: crests of 20-40x the
+    drivable lift on the solve's own line)."""
+    rank = {c: k for k, c in enumerate(("motorway", "trunk", "primary", "secondary", "tertiary"))}
+    best = None
+    dirs = {e: _out(net, e) for e in ends}
+    for x in range(len(ends)):
+        for y in range(x + 1, len(ends)):
+            a, b = ends[x], ends[y]
+            if a // 2 == b // 2 or dirs[a] is None or dirs[b] is None:
+                continue
+            ma, mb = net.m[a // 2], net.m[b // 2]
+            if family(ma.kind) != family(mb.kind):
+                continue
+            c = float(dirs[a] @ dirs[b])
+            if c > -THROUGH_COS:
+                continue
+            cls = min(rank.get(str(ma.cls or "").replace("_link", ""), 9), rank.get(str(mb.cls or "").replace("_link", ""), 9))
+            k = (cls, c)
+            if best is None or k < best[0]:
+                best = (k, (a, b))
+    return None if best is None else best[1]
+
+
 def chain(net, rel):
-    """[Path] of the members of net chained where exactly two ends of one family meet and nothing else touches: rel is
-    relations(net). A ring of such meetings is cut at its member of the least key."""
+    """[Path] of the members of net chained where exactly two ends of one family meet and nothing else touches, and
+    through a fork or merge where two of its ends go on straight (through): rel is relations(net). A ring of such
+    meetings is cut at its member of the least key."""
     n = len(net.m)
     par = list(range(2 * n))            # (an end: 2 i + 0 its start, 2 i + 1 its end)
 
@@ -296,6 +340,10 @@ def chain(net, rel):
     for g in groups.values():
         if len(g) == 2 and g[0] // 2 != g[1] // 2 and not (set(g) & busy):
             nxt[g[0]], nxt[g[1]] = g[1], g[0]
+        elif len(g) >= 3:               # (a fork or a merge: the road going straight on goes on through it)
+            pair = through(net, [e for e in g if e not in busy])
+            if pair is not None:
+                nxt[pair[0]], nxt[pair[1]] = pair[1], pair[0]
     key = [str(m.key) for m in net.m]
     seen = [False] * n
     paths = []

@@ -148,8 +148,6 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expWearStrips", type: "bool", default: false, name: "Tyre polish, crack networks and manholes", desc: "Experimental. Extra road wear decals: polished tyre tracks, sealed and alligator crack networks across the lanes and manhole covers. They can look too bright for now. Needs Road surface detail at Full.",
         note: RESTART_NOTE },
-      { id: "expGradeGuard", type: "bool", default: false, name: "Road steepness limit", desc: "Experimental. Caps how steep each class of road may be (unless the ground itself is that steep), smoothing out spikes the elevation data puts in roads. Changes the height of every road.",
-        note: RESTART_NOTE },
       { id: "expPhotoSurface", type: "bool", default: false, name: "Road surface from aerial photos", desc: "Experimental. Roads whose map data has no surface are drawn paved, gravel or grass by the colour of the aerial photo along them, where a sharp regional photo source is available (such as Czechia). Otherwise such roads stay dirt as before.",
         note: RESTART_NOTE },
       { id: "expTerrainBumps", type: "bool", default: false, name: "Rougher land off the roads", desc: "Experimental. Small bumps in the open land away from the roads, so fields and verges are not perfectly smooth. Costs some world building time.",

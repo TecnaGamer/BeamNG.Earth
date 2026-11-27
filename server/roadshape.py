@@ -1330,24 +1330,6 @@ def _surface_forks(store, keys, decks, dz, specs):
     return sorted(set(out))
 
 
-def _profile_rail_heads(store, lines, crossings, indices, ids):
-    """Rail-head elevations in the chain frame where the rail mesh has a lattice height."""
-    import fast
-    import railprofile
-    import railways
-    elev = getattr(store, "profile_bed_elev", None)
-    if elev is None or not railprofile.ENABLED:
-        return {}
-    fast.require(562, "surface_rail_samples")
-    samples = fast._ef.surface_rail_samples(lines, [(i, c[2]) for i, c in zip(indices, crossings)], railways.STEP_M)
-    rails = [(ids[i], "rail", "ground", np.array([a, b])) for i, (a, b, _) in zip(indices, samples)]
-    frame = store.frame
-    key = ("beds", round(float(frame.lat0), 7), round(float(frame.lon0), 7))
-    beds = railprofile.beds(frame, key, store.cell_fn, railways.point_ground(frame, elev), rails)
-    return {j: float(z[0] + t * (z[1] - z[0]) + railways.RAIL_TOP_M)
-            for j, ((_, _, t), z) in enumerate(zip(samples, beds)) if np.isfinite(z).all()}
-
-
 def profile_chain(store, comp, parts, ground, reqs, short=False):
     """One chain's shadow profile record (a dict), or None (no deck). parts: {key: (spec, xy, z, lon, level)} as
     published (the level: the chain pool's)."""
@@ -1463,8 +1445,6 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
         if ROBUST_PROFILE and reqs.get("rail_crossings"):
             _, rl, rcr, ri, ids = reqs["rail_crossings"]
             rail_ids = [ids[i] for i in ri]
-            if on_surface:
-                rail_heads = _profile_rail_heads(store, rl, rcr, ri, ids)
         for n, r in enumerate(reqs["req"]):
             if n < len(mask) and not mask[n]:
                 if ROBUST_PROFILE and ground_ids:

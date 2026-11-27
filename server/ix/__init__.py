@@ -1,3 +1,2 @@
-"""The interchange pipeline's skeleton (SPEC.md): each step's output is one of artifacts.py's records (the contract,
-imported by the checks and nothing else of this package), the steps are s1_paths..s6_heights, the cache cache.py and
-the orchestrator pipeline.py."""
+"""The map's road members, each key's longest line (s1_paths), the 3D solve's input (grade3d.region, grade3d.network),
+and their cache (cache.py, artifacts.py)."""

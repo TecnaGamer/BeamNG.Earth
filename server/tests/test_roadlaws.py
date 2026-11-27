@@ -352,55 +352,6 @@ class ThreeSampleCouplingTest(unittest.TestCase):
                 self.assertAlmostEqual(gap, -0.1, delta=1e-4)     # (pulled down to it from 11 m: its lower side)
 
 
-class OverArchTest(unittest.TestCase):
-    """Popoli: a street graded flat at 280.16 m across the A25's east tube, a 5 m box (MAJOR_LOW_H, taller than the
-    room under the street) over a floor at 275.12 m: roads.arch_raise raised the ground over the vault to 280.72 m
-    through the street, a 0.56 m step within a metre at each side of the tube, which trucks hit. The road stage never
-    saw the arch; the street is put under its laws again with the arch's cover its floor."""
-
-    def planner(self):
-        import types
-        ns = SimpleNamespace(widths=None, _decks_near=lambda key: [], _map_nodes=lambda key: {},
-                             _shape_at=lambda xy, xy2, fid, modes: (np.full(len(xy), np.nan), [None] * len(xy)))
-        ns._road_laws = types.MethodType(grading._Planner._road_laws, ns)
-        return ns
-
-    def solve(self, z0, own=False):
-        from test_roads import features
-        feats = features([[(-120.0, 0.0), (120.0, 0.0)]], ["residential"], ids=["street"])
-        x = np.arange(-120.0, 120.1, 4.0)
-        street = plan(np.c_[x, 0 * x], np.full(len(x), z0), half=4.0)
-        y = np.arange(-30.0, 60.1, 3.0)                       # the tube across it, its portal 30 m south
-        arch = ("street.0#1" if own else "a25.0#1", SimpleNamespace(width=11.0), np.c_[0 * y, y],
-                np.full(len(y), 275.12 - grading.ROAD_LIFT), 1)
-        plans = [("street", street)]
-        got = grading._Planner._over_arches(self.planner(), "k", feats, plans, [arch],
-                                            {arch[0]: (5.0, (True, False))})
-        return x, plans, got
-
-    def test_a_street_under_the_cover_rises_over_it_under_its_laws(self):
-        x, plans, got = self.solve(280.16)
-        p = got[0][1]
-        cover = 275.12 - grading.ROAD_LIFT + 5.0 + grading.roadsmod.ARCH_SOIL_MIN
-        # (the street's ground, the line between its points, over the whole footprint: the tube and ARCH_SIDE_M beside
-        # it, where arch_raise raises the ground; at its points alone the footprint's edges between two stayed under)
-        reach = 11.0 / 2 + roadmesh_shoulder() + grading.roadsmod.ARCH_SIDE_M
-        fine = np.linspace(-reach, reach, 101)
-        self.assertGreaterEqual(float(np.interp(fine, x, p.z).min()), cover - 0.01, np.round(p.z, 2).tolist())
-        g, rad = roadlaws.laws(spec("residential"))
-        s = x - x[0]
-        self.assertLessEqual(float(np.max(np.abs(np.diff(p.z) / np.diff(s)))), g + 1e-3)
-        self.assertLess(bends(p), 1.5 / rad, "a curve the street's speed allows, no step")
-        far = np.abs(x) > 60.0          # (held past the reach its laws need: its junctions, a cell's edge as they were)
-        np.testing.assert_array_equal(p.z[far], np.full(int(far.sum()), 280.16))
-        np.testing.assert_array_equal(plans[0][1].z, np.full(len(x), 280.16))   # (the road stage's plan as it was)
-
-    def test_a_street_over_the_cover_or_the_tunnels_own_road_is_left_alone(self):
-        for z0, own in ((281.5, False), (280.16, True)):
-            _x, plans, got = self.solve(z0, own)
-            self.assertIs(got, plans)
-
-
 def roadmesh_shoulder():
     import roadmesh
     return roadmesh.TUNNEL_SHOULDER

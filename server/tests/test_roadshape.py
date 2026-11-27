@@ -76,10 +76,10 @@ class ShapeTest(unittest.TestCase):
         d = np.diff(line, axis=0)
         d = d[np.hypot(*d.T) > 1e-6]
         turns = [angle(d[i], d[i + 1]) for i in range(len(d) - 1)]
-        mapped = np.concatenate([off[f][0] for f in sorted(off, key=lambda f: float(off[f][0][0, 0]))])
-        dm = np.diff(mapped, axis=0)
-        dm = dm[np.hypot(*dm.T) > 1e-6]
-        self.assertGreater(max(angle(dm[i], dm[i + 1]) for i in range(len(dm) - 1)), 10.0, "the mapped corner")
+        # (the mapped corner: where the west approach arrives at the deck's end; the deck is the map's own range, its
+        # pieces not lengthened into the approach, #118)
+        west = np.array([0.0, 0.0]) - np.array([-100.0 * math.cos(TURN), 100.0 * math.sin(TURN)])
+        self.assertGreater(angle(west, oxy[-1] - oxy[0]), 10.0, "the mapped corner")
         self.assertLess(max(turns), 5.0, "rows by the chord rule along one smooth line")
         steps = np.hypot(*np.diff(xy, axis=0).T)
         self.assertLessEqual(float(steps.max()), roadshape.MAX_STEP_M + 1e-9)

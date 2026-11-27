@@ -158,7 +158,7 @@ class SingleFlightTest(unittest.TestCase):
         neighbor = lambda: self.fail("neighbors must not be expanded during decoding")
         with patch.object(self.md, "layer_arrays", return_value=self.arrays("roads")), \
              patch.object(self.md, "_lanes", side_effect=tags), \
-             patch.object(mapdata.gradesep, "neighbours_hook", return_value=neighbor):
+             patch.object(mapdata.neighbours, "neighbours_hook", return_value=neighbor):
             got = self.md.cell(KEY, ("roads",)).layers["roads"]
         self.assertIs(got._bnge_neighbours, neighbor)
 

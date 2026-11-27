@@ -1,81 +1,65 @@
-"""Step 5 of the 3D solve: what each path may do and what it costs.
+"""Step 5 of the 3D solve: what each path may do and what moving it off the terrain costs.
 
     lay(network, samples, ground) -> Laws
 
-Per path (the kernel's chain): a comfortable grade and vertical curve, past which each metre pays for its excess
-squared, and the ceilings no answer goes past. Per sample: the height it is drawn to (its smoothed ground), what a metre
-off it costs, and the bounds of its kind.
+Per path, its grading law, which no answer goes past: the steepest grade and the tightest vertical curve of its class
+and speed (gradeshapes.max_grade, curve_radius: AASHTO's grades plus the game's, v^2 / a; a major road's curve no
+tighter than a car drives it at its class's driving speed, drive_ceiling). A road lying on ground steeper than its
+grade follows that ground: the terrain's own grade round each segment, where both its samples lie on the terrain, is
+allowed there.
 
-- Roads: the comfortable grade and curve are the build's by class and speed (gradeshapes.max_grade, curve_radius:
-  AASHTO's grades plus the game's, v^2 / a). The ceilings are CEIL_GRADE_X and CEIL_CURVE_X times as steep and as sharp.
-  What the excess costs grows with the speed squared, so a motorway bends least.
+Per sample, its earthwork: the terrain it lies on (its smoothed ground) and what a metre off it costs, its length times
+its carriageway's width times (its speed / REF_KMH)^2, so the faster line moves least. A deck, a rail deck and a tunnel
+cost nothing: they span or bore. Nor does a sample where two lines are stacked (a crossing at two layers, STACK_M along
+each either side): the heightmap has one height there and does not say whose, the square over a tunnel's trough or the
+trough under the square.
+
 - Tracks: OSM has no speed for a track. In a city (URBAN_ROADS_M of road within URBAN_R_M) a train runs at RAIL_CITY_KMH,
-  and its line may bend as one that slow may (the curve's radius by that speed, RAIL_CITY_GRADE). Outside a city it runs
-  at RAIL_KMH with RAIL_GRADE. A track costs RAIL_GROUND_X times a road to move off its ground: moving a track is the
-  dearest change there is.
-- Kinds: a road on the ground and a track pay to leave their ground. A deck pays nothing (it spans; its laws keep its
-  line) but stands over its ground by its depth and DECK_AIR_M, away from its ends (ABUT_M: its abutments). A tunnel pays
-  nothing and stays under its ground by its cover and headroom, away from its mouths. Floors and roofs are costs too
-  (W_BOUND per m^2 short, earthfast 644): only the joins and the ceilings are hard, and those a flat network always meets,
-  so every problem has an answer.
-
-The weights share one unit, W_GROUND: a road sample a metre off its ground. At REF_KMH, a grade 1 % past the comfortable
-over one STEP_M segment pays what that segment's sample a metre off its ground does (W_GRADE * h * 0.01^2 = 1)."""
+  its line bending as one that slow may (the curve's radius by that speed, RAIL_CITY_GRADE). Outside a city it runs at
+  RAIL_KMH with RAIL_GRADE."""
 from dataclasses import dataclass
 
 import numpy as np
 
-import carriageways as _cw
 import gradeshapes as _gsh
 from . import network as _network
+from . import problem as _problem
 
-W_GROUND = 1.0              # a road's sample a metre off its ground (per m^2)
-RAIL_GROUND_X = 20.0        # a track's: this times a road's
-W_BOUND = 1.0e4             # a deck's sample a metre under its floor, a tunnel's over its roof
-W_GRADE = 1.0e4 / _gsh.STEP_M   # per m of path, per (grade past the comfortable)^2, at REF_KMH
-W_CURVE = 1.0e3             # per m, per (curve past the comfortable, the kernel's measure)^2, at REF_KMH
-REF_KMH = 60.0
-SPEED_X_MAX = 6.0           # the speed's factor at most, and 1 / this at least
-CEIL_GRADE_X = 2.0          # the hard ceiling: this times the comfortable grade ...
-CEIL_CURVE_X = 4.0          # ... and this times as sharp a curve
-LAM_ROAD = 1.0e-3           # the kernel's smoothness (second difference squared, per sample): the laws decide the line
-LAM_DECK = 10.0             # a deck's: its line kept where nothing else decides
-ABUT_M = 15.0               # m from a deck's (a tunnel's) end where it meets its ground
-DECK_AIR_M = _gsh.DECK_AIR_M
+REF_KMH = 50.0              # km/h at which a metre of road a metre wide a metre off its terrain costs 1
+STACK_M = 8.0               # m along each line either side of a crossing at two layers where the terrain is neither's
+GROUND_GRADE_WIN = 5        # samples either side over which the terrain's own grade is read (a road may follow it)
 RAIL_KMH = 120.0            # a track's speed outside a city
 RAIL_CITY_KMH = 50.0        # ... and in one
 RAIL_CITY_R_MIN_M = 300.0   # m: the tightest vertical curve of a track in a city (outside: gradeshapes.R_MIN_RAIL_M)
-RAIL_GRADE = 0.025          # a track's comfortable grade outside a city (the survey's 99th percentile over 100 m)
+RAIL_GRADE = 0.025          # a track's grade outside a city (the survey's 99th percentile over 100 m)
 RAIL_CITY_GRADE = 0.035     # ... and in one
 URBAN_R_M = 250.0           # a track is in a city with URBAN_ROADS_M of road within this of its middle
 URBAN_ROADS_M = 3000.0      # (streets 100 m apart: ~5000 m within 250 m; open country a few hundred)
+DRIVE_LIFT_G = 0.20         # the vertical acceleration a crest or a dip gives at the class's speed, at most (lift_g)
+DRIVE_KMH = {"motorway": 130.0, "trunk": 100.0, "primary": 90.0, "secondary": 80.0}   # (drivability.SPEED_MS)
+EARTH_KINDS = ("ground", "rail")
 
 
 @dataclass
 class Laws:
-    """Per path (P,): soft_grade, grade (ceiling), w_grade; soft_K, K (ceiling; the kernel's K: radius / 100), w_curve;
-    lam; kmh; urban (a track in a city; False for roads). Per sample (N,): t (drawn to), w (per m^2 off it), lo, hi."""
-    soft_grade: np.ndarray
+    """Per path (P,): grade, R (its vertical curve's least radius, m), kmh, urban (a track in a city; False for roads).
+    Per sample (N,): t (its terrain), w (what a metre off it costs; 0: nothing), glim (the grade allowed from it to the
+    next sample of its path; 0 at a path's last)."""
     grade: np.ndarray
-    w_grade: np.ndarray
-    soft_K: np.ndarray
-    K: np.ndarray
-    w_curve: np.ndarray
-    lam: np.ndarray
+    R: np.ndarray
     kmh: np.ndarray
     urban: np.ndarray
     t: np.ndarray
     w: np.ndarray
-    lo: np.ndarray
-    hi: np.ndarray
+    glim: np.ndarray
 
     def chain(self, samples, p):
-        """The kernel's chain dict of path p (carriageways.solve)."""
+        """Path p's law as the solve reads it: t, w, xy (its samples' places), ds (m between its samples), glim (per
+        segment), R, step."""
         sl = samples.of(p)
-        return dict(t=self.t[sl], w=self.w[sl], lo=self.lo[sl], hi=self.hi[sl], grade=float(self.grade[p]),
-                    K=float(self.K[p]), lam=float(self.lam[p]), step=max(float(samples.h[p]), 1e-3), length=0.0,
-                    soft_grade=float(self.soft_grade[p]), w_grade=float(self.w_grade[p]),
-                    soft_K=float(self.soft_K[p]), w_curve=float(self.w_curve[p]), w_bound=W_BOUND)
+        ds = np.maximum(np.diff(samples.s[sl]), 1e-3)
+        return dict(t=self.t[sl], w=self.w[sl], xy=samples.xy[sl], ds=ds, glim=self.glim[sl][:len(ds)],
+                    R=float(self.R[p]), step=float(samples.h[p]))
 
 
 def road_length_near(network, xy, r=URBAN_R_M):
@@ -106,13 +90,8 @@ def road_length_near(network, xy, r=URBAN_R_M):
     return out
 
 
-def speed_x(kmh):
-    """The factor of what a law's excess costs at kmh: (kmh / REF_KMH)^2, within SPEED_X_MAX either way."""
-    return float(np.clip((float(kmh) / REF_KMH) ** 2, 1.0 / SPEED_X_MAX, SPEED_X_MAX))
-
-
 def member_law(m, urban=False):
-    """(comfortable grade, comfortable vertical curve radius m, km/h) of member m (a track's by urban)."""
+    """(grade, vertical curve radius m, km/h) of member m (a track's by urban)."""
     if _network.family(m.kind) == "rail":
         kmh = float(m.kmh) if m.kmh else (RAIL_CITY_KMH if urban else RAIL_KMH)
         v = kmh / 3.6
@@ -121,66 +100,79 @@ def member_law(m, urban=False):
     return float(_gsh.max_grade(m)), float(_gsh.curve_radius(m)), float(_gsh.speed(m))
 
 
+def drive_radius(network, path):
+    """The vertical curve radius (m) a major road's path is driven over at its fastest class's driving speed (DRIVE_KMH,
+    not its limit: a car drives a city's 50 km/h secondary at 80; a link as its road: Suedtiroler Platz's secondary links,
+    9 m decks, rose 2 m to a crest at 22 %); None for others (a street, a track)."""
+    best = None
+    for i in path.members():
+        m = network.members[i]
+        if _network.family(m.kind) != "road":
+            continue
+        v = DRIVE_KMH.get(str(m.cls or "").replace("_link", ""))     # (a link driven as its road: drivability's)
+        if v is not None and (best is None or v > best):
+            best = v
+    if best is None:
+        return None
+    v = best / 3.6
+    return v * v / (DRIVE_LIFT_G * 9.81)
+
+
 def path_law(network, path, urban=False):
     """member_law of the path's fastest member (its strictest)."""
     return max((member_law(network.members[i], urban) for i in path.members()), key=lambda law: law[2])
 
 
-def inner(samples, p, near_m=ABUT_M):
-    """bool (n,) of path p's samples more than near_m (along the path) from both ends of the member each is on."""
-    sl = samples.of(p)
-    s, mem = samples.s[sl], samples.member[sl]
-    out = np.zeros(len(s), bool)
-    for i in np.unique(mem):
-        on = mem == i
-        a, b = s[on].min(), s[on].max()
-        out[on] = (s[on] - a > near_m) & (b - s[on] > near_m)
+def stacked(network, samples):
+    """bool (N,): the samples of a crossing at two layers, those its clearance holds (under or over the other's
+    carriageway: problem._reach) and STACK_M along their path past them."""
+    out = np.zeros(len(samples), bool)
+    for pa, ia, pb, ib, lay in samples.crossings:
+        if lay.upper is None:
+            continue
+        for (p, i, m), (o, j, mo) in (((pa, ia, lay.a), (pb, ib, lay.b)), ((pb, ib, lay.b), (pa, ia, lay.a))):
+            sl = samples.of(p)
+            s = samples.s[sl]
+            k = _problem._reach(samples, p, i, o, j, float(network.members[mo].half) + _problem.CLEAR_PAD_M)
+            out[sl.start + np.flatnonzero((s >= s[k[0]] - STACK_M) & (s <= s[k[-1]] + STACK_M))] = True
     return out
 
 
 def lay(network, samples, ground):
     """The Laws of the network's paths (step 1) over their samples (step 3) and smoothed ground (step 4)."""
     P, N = len(network.paths), len(samples)
-    soft_grade, grade, w_grade = np.zeros(P), np.zeros(P), np.zeros(P)
-    soft_K, K, w_curve = np.zeros(P), np.zeros(P), np.zeros(P)
-    lam, kmh, urban = np.full(P, LAM_ROAD), np.zeros(P), np.zeros(P, bool)
+    grade, R, kmh, urban = np.zeros(P), np.zeros(P), np.zeros(P), np.zeros(P, bool)
     t = np.asarray(ground, np.float64).copy()
-    w, lo, hi = np.zeros(N), np.full(N, -np.inf), np.full(N, np.inf)
+    w, glim = np.zeros(N), np.zeros(N)
     kind = np.array([m.kind for m in network.members], dtype=object)
+    half = np.array([float(m.half) for m in network.members])
     rail = [p for p, path in enumerate(network.paths)
             if any(_network.family(kind[i]) == "rail" for i in path.members())]
     if rail:            # (a track's city: the road round its middle sample)
         mids = np.array([samples.xy[samples.of(p)][(samples.of(p).stop - samples.of(p).start) // 2] for p in rail])
         urban[rail] = road_length_near(network, mids) >= URBAN_ROADS_M
-    depth = {}
+    earth = np.isin(kind[samples.member], EARTH_KINDS) & ~stacked(network, samples)
     for p, path in enumerate(network.paths):
-        g, rad, kmh[p] = path_law(network, path, bool(urban[p]))
-        x = speed_x(kmh[p])
-        soft_grade[p], w_grade[p] = g, W_GRADE * x
-        grade[p] = g * CEIL_GRADE_X if CEIL_GRADE_X else _cw.NO_GRADE_CEILING        # (0: no ceiling, the cost alone)
-        soft_K[p], w_curve[p] = rad / 100.0, W_CURVE * x
-        K[p] = rad / 100.0 / CEIL_CURVE_X if CEIL_CURVE_X else _cw.NO_CURVE_CEILING
+        grade[p], rad, kmh[p] = path_law(network, path, bool(urban[p]))
+        dr = drive_radius(network, path)
+        R[p] = rad if dr is None else max(rad, dr)
         sl = samples.of(p)
-        mem = samples.member[sl]
-        kk = kind[mem]
-        w[sl] = np.where(kk == "ground", W_GROUND, np.where(kk == "rail", W_GROUND * RAIL_GROUND_X, 0.0))
-        away = inner(samples, p)
-        deck = away & ((kk == "deck") | (kk == "rail_deck"))
-        if deck.any():
-            for i in np.unique(mem[deck]):
-                if i not in depth:
-                    depth[i] = (_gsh.deck_depth(network.net.L[i]) if kind[i] == "deck" else _gsh.RAIL_DECK_DEPTH_M)
-            lo[sl.start + np.flatnonzero(deck)] = t[sl][deck] + np.array([depth[i] for i in mem[deck]]) + DECK_AIR_M
-            lam[p] = LAM_DECK
-        tun = away & (kk == "tunnel")
-        if tun.any():
-            hi[sl.start + np.flatnonzero(tun)] = t[sl][tun] - _gsh.COVER_M - _gsh.HEADROOM_M
-    return Laws(soft_grade, grade, w_grade, soft_K, K, w_curve, lam, kmh, urban, t, w, lo, hi)
+        ds = np.diff(samples.s[sl])
+        span = np.r_[ds, 0.0] / 2 + np.r_[0.0, ds] / 2 if len(ds) else np.ones(1)   # (m of the path each sample stands for)
+        on = earth[sl]
+        w[sl] = np.where(on, span * 2.0 * half[samples.member[sl]] * (kmh[p] / REF_KMH) ** 2, 0.0)
+        n = sl.stop - sl.start
+        if n < 2:
+            continue
+        # (the terrain's own grade round each segment, where both its samples lie on the terrain)
+        s, g = samples.s[sl], t[sl]
+        k = np.arange(n - 1)
+        i0, i1 = np.maximum(0, k - GROUND_GRADE_WIN), np.minimum(n - 1, k + 1 + GROUND_GRADE_WIN)
+        own = np.abs(g[i1] - g[i0]) / np.maximum(s[i1] - s[i0], 1e-3)
+        glim[sl.start:sl.stop - 1] = np.maximum(grade[p], np.where(on[:-1] & on[1:], own, 0.0))
+    return Laws(grade, R, kmh, urban, t, w, glim)
 
 
 def summary(laws):
     """Counts of what the laws hold."""
-    return dict(track_samples=int(np.count_nonzero(laws.w >= W_GROUND * RAIL_GROUND_X)),
-                city_tracks=int(laws.urban.sum()),
-                deck_floor=int(np.isfinite(laws.lo).sum()), tunnel_roof=int(np.isfinite(laws.hi).sum()),
-                free=int((laws.w == 0).sum()))
+    return dict(city_tracks=int(laws.urban.sum()), on_terrain=int((laws.w > 0).sum()), free=int((laws.w == 0).sum()))

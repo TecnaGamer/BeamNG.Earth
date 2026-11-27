@@ -86,24 +86,6 @@ class RailIndexTest(unittest.TestCase):
         self.assertIsNot(railways._underpass_index(f, FRAME), ix)
         self.assertEqual(len(railways.road_underpasses(FRAME, [f], (0.0, 0.0, 10.0, 10.0), reach=0.0)), 0)
 
-    def test_a_missing_tunnels_width_is_each_calls_road_spec(self):
-        # (a map tunnel gradesep made ground takes the road's own spec: road_specs made while a download failed are
-        # made again, so each call's is the one used, not the first call's)
-        f = features([line(100.0), [(120.0, 90.0), (120.0, 110.0)]], ["standard_gauge", "secondary"],
-                     subtypes=["rail", "road"], flags=[(1, "is_tunnel")], widths=[(1, 8.6)])
-        ranges = {0: [], 1: []}
-        with mock.patch.multiple(roads, raw_level_ranges=lambda feats, i: list(ranges[i]),
-                                 level_ranges=lambda feats, i: list(ranges[i]),
-                                 _raw_all=lambda feats: [list(ranges[i]) for i in range(len(feats))],
-                                 _level_lists=lambda feats, idx: {i: list(ranges[i]) for i in idx}):
-            self.assertIsNone(roads.tunnel_specs(f)[1])
-            spec = roads.road_specs(f)[1]
-            for width in (6.0, 10.0):
-                wide = spec._replace(width=width)
-                with mock.patch.object(roads, "road_specs", return_value=[None, wide]):
-                    got = railways.road_underpasses(FRAME, [f], BOX)
-                self.assertEqual(len(got), 1)
-                self.assertEqual(got[0][1], width / 2 + railways.UNDERPASS_SIDE_M)
 
     def test_a_road_gaining_a_tunnel_spec_is_taken(self):
         # (a road with no map tunnel whose tunnel spec comes later, same road revision: each call's specs decide)

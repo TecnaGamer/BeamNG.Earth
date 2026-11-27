@@ -1,6 +1,7 @@
-"""grade3d.problem and grade3d.solve: the network's chains and couplings, solved in one go, the answer measured from the
-heights alone."""
+"""grade3d.problem and grade3d.solve: the network's chains and couplings, the least earthwork that holds every join,
+clearance and law, the answer measured from the heights alone; with no answer, the contradiction named."""
 import numpy as np
+import pytest
 
 import gradeshapes as gsh
 import linenet
@@ -12,22 +13,26 @@ def _line(x0, y0, x1, y1, n=11):
     return np.stack([np.linspace(x0, x1, n), np.linspace(y0, y1, n)], axis=1)
 
 
-def _m(key, line, kind="ground", cls="secondary", level=0.0, kmh=None):
+def _m(key, line, kind="ground", cls="secondary", level=0.0, kmh=None, nodes=None, node_xy=None):
     return Member(key, np.asarray(line, np.float64), kind, "rail" if kind.startswith("rail") else cls, kmh, level,
-                  4.0, None, None)
+                  4.0, None, nodes, node_xy=node_xy)
 
 
 def setup_function(_f):
     linenet.reset()
 
 
-def _run(ms, elev=lambda xy: np.full(len(xy), 10.0)):
+def _pose(ms, elev=lambda xy: np.full(len(xy), 10.0)):
     net = network.build(ms)
     lay = layers.order(net)
     sm = samples.sample(net, lay)
     g = ground.smooth(sm, ground.read(elev, sm))
     lw = laws.lay(net, sm, g)
-    pr = problem.pose(net, sm, lw)
+    return net, sm, lw, problem.pose(net, sm, lw)
+
+
+def _run(ms, elev=lambda xy: np.full(len(xy), 10.0)):
+    net, sm, lw, pr = _pose(ms, elev)
     sol = solve.solve(pr)
     return net, sm, lw, pr, sol, solve.measure(pr, sol.z)
 
@@ -40,38 +45,77 @@ def _z(net, sm, sol, key, x=None, y=None):
     return float(z[k])
 
 
+def _held(got):
+    assert got["clear_short_max"] < 1e-5 and got["join_gap_max"] < 1e-6, got
+    assert got["grade_excess_max"] < 1e-6 and got["curve_excess_max"] < 1e-6, got
+
+
 def test_a_bridge_over_a_road_clears_it_and_its_approaches_meet_the_ground():
     ms = [_m("w", _line(-400, 0, -100, 0)), _m("deck", _line(-100, 0, 100, 0), "deck", level=1.0),
           _m("e", _line(100, 0, 400, 0)), _m("under", _line(0, -300, 0, 300))]
     net, sm, _lw, pr, sol, got = _run(ms)
     assert sol.diagnostics["status"] == "Solved", sol.diagnostics
     need = gsh.headroom(ms[3]) + gsh.deck_depth(200.0)
-    assert _z(net, sm, sol, "deck", x=0.0) - _z(net, sm, sol, "under", y=0.0) >= need - 0.05
-    assert got["clear_short_max"] < 0.05 and got["join_gap_max"] < 1e-4 and got["grade_excess_max"] < 1e-4
-    assert abs(_z(net, sm, sol, "w", x=-400.0) - 10.0) < 0.5      # (far off, the road on its ground)
+    assert _z(net, sm, sol, "deck", x=0.0) - _z(net, sm, sol, "under", y=0.0) >= need - 1e-5
+    _held(got)
+    assert abs(_z(net, sm, sol, "w", x=-400.0) - 10.0) < 1e-5      # (far off, the road on its terrain)
+    assert abs(_z(net, sm, sol, "under", y=-300.0) - 10.0) < 1e-5
 
 
-def test_a_track_is_moved_less_than_a_road():
-    # (a road deck over a track and a road side by side: the clearance is made by the road, the track barely moves)
+def test_the_faster_line_moves_least():
+    # (a road deck over a track: the clearance is made by the road. Under the deck the terrain is neither's, so the
+    # track may dip a little there where that saves the road's ramps; off it, it stays on its terrain)
     ms = [_m("deck", _line(-60, 0, 60, 0), "deck", level=1.0),
           _m("a", _line(-500, 0, -60, 0)), _m("b", _line(60, 0, 500, 0)),
           _m("rail", _line(0, -800, 0, 800), "rail")]
     net, sm, _lw, _pr, sol, got = _run(ms)
+    _held(got)
     rail_move = abs(_z(net, sm, sol, "rail", y=0.0) - 10.0)
     deck_rise = _z(net, sm, sol, "deck", x=0.0) - 10.0
-    assert got["clear_short_max"] < 0.05
-    assert rail_move < 0.2 * deck_rise
+    assert deck_rise >= 5.0 and rail_move < 0.02 * deck_rise, (rail_move, deck_rise)
+    assert abs(_z(net, sm, sol, "rail", y=-400.0) - 10.0) < 1e-5
 
 
-def test_a_contradiction_is_answered_with_the_least_shortfall():
-    # (two decks mapped as crossing one level apart, and a road 11 m long joining them 8 m from the crossing: within the
-    # ceilings no answer holds the clearance)
+def test_a_street_over_a_tunnel_stays_on_its_terrain_and_the_tunnel_goes_under():
+    # (a street on the ground over a tunnel, its portals' approaches on either side: the slower street does not move)
+    ms = [_m("w", _line(-600, 0, -150, 0, 46), cls="primary"), _m("tube", _line(-150, 0, 150, 0, 31), "tunnel",
+                                                                    cls="primary", level=-1.0),
+          _m("e", _line(150, 0, 600, 0, 46), cls="primary"), _m("street", _line(0, -300, 0, 300, 61), cls="residential")]
+    net, sm, _lw, _pr, sol, got = _run(ms)
+    _held(got)
+    assert abs(_z(net, sm, sol, "street", y=0.0) - 10.0) < 1e-5
+    assert _z(net, sm, sol, "tube", x=0.0) <= 10.0 - gsh.headroom(ms[1]) - gsh.COVER_M + 1e-5
+
+
+def test_a_road_ending_near_a_tunnels_middle_is_not_joined_to_it():
+    # (Suedtiroler Platz: a street ends 1.8 m off the line of the tunnel under it; the two share a map node, but at the
+    # tunnel's portal, not there: no join, the street over the tunnel by its clearance)
+    portal = ("b", 150.0, 0.0)
+    ms = [_m("w", _line(-600, 0, -150, 0, 46), cls="primary", nodes=frozenset({"a"}), node_xy=(("a", -150.0, 0.0),)),
+          _m("tube", _line(-150, 0, 150, 0, 31), "tunnel", cls="primary", level=-1.0, nodes=frozenset({"a", "b"}),
+             node_xy=(("a", -150.0, 0.0), portal)),
+          _m("e", _line(150, 0, 600, 0, 46), cls="primary", nodes=frozenset({"b"}), node_xy=(portal,)),
+          _m("street", _line(0, 1.8, 0, 300, 31), cls="residential", nodes=frozenset({"b", "s"}),
+             node_xy=(portal, ("s", 0.0, 300.0)))]
+    net = network.build(ms)
+    keys = [str(m.key) for m in net.members]
+    st, tu = keys.index("street"), keys.index("tube")
+    assert not any({i, j} == {st, tu} for i, _si, j, _sj in net.joins)
+    _net, sm, _lw, pr, sol, got = _run(ms)
+    _held(got)
+    assert any(w == "clear" for w, _k in pr.why)
+
+
+def test_a_contradiction_is_named_not_eased():
+    # (two decks mapped as crossing one level apart, and a link 14 m long joining them 10 m from the crossing: no
+    # answer holds the clearance within the link's grade)
     ms = [_m("hi", _line(-300, 0, 300, 0, 61), "deck", level=2.0), _m("lo", _line(0, -300, 0, 300, 61), "deck", level=1.0),
-          _m("link", _line(0, 8, 8, 0, 4))]
-    _net, _sm, _lw, pr, sol, got = _run(ms)
-    assert sol.diagnostics["status"] == "Solved", sol.diagnostics
-    assert got["join_gap_max"] < 1e-4 and got["grade_excess_max"] < 1e-4      # (the joins and the ceilings hold ...)
-    assert got["clear_short_max"] > 0.5                                         # (... the clearance gives)
+          _m("link", _line(0, 10, 10, 0, 4))]
+    _net, _sm, _lw, pr = _pose(ms)
+    with pytest.raises(solve.NotSolved) as e:
+        solve.solve(pr)
+    msg = str(e.value)
+    assert "clearance" in msg and "hi deck" in msg and "lo deck" in msg, msg
 
 
 def _hilly(xy):
@@ -92,7 +136,7 @@ def test_blocks_blend_to_what_one_solve_gives_and_hold_its_clearances_across_a_s
     net, sm, _lw, pr, whole, got = _run(ms, _hilly)
     for block_m in (400.0, 650.0):                      # (a seam beside the motorway, and one along it)
         sol = solve.solve_blocks(pr, sm, block_m=block_m, ramp_m=60.0, margin_m=250.0, workers=2)
-        assert sol.diagnostics["blocks"] >= 4 and set(sol.diagnostics["status"]) == {"Solved"}, sol.diagnostics
+        assert sol.diagnostics["blocks"] >= 4 and sol.diagnostics["status"] == "Solved", sol.diagnostics
         m = solve.measure(pr, sol.z)
         assert m["clear_short_max"] < 0.1 and m["join_gap_max"] < 1e-3, m
         assert np.abs(sol.z - whole.z).max() < 0.5, np.abs(sol.z - whole.z).max()
@@ -100,12 +144,12 @@ def test_blocks_blend_to_what_one_solve_gives_and_hold_its_clearances_across_a_s
 
 def test_a_block_takes_a_paths_runs_inside_it_and_the_couplings_of_two_samples_there():
     ms = _grid_with_bridges()
-    net, sm, _lw, pr, _sol, _got = _run(ms)
+    _net, sm, _lw, pr = _pose(ms)
     bl = solve.blocks(pr, sm, block_m=400.0, ramp_m=50.0, margin_m=50.0)
     seen = np.zeros(len(sm), int)
     for b in bl:
         seen[b.idx] += 1
-        assert len(b.idx) == sum(e - a + 1 for _p, a, e in b.runs)
+        assert len(b.idx) == sum(e - a + 1 for _p, a, e in b.runs) and len(b.couplings) == len(b.why)
         for c in b.couplings:
             pa, ia, pb, ib = c[:4]
             assert 0 <= ia <= b.runs[pa][2] - b.runs[pa][1] and 0 <= ib <= b.runs[pb][2] - b.runs[pb][1]
@@ -114,14 +158,12 @@ def test_a_block_takes_a_paths_runs_inside_it_and_the_couplings_of_two_samples_t
     assert np.allclose(w, 1.0)
 
 
-def test_problem_couples_joins_hard_and_layers_soft():
+def test_problem_holds_joins_equal_and_clearances_over():
     ms = [_m("a", _line(0, 0, 200, 0)), _m("x", _line(100, -100, 100, 100), "deck", level=1.0),
           _m("t", _line(200, 0, 200, 80)), _m("u", _line(200, 0, 300, -50))]
-    net = network.build(ms)
-    sm = samples.sample(net, layers.order(net))
-    lw = laws.lay(net, sm, np.zeros(len(sm)))
-    pr = problem.pose(net, sm, lw)
-    for c, w, (what, _k) in zip(pr.couplings, pr.soft, pr.why):
-        assert (c[4] == "eq") == (what == "join") and (w == 0.0) == (what == "join")
+    _net, _sm, _lw, pr = _pose(ms)
+    assert {w for w, _k in pr.why} == {"join", "clear"}
+    for c, (what, _k) in zip(pr.couplings, pr.why):
+        assert c[4] == ("eq" if what == "join" else "ge")
     clear = [c for c, (what, _k) in zip(pr.couplings, pr.why) if what == "clear"]
     assert len(clear) >= 3 and len({c[3] for c in clear}) >= 3     # (the lower held along the deck's width)

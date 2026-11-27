@@ -263,20 +263,7 @@ def _beds_own(frame, rails, ground, underpasses, load=None, elev=None, raw=None)
     where not, for a tram and for a point no node has. raw: ground(xy) -> the DEM's heights as they are (the grader's,
     in its planning frame); without it (the mesh, in an anchor's frame) the beds are the grader's lattice's
     (_region_beds), in the frame's heights."""
-    import railprofile
-    new = None
-    if railprofile.ENABLED and load is not None and (elev is not None or raw is not None) and rails:
-        if raw is None:
-            new = _region_beds(frame, load, elev, rails)
-        else:
-            lat0, lon0 = round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7)
-            new = railprofile.beds(frame, ("beds-dem", lat0, lon0), load, raw, rails)
-    if new is None or any(np.isnan(z).any() for z in new):
-        old = profile(rails, ground, underpasses)
-        if new is None:
-            return old
-        return [(np.where(np.isfinite(z), z, zb), zg) for z, (zb, zg) in zip(new, old)]
-    return [(z, np.asarray(ground(xy), np.float64)) for z, (_f, _c, _k, xy) in zip(new, rails)]
+    return profile(rails, ground, underpasses)
 
 
 def dem_ground(frame, elev):
@@ -318,39 +305,6 @@ def dem_ground(frame, elev):
 # ramp runs on at GRADE for up to SEED_LIFT_MAX_M / GRADE), and two frames' nodes stand at other places: north of the
 # SR17's underpass at Popoli (42.1712 N 13.8250 E) the nodes of the Rome-Pescara line's track were 7 m apart, the
 # grader's blend stood the ground 1.4-1.7 m over the anchor's blend the track was drawn at, and the wagons hit it.
-def _region_beds(frame, load, elev, rails):
-    """railprofile.beds of rails (parts in frame, an anchor's) as the grader lays them: in each point's planning region's
-    frame (geotiles.region_frame, PlanStore.frame_of's), on the DEM's heights (dem_ground), from that frame's lattice
-    ("beds-dem"), the points mapped into it as the plans are mapped out of it (geotiles.world_xy_map); the heights then
-    in frame's (as point_ground reads the ground for the mesh). NaN where no node has the point."""
-    import geotiles
-    import railprofile
-    pts = [np.asarray(r[3], np.float64).reshape(-1, 2) for r in rails]
-    off = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
-    z = np.full(int(off[-1]), np.nan)
-    if not len(z):
-        return np.split(z, off[1:-1])
-    allxy = np.concatenate(pts)
-    la, lo, _ = frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
-    la, lo = np.asarray(la, np.float64).ravel(), np.asarray(lo, np.float64).ravel()
-    rx, ry = geotiles.region_of(la, lo)
-    rx, ry = np.atleast_1d(rx), np.atleast_1d(ry)
-    for a, b in sorted({(int(a), int(b)) for a, b in zip(rx.tolist(), ry.tolist())}):
-        rf = geotiles.region_frame(a, b)
-        akey = ("beds-dem", round(float(rf.lat0), 7), round(float(rf.lon0), 7))
-        here = (rx == a) & (ry == b)
-        asks, idx = [], []
-        for n, (fid, cls, kind, _xy) in enumerate(rails):
-            m = np.flatnonzero(here[off[n]:off[n + 1]])
-            if len(m):
-                asks.append((fid, cls, kind, geotiles.world_xy_map(frame, rf, pts[n][m])))
-                idx.append(off[n] + m)
-        for k, h in zip(idx, railprofile.beds(rf, akey, load, dem_ground(rf, elev), asks)):
-            z[k] = h
-    ok = np.isfinite(z)
-    if ok.any():
-        z[ok] = np.asarray(frame.geodetic_to_enu(la[ok], lo[ok], z[ok])[2], np.float64)
-    return np.split(z, off[1:-1])
 
 
 def track_beds(frame, cells, box, elev, load=None):
@@ -490,7 +444,6 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
                       near if clip else None)
 
 
-
 def _rail_ranges(feats, i):
     """roads.level_ranges of rail feature i with its short tunnels taken out (laid on the ground, as _pieces): short by
     the run of the tunnel they are a piece of (tunnel_run_m, through the map's splits at switches), not by the piece's
@@ -546,6 +499,7 @@ def _rail_index(feats, frame):
 # A short road tunnel may be tagged only on the lower road, with no bridge flag on
 # the railway above. Its ballast and grading must not fill the lower carriageway.
 UNDERPASS_CLEAR_M = 3.6
+UNDERPASS_MAX_M = 80.0      # m: a road tunnel part this short is an underpass the tracks pass over
 UNDERPASS_SIDE_M = 1.0
 UNDERPASS_MIN_SIN = 0.25    # conservatively exclude near-parallel tracks beside a tunnel
 
@@ -585,7 +539,7 @@ def raising_underpasses(tunnels, classes):
 
 
 def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
-    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep. classes: a
+    """Short road tunnels near box as (xy, half width). classes: a
     list that gets each one's road class, in the same order (grading's UNDER_TUNNEL_FIXED_ON); without it the native
     selection (_road_underpasses_native: the same tunnels, the classes not kept)."""
     if classes is None:
@@ -596,35 +550,17 @@ def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
         if feats is None or not len(feats):
             continue
         specs = roads.tunnel_specs(feats)
-        ground_specs = None
         tagged_any = _tunnel_tagged(feats)
         has = np.fromiter((sp is not None for sp in specs), bool, len(specs)) | tagged_any
         for i in _box_hits(feats.boxes(frame), near, has):     # (a road with neither: nothing below)
             sp = specs[i]
             rings = roads.tunnel_parts(feats, i) if sp is not None else []
-            # gradesep can turn a short road tunnel into ground and the tracks above it into bridges.
-            # Keep that source clearance evidence (Nashville, Carney Street), including when another
-            # tunnel on the same feature remains. Retained tunnels keep their cleared portal ends.
-            tagged = ([(a, b, kind) for a, b, kind in roads.tag_level_ranges(feats, i) if kind == "tunnel"]
-                      if tagged_any[i] else [])
-            missing = []
-            if tagged:          # (the map's tunnels first: most features have none)
-                effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
-                floor = roads.part_floor(feats, i)
-                missing = [(a, b, kind) for a, b, kind in tagged
-                           if not any(c <= a + floor and d >= b - floor for c, d in effective)]
-            if missing:
-                if ground_specs is None:
-                    ground_specs = roads.road_specs(feats)
-                sp = sp or ground_specs[i]
-                if sp is not None:
-                    rings += roads._parts_by_level_new(feats, i, "tunnel", rngs=missing)
             if sp is None:
                 continue
             for ring in rings:
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 xy = np.column_stack((e, n))
-                if len(xy) < 2 or _arc(xy)[-1] > roads.UNDERPASS_MAX_M:
+                if len(xy) < 2 or _arc(xy)[-1] > UNDERPASS_MAX_M:
                     continue
                 key = (str(feats.ids[i]), tuple(np.round(xy[[0, -1]].ravel(), 2)))
                 if key not in seen:
@@ -636,7 +572,7 @@ def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
 
 
 def _road_underpasses_native(frame, cells, box, reach=REACH_M):
-    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep: layer by
+    """Short road tunnels near box as (xy, half width): layer by
     layer, its roads in its earthfast.UnderpassIndex (_underpass_index), a road's tunnel geometry made once
     (_underpass_entry), the window's selection, specs, arc test and dedupe by (id, ends) one call a layer
     (rail_underpass_select). A road's spec is each call's: its tunnel spec (roads.tunnel_specs, asked every call: a
@@ -662,13 +598,13 @@ def _underpass_index(feats, frame):
     import fast
     xin = feats.xy_in(frame)
     tagged = _tunnel_tagged(feats)
-    src = (xin, feats.__dict__.get("_road_revision", 0), tagged, roads.UNDERPASS_MAX_M)
+    src = (xin, feats.__dict__.get("_road_revision", 0), tagged, UNDERPASS_MAX_M)
     memos = feats.__dict__.setdefault("_rail_underpass_index", [])
     for got_src, got in memos:
         if len(got_src) == len(src) and all(x is y or (k == 1 and x == y) for k, (x, y) in enumerate(zip(got_src, src))):
             return got
     ix = fast._ef.UnderpassIndex(np.asarray(feats.boxes(frame), np.float64).reshape(-1, 4),
-                                 np.ascontiguousarray(tagged, bool), float(roads.UNDERPASS_MAX_M))
+                                 np.ascontiguousarray(tagged, bool), float(UNDERPASS_MAX_M))
     memos.append((src, ix))
     del memos[:-2]
     return ix
@@ -676,23 +612,14 @@ def _underpass_index(feats, frame):
 
 def _underpass_entry(feats, frame, specs, i):
     """(spec, missing, id, tunnel parts, missing tunnels): road i's tunnel geometry in frame for the UnderpassIndex: its
-    tunnel parts when it has a tunnel spec (retained tunnels keep their cleared portal ends) and the map's tunnels that
-    gradesep made ground (missing from its ranges: Nashville's Carney Street keeps that clearance evidence, also when
-    another tunnel on the feature remains), each an (k, 2) array."""
+    tunnel parts when it has a tunnel spec, each an (k, 2) array. Every tunnel the map has is in its ranges (the map's
+    own: roads.level_ranges): none missing."""
     spec = specs[i] is not None
     rings = roads.tunnel_parts(feats, i) if spec else []
-    tagged = ([(a, b, kind) for a, b, kind in roads.tag_level_ranges(feats, i) if kind == "tunnel"]
-              if _tunnel_tagged(feats)[i] else [])
-    missing = []
-    if tagged:          # (the map's tunnels first: most features have none)
-        effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
-        missing = [(a, b, kind) for a, b, kind in tagged
-                   if not any(c <= a + roads.MIN_PART and d >= b - roads.MIN_PART for c, d in effective)]
-    gone = roads._parts_by_level_new(feats, i, "tunnel", rngs=missing) if missing else []
 
     def enu(rs):
         return [np.ascontiguousarray(np.column_stack(mapgeom.enu_xy(feats, frame, r)), np.float64) for r in rs]
-    return spec, bool(missing), str(feats.ids[i]), enu(rings), enu(gone)
+    return spec, False, str(feats.ids[i]), enu(rings), []
 
 
 # A railway's bridge over a road on the ground (findground: a bridge over a plain way leaves the ground, the plain way
@@ -1012,7 +939,6 @@ def heritage(feats, i):
     u = feats.attrs.get("osm_usage")
     p = feats.attrs.get("osm_railway:preserved")
     return bool((u is not None and str(u[i] or "") == "tourism") or (p is not None and str(p[i] or "") == "yes"))
-
 
 
 def osm_gauge(feats, i):
@@ -2182,76 +2108,10 @@ def _beds_fit(frame, rails, ground, nat, underpasses, load=None, elev=None, trus
     trust: a list given here gets per part a mask (n,) of the points whose bed may decide a level crossing: the
     lattice's own and a short gap's between two of them; a long gap's natural ground is drawn, never a crossing (the
     lattice off altogether: every point, as before)."""
-    import railprofile
-
-    def window():
-        got = _beds(frame, rails, ground, underpasses, load, elev)
-        if trust is not None:
-            trust.extend(np.ones(len(xy), bool) for _f, _c, _k, xy in rails)
-        return got
-    if not (railprofile.ENABLED and load is not None and elev is not None and rails):
-        return window()
-    lat0, lon0 = round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7)
-    new = railprofile.beds(frame, ("beds", lat0, lon0), load, point_ground(frame, elev, ("nodes", lat0, lon0)), rails)
-    if new is None:
-        return window()
-    old = None
-    out = []
-    for n, (z, (_f, c, kind, xy)) in enumerate(zip(new, rails)):
-        z = np.asarray(z, np.float64)
-        ok = np.isfinite(z)
-        if not ok.all():
-            if kind != "ground" or c == "tram":
-                if old is None:         # (_beds' own: the lattice where it has the point, profile's past it)
-                    old = _beds(frame, rails, ground, underpasses, load, elev)
-                z = np.asarray(old[n][0], np.float64)
-            else:
-                z, ok = _fill_gaps(xy, z, nat, with_trust=True)
-        out.append((z, np.asarray(ground(xy), np.float64)))
-        if trust is not None:
-            trust.append(ok)
-    return out
-
-
-def _fill_gaps(xy, z, nat, with_trust=False):
-    """z (n,) with its NaN runs filled along the part (xy (n, 2)): a run between two finite points whose arc between them
-    is FIT_GAP_M or less linearly by the arc from the first (each section's length summed from it); any other run (longer,
-    or reaching the part's clipped end, where a tile cannot see its far point) from the natural ground averaged along the
-    part (_smooth_ground). The same at a point wherever the part was clipped, for every point within REACH_M -
-    FIT_GAP_M of the clip's ends. with_trust: (z, mask) the mask True at the finite points and a short gap's (the
-    points whose bed may decide a crossing). Pure given nat."""
-    xy = np.asarray(xy, np.float64)[:, :2]
-    z = np.array(z, np.float64)
-    ok = np.isfinite(z)
-    idx = np.flatnonzero(~ok)
-    seg = dnp.hypot(*np.diff(xy, axis=0).T)
-    smooth = None
-    for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1) if len(idx) else []:
-        a, b = int(run[0]) - 1, int(run[-1]) + 1
-        s = np.cumsum(seg[a:b]) if a >= 0 and b < len(z) else None       # (from point a: sections a..b-1)
-        if s is not None and s[-1] <= FIT_GAP_M:
-            z[run] = z[a] + (z[b] - z[a]) * (s[:-1] / s[-1] if s[-1] > 0.0 else 0.0)
-            ok[run] = True
-        else:
-            if smooth is None:
-                smooth = _smooth_ground(xy, nat)
-            z[run] = smooth[run]
-    return (z, ok) if with_trust else z
-
-
-def _smooth_ground(xy, nat, n=FIT_SMOOTH_N):
-    """nat(xy) (n,) averaged over the n points either side along the part (fewer at its ends), each point's own sum in
-    the same order wherever the part was clipped (no running sum from the clip's start). Pure given nat."""
-    g = np.asarray(nat(np.asarray(xy, np.float64)[:, :2]), np.float64).reshape(len(xy))
-    k = len(g)
-    acc, cnt = np.zeros(k), np.zeros(k)
-    at = np.arange(k)
-    for d in range(-n, n + 1):
-        idx = at + d
-        ok = (idx >= 0) & (idx < k)
-        acc[ok] += g[idx[ok]]
-        cnt[ok] += 1.0
-    return acc / np.maximum(cnt, 1.0)
+    got = _beds(frame, rails, ground, underpasses, load, elev)
+    if trust is not None:
+        trust.extend(np.ones(len(xy), bool) for _f, _c, _k, xy in rails)
+    return got
 
 
 def _part_crossings(xy, zb, crossers):

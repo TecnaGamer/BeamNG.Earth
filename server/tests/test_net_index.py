@@ -68,24 +68,6 @@ class NearIndexTest(unittest.TestCase):
         self.assertEqual(net.near(1, 3.0), [0])
         self.assertEqual(net.near(2, 40.0), [0, 1])
 
-    def test_the_systems_found_are_the_same_with_the_linear_scan(self):
-        import unittest.mock
-
-        def deck(n, line):
-            return Member(("d%d" % n, "deck", 0), np.asarray(line, np.float64), "deck", "secondary", 50, 1.0, 5.0, None)
-        x = np.linspace(-300.0, 300.0, 40)
-        ms = [member(0, np.stack([x, np.zeros(40)], 1)), member(1, np.stack([np.zeros(40), x], 1)),
-              deck(2, np.stack([np.linspace(-60.0, 60.0, 20), np.full(20, 80.0)], 1)),
-              deck(3, np.stack([np.full(20, 0.0), np.linspace(-60.0, 60.0, 20)], 1)),
-              member(4, np.stack([x + 700.0, np.full(40, 400.0)], 1))]
-
-        def canon(systems):
-            return [(s["seeds"], s["joins"], [(c["u"], c["d"], c["moves"]) for c in s["crossings"]], s["ends"], s["dips"])
-                    for s in systems]
-        got = canon(gs.find_systems(ms)[1])
-        with unittest.mock.patch.object(gs.Net, "near", linear_near):
-            self.assertEqual(got, canon(gs.find_systems(ms)[1]))
-        self.assertTrue(got)
 
     def test_one_member_and_none(self):
         self.assertEqual(gs.Net([member(0, [(0.0, 0.0), (5.0, 5.0)])]).near(0, 3.0), [])

@@ -338,7 +338,6 @@ class PortalCover(unittest.TestCase):
                          "a long one stays a low arch")
 
 
-
 class ArchRaise(unittest.TestCase):
     def test_ground_over_a_low_arch_stays_over_its_vault(self):
         xy = np.array([[0.0, 0.0], [30.0, 0.0]])
@@ -531,13 +530,6 @@ class PortalClearTest(unittest.TestCase):
             out.append([((p[0] - LON) * M_LON, (p[1] - LAT) * M_LAT) for p in (ring[0], ring[-1])])
         return out
 
-    def test_end_under_a_road_carried_past_it(self):
-        (a, b), = self.ends([[(0, -40), (0, 7)], [(-200, 0), (200, 0)]], ["service", "trunk"], [(0, "is_tunnel")])
-        hw = roads.carriageway("trunk", "paved", False) / 2
-        self.assertAlmostEqual(a[1], -40.0, delta=0.1, msg="the far end stays")
-        self.assertGreaterEqual(b[1], hw + grading.T_MAX - 0.1, "past the road's graded ground")
-        self.assertLessEqual(b[1], 7.0 + roads.PORTAL_EXTEND_MAX_M + 0.1)
-        self.assertAlmostEqual(b[0], 0.0, delta=0.1, msg="straight on")
 
     def test_road_beside_it_not_over_it(self):
         (a, b), = self.ends([[(0, -60), (0, -10)], [(8, -100), (8, 100)]], ["service", "trunk"], [(0, "is_tunnel")])
@@ -628,31 +620,6 @@ class Underwater(unittest.TestCase):
         w = np.zeros(50, bool)
         w[40:] = True
         self.assertEqual(roads.wet_run_inside(xy, w), 0.0)              # at an end: a portal on a bank
-
-
-class PortalDecks(unittest.TestCase):
-    """roads._portal_decks: a short ground gap between a tunnel's portal and a bridge of the same road is bridge (CA-1's
-    northbound Tom Lantos bore: 18 m of ground between them graded as a 22 % drop onto the bridge, 2026-11-09)."""
-
-    def feats(self, gap_m, side_road=False):
-        from test_roads import features
-        # 1000 m west-east: tunnel 0-0.5, then gap_m of ground, then a bridge to 0.8
-        a = 0.5 + gap_m / 1000.0
-        lines, classes = [[(-500, 0), (500, 0)]], ["trunk"]
-        if side_road:                           # (a road ending in the gap: a junction there)
-            lines.append([(gap_m / 2, 0), (gap_m / 2, 50)])
-            classes.append("residential")
-        return features(lines, classes, flags=[(0, "is_tunnel", 0.0, 0.5), (0, "is_bridge", a, 0.8)])
-
-    def ranges(self, f):
-        return [(round(a, 3), round(b, 3), k) for a, b, k in roads._portal_decks(f, 0, roads.tag_level_ranges(f, 0))]
-
-    def test_a_short_gap_is_bridge(self):
-        self.assertEqual(self.ranges(self.feats(18.0)), [(0.0, 0.5, "tunnel"), (0.5, 0.8, "bridge")])
-
-    def test_a_long_gap_or_a_junction_stays_ground(self):
-        self.assertEqual(self.ranges(self.feats(60.0)), [(0.0, 0.5, "tunnel"), (0.56, 0.8, "bridge")])
-        self.assertEqual(self.ranges(self.feats(18.0, side_road=True)), [(0.0, 0.5, "tunnel"), (0.518, 0.8, "bridge")])
 
 
 class SplitRanges(unittest.TestCase):
