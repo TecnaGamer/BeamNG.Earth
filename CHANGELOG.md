@@ -79,6 +79,12 @@ What changed in each release of BeamNG.Earth, newest first.
 - Reduced the chance of streets staying dry in a rain preset with Winter on where the real weather is dry.
 - Reduced the chance of the world stopping loading with Revamped roads (Experimental) on: after driving a while, the
   ground ahead could fail to build again and again.
+- Reduced the chance of snow from a previous place showing after a teleport (with Winter on): the snow on the ground
+  now belongs to the place it was worked out for, a new place shows none until its own weather is in, and that comes
+  within seconds instead of up to 5 minutes when the first try is busy.
+- Reduced the chance of snow showing where it has not really snowed (with Winter on): mountains no longer turn white
+  from their climate alone (mapped glaciers and ice stay), and the snow worked out for the heights above a place's own
+  ground no longer whitens higher mountains in view.
 
 ### Changed
 - Retired the Experimental "Road surface from aerial photos" setting (`BNE_PHOTO_SURFACE`). Roads should look the same as they do by default, and an old setting or variable is now ignored.
