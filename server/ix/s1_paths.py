@@ -9,7 +9,7 @@ import gradeshapes as _gsh
 
 from . import artifacts, cache
 
-FORMAT = 4
+FORMAT = 5     # 5: a tunnel member's half the carriageway's and the shoulder's, as a ground road's (#119)
 LAWS = (("gradeshapes", ["JOIN_M", "CROSS_END_M", "MERGE_DEG", "NODE_M", "NODE_EPS_M"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 1

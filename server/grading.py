@@ -3545,9 +3545,12 @@ class _Planner:
                     line = np.stack([np.asarray(e, np.float64), np.asarray(n_, np.float64)], axis=1)
                     mid = line[len(line) // 2]
                     ids, at = self._cell_nodes(k).get(str(f.ids[i]), (None, None))
+                    # (its half the carriageway's and the shoulder's, as a ground road's (_cell_enu) and its open
+                    # section's plan: the carriageway's alone held the A23's street clear of the asphalt and not the
+                    # shoulders, and the deck over it ended 1.4 m inside the trench its plan cut, a 5.9 m step)
                     out.append(_gsh.Member((str(f.ids[i]), "tunnel", int(round(mid[0])), int(round(mid[1]))), line,
                                            "tunnel", spec.cls + ("_link" if _is_link(spec) else ""), spec.kmh, -1.0,
-                                           float(spec.width) / 2, None, ids, node_xy=at))
+                                           float(spec.width) / 2 + shoulder(spec), None, ids, node_xy=at))
         with self.lock:
             if len(memo) > 256:
                 memo.clear()
@@ -3860,13 +3863,15 @@ class _Planner:
         Kept for the ENU_CACHE_MAX cells used last; a cell another thread is making is waited for (cleared whole at
         128 cells, while the planning threads made the same cells at once, a 36-tile downtown Los Angeles set made
         318 cells for 242, ~125 ms each, 2026-10-27)."""
-        key = (str(k), ground)
+        mode = roadsmod._mode()         # (the 3D solve's, on the map's own ranges, apart from the build's: map_only)
+        key = (str(k), ground, mode)
+        whole = (str(k), True, mode)
         with self.lock:
             if not hasattr(self, "enu_cache"):
                 self.enu_cache, self.enu_making = OrderedDict(), {}
             while True:
-                hit = key if key in self.enu_cache else (str(k), True)
-                got = self.enu_cache.get(key) or (self.enu_cache.get((str(k), True)) if not ground else None)
+                hit = key if key in self.enu_cache else whole
+                got = self.enu_cache.get(key) or (self.enu_cache.get(whole) if not ground else None)
                 if got is not None:
                     self.enu_cache.move_to_end(hit)
                     short = self.__dict__.get("enu_short", {}).get(hit)
@@ -4133,7 +4138,8 @@ class _Planner:
         with self.lock:
             cache = self.__dict__.get("enu_cache") or {}
             now = time.monotonic()
-            todo = [k for k in keys if (str(k), False) not in cache and (str(k), True) not in cache
+            mode = roadsmod._mode()
+            todo = [k for k in keys if (str(k), False, mode) not in cache and (str(k), True, mode) not in cache
                     and not (self.failed.get(k) is not None and now - self.failed[k] < RETRY_S)]
         if len(todo) < 2:
             return
@@ -4143,6 +4149,12 @@ class _Planner:
 
         def one(k):
             f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
+            if mode:                    # (the caller's ranges, the map's alone in the 3D solve: map_only)
+                with roadsmod.map_only():
+                    return _one(k, f0, l0)
+            return _one(k, f0, l0)
+
+        def _one(k, f0, l0):
             try:
                 if urgent:
                     with dem.urgent():
@@ -4938,7 +4950,7 @@ class _Planner:
             for i in range(len(f)):
                 if rs[i] is None and bs[i] is None:
                     continue
-                rngs = roadsmod.level_ranges(f, i)
+                rngs = roadsmod.tag_level_ranges(f, i)      # (the map's own: as mapped)
                 for kind, sp, want in (("bridges", rs[i] if rs[i] is not None else bs[i], "bridge"),
                                        ("ground", rs[i], "ground")):
                     if sp is None:
@@ -6445,7 +6457,10 @@ def _deck_z_hook(frame, lines, fids=None):
         xy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
         z = None
         if fid is not None:
-            zz, _m = pl._shape_at(xy, xy, fid, ("deck",))
+            # (a deck the solve made of a road on the ground over a tube (grade3d.decks): the solve laid it as that
+            # road, its "set" piece there)
+            modes = ("deck", "set") if fid in _SOLVED_DECK_FIDS else ("deck",)
+            zz, _m = pl._shape_at(xy, xy, fid, modes)
             z = solved_line(xy, zz, "deck %s" % fid)
         if z is None:
             out.append(None)
@@ -6455,6 +6470,122 @@ def _deck_z_hook(frame, lines, fids=None):
 
 
 roadsmod.DECK_Z_HOOK = _deck_z_hook
+
+_SOLVED_DECK_FIDS = set()      # the roads a solve made a deck of (_solved_decks_hook): their decks' heights are "set"
+_TUBES_MEMO = "_solved_tubes"
+
+
+def _tubes(feats):
+    """[(lon/lat line (k, 2), bbox (4,))] of the map's tunnel pieces of a layer (roads and tracks), kept on it."""
+    got = feats.__dict__.get(_TUBES_MEMO)
+    if got is None:
+        got = []
+        for j in range(len(feats)):
+            rng = [(a, b) for a, b, kd in roadsmod.tag_level_ranges(feats, j) if kd == "tunnel"]
+            if not rng:
+                continue
+            rings = [r for part in feats.parts(j) for r in part if len(r) >= 2]
+            for r in roadsmod.sub_polylines(rings, rng, whole=False):
+                r = np.asarray(r, np.float64)
+                if len(r) >= 2:
+                    got.append((r, np.r_[r.min(axis=0), r.max(axis=0)]))
+        feats.__dict__[_TUBES_MEMO] = got
+    return got
+
+
+def _ring_fraction(ring, p):
+    """The fraction of lon/lat polyline ring (sub_polyline's metric: metres, lon scaled by the cos of its mean lat) of
+    its point nearest p (lon, lat), and that point's distance (m)."""
+    c = dmath.cos(math.radians(float(np.mean(ring[:, 1]))))
+    q = np.c_[ring[:, 0] * c, ring[:, 1]] * 111320.0
+    pp = np.array([p[0] * c, p[1]]) * 111320.0
+    a, b = q[:-1], q[1:]
+    ab = b - a
+    L = np.hypot(ab[:, 0], ab[:, 1])
+    t = np.clip(((pp - a) * ab).sum(1) / np.maximum(L * L, 1e-12), 0.0, 1.0)
+    d = np.hypot(*(a + t[:, None] * ab - pp).T)
+    k = int(np.argmin(d))
+    s = np.r_[0.0, np.cumsum(L)]
+    return float((s[k] + t[k] * L[k]) / max(s[-1], 1e-9)), float(d[k])
+
+
+def _solved_decks_hook(feats, i):
+    """roads.SOLVED_DECKS_HOOK: [(a, b)] fractions of feature i the 3D solve makes a deck over (grade3d.decks): where
+    one of its ground pieces crosses a tunnel piece of the layer, the blocks there solved and their decks of it taken.
+    Kept on the layer."""
+    store = _ACTIVE_STORE
+    if store is None:
+        return []
+    memo = feats.__dict__.setdefault("_solved_decks", {})
+    got = memo.get(i)
+    if got is not None:
+        return got
+    got = memo[i] = _solved_decks(store, feats, i)
+    return got
+
+
+def _solved_decks(store, feats, i):
+    tubes = _tubes(feats)
+    if not tubes:
+        return []
+    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
+    pieces = roadsmod.ground_ranges(roadsmod.tag_level_ranges(feats, i), 0.0)
+    if len(rings) != 1 or not pieces:
+        return []
+    ring = rings[0]
+    hits = []
+    for g in roadsmod.sub_polylines(rings, pieces, whole=True):
+        g = np.asarray(g, np.float64)
+        if len(g) < 2:
+            continue
+        lo, hi = g.min(axis=0), g.max(axis=0)
+        for t, box in tubes:
+            if (box[2:] < lo).any() or (box[:2] > hi).any() or not roadsmod._crosses(g, t):
+                continue
+            hits.append(_cross_point(g, t))
+    if not hits:
+        return []
+    hits = np.asarray(hits, np.float64)
+    pl, _idx = store.planners_of(hits[:1, 1], hits[:1, 0])[0]
+    e, n, _ = pl.frame.geodetic_to_enu(hits[:, 1], hits[:, 0], 0.0)
+    from grade3d import region as _region
+    spans = _region.decks_at(pl, str(feats.ids[i]), np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64)])
+    out = []
+    for a, b in spans:
+        # (the deck's points every metre on this copy of the road: a layer holds a long road cut to its cell, and the
+        # blocks hold the road's decks wherever they are along it)
+        n = max(2, int(np.ceil(float(np.hypot(*(np.asarray(b) - np.asarray(a)))))) + 1)
+        ab = np.linspace(np.asarray(a, np.float64), np.asarray(b, np.float64), n)
+        la, lo_, _ = pl.frame.enu_to_geodetic(ab[:, 0], ab[:, 1], 0.0)
+        on = [_ring_fraction(ring, (float(x), float(y))) for x, y in zip(np.asarray(lo_), np.asarray(la))]
+        fs = [f for f, d in on if d <= DECK_ON_LINE_M]
+        if fs:
+            out.append((min(fs), max(fs)))
+    if out:
+        _SOLVED_DECK_FIDS.add(str(feats.ids[i]))
+    return sorted(out)
+
+
+DECK_ON_LINE_M = 3.0       # m: a solved deck's ends lie on its road's line (grade3d samples it); farther is an error
+
+
+def _cross_point(a, b):
+    """The first point where polylines a and b (lon/lat) cross."""
+    for j in range(len(a) - 1):
+        p, r = a[j], a[j + 1] - a[j]
+        for k in range(len(b) - 1):
+            q, s = b[k], b[k + 1] - b[k]
+            den = r[0] * s[1] - r[1] * s[0]
+            if abs(den) < 1e-18:
+                continue
+            t = ((q - p)[0] * s[1] - (q - p)[1] * s[0]) / den
+            u = ((q - p)[0] * r[1] - (q - p)[1] * r[0]) / den
+            if 0 <= t <= 1 and 0 <= u <= 1:
+                return p + t * r
+    return a[len(a) // 2]
+
+
+roadsmod.SOLVED_DECKS_HOOK = _solved_decks_hook
 
 
 def _track_z_hook(frame, rails):

@@ -399,18 +399,59 @@ def home_copy(feats, i):
     return None if j is None else (other, j)
 
 
+SOLVED_DECKS_HOOK = None    # grading: (feats, i) -> [(a, b)] fractions of feature i the 3D solve makes a deck over
+_MAP_ONLY = threading.local()
+
+
+class map_only:
+    """Within it (this thread), the ranges are the map's own: the 3D solve reads its input so, never the decks it
+    finds (grade3d.region). The memos made from the ranges are kept apart by mode (_mode)."""
+
+    def __enter__(self):
+        self.was = getattr(_MAP_ONLY, "on", False)
+        _MAP_ONLY.on = True
+        return self
+
+    def __exit__(self, *exc):
+        _MAP_ONLY.on = self.was
+        return False
+
+
+def _mode():
+    """"" where level_ranges carries the solve's decks, "@map" where it is the map's alone (map_only, no hook)."""
+    return "@map" if SOLVED_DECKS_HOOK is None or getattr(_MAP_ONLY, "on", False) else ""
+
+
 def level_ranges(feats, i):
     """The off-ground ranges of feature i as sorted (start, end, "bridge" | "tunnel") fractions of its length: the
-    map's own (tag_level_ranges), for the 3D solve, the deck builder, the ground roads and the grading alike. No range
-    is lengthened, inferred or moved by us: those rules rewrote the data before the solve saw it (the Wiedner Guertel's
-    82 m tunnels under Suedtiroler Platz cut to 45-50 m, its ground under the square's junction; the square's streets
-    made decks over it), the user 2026-11-27. Pure."""
-    return tag_level_ranges(feats, i)
+    map's own (tag_level_ranges), and the decks the 3D solve makes of a road on the ground over a tube it has no room to
+    be a tunnel over (SOLVED_DECKS_HOOK, grade3d.decks: the user 2026-11-27, a tunnel by default, a deck where there is
+    no space). Nothing else is lengthened, inferred or moved: those rules rewrote the data before the solve saw it (the
+    Wiedner Guertel's 82 m tunnels under Suedtiroler Platz cut to 45-50 m, its ground under the square's junction), the
+    user 2026-11-27; the solve itself reads the map's alone (map_only)."""
+    rngs = tag_level_ranges(feats, i)
+    if _mode():
+        return rngs
+    return _with_decks(rngs, SOLVED_DECKS_HOOK(feats, i))
+
+
+def _with_decks(rngs, decks):
+    """rngs with the deck spans decks [(a, b)] as "bridge" ranges, on the ground ranges only (a deck never reaches over
+    a range the map has)."""
+    if not decks:
+        return rngs
+    out = list(rngs)
+    for a, b in decks:
+        for ga, gb in ground_ranges(rngs, 0.0):
+            lo, hi = max(a, ga), min(b, gb)
+            if hi - lo > 1e-6:
+                out.append((lo, hi, "bridge"))
+    return sorted(out)
 
 
 def _level_lists(feats, idx):
     """{i: level_ranges(feats, i)} of features idx."""
-    return {i: tag_level_ranges(feats, i) for i in idx}
+    return {i: level_ranges(feats, i) for i in idx}
 
 
 def _raw_all(feats):
@@ -880,9 +921,10 @@ def height_limit_lines(feats, on_bridges=True):
 
 def _parts_by_level(feats, i, want):
     memo = feats.__dict__.setdefault("_parts_by_level", {})      # remembered: cells stay decoded (mapdata)
-    got = memo.get((i, want))
+    key = (i, want + _mode())   # (the solve's, the map's alone, kept apart from the build's: map_only)
+    got = memo.get(key)
     if got is None:
-        got = memo[(i, want)] = _parts_by_level_new(feats, i, want)
+        got = memo[key] = _parts_by_level_new(feats, i, want)
     return list(got)
 
 
@@ -972,9 +1014,10 @@ def _keyed(keys_of, parts_of, feats, i):
 def part_keys(feats, i, want):
     """_part_keys_new remembered on feats (bridge_parts' and tunnel_parts' keys: want "bridge" or "tunnel")."""
     memo = feats.__dict__.setdefault("_part_keys", {})
-    got = memo.get((i, want))
+    key = (i, want + _mode())
+    got = memo.get(key)
     if got is None:
-        got = memo[(i, want)] = _part_keys_new(feats, i, want)
+        got = memo[key] = _part_keys_new(feats, i, want)
     return list(got)
 
 
@@ -3631,7 +3674,8 @@ def _cell_memo(feats, name, make):
 def bridge_specs(feats):
     """Per feature: the Spec of a road bridge (flag is_bridge, or level above ground; not a tunnel), else
     None. No parking widths on bridges (urban False). Pure."""
-    return list(_cell_memo(feats, "_bridge_specs", lambda: _bridge_specs(feats)))  # (cells stay decoded: mapdata)
+    # (cells stay decoded: mapdata; the build's, with the solve's decks, apart from the solve's: map_only)
+    return list(_cell_memo(feats, "_bridge_specs" + _mode(), lambda: _bridge_specs(feats)))
 
 
 def tunnel_specs(feats):

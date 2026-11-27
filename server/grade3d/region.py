@@ -21,7 +21,7 @@ import numpy as np
 
 import gradeshapes as _gsh
 import linenet as _linenet
-from . import ground, laws, layers, network, outputs, problem, samples, solve
+from . import decks, ground, laws, layers, network, outputs, problem, samples, solve
 
 log = logging.getLogger("earthd.grading")
 
@@ -38,11 +38,13 @@ KEPT = 128                  # blocks a planner keeps
 @dataclass
 class Block:
     """A solved block: core (lo, hi); prof {(fid, mode): (a (m, 2), b (m, 2), za (m,), zb (m,))} the segments of its
-    pieces where it solved them; seconds; diagnostics (the solve's)."""
+    pieces where it solved them; seconds; diagnostics (the solve's); decks [(fid, xy_a, xy_b)] the roads on the ground
+    it makes decks over the tubes under them (decks.find), of the crossings in its core."""
     core: tuple
     prof: dict
     seconds: float
     diagnostics: dict
+    decks: list = ()
 
 
 def touches(line, lo, hi):
@@ -79,7 +81,14 @@ def _segments(pcs_prof):
 
 
 def solve_block(planner, bx, by):
-    """Block (bx, by) of the planner's frame, solved (not kept: block() keeps it)."""
+    """Block (bx, by) of the planner's frame, solved (not kept: block() keeps it). The solve reads the map's own
+    ranges (roads.map_only): the decks it finds are the build's, never its own input."""
+    import roads as _roads
+    with _roads.map_only():
+        return _solve_block(planner, bx, by)
+
+
+def _solve_block(planner, bx, by):
     t0 = time.perf_counter()
     c0 = np.array([bx, by], np.float64) * BLOCK_M
     c1 = c0 + BLOCK_M
@@ -98,7 +107,8 @@ def solve_block(planner, bx, by):
         zb, d, _s = solve.solve_block(pr, b)
         z[b.idx] = zb
     prof = outputs.profiles(net, sm, z)
-    return Block((c0, c1), _segments(prof), time.perf_counter() - t0, {k: d.get(k) for k in ("status", "rows")})
+    dk = decks.find(net, sm, pr, z, c0, c1) if b is not None else []
+    return Block((c0, c1), _segments(prof), time.perf_counter() - t0, {k: d.get(k) for k in ("status", "rows")}, dk)
 
 
 def block(planner, bx, by):
@@ -157,6 +167,21 @@ def _tangents(xy):
     return d / np.where(n > 0, n, 1.0)[:, None]
 
 
+def decks_at(planner, fid, pts):
+    """[(xy_a, xy_b)] of road fid's decks (decks.find) the blocks hold around the points pts (n, 2: where it crosses a
+    tube), each block solved if it is not yet; each crossing's from the block whose core holds it."""
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    if not len(pts):
+        return []
+    need = sorted({b for q in pts for b in blocks_over(q, q)})
+    out = []
+    for bx, by in need:
+        for f, a, b in block(planner, bx, by).decks:
+            if f == fid and not any(np.allclose(a, a2) and np.allclose(b, b2) for a2, b2 in out):
+                out.append((a, b))
+    return out
+
+
 def blocks_over(lo, hi):
     """[(bx, by)] of the blocks whose core is within RAMP_M of the box lo..hi."""
     a = np.floor((np.asarray(lo) - RAMP_M) / BLOCK_M).astype(int)
@@ -174,9 +199,13 @@ def cell_box(planner, home):
 
 
 def cell_profiles(planner, home):
-    """{fid: [(xy, z, mode)]} of map cell home: its members' pieces, their heights the blocks' blended."""
+    """{fid: [(xy, z, mode)]} of map cell home: its members' pieces, their heights the blocks' blended. The members as
+    the solve has them, the map's own ranges (a deck the solve made is still its road's "set" piece: grading's deck
+    heights read it there)."""
+    import roads as _roads
     lo, hi = cell_box(planner, home)
-    ms = members_in(planner, lo - CELL_PAD_M, hi + CELL_PAD_M)
+    with _roads.map_only():
+        ms = members_in(planner, lo - CELL_PAD_M, hi + CELL_PAD_M)
     if not ms:
         return {}
     net = network.build(ms, _linenet.Network())
