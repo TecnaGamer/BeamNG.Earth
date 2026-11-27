@@ -155,8 +155,6 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expGradeGuard", type: "bool", default: false, name: "Road steepness limit", desc: "Experimental. Caps how steep each class of road may be (unless the ground itself is that steep), smoothing out spikes the elevation data puts in roads. Changes the height of every road.",
         note: RESTART_NOTE },
-      { id: "expPhotoSurface", type: "bool", default: false, name: "Road surface from aerial photos", desc: "Experimental. Roads whose map data has no surface are drawn paved, gravel or grass by the colour of the aerial photo along them, where a sharp regional photo source is available (such as Czechia). Otherwise such roads stay dirt as before.",
-        note: RESTART_NOTE },
       { id: "expTerrainBumps", type: "bool", default: false, name: "Rougher land off the roads", desc: "Experimental. Small bumps in the open land away from the roads, so fields and verges are not perfectly smooth. Costs some world building time.",
         note: RESTART_NOTE },
       { id: "expRoadFollow", type: "bool", default: false, name: "Roads follow the land", desc: "Experimental. Roads keep more of the real hills and dips in the ground under them instead of being smoothed flat. Best where the elevation comes from lidar (most of the US and much of Europe); on the coarse global elevation roads get bumpier. Motorways and trunk roads are unchanged.",

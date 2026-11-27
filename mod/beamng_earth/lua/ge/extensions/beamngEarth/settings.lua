@@ -186,7 +186,6 @@ M.SCHEMA = {
   expRoughDirt = { kind = 'bool', default = false, label = 'Rough dirt roads' },
   expWearStrips = { kind = 'bool', default = false, label = 'Tyre polish, crack networks and manholes' },
   expGradeGuard = { kind = 'bool', default = false, label = 'Road steepness limit' },
-  expPhotoSurface = { kind = 'bool', default = false, label = 'Road surface from aerial photos' },
   expTerrainBumps = { kind = 'bool', default = false, label = 'Rougher land off the roads' },
   expRoadFollow = { kind = 'bool', default = false, label = 'Roads follow the land' },
   expCliffWalls = { kind = 'bool', default = false, label = 'Rock faces in deep road cuts' },
@@ -278,7 +277,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
   'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
-  'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expRoadFollow', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
+  'expWearStrips', 'expGradeGuard', 'expTerrainBumps', 'expRoadFollow', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads' }
 
