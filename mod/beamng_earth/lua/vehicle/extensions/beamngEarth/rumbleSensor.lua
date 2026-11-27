@@ -26,7 +26,9 @@ local function nodePosition(nodeId)
   if type(getter) ~= 'function' then return nil end
   local ok, a, b, c = pcall(getter, obj, nodeId)
   if not ok then return nil end
-  if (type(a) == 'table' or type(a) == 'userdata') and finite(a.x) and finite(a.y) and finite(a.z) then
+  -- BeamNG's vec3 values are LuaJIT cdata, so excluding cdata silently drops every wheel sample.
+  if (type(a) == 'table' or type(a) == 'userdata' or type(a) == 'cdata')
+      and finite(a.x) and finite(a.y) and finite(a.z) then
     return { x = a.x, y = a.y, z = a.z }
   end
   if finite(a) and finite(b) and finite(c) then return { x = a, y = b, z = c } end
