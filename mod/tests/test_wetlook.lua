@@ -1,7 +1,7 @@
 -- luajit mod/tests/test_wetlook.lua
 -- beamngEarth/wetlook.lua (weather phase B): the material classes, the wetness steps and the own wetting / drying model,
 -- the wet values; then the runtime against stub materials: a level change writes each material once, in batches, then
--- nothing per frame; drying puts the own values back (only where ours still hold); W1's road state wins over the rain.
+-- nothing per frame; drying puts the own values back (only where ours still hold); the wetter of W1's road state and the rain model.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
@@ -23,7 +23,7 @@ check(w2 > 0.2 and w2 < 0.6, 'drizzle: damp')
 check(W.wetStep(1, 0, W.DRY_S / 2) == 0.5 and W.wetStep(0.1, 0, W.DRY_S) == 0, 'drying')
 -- the wet values: darker by porosity, glossier by gloss
 local col, ro = W.wetValues('asphalt', { 0.5, 0.5, 0.5, 1 }, 0.8, W.LEVELS)
-near(tonumber(col:match('^(%S+)')), 0.5 * (1 - W.WET_DARK * 0.55), 1e-4, 'soaked asphalt darker')
+near(tonumber(col:match('^(%S+)')), 0.5 * (1 - W.WET_DARK * W.CLASSES.asphalt[1]), 1e-4, 'soaked asphalt darker')
 near(tonumber(ro), 0.8 * (1 - W.WET_ROUGH * 0.75), 1e-4, 'and glossier')
 col, ro = W.wetValues('metal', { 0.5, 0.5, 0.5, 1 }, nil, W.LEVELS)
 check(col == nil and tonumber(ro) < 1, 'metal: not darker, glossier')
@@ -60,6 +60,84 @@ package.loaded['beamngEarth/winter'] = { _state = function() return { roads = { 
 W.reset()
 W.update(W.CHECK_S, 0, true)
 check(W.source == 'road state' and W.level() == W.levelOf(0.8), 'W1 says wet: wet without rain')
+-- ... but a dry real road under a storm shown (a preset; the 2026-11-26 playtest: 'wet lvl=0 own=0.97 src=road state'):
+-- the wetter of the two
+package.loaded['beamngEarth/winter'] = { _state = function() return { roads = { {}, {}, { 'dry' } } }, 2 end }
+W.reset()
+W._setOwn(0.97)
+W.update(W.CHECK_S, 8, true)
+check(W.source == 'rain' and W.level() == W.LEVELS, 'the real road dry, the storm shown: wet by the rain model ('
+  .. W.debugLine() .. ')')
+check(select(1, W.wetOf(true, 0.8, 0.2)) == 0.8 and select(2, W.wetOf(true, 0.8, 0.2)) == 'road state'
+  and select(1, W.wetOf(true, nil, 0.3)) == 0.3 and select(1, W.wetOf(false, 1, 1)) == 0, 'wetOf: the wetter one; off: dry')
 package.loaded['beamngEarth/winter'] = nil
+
+-- puddles: none below PUDDLE_MIN, then deeper steps lower the material's alpha threshold (the deep pools first);
+-- shown and hidden through roads.setPuddles at step changes only, never per frame
+check(W.puddleStep(0) == 0 and W.puddleStep(W.PUDDLE_MIN - 0.01) == 0 and W.puddleStep(W.PUDDLE_MIN) == 1
+  and W.puddleStep(1) == W.PUDDLE_STEPS, 'puddle steps')
+check(W.puddleRef(0) == 255 and W.puddleRef(1) == W.PUDDLE_REF[1] and W.puddleRef(W.PUDDLE_STEPS) == W.PUDDLE_REF[2]
+  and W.puddleRef(2) < W.puddleRef(1), 'thresholds fall as they fill')
+do
+  local pm = S.newObject('Material')
+  pm:registerObject(W.PUDDLE_MAT)
+  pm:setField('alphaRef', 0, '255')
+  local shown, calls = nil, 0
+  package.loaded['beamngEarth/roads'] = { setPuddles = function(on) shown = on; calls = calls + 1 end }
+  W.reset()
+  check(shown == false, 'a level start: the puddles made hidden')
+  W._setOwn(1)
+  W.update(W.CHECK_S, 8, true)
+  check(shown == true and pm.fields.alphaRef == tostring(W.PUDDLE_REF[2]), 'soaked: shown, the full extent')
+  local c0 = calls
+  for _ = 1, 30 do W.update(0.016, 8, true) end
+  W.update(W.CHECK_S, 8, true)
+  check(calls == c0, 'steady: no more calls')
+  W._setOwn(0.5)
+  W.update(W.CHECK_S, 0, true)
+  check(shown == true and tonumber(pm.fields.alphaRef) > W.PUDDLE_REF[2], 'drying: smaller')
+  for _ = 1, 10 do W.update(0.016, 0, true) end      -- (the drying's material batch)
+  W._setOwn(0.1)
+  W.update(W.CHECK_S, 0, true)
+  check(shown == false and pm.fields.alphaRef == '255', 'dry: hidden')
+  W._setOwn(1)
+  W.update(W.CHECK_S, 8, true)
+  W.restoreAll()
+  check(shown == false, 'the weather off: hidden at once')
+  package.loaded['beamngEarth/roads'] = nil
+end
+
+-- grip (the user, 2026-11-26: "grip should follow the weather shown in game"): the own wetness as dry / damp / wet,
+-- with a margin either side of a change; handed to winter.lua at changes only, the wet look on or off
+check(W.gripCond(0) == nil and W.gripCond(0.3) == 'damp' and W.gripCond(0.9) == 'wet', 'grip conditions')
+check(W.gripCond(W.GRIP_DAMP + 0.01, nil) == nil and W.gripCond(W.GRIP_DAMP + 0.01, 'damp') == 'damp'
+  and W.gripCond(W.GRIP_DAMP - 0.01, 'damp') == 'damp' and W.gripCond(W.GRIP_DAMP - 0.04, 'damp') == nil,
+  'damp: a margin either side')
+check(W.gripCond(W.GRIP_WET + 0.01, 'damp') == 'damp' and W.gripCond(W.GRIP_WET - 0.01, 'wet') == 'wet'
+  and W.gripCond(W.GRIP_WET + 0.04, 'damp') == 'wet' and W.gripCond(W.GRIP_WET - 0.04, 'wet') == 'damp',
+  'wet: a margin either side')
+do
+  local got = {}
+  package.loaded['beamngEarth/winter'] = { setShown = function(c) got[#got + 1] = tostring(c) end }
+  W.reset()
+  check(#got == 0, 'dry at a reset: winter not called')
+  W._setOwn(0.97)
+  W.update(W.CHECK_S, 8, false, true)
+  check(got[#got] == 'wet' and W.grip() == 'wet' and W.level() == 0, 'the storm shown, wet look off: wet grip, no look')
+  local n = #got
+  for _ = 1, 20 do W.update(W.CHECK_S, 8, false, true) end
+  check(#got == n, 'steady: winter not called again')
+  W._setOwn(0.3)
+  W.update(W.CHECK_S, 0, false, true)
+  check(got[#got] == 'damp', 'drying: damp')
+  W.update(W.CHECK_S, 0, false, false)
+  check(got[#got] == 'nil' and W.grip() == nil and W.wetness() == 0, 'the setting off: dry grip, no memory')
+  W._setOwn(0.97)
+  W.update(W.CHECK_S, 8, true, true)
+  W.reset()
+  check(got[#got] == 'nil', 'a level end: dry grip')
+  check(W.puddleRefShown() == 255, 'no puddles shown: threshold 255')
+  package.loaded['beamngEarth/winter'] = nil
+end
 
 T.done('test_wetlook')

@@ -43,7 +43,8 @@
 -- Rain and snow (the level's two Precipitation objects) have ONE owner, precipBlock: shown only in real / preset mode,
 -- with "Show rain and snow" on, outside the 3D map, the big map and missions, below the cloud base; and faded out in
 -- shelter (a road tile's tunnel, arch, parking structure or under-bridge space, or a roof straight above the camera:
--- shelterStep). Rain thickens the fog (rainSigma / snowSigma) and turns its colour grey (fogGrey: the sky's sun
+-- shelterStep). The drops do not collide (doCollision off: thousands of colliding drops cost the 2026-11-26 playtest
+-- its frame rate); the shelter fade keeps them out from under roofs instead. Rain thickens the fog (rainSigma / snowSigma) and turns its colour grey (fogGrey: the sky's sun
 -- term in the lit fog dimmed, applyFogTint). Traffic reads trafficDark / trafficSpeedFactor (headlights, slower).
 -- Console: beamngEarth_weather.setMode('real'|'preset'|'manual')   .setPresetChoice(name)   .status()
 --          .setGravityEnabled(bool)
@@ -149,6 +150,7 @@ M.FLAKE_WET_C, M.FLAKE_DRY_C = -1, -8
 -- SHELTER_S while anything falls: a road tile's roofed space or under-bridge box (ambience.shelterAt), or the SHELTER_RAYS
 -- straight up from the camera (and SHELTER_SIDE_M to either side of it) all hitting within SHELTER_RAY_M.
 M.SHELTER_S, M.SHELTER_RAY_M, M.SHELTER_SIDE_M = 0.25, 60, 3
+M.SHELTER_WALL_M = 10   -- a roof with walls this close to both sides of the view is enclosed
 M.SHELTER_FADE_OUT_S, M.SHELTER_FADE_IN_S = 0.5, 1.0
 M.PRECIP_S = 0.25          -- the drops' share written at 4 Hz while anything falls (the fades)
 M.TRAFFIC_S = 1.0          -- traffic's headlights looked at this often
@@ -186,6 +188,8 @@ M.LIGHTNING = true         -- the settings' "Lightning and thunder"
 M.STREAKS = false          -- the settings' "Rain streaks" (rainstreaks.lua): off by default (real rain hardly shows as streaks by day:
                            -- the reference photos, ~/bnge-tests/weather/b/refs; one shell costs ~1.5 ms a frame on the Deck)
 M.WET_LOOK = true          -- the settings' "Wet look" (wetlook.lua)
+M.WET_GRIP = true          -- the settings' "Wet roads": the grip follows the weather shown, aquaplaning in its water
+                           -- (wetlook.lua -> winter.lua setShown; aquaplane.lua)
 M.GRAVITY_ENABLED = true
 M.GRAVITY_EPS = 1e-4       -- m/s^2; ~30 m of climb (setGravity queues Lua into every vehicle)
 M.GRAVITY_CHECK_S = 1
@@ -986,7 +990,8 @@ end
 -- shader (shaders/beamngEarth/precipNearV.hlsl: the stock one plus a fade from 2.5 m to 0.8 m from the camera, so a
 -- drop passing the lens is no blob) as a ShaderData of our own, named in both datablocks, the objects made again.
 -- Once per level, at the first drops.
-M.NEAR_FADE = false
+M.NEAR_FADE = true         -- (on since phase C: it draws on DX11 and Vulkan, broker shots wc1 / wc2, and with the 0.14 drops the
+                           -- nearest ones no longer read as white flakes)
 M.NEAR_SHADER = 'bngEarthPrecipNearShader'
 local function setupNearFade(o)
   if not M.NEAR_FADE or S.nearFade ~= nil then return end
@@ -1022,6 +1027,17 @@ local function drivePrecip(name, pct, pool, flake)
   if pct < M.PRECIP_NONE then pct = 0 end
   local st = S.precip[name]
   if pct > 0 and flake then applyFlakes(o, flake, st) end
+  if pct > 0 and not st.noCollision then
+    -- (no drop collision, once per level: the level file says so, but a level saved by an editor or an older install
+    -- may not. Thousands of colliding drops each cast rays every fall, the 2026-11-26 playtest's lost frame rate; the
+    -- shelter fade hides the rain under roofs instead)
+    st.noCollision = true
+    local okc, dc = pcall(function() return o:getField('doCollision', 0) end)
+    if okc and (dc == '1' or dc == 'true') then
+      o:setField('doCollision', 0, '0')
+      st.pool = nil         -- (made again below, with the pool)
+    end
+  end
   if pct > 0 and st.pool ~= pool then
     o.numDrops = pool
     o:setField('numDrops', 0, tostring(pool))
@@ -1078,7 +1094,14 @@ local function shelterCheck()
     local d = castRayStatic(vec3(p.x + rx * s, p.y + ry * s, p.z + 0.2), up, M.SHELTER_RAY_M)
     if not (d and d < M.SHELTER_RAY_M) then return false, nil end
   end
-  return true, 'roof'
+  -- walls to both sides (a building, a closed bridge): 'roof_enclosed', else an open roof (an overpass, an awning);
+  -- the rain sound picks its muffled loop by it (ambience.openShelter)
+  local walls = 0
+  for _, sgn in ipairs({ -1, 1 }) do
+    local d = castRayStatic(vec3(p.x, p.y, p.z + 0.5), vec3(rx * sgn, ry * sgn, 0), M.SHELTER_WALL_M)
+    if d and d < M.SHELTER_WALL_M then walls = walls + 1 end
+  end
+  return true, walls == 2 and 'roof_enclosed' or 'roof'
 end
 
 -- The one owner of the rain and snow objects (every PRECIP_S while they fall or are shown, dt: the time since): what
@@ -1095,7 +1118,10 @@ local function ownPrecip(e, dt)
   if block then rain, snow = 0, 0 end
   M.rainNow = rain                          -- (its sound: ambience.lua; api.weather)
   M.rainMmHNow = (not block and c and tonumber(c.rainMmH)) or 0   -- (the rain sound's layers)
+  M.windMsNow = c and tonumber(c.windMs) or 0  -- (the live weather sounds' gusts: liveaudio.lua)
   M.snowNow = snow
+  -- (hail falls through the snow object: its share, for the hail sound, ambience.lua)
+  M.hailNow = (c and c.flake == 'hail' and not block) and snow or 0
   local falling = rain >= M.PRECIP_NONE or snow >= M.PRECIP_NONE
   local r, sn = S.precip[M.RAIN_NAME], S.precip[M.SNOW_NAME]
   if not falling and r.hidden == true and sn.hidden == true then        -- (dry and hidden: nothing to do)
@@ -1109,6 +1135,7 @@ local function ownPrecip(e, dt)
     S.sheltered, S.shelterWhy, S.shelter = false, nil, 1
   end
   M.shelter = S.shelter
+  M.shelterWhy = S.shelterWhy   -- (the kind: 'tunnel', 'bridge', 'arch', 'parking', 'roof', 'roof_enclosed'; ambience)
   local vis = choice.visibility
   drivePrecip(M.RAIN_NAME, rain * S.shelter, M.poolFor(M.RAIN_POOL, vis))
   drivePrecip(M.SNOW_NAME, snow * S.shelter, M.poolFor(M.SNOW_POOL, vis), c and c.flake)
@@ -1201,8 +1228,10 @@ M._restoreExposure = function() restoreExposure() end -- tests
 -- 0.2) turned the orange sky and fog a pale grey (water droplets scatter all colours alike), x15 hardly, x50 partly.
 -- Not over the 3D map nor high above the ground (applyFogTint's share: the same fade as the fog's).
 M.FOG_TINT = {
-  { field = 'atmoMieScattering', kind = 'mul', k = 150 },
-  { field = 'atmoMieExtinction', kind = 'mul', k = 150 },
+  -- (phase C: the haze absorbs more than it scatters, extinction x120 over scattering x20: a darker, slate-grey veil and
+  -- sky, as the storm photos show, where scattering x150 made a bright milky one; broker wc4)
+  { field = 'atmoMieScattering', kind = 'mul', k = 20 },
+  { field = 'atmoMieExtinction', kind = 'mul', k = 120 },
   { field = 'atmoMiePhaseG', kind = 'number', value = 0.2 },
 }
 M.TINT_EPS, M.TINT_ON = 0.05, 0.02
@@ -1253,13 +1282,16 @@ local function valuesDiffer(a, b)
   return tostring(a) ~= tostring(b)
 end
 
-local function restoreFogTint()
-  local t = S.tint
+-- The tint levers (FOG_TINT on the sky) on an object: moved towards their storm
+-- values by g, the object's own values kept as the base (someone else's later value becomes the base), put back when g
+-- is 0 again (only fields still holding ours). key: the state's slot (S.tint).
+local function untint(getObj, levers, key)
+  local t = S[key]
   if not t then return end
-  local o = sunObject()
+  local o = getObj()
   if o then
     local changed = false
-    for _, lv in ipairs(M.FOG_TINT) do
+    for _, lv in ipairs(levers) do
       local base, ours = t.base[lv.field], t.applied[lv.field]
       if base ~= nil and ours ~= nil and not valuesDiffer(o:getField(lv.field, 0), ours) then
         o:setField(lv.field, 0, base)
@@ -1268,25 +1300,24 @@ local function restoreFogTint()
     end
     if changed then o:postApply() end
   end
-  S.tint = nil
+  S[key] = nil
 end
-M._restoreFogTint = function() restoreFogTint() end -- tests
 
-local function applyFogTint(g)
+local function tint(getObj, levers, key, g)
   if g < M.TINT_EPS then
-    if S.tint then restoreFogTint() end
+    if S[key] then untint(getObj, levers, key) end
     return
   end
-  local o = sunObject()
+  local o = getObj()
   if not o then return end
-  local t = S.tint
+  local t = S[key]
   if not t then
     t = { base = {}, applied = {} }
-    for _, lv in ipairs(M.FOG_TINT) do t.base[lv.field] = o:getField(lv.field, 0) end
-    S.tint = t
+    for _, lv in ipairs(levers) do t.base[lv.field] = o:getField(lv.field, 0) end
+    S[key] = t
   end
   local changed = false
-  for _, lv in ipairs(M.FOG_TINT) do
+  for _, lv in ipairs(levers) do
     local have = o:getField(lv.field, 0)
     if t.base[lv.field] == nil or (t.applied[lv.field] ~= nil and valuesDiffer(have, t.applied[lv.field])) then
       t.base[lv.field] = have          -- (someone else set it since, or unread before: their value is the base)
@@ -1300,6 +1331,11 @@ local function applyFogTint(g)
   end
   if changed then o:postApply() end
 end
+
+local function restoreFogTint() untint(sunObject, M.FOG_TINT, 'tint') end
+M._restoreFogTint = function() restoreFogTint() end -- tests
+local function applyFogTint(g) tint(sunObject, M.FOG_TINT, 'tint', g) end
+
 
 -- The camera's height over the ground under the player (nil without one): what the fog and clouds go by.
 local function cameraOverGround()
@@ -1474,6 +1510,7 @@ local function hidePrecip()
   for name in pairs(S.precip) do pcall(drivePrecip, name, 0, 0) end
   M.rainNow = 0
   M.snowNow = 0
+  M.hailNow = 0
   S.shelter, M.shelter = 1, 1
   pcall(restoreSun)
   pcall(restoreExposure)
@@ -1565,6 +1602,7 @@ end
 -- map), the wet look (wetlook.lua: the rain shown, or W1's road state).
 local streaks = require('beamngEarth/rainstreaks')
 local wetlook = require('beamngEarth/wetlook')
+local aquaplane = require('beamngEarth/aquaplane')
 local function phaseB(e, dt)
   local rain = (M.rainNow or 0) * (S.shelter or 1)
   if (M.STREAKS and rain > 0) or streaks.shown() then
@@ -1585,10 +1623,18 @@ local function phaseB(e, dt)
     if not ok then log('W', 'beamngEarth', 'weather storm: ' .. tostring(on)) end
   end
   local wetOn = M.WET_LOOK and mode ~= 'manual' and not S.mission
-  if wetOn or S.wetActive then
-    local ok, on = pcall(wetlook.update, dt, S.cur and S.cur.rainMmH or 0, wetOn)
+  local gripOn = M.WET_GRIP and mode ~= 'manual' and not S.mission
+  local rainMmH = S.cur and S.cur.rainMmH or 0
+  if wetOn or gripOn or S.wetActive then
+    local ok, on = pcall(wetlook.update, dt, rainMmH, wetOn, gripOn)
     S.wetActive = ok and on or false
     if not ok then log('W', 'beamngEarth', 'weather wet look: ' .. tostring(on)) end
+  end
+  -- aquaplaning (the player's car over the puddles shown or the rain's film): only while there is water or it has sent
+  if (gripOn and (rainMmH > 0 or wetlook.puddleRefShown() < 255)) or S.aquaActive then
+    local ok, on = pcall(aquaplane.update, dt, wetlook.puddleRefShown(), rainMmH, gripOn)
+    S.aquaActive = ok and on or false
+    if not ok then log('W', 'beamngEarth', 'weather aquaplane: ' .. tostring(on)) end
   end
 end
 M._phaseB = function(e, dt) phaseB(e, dt) end    -- (tests)
@@ -1736,7 +1782,7 @@ function M.onAnyMissionChanged(state)
     pcall(restoreSun)
     pcall(restoreExposure)
     pcall(restoreFogTint)
-    if S.pending then -- the mission's own setup, just before 'started': no switch
+      if S.pending then -- the mission's own setup, just before 'started': no switch
       S.pending = nil
       local sk = sky()
       if sk and sk.setCloudFollow then sk.setCloudFollow(true) end
@@ -1757,7 +1803,7 @@ function M.onDeactivateBigMapCallback()
 end
 
 local function onLevel()
-  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset)
+  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset); pcall(aquaplane.reset)
   resetState()
   S.inOurLevel = getCurrentLevelIdentifier and getCurrentLevelIdentifier() == M.LEVEL_ID
   local sk = sky()
@@ -1766,7 +1812,7 @@ end
 M.onClientStartMission = onLevel
 function M.onClientEndMission()
   pcall(wxtraffic.reset)
-  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset)
+  pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset); pcall(aquaplane.reset)
   resetState()
 end
 -- A Lua reload mid-level: settings.lua loads (and applies) before this extension, and no level
@@ -1830,6 +1876,7 @@ function M.setStormLight(on) M.STORM_LIGHT = on and true or false end
 function M.setLightning(on) M.LIGHTNING = on and true or false end
 function M.setStreaks(on) M.STREAKS = on and true or false end
 function M.setWetLook(on) M.WET_LOOK = on and true or false end
+function M.setWetGrip(on) M.WET_GRIP = on and true or false end
 function M.setRainVisibility(v) choice.visibility = clamp(tonumber(v) or M.RAIN_VISIBILITY, 0.25, 3) end
 -- the parts of the real weather kept (clouds, fog, wind, precip; false: as on a clear day)
 function M.setRealPart(part, on)
@@ -1854,7 +1901,7 @@ function M.loadChoices(get)
   if g('rainVisibility') ~= nil then choice.visibility = clamp(tonumber(g('rainVisibility')) or M.RAIN_VISIBILITY, 0.25, 3) end
   if g('fogLimit') ~= nil then choice.fogLimitM = math.max(0, tonumber(g('fogLimit')) or 0) end
   for key, f in pairs({ weatherStormLight = 'STORM_LIGHT', weatherLightning = 'LIGHTNING', weatherStreaks = 'STREAKS',
-      weatherWetLook = 'WET_LOOK' }) do
+      weatherWetLook = 'WET_LOOK', weatherWetGrip = 'WET_GRIP' }) do
     if g(key) ~= nil then M[f] = g(key) ~= false end
   end
   for part, key in pairs({ clouds = 'realClouds', fog = 'realFog', wind = 'realWind', precip = 'realPrecip' }) do
@@ -2012,7 +2059,8 @@ function M.status()
     precip = M.precipState(),
     phaseB = { stormLight = M.STORM_LIGHT, exposure = S.ev, gloom = S.cur and S.cur.gloom, thunder = S.tgt and S.tgt.thunder,
       storm = storm.status(), streaks = streaks.shown(), wet = { level = wetlook.level(), wetness = wetlook.wetness(),
-      source = wetlook.source, writes = wetlook.writes } },
+      source = wetlook.source, writes = wetlook.writes, grip = wetlook.grip(), film = aquaplane.film(),
+      aquaSends = aquaplane.sends } },
     traffic = S.traffic, lights = S.lightsWant, lightsWrap = wxtraffic.installed, tint = S.tint,
     msg = lastMsg, shown = shownMsgOf(), target = S.tgt, current = S.cur, line = M.statusLine() })
 end

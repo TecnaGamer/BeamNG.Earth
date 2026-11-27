@@ -33,7 +33,7 @@ class CliffOffNamesTest(unittest.TestCase):
     def test_geotile_names(self):
         with mock.patch.object(cliffsettings, "SETTINGS", OFF):
             self.assertEqual(_cliffy(blockworker.geo_names("g17_1_2")), [])
-            self.assertEqual(sorted(blockworker.geo_names("g17_1_2", 5)), ["json", "road", "walk", "walkcol"])
+            self.assertEqual(sorted(blockworker.geo_names("g17_1_2", 5)), ["json", "puddle", "road", "walk", "walkcol"])
         with mock.patch.object(cliffsettings, "SETTINGS", ON):
             self.assertIn("cliff", blockworker.geo_names("g17_1_2"))
             self.assertIn("cliffStrip1", blockworker.geo_names("g17_1_2", 5))

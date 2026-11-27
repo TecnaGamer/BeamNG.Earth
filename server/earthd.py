@@ -146,6 +146,7 @@ import farfield  # noqa: E402
 import farpvs as farpvsmod  # noqa: E402
 import bc7  # noqa: E402
 import terraincache  # noqa: E402
+import terrainpacks as terrainpacksmod  # noqa: E402
 import terrainprefill  # noqa: E402
 import terrainpatch as terrainpatchmod  # noqa: E402
 import geodesy  # noqa: E402
@@ -187,6 +188,7 @@ import protocol  # noqa: E402
 msgs = protocol.ef  # noqa: E402  (made in Rust: far_tile, far_swap, far_remove, far_done, status, load_progress)
 import weather as weathermod  # noqa: E402
 import snow as snowmod  # noqa: E402
+import liveaudio as liveaudiomod  # noqa: E402
 
 PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
@@ -466,6 +468,7 @@ TEX_NEAR, TEX_FAR = 256, 256    # 32 cells: texture edge (px) of the two finest 
                                  # near was 15x finer than USGS: no visible gain for 2x build time and VRAM);
                                  # --tex gives one per level (64 cells: farfield.TEX_DEFAULT)
 SESSION_MARKER = ".earthd-session"
+SESSION_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")     # Server.sid's form (a session folder's name)
 # The engine caches every loaded .dae as a .cdae under <user-dir>/temp/<VFS path, lower-cased>
 # (seen in-game: temp/beamngEarth/<sid>/far_*.dae -> temp/temp/beamngearth/<sid>/far_*.cdae,
 # 1.8 GB / 24k files after one v1 session). Those caches are deleted along with their sources.
@@ -729,10 +732,21 @@ def v2_warm_dir():
 _V2_WARM_DIR = None
 
 
-def v2_pool(name, n, cls, lane=None, **kwargs):
-    """A worker process pool of n processes: pools.RespawningPool, or with BNE_V2_HOST (v2host.py) a pools.SlotPool
-    whose jobs the Rust scheduler starts by class and deadline (cls: its lane's own class; lane: the lane's name)."""
+# The road tiles' pool as one process a slot (pools.SlotPool without the v2 scheduler) while the v2 host is off: the
+# memory watchdog replaces its biggest process alone, its jobs never stranded behind a replaced executor. Its four
+# processes were never replaced (a pool with a backlog is not: a road pool while driving), so they grew to 3-4 GB each
+# and the watchdog replaced the block and far processes instead, ten times in 25 minutes (Baltimore 2026-11-26).
+# BNGE_ROAD_SLOTS=off: one executor of n processes, as before.
+ROAD_SLOTS = os.environ.get("BNGE_ROAD_SLOTS", "on").lower() not in ("off", "0", "false", "no")
+
+
+def v2_pool(name, n, cls, lane=None, slots=False, **kwargs):
+    """A worker process pool of n processes: pools.RespawningPool (slots: a pools.SlotPool of n single-process pools,
+    its jobs in order), or with BNE_V2_HOST (v2host.py) a pools.SlotPool whose jobs the Rust scheduler starts by class
+    and deadline (cls: its lane's own class; lane: the lane's name)."""
     if not v2host.ON:
+        if slots:
+            return poolsmod.SlotPool(None, name, n, **kwargs)
         return poolsmod.RespawningPool(name, n, **kwargs)
     return poolsmod.SlotPool(v2host.sched(), name, n, cls=cls, lane=lane or name, **kwargs)
 
@@ -1501,6 +1515,8 @@ class Server:
         self.weather = weather
         # Winter W1 (snow.py): a snowmod.Service when BNE_WINTER is set (main), else None: no snowstate at all
         self.snow = None
+        # Live weather sounds (liveaudio.py): the weathersynth child, started by a 'weather_audio' with mode 'live'
+        self.liveaudio = liveaudiomod.LiveAudio()
         # Real gravity at the player (gravity.py): a gravitymod.Provider, or None (--gravity off)
         self.gravity = gravity
         # On-screen data credits (credits.py): a creditsmod.Credits, or None (--credits off; Server()'s default)
@@ -1558,6 +1574,10 @@ class Server:
         if vegetation is not None:      # trees kept off the roads' drawn widths (vegetation._mask_roads)
             vegetation.surface, vegetation.widths = surface, self.road_widths
         self.grader_lock = threading.Lock()
+        # (the hooks blockworker installs in every process, grading.PROFILE_PINS and roadsys.GROUND / DISK_FN, read this
+        # server's map data, DEM, ground rules and plan store when this process grades a block itself: the first block
+        # of an anchor while driving failed without them under BNE_ROADSYS=surface, 2026-11-26)
+        blockworker.attach_main(self)
         # The download cache's bookkeeping (cache.py): every producer reports its disk hits and writes
         self.cache = cache
         self.covermap = None            # the map's cache view (covermap.CoverMap; main_async, with a Cache)
@@ -1640,9 +1660,71 @@ class Server:
                 self.orphans[sid] = now
                 log.info("session %s of an earlier run (%.0f min old) kept until the game says whether it still "
                          "shows its tiles", sid, age / 60)
+        # a session folder of ours that lost its marker (one of 2026-11-13 stayed on the dev PC for 12 days, 240 MB): by
+        # its name, untouched for SESSION_STALE_S (or no game running), never one a game claims (no marker: none can)
+        for d in glob.glob(os.path.join(self.root, "*")):
+            sid = os.path.basename(d)
+            if sid == self.sid or not SESSION_ID.fullmatch(sid) or not os.path.isdir(d) or \
+                    os.path.exists(os.path.join(d, SESSION_MARKER)):
+                continue
+            try:
+                age = wall - os.path.getmtime(d)
+            except OSError:
+                continue
+            if age > SESSION_STALE_S or no_game:
+                log.info("session folder %s without its marker (%.1f days old): deleted", sid, age / 86400)
+                self._rmtree_session(sid, later=True)
         if no_game:
             self._wipe_leaked_packs_once()
+            self._prune_packs()
         self.trash_thread = self._empty_trash()
+
+    def _pack_ledger(self):
+        """The packs we write into the game's terrain texture cache (terrainpacks.Ledger, in the server's cache)."""
+        led = self.__dict__.get("_ledger")
+        if led is None:
+            led = self._ledger = terrainpacksmod.Ledger(getattr(self, "cache_dir", None))
+        return led
+
+    def _record_pack(self, name):
+        """Base photo `name` of this session gets its packed copy now (written here or in a block process): recorded
+        first, so it goes with the session whatever happens to the photo (terrainpacks.py)."""
+        try:
+            Server._pack_ledger(self).record(
+                terraincache.base_key(f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px)), self.sid)
+        except Exception as e:          # (never in the photo's way)
+            log.debug("terrain pack ledger: %s", e)
+
+    def _photo_pack_keys(self):
+        """The pack keys of every base photo on disk in any session folder (whichever photo size it was made at)."""
+        keys = set()
+        for path in glob.glob(os.path.join(self.root, "*", "*_base*.jpg")) + \
+                glob.glob(os.path.join(self.root, "*", "*_base*.png")):
+            vfs = f"/temp/beamngEarth/{os.path.basename(os.path.dirname(path))}/{os.path.basename(path)}"
+            for px in BASE_SIZES:
+                keys.add(terraincache.base_key(vfs, base_ao_vfs(px)))
+        return keys
+
+    def _prune_packs(self):
+        """No game running (the start): the recorded packs of sessions gone deleted, the rest capped, then once the
+        packs earlier builds leaked (terrainpacks.py). Every count and size logged."""
+        try:
+            pdir = terraincache.cache_dir(self.user_dir)
+            led = self._pack_ledger()
+            live = {self.sid, *self.orphans} | {os.path.basename(d) for d in glob.glob(os.path.join(self.root, "*"))
+                                                if SESSION_ID.fullmatch(os.path.basename(d))}
+            n, b = terrainpacksmod.prune(led, pdir, live)
+            if n:
+                log.info("terrain texture cache: %d packs of sessions gone deleted (%.2f GB)", n, b / 1e9)
+            n, b = terrainpacksmod.cap(led, pdir, protect=set(led.keys_of(self.sid)))
+            if n:
+                log.info("terrain texture cache: %d oldest packs over the %.0f GB cap deleted (%.2f GB)", n,
+                         terrainpacksmod.CAP_BYTES / 1024 ** 3, b / 1e9)
+            if getattr(self, "cache_dir", None):
+                keep = self._photo_pack_keys() | set(led.entries())
+                terrainpacksmod.wipe_v2(pdir, keep, os.path.join(self.cache_dir, terrainpacksmod.WIPE_MARK))
+        except Exception as e:          # (a cache clean-up never stops the start)
+            log.warning("terrain texture cache clean-up: %s: %s", type(e).__name__, e)
 
     def _base_cache_files(self, sid):
         """Detail mode's packed copies of session sid's base photos in the game's terrain texture cache (terraincache.py):
@@ -1656,6 +1738,12 @@ class Server:
                 p = os.path.join(terraincache.cache_dir(self.user_dir), key + ".dds")
                 if os.path.exists(p):
                     out.append(p)
+        # ... and every pack recorded for it, its photo there or not (terrainpacks.py: photos deleted on their own left
+        # their packs for good, 965 of them on the dev PC by 2026-11-25)
+        for key in Server._pack_ledger(self).keys_of(sid):
+            p = os.path.join(terraincache.cache_dir(self.user_dir), key + ".dds")
+            if p not in out and os.path.exists(p):
+                out.append(p)
         return out
 
     def _remove_base(self, name):
@@ -1666,11 +1754,11 @@ class Server:
             self._remove(p)
 
     def _base_paths(self, name):
-        """_remove_base's files."""
-        return [os.path.join(self.out_dir, name)] + [
-            os.path.join(terraincache.cache_dir(self.user_dir),
-                         terraincache.base_key(f"{self.vfs_dir}/{name}", base_ao_vfs(px)) + ".dds")
-            for px in BASE_SIZES]
+        """_remove_base's files: the packed copies first, then the photo (a delete queue cut short leaves a photo, which
+        the session's clean-up finds, never a pack without one)."""
+        return [os.path.join(terraincache.cache_dir(self.user_dir),
+                             terraincache.base_key(f"{self.vfs_dir}/{name}", base_ao_vfs(px)) + ".dds")
+                for px in BASE_SIZES] + [os.path.join(self.out_dir, name)]
 
     PACK_WIPE_MARK = "terrainpacks_wiped_v1"   # in the cache dir: the one wipe of the leaked packs done
     PACK_WIPE_MIN_BYTES = 5 * 1024 ** 3
@@ -1824,11 +1912,11 @@ class Server:
         queue (the game loaded them, P9), the marker and the folders last."""
         if self.orphans.pop(sid, None) is None:
             return
-        d = os.path.join(self.root, sid)
-        cd = os.path.join(self.cdae_root, sid.lower())
-        files = sorted(glob.glob(os.path.join(d, "*")) + glob.glob(os.path.join(cd, "*")))
-        log.info("session %s released by the game: deleting its %d files", sid, len(files))
-        self.queue_delete(files + [os.path.join(d, SESSION_MARKER), d, cd])
+        # (_session_paths: its base photos' packed copies first; this listed the folders alone, and every released
+        # session left all its packs in the game's terrain texture cache, 2026-11-25)
+        paths = self._session_paths(sid)
+        log.info("session %s released by the game: deleting its %d files", sid, len(paths) - 3)
+        self.queue_delete(paths)
 
     def _session_sweep_snapshot(self):
         now = time.monotonic()
@@ -2006,6 +2094,22 @@ class Server:
                     self._remove(path)
             return work
         return None
+
+    def flush_pack_deletes(self, budget_s=5.0):
+        """A clean exit: the queued deletes of packed photo copies in the game's terrain texture cache done now (the
+        paced queue dies with the process; the photos and the rest wait for the next start's session clean-up, which
+        finds them, where a pack whose photo had gone was found by nothing). Returns how many went."""
+        pdir = os.path.normcase(os.path.normpath(terraincache.cache_dir(self.user_dir)))
+        t0, n = time.monotonic(), 0
+        for path, ck in list(self.delete_queue):
+            if time.monotonic() - t0 > budget_s:
+                break
+            if ck is None and os.path.normcase(os.path.dirname(os.path.normpath(path))) == pdir:
+                if os.path.exists(path) and self._remove(path):
+                    n += 1
+        if n:
+            log.info("exit: %d queued terrain pack deletes done", n)
+        return n
 
     def _retry_session_folder(self, path):
         # Its individual files and the final rmtree both ran, but an open Windows handle kept a
@@ -3636,7 +3740,13 @@ class Server:
         """The road tiles' wear argument (roadwear.py): the tier and the season mode of the imagery (the fallen leaves:
         roadwear.fall_of). Called as Server.wear_arg(self)."""
         im = getattr(self, "imagery", None)
-        return {"tier": Server.wear_tier(self), "season": getattr(im, "season_mode", None) or "off"}
+        out = {"tier": Server.wear_tier(self), "season": getattr(im, "season_mode", None) or "off"}
+        # (winter W3: the road skins' winter part, snowroad.skin_key; roadwear.wear_key never reads it)
+        svc = getattr(self, "snow", None)
+        rs = getattr(svc, "road_snow", None) if svc is not None else None
+        if rs:
+            out["snow"] = dict(rs)
+        return out
 
     def set_road_wear(self, value):
         """The settings page's Road detail (message road_wear {value: 'off' / 'basic' / 'full'}): True when the tier
@@ -4827,7 +4937,7 @@ class Server:
         if not revisitmod.ON or im is None or not hasattr(im, "chain") or not hasattr(anchor, "lat"):
             return None
         try:
-            return revisitmod.key("basephoto", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx),
+            return revisitmod.key("basephoto", *revisitmod.frame_parts(anchor.lat, anchor.lon), float(cx),
                                   float(cy), ("v", BASE_PHOTO_VERSION, BASE_SHIFT_M), self.layout.block,
                                   heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
                                   BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on,
@@ -4875,6 +4985,19 @@ class Server:
         self.snow_changes = getattr(self, "snow_changes", 0) + 1
         log.info("snow state changed (%s): %d far tiles to texture again, %d block photos", snowcovermod.MODE, n,
                  len(self.base_stale))
+        return n
+
+    def snow_roads_changed(self):
+        """(event loop) Winter W3: the road skins' winter part changed (snow.Service._commit_roads: a first snowy state,
+        a bank bin moving): every connection's road tiles sent again (their skins rebuilt under the new key)."""
+        n = 0
+        for c in list(getattr(self, "connections", ()) or ()):
+            if getattr(c, "roads", None) is None:
+                continue
+            c.roads.close()
+            c.roads = road_tracker(c)
+            n += 1
+        log.info("snowy roads changed: road tiles again for %d connections", n)
         return n
 
     def snow_masks(self, anchor, tile, px, snow):
@@ -4970,6 +5093,7 @@ class Server:
             if "base.dds" in blobs:         # (after the photo: the cache entry must be the newer file; its own copy)
                 b = blobs["base.dds"]
                 os.makedirs(terraincache.cache_dir(self.user_dir), exist_ok=True)
+                Server._record_pack(self, name)
                 revisitmod.place(b.read() if isinstance(b, revisitmod.Side) else b, self._base_pack_path(name))
         except Exception as e:          # (painted again rather than no photo)
             log.info("revisit: base photo %s not taken: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
@@ -5067,6 +5191,7 @@ class Server:
                "season_mode": im.season_mode, "snow": Server.base_snow(self, anchor, cx, cy)}
         if fin:
             tex["fin"] = fin
+        Server._record_pack(self, name)        # (the block process writes its pack)
         try:
             got = pool.submit(blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                               cy - size / 2 - BASE_SHIFT_M, size,
@@ -5437,6 +5562,7 @@ class Server:
         tex = {"chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                "season_mode": im.season_mode}
         t0 = time.perf_counter()
+        Server._record_pack(self, name)        # (the block process writes its pack)
         try:
             got = (pool or self.block_pools[lane][0]).submit(
                 blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
@@ -5472,6 +5598,7 @@ class Server:
             with open(tmp, "wb") as f:
                 f.write(terraincache.stored_photo(rgb))
             staging.replace(tmp, path)
+            Server._record_pack(self, name)
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
             pool = self.block_pools[LANE_PREFETCH][0] if (URGENT_ELSEWHERE and self.block_pools and
                                                           not bc7.gpu_ok()) else None
@@ -5551,6 +5678,7 @@ class Server:
                 f.write(terraincache.stored_photo(rgb))
             staging.replace(tmp, path)
             tq.append(("png", time.perf_counter()))
+            Server._record_pack(self, name)
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
             if canopy is not None and genground.ON:
                 args += ((canopy, size / n),)
@@ -5705,6 +5833,7 @@ class Server:
         staging.replace(tmp, path)
         t2 = time.perf_counter()
         try:            # after the photo: the cache entry must be the newer file
+            Server._record_pack(self, name)
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
             if canopy is not None:      # (the forest floor faded out through the mips, as the far tiles')
                 args += ((canopy, size / self.base_px),)
@@ -6831,7 +6960,7 @@ class Server:
         gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, px)[2]
         gen = (genground.far_key(self.mapdata, getattr(self, "veg", None) is not None),) \
             if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, px) is not None else ()
-        return revisitmod.key("fartex", round(float(anchor.lat), 7), round(float(anchor.lon), 7), tile.key, px,
+        return revisitmod.key("fartex", *revisitmod.frame_parts(anchor.lat, anchor.lon), tile.key, px,
                               self.road_mask_px(tile.level) if self.road_masks else 0, [s.name for s in im.chain],
                               self.tone, im.leaf_on, seasonmod.season_key(im.season_mode, float(anchor.lat)),
                               self.tex_modes, roadsmod.ROADS_IN_GROUND,
@@ -7707,6 +7836,11 @@ class Server:
                     private.extend(self._base_paths(name))
                 elif BLOCK_REVISION.fullmatch(name):
                     private.append(p)
+                elif BASE_PHOTO.fullmatch(name):
+                    # a base photo (final, refreshed or stand-in) with its packed copies, those first: the photo alone
+                    # went here and left its 5.6-22 MB pack for good at every anchor dropped (a teleport away), the
+                    # most of the 965 leaked packs on the dev PC (2026-11-25)
+                    doomed.extend(self._base_paths(name))
                 else:
                     doomed.append(p)
             self.remove_revision_files(private)
@@ -7762,6 +7896,7 @@ def block_files(info):
 # A teleport's first block is built first without the road grading (make_provisional: the car is placed in ~5 s
 # instead of 15-60 s on a fresh place) and replaced by the graded one when that is built (terrain_refresh)
 GROUND_STANDIN = re.compile(r"hm_\d+_-?\d+_-?\d+_base_g\d+\.(?:jpg|png)")
+BASE_PHOTO = re.compile(r"hm_\d+_-?\d+_-?\d+_base(?:_q|_r\d+)?\.(?:jpg|png)")     # base_name, quick_base_name
 BLOCK_REVISION = re.compile(r"hm_\d+_-?\d+_-?\d+_\d+(?:\.ter|(?:_m\d+)?\.png)")
 PROVISIONAL_FIRST = os.environ.get("BNGE_PROVISIONAL", "1") != "0"
 PROVISIONAL_KEEP_S = 60.0   # existing grace for the separately updated ground stand-in photo
@@ -8993,6 +9128,7 @@ class Connection:
             self.closing = True
             self.route_dl_version += 1          # (a running route_download stops: no one to show its bar to)
             self.s.connections.discard(self)
+            self.s.liveaudio.on_close(self)     # (the live weather sounds stop with their game)
             if not self.s.stream_leases.detach(self):
                 self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
@@ -9531,6 +9667,8 @@ class Connection:
                 self.roads.close()
                 self.roads = road_tracker(self)
                 self.signs.refresh()
+        elif kind == "weather_audio":           # the Weather page's Weather sounds: live (weathersynth) or pre-recorded
+            self.s.liveaudio.on_message(self, msg)
         elif kind == "snow_mode":               # winter (BNE_WINTER): another snow state live (a preset; dev / tests)
             if snowcovermod.set_mode(msg.get("mode")):
                 self.s.snow_changed()
@@ -10103,6 +10241,11 @@ class Connection:
                  "groundZ": gz, "floorZ": floor_z, "terrain": self.terrain_msg(key, info), "provisional": provisional}
         if place is not None:           # (the player's spot off the origin, echoed: core places the car there)
             ready["px"], ready["py"] = place
+        try:                            # the place's Koppen-Geiger class: the trees' leaf cycle (seasonlook.lua)
+            import climate
+            ready["koppen"] = int(climate.koppen_at(lat, lon))
+        except Exception as e:          # (no class: the mod keeps the full cycle)
+            log.warning("koppen at the anchor: %s", e)
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
         progress["done"] = True
@@ -11910,7 +12053,7 @@ async def main_async(args, restart=None):
     road_pool = None
     if ctx is not None and args.roads == "on" and args.road_processes > 0:
         road_pool = v2_pool(      # road tiles (blockworker.roads_tile)
-            "road tile", args.road_processes, v2host.P1, mp_context=ctx, initializer=blockworker.init,
+            "road tile", args.road_processes, v2host.P1, slots=ROAD_SLOTS, mp_context=ctx, initializer=blockworker.init,
             hung_s=ROAD_TILE_TIMEOUT_S + ROAD_HUNG_EXTRA_S,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,
@@ -12241,6 +12384,10 @@ async def main_async(args, restart=None):
             server.areas.close()
         net.close()                 # today's request counters
         disk.close()                # the cache's last uses
+        try:
+            server.flush_pack_deletes()
+        except Exception as e:      # (the next start's clean-up finds them)
+            log.debug("exit: terrain pack deletes: %s", e)
 
 
 def parse_cache_cap(text):

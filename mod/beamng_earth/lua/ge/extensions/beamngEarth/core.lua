@@ -416,6 +416,7 @@ local function loadBlock(tr, aid)
   end
   local ter = M.TER_SWAP and type(tr.ter) == 'string'
   if ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
+    M._rewetDrop(tr.ter)
     st.blockLoads = (st.blockLoads or 0) + 1      -- (M.groundSerial)
     roads.terrainSwapped()      -- its collision follows by itself next frame: no other rebuild meanwhile
     groundcover.afterBlockChange()
@@ -435,6 +436,51 @@ local function loadBlock(tr, aid)
     st.blockMsg = tr
   end
   return ok, err
+end
+
+-- Wet city streets at once (the 2026-11-26 playtest: "ground dosnt look super wet"): wetlook.lua's step reaches the
+-- terrain's paved layers at a block swap (terrain.applyWet: their wet maps ride on the swap's own rebind; a terrain
+-- material change of its own, updateMaterial, costs ~1 s), and a car standing in the rain saw no swap. So the block in
+-- use is swapped in again from a second name of its .ter (a copy beside it: the engine skips a terrainFile it already
+-- has; the next re-wet goes back to the first name): one swap's cost per wet step, a few per rain. Only while the car
+-- stands still (REWET_STILL_MS): a moving car's next block swap brings the step anyway within a few hundred metres, and
+-- a swap's next frame can be slow (RenderShadows). The copy goes when the next block comes (_rewetDrop).
+M.REWET_STILL_MS = 2
+M._rewetAlt = nil       -- the copy made (its path), until the next block
+function M._rewetDrop(ter)
+  local alt = M._rewetAlt
+  if alt and alt ~= ter then
+    M._rewetAlt = nil
+    pcall(function() if FS:fileExists(alt) then FS:removeFile(alt) end end)
+  end
+end
+-- Called every frame (a flag test while nothing waits); force: also while moving (probes). -> what it did.
+function M._rewetBlock(force)
+  if not terrain.wetDirty then return 'clean' end
+  local tr = st.blockMsg
+  if not (st.inOurLevel and M.TER_SWAP and type(tr) == 'table' and type(tr.ter) == 'string' and st.block
+      and tr.cx == st.block.cx and tr.cy == st.block.cy) then return 'no block' end
+  if st.swap or M._loadCover() then return 'busy' end
+  if not terrain.wetPending() then terrain.wetDirty = false; return 'on step' end
+  local p = st.player
+  if not force and p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) > M.REWET_STILL_MS then return 'moving' end
+  local orig = tr.ter         -- (the block as sent; the copy is ours, never in blockMsg)
+  local alt = orig:gsub('%.ter$', '') .. '_wet.ter'
+  local tb = terrain.get()
+  local want = (tb and tb:getField('terrainFile', 0) == alt) and orig or alt
+  if want == alt and not FS:fileExists(alt) then
+    local okc, res = pcall(function() return FS:copyFile(orig, alt) end)
+    if not (okc and (res == true or res == 0) and FS:fileExists(alt)) then
+      terrain.wetDirty = false          -- (no copy possible: the next block swap brings the step)
+      return 'no copy'
+    end
+  end
+  if not terrain.reswap(want) then terrain.wetDirty = false; return 'failed' end
+  if want == alt then M._rewetAlt = alt end
+  roads.terrainSwapped()      -- (its collision follows by itself next frame, the same heights)
+  groundcover.afterBlockChange()
+  terrain.wetDirty = false
+  return 'rewet'
 end
 
 -- M1h: in horizon mode LevelInfo.visibleDistance follows the server's radius (+10 %, with
@@ -629,6 +675,8 @@ local function commitTeleport(msg)
 
   local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
+  st.koppen = tonumber(msg.koppen)  -- (anchor_ready.koppen: the place's Koppen-Geiger class, server climate.py; nil when not
+                                    -- sent: the full leaf cycle; seasonlook.climateFactor, baretrees.lua)
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
   require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)
@@ -692,6 +740,7 @@ local function finishRebase()
 
   local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
+  st.koppen = tonumber(msg.koppen) or st.koppen    -- (a rebase nearby: the same climate when not sent)
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(st.anchor.lat, st.anchor.lon)
   M._apiRebased(oldAnchor, rb.purpose)
@@ -1285,6 +1334,7 @@ local function onMessage(msg)
     sea.clear()
     trees.clear()
     ambience.clear()
+    require('beamngEarth/liveaudio').reset()    -- (the pre-recorded weather sounds back at once)
     M._trafficvisuals.session(nil, false)
     setStatus('Disconnected from companion server: ' .. tostring(msg.error))
   elseif t == 'runtime_profiler_pong' then
@@ -1366,6 +1416,12 @@ local function onMessage(msg)
     if settings and settings.cacheCapGb then net.send({ type = 'cache', capGb = settings.cacheCapGb() }) end
     -- gas stations on, after every hello (a server started without them too; this comes before any tile request)
     net.send({ type = 'gas_stations', on = true })
+    -- live weather sounds: the Weather sounds setting said again to this server (liveaudio.lua)
+    do
+      local la = require('beamngEarth/liveaudio')
+      la.reset()
+      la.setSender(function(m) if st.sessionId and net.isConnected() then net.send(m) return true end return false end)
+    end
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
     -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
@@ -1607,6 +1663,8 @@ local function onMessage(msg)
     -- real weather (server weather.py): applied by the separate beamngEarth_weather extension
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.onWeather then w.onWeather(msg) end
+  elseif t == 'audio_state' then
+    require('beamngEarth/liveaudio').onAudioState(msg) -- live weather sounds (server liveaudio.py): the synth's state
   elseif t == 'snowstate' then
     -- winter grip (server snow.py, BNE_WINTER only): winter.lua loads with the first one (nothing of it runs before)
     M._winter = M._winter or require('beamngEarth/winter')
@@ -3027,7 +3085,8 @@ local function onUpdate(dtReal, dtSim)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
-  seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
+  seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat, st.koppen)
+  if terrain.wetDirty then pcall(M._rewetBlock) end        -- (the wet streets' step: a flag test otherwise)
   t = mark('ui', t)
   local frameMs = frameMs0
   statusbar.frame(frameMs0)
@@ -3264,9 +3323,12 @@ local function onUpdate(dtReal, dtSim)
       if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
     end
     t = mark('speeding', t)
-    if M._winter then                -- (winter grip: its once-a-second check; nil unless the server sent a snowstate)
-      local ok, err = pcall(M._winter.update, dtReal)
-      if not ok then log('E', 'beamngEarth', 'winter: ' .. tostring(err)) end
+    do                               -- (road grip: its once-a-second check; loaded by a snowstate or a wet road shown)
+      local wm = M._winter or package.loaded['beamngEarth/winter']
+      if wm then
+        local ok, err = pcall(wm.update, dtReal)
+        if not ok then log('E', 'beamngEarth', 'winter: ' .. tostring(err)) end
+      end
     end
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)

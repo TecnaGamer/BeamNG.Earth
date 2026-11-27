@@ -39,11 +39,17 @@ M.CLOSE_M, M.MID_M = 1500, 6000     -- thunder sounds: a crack nearer than CLOSE
 -- strike, no delay after the flash (at 300 m the sound needs 0.9 s; the crack of a strike that near reads as at once),
 -- full volume, the rain bed ducked under it for DUCK_S
 M.STRIKE_M = 300
-M.DUCK_S, M.DUCK_TO = 3.0, 0.35
+M.DUCK_S, M.DUCK_TO = 3.0, 0.35   -- (the old timed duck; strikes now schedule ambience.scheduleDuck from the crack's time)
+-- the crack's place in the thunder files (their renders' 0.5 s lead, measured on the method B set: 0.46-0.59 s; far1
+-- 0.88 s swells in): the duck's t0 is the file's start + FILE_ONSET_S
+M.FILE_ONSET_S = 0.5
 M.LPI_MIN, M.LPI_STRONG = 0.5, 5    -- J/kg (ICON-D2's lightning potential index)
 M.CAPE_MIN, M.CAPE_RAIN_MMH = 800, 0.5
 M.CHECK_S = 0.25          -- the strike walk while a storm is on ...
 M.LOOKAHEAD_S = 1.0       -- ... looking this far ahead
+M.LIVE_LOOKAHEAD_S = 30.0 -- ... or this far with the live weather sounds (their synth renders a thunder ahead: method
+                          -- B's strikes take seconds, more on a loaded Deck)
+M.REHINT_REL_D = 0.15     -- a hinted strike whose distance moved this much (the listener drove) is hinted again
 
 ------------------------------------------------------------------------------------------
 -- pure
@@ -179,14 +185,138 @@ function M.proxyDistance(d, visM)
   return math.min(d, math.max(M.PROXY_MIN_M, M.PROXY_VIS * v))
 end
 
--- Pure: the thunder for a strike d m away: { delay s, kind 'strike' | 'close' | 'mid' | 'far', gain 0..1 } or nil (too far).
-function M.thunderFor(d)
+-- The thunder's level by distance (the user, 2026-11-26: "i think thunder sounds can be increased in volume by alot").
+-- Each thunder file is already rendered for a distance at its class's own level (SOURCES.md: strike -13, close -14,
+-- mid -18, far -22 LUFS for the generated set; the recorded one's strike -9.7), so the playback gain only corrects
+-- WITHIN a class, from the distance the file was rendered at to the strike's (the old law, 1.2 / (1 + d / 2500) x a
+-- fade to HEAR_M, attenuated a second time on top of the files' own levels: a far rumble at 9 km played 14 dB under
+-- its approved level). The correction follows the set's own level-by-distance curve: its classes' median render
+-- distance and loudness (FILE_INFO) joined in log distance, PAST_FAR_DB per doubling beyond the far class (spherical
+-- spreading), held flat before the strike class; never above 1.0 (the files' true peak is about -1.1 dBTP).
+M.PAST_FAR_DB = -6.0
+-- per file: { render distance m, loudness of its loudest 3 s LUFS } (SOURCES.md's tables; the generated set's from
+-- the approved renders' JSON, ~/bnge-tests/weather/procedural/finalB; test_storm checks them against SOURCES.md)
+M.FILE_INFO = {
+  ['bne_thunder_strike1.ogg'] = { 122.5, -13.14 }, ['bne_thunder_strike2.ogg'] = { 127.4, -13.15 },
+  ['bne_thunder_strike3.ogg'] = { 234.8, -13.14 }, ['bne_thunder_strike4.ogg'] = { 155.8, -13.2 },
+  ['bne_thunder_strike5.ogg'] = { 139.2, -13.18 }, ['bne_thunder_strike6.ogg'] = { 110.2, -13.15 },
+  ['bne_thunder_close1.ogg'] = { 899.5, -14.13 }, ['bne_thunder_close2.ogg'] = { 600.4, -14.13 },
+  ['bne_thunder_close3.ogg'] = { 871.1, -14.12 }, ['bne_thunder_close4.ogg'] = { 858.0, -14.14 },
+  ['bne_thunder_close5.ogg'] = { 1256.9, -14.19 }, ['bne_thunder_close6.ogg'] = { 736.6, -14.11 },
+  ['bne_thunder_mid1.ogg'] = { 4231.4, -18.18 }, ['bne_thunder_mid2.ogg'] = { 4694.4, -18.0 },
+  ['bne_thunder_mid3.ogg'] = { 4570.3, -18.01 }, ['bne_thunder_mid4.ogg'] = { 4950.7, -18.11 },
+  ['bne_thunder_mid5.ogg'] = { 3299.7, -18.13 }, ['bne_thunder_mid6.ogg'] = { 3235.1, -18.05 },
+  ['bne_thunder_far1.ogg'] = { 11507.3, -22.0 }, ['bne_thunder_far2.ogg'] = { 8787.0, -22.0 },
+  ['bne_thunder_far3.ogg'] = { 7836.6, -22.0 }, ['bne_thunder_far4.ogg'] = { 7061.9, -22.0 },
+  ['bne_thunder_far5.ogg'] = { 11242.4, -22.14 }, ['bne_thunder_far6.ogg'] = { 7439.6, -22.0 },
+  ['bne_thunder_rec_strike1.ogg'] = { 183, -9.7 }, ['bne_thunder_rec_strike2.ogg'] = { 123, -9.7 },
+  ['bne_thunder_rec_strike3.ogg'] = { 81, -9.6 }, ['bne_thunder_rec_strike4.ogg'] = { 286, -9.7 },
+  ['bne_thunder_rec_strike5.ogg'] = { 253, -9.7 }, ['bne_thunder_rec_strike6.ogg'] = { 189, -9.6 },
+  ['bne_thunder_rec_close1.ogg'] = { 1010, -14.1 }, ['bne_thunder_rec_close2.ogg'] = { 809, -14.2 },
+  ['bne_thunder_rec_close3.ogg'] = { 668, -14.0 }, ['bne_thunder_rec_close4.ogg'] = { 1350, -14.1 },
+  ['bne_thunder_rec_close5.ogg'] = { 1240, -14.0 }, ['bne_thunder_rec_close6.ogg'] = { 1030, -14.0 },
+  ['bne_thunder_rec_mid1.ogg'] = { 3780, -18.1 }, ['bne_thunder_rec_mid2.ogg'] = { 3150, -18.0 },
+  ['bne_thunder_rec_mid3.ogg'] = { 2710, -18.0 }, ['bne_thunder_rec_mid4.ogg'] = { 4860, -18.0 },
+  ['bne_thunder_rec_mid5.ogg'] = { 4510, -18.0 }, ['bne_thunder_rec_mid6.ogg'] = { 3850, -18.1 },
+  ['bne_thunder_rec_far1.ogg'] = { 9560, -22.0 }, ['bne_thunder_rec_far2.ogg'] = { 8310, -22.0 },
+  ['bne_thunder_rec_far3.ogg'] = { 7430, -22.0 }, ['bne_thunder_rec_far4.ogg'] = { 11720, -22.0 },
+  ['bne_thunder_rec_far5.ogg'] = { 11030, -22.0 }, ['bne_thunder_rec_far6.ogg'] = { 9690, -22.0 },
+}
+M.KINDS = { 'strike', 'close', 'mid', 'far' }
+
+local function median(t)
+  table.sort(t)
+  local n = #t
+  if n == 0 then return nil end
+  return n % 2 == 1 and t[(n + 1) / 2] or (t[n / 2] + t[n / 2 + 1]) / 2
+end
+
+-- Pure: a set's curve, { { d m, LUFS } per class, nearest first }: the median render distance and loudness of the set's
+-- files of each class (FILE_INFO; names bne_thunder_<kind>N.ogg / bne_thunder_rec_<kind>N.ogg). Kept per set.
+local curves = {}
+function M.levelCurve(set)
+  set = (set == 'recorded') and 'recorded' or 'generated'
+  if curves[set] then return curves[set] end
+  local out = {}
+  for _, kind in ipairs(M.KINDS) do
+    local ds, ls = {}, {}
+    local prefix = (set == 'recorded') and ('bne_thunder_rec_' .. kind) or ('bne_thunder_' .. kind)
+    for name, info in pairs(M.FILE_INFO) do
+      if name:sub(1, #prefix) == prefix and name:sub(#prefix + 1):match('^%d+%.ogg$') then
+        ds[#ds + 1], ls[#ls + 1] = info[1], info[2]
+      end
+    end
+    if #ds > 0 then out[#out + 1] = { median(ds), median(ls), kind = kind } end
+  end
+  curves[set] = out
+  return out
+end
+
+-- Pure: the set's loudness (LUFS) at d m on its curve: log-linear between its classes, PAST_FAR_DB per doubling past
+-- the last, flat before the first.
+function M.levelAt(set, d)
+  local c = M.levelCurve(set)
+  d = math.max(1, tonumber(d) or 1)
+  if #c == 0 then return 0 end
+  if d <= c[1][1] then return c[1][2] end
+  for i = 2, #c do
+    if d <= c[i][1] then
+      local t = math.log(d / c[i - 1][1]) / math.log(c[i][1] / c[i - 1][1])
+      return c[i - 1][2] + t * (c[i][2] - c[i - 1][2])
+    end
+  end
+  return c[#c][2] + M.PAST_FAR_DB * math.log(d / c[#c][1]) / math.log(2)
+end
+
+-- Pure: the gain (0..1) for a sound rendered for dRef m played for a strike d m away: the set's curve from dRef to d,
+-- never above 1 (a strike nearer than the render plays at the file's own level).
+function M.distanceGain(set, d, dRef)
+  return math.min(1, 10 ^ ((M.levelAt(set, d) - M.levelAt(set, dRef)) / 20))
+end
+
+-- Pure: the class's reference distance in a set (its curve point: the median render distance of its files).
+function M.classDistance(set, kind)
+  for _, p in ipairs(M.levelCurve(set)) do if p.kind == kind then return p[1] end end
+  return nil
+end
+
+-- Pure: the playback gain of thunder file `file` (a name; its set by its prefix) for a strike d m away of kind: from the
+-- file's own render distance (FILE_INFO), else its class's. A strike (within STRIKE_M) is always full (the user,
+-- 2026-11-25: "super close", scary loud).
+function M.fileGain(file, d, kind)
+  if kind == 'strike' then return 1 end
+  local set = (type(file) == 'string' and file:find('^bne_thunder_rec_')) and 'recorded' or 'generated'
+  local info = file and M.FILE_INFO[file]
+  local dRef = info and info[1] or M.classDistance(set, kind)
+  if not dRef then return 1 end
+  return M.distanceGain(set, d, dRef)
+end
+
+-- Pure: the gain the live synth gets for a strike d m away of kind in a set: the recorded renders (the grain bank) are
+-- levelled to their own distance already (grainbank.rs live_target), so 1; method B's (generated) are levelled to the
+-- class, so the class's correction.
+function M.synthGain(set, kind, d)
+  if set == 'recorded' or kind == 'strike' then return 1 end
+  local dRef = M.classDistance('generated', kind)
+  return dRef and M.distanceGain('generated', d, dRef) or 1
+end
+
+-- Pure: the thunder for a strike d m away: { delay s, kind 'strike' | 'close' | 'mid' | 'far', gain 0..1 (from the
+-- class's reference distance in the set, M.THUNDER_SET by default: the file's own correction is M.fileGain) } or nil
+-- (too far).
+function M.thunderFor(d, set)
   d = tonumber(d) or math.huge
   if d > M.HEAR_M then return nil end
-  if d < M.STRIKE_M then return { delay = 0, kind = 'strike', gain = 1 } end
-  local kind = d < M.CLOSE_M and 'close' or (d < M.MID_M and 'mid' or 'far')
-  local gain = math.min(1, 1.2 / (1 + d / 2500)) * (1 - 0.5 * d / M.HEAR_M)
-  return { delay = d / M.SOUND_MS, kind = kind, gain = gain }
+  set = set or M.THUNDER_SET
+  local kind = d < M.STRIKE_M and 'strike' or (d < M.CLOSE_M and 'close' or (d < M.MID_M and 'mid' or 'far'))
+  local dRef = M.classDistance(set, kind)
+  local gain = (kind ~= 'strike' and dRef) and M.distanceGain(set, d, dRef) or 1
+  return { delay = kind == 'strike' and 0 or d / M.SOUND_MS, kind = kind, gain = gain }
+end
+
+-- Pure: thunderFor's th as the live synth gets it (its gain M.synthGain's for the set playing).
+function M.forSynth(th, d)
+  return { delay = th.delay, kind = th.kind, gain = M.synthGain(M.THUNDER_SET, th.kind, d) }
 end
 
 ------------------------------------------------------------------------------------------
@@ -214,8 +344,58 @@ M.SOUND = '/levels/beamng_earth/art/sound/weather/'
 M.THUNDER = { close = { 'bne_thunder_close1.ogg', 'bne_thunder_close2.ogg' }, mid = { 'bne_thunder_mid1.ogg',
   'bne_thunder_mid2.ogg' }, far = { 'bne_thunder_far1.ogg', 'bne_thunder_far2.ogg' },
   strike = { 'bne_thunder_strike1.ogg', 'bne_thunder_strike2.ogg' } }
+-- The thunder's playback gain, never above 1.0: the files' true peak is about -1.1 dBTP, and a gain over unity goes past
+-- full scale (Linux / Proton clip, the Windows engine limiter pumps). The impact comes from the duck instead.
+-- The thunder file sets: bne_thunder_<kind>N.ogg (generated, method B: the default) and bne_thunder_rec_<kind>N.ogg
+-- (recorded: grain bank v3, CC0 field recordings layered by native/weathersynth), N = 1, 2, ... as many as exist (up
+-- to MAX_FILES; found once per set and kind). A recorded kind without files plays the generated set.
+M.MAX_FILES = 12
+M.THUNDER_SET = 'generated'   -- 'generated' | 'recorded' (the Weather page's Thunder sound)
+local setFiles = {}           -- set .. '/' .. kind -> the file names found
+local lastPick = {}           -- kind -> the file played last (not played twice in a row)
+function M.setThunderSet(v) M.THUNDER_SET = (v == 'recorded') and 'recorded' or 'generated' end
+
+-- Pure (exists: a file test, its result kept per set and kind): the files of a kind in a set.
+function M.thunderFiles(kind, set, exists)
+  local key = set .. '/' .. kind
+  if setFiles[key] == nil then
+    local prefix = (set == 'recorded') and 'bne_thunder_rec_' or 'bne_thunder_'
+    local list = {}
+    for n = 1, M.MAX_FILES do
+      local f = prefix .. kind .. n .. '.ogg'
+      if not exists(M.SOUND .. f) then break end
+      list[#list + 1] = f
+    end
+    setFiles[key] = list
+  end
+  local list = setFiles[key]
+  if #list == 0 and set == 'recorded' then return M.thunderFiles(kind, 'generated', exists) end
+  if #list == 0 then return M.THUNDER[kind] end      -- (no file test in the game's start-up: the two names of old)
+  return list
+end
+function M._resetRecOk() setFiles, lastPick = {}, {} end
+
+-- Pure: the file for a strike's seed: the same for everyone who sees the strike (multiplayer), never the one played
+-- last for the kind (the next one instead).
+function M.pickFile(files, seed, last)
+  local n = #files
+  if n == 0 then return nil end
+  local i = 1 + (tonumber(seed) or 0) % n
+  if n > 1 and files[i] == last then i = i % n + 1 end
+  return files[i]
+end
 M.THUNDER_VOL = 1.0
+-- Pure: the playback volume for a thunder of gain g (muffled: in a tunnel or under a deck): never above 1.
+function M.playVolume(g, muffled)
+  local v = (tonumber(g) or 0) * math.min(1, M.THUNDER_VOL) * (muffled and M.MUFFLED or 1)
+  return math.max(0, math.min(1, v))
+end
 M.MUFFLED = 0.45          -- the thunder's volume in a tunnel or under a deck
+-- the SFXDescription the files play through: 'AudioEnvironment', whose source group is AudioChannelEnvironment, so
+-- thunder follows the game's Environment volume slider like the stock weather. (In-game probes on Windows and the
+-- Deck, 2026-11-25: 'AudioGui' and 'AudioDefault3D' play on AudioChannelGui, a channel no slider sets, so they
+-- followed only Master; AudioAmbience / AudioEffect / AudioDefault do not exist.)
+M.THUNDER_DESC = 'AudioEnvironment'
 -- the flash's light: as bright at the camera as a strike of LIGHT_LM lumens d m away (~50 lux at 3 km: a night lit up,
 -- lost in daylight as a real flash is), but put LIGHT_NEAR_M from the camera towards the strike and LIGHT_UP_M up, its
 -- lumens scaled by the distance squared (a light kilometres away drew nothing on the ground in the broker shots: the
@@ -317,8 +497,20 @@ local function strike(s, now, ctx)
   M.last = { t = s.t, d = d, cg = s.cg, lat = s.lat, lon = s.lon }
   local th = M.thunderFor(d)
   if th then
-    local files = M.THUNDER[th.kind]
-    st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = files[1 + s.seed % #files], gain = th.gain, kind = th.kind }
+    local la = package.loaded['beamngEarth/liveaudio']
+    -- who plays it: the synth when it offers the set and (method B) has this strike rendered for about d, else the file
+    local synth = false
+    if la and la.mode() == 'live' then
+      synth = la.isLive() and la.synthPlays(th.kind, la.thunderId(s), d, true) or false
+      la.onThunder(la.thunder(s, d, M.forSynth(th, d), true, synth))
+    end
+    if st.hinted then st.hinted[la and la.thunderId(s) or ''] = nil end
+    local files = M.thunderFiles(th.kind, M.THUNDER_SET, function(p) return FS and FS.fileExists and FS:fileExists(p) or false end)
+    local file = M.pickFile(files, s.seed, lastPick[th.kind])
+    lastPick[th.kind] = file
+    -- (the file's gain: from its own render distance to this strike's)
+    st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = file, gain = M.fileGain(file, d, th.kind), kind = th.kind,
+      d = d, synth = synth }
   end
   local gain = M.flashGain(d)
   if gain <= 0.002 then return end
@@ -410,16 +602,27 @@ local function playThunders(now, muffled)
   local keep = {}
   for _, t in ipairs(st.thunders) do
     if now >= t.at then
-      if now - t.at < 2 then          -- (a thunder missed by more than that, a pause or a hitch: dropped)
+      local la = package.loaded['beamngEarth/liveaudio']
+      local synth = t.synth and la and la.isLive()      -- (decided at the strike: the synth had it ready)
+      local played = false
+      if synth then
+        M.thunders = M.thunders + 1   -- (the live synth plays it: liveaudio sent it at the strike)
+        played = true
+      elseif now - t.at < 2 then      -- (a thunder missed by more than that, a pause or a hitch: dropped)
         local au = Engine and Engine.Audio
         if au and au.playOnce then
-          pcall(au.playOnce, 'AudioGui', M.SOUND .. t.file, { volume = t.gain * M.THUNDER_VOL * (muffled and M.MUFFLED or 1) })
+          pcall(au.playOnce, M.THUNDER_DESC, M.SOUND .. t.file, { volume = M.playVolume(t.gain, muffled) })
           M.thunders = M.thunders + 1
-          if t.kind == 'strike' then          -- (the rain bed ducked under a strike's crack and boom)
-            local amb = package.loaded['beamngEarth/ambience']
-            if amb and amb.duck then pcall(amb.duck, M.DUCK_S, M.DUCK_TO) end
-          end
+          played = true
         end
+      end
+      local amb = played and package.loaded['beamngEarth/ambience']
+      if amb and amb.scheduleDuck and (amb.ducksFor and amb.ducksFor(t.kind) or t.kind == 'strike') then
+        -- the bed (and the music) ducked under the crack, scheduled from its known arrival: a file's crack comes
+        -- FILE_ONSET_S into it, the synth's at once (the synth ducks its own rain the same way); a strike always, a
+        -- close one with ambience's mix option (CLOSE_DUCK)
+        local c = os.clockhp and os.clockhp() or os.clock()
+        pcall(amb.scheduleDuck, c, c + (synth and 0 or M.FILE_ONSET_S), t.d, t.kind)
       end
     else
       keep[#keep + 1] = t
@@ -478,11 +681,55 @@ function M.update(dt, c, ctx)
     if a and a.toGeo and p then lat, lon = a.toGeo(p.x, p.y, p.z) end
     local geo = tonumber(lat) and tonumber(lon) and { lat = lat, lon = lon }
     if geo then
+      local la = package.loaded['beamngEarth/liveaudio']
+      local live = la and la.mode() == 'live'
+      local ahead = live and M.LIVE_LOOKAHEAD_S or M.LOOKAHEAD_S
       local t0 = st.lastT or now
-      if t0 < now - 1 or t0 > now + 5 then t0 = now end    -- (back from a pause, a load: no burst of old strikes)
-      local t1 = now + M.LOOKAHEAD_S
-      for _, s in ipairs(M.strikesNear(geo.lat, geo.lon, t0, t1, c)) do st.upcoming[#st.upcoming + 1] = s end
+      -- (back from a pause, a load: no burst of old strikes; a clock that jumped: looked up again from now)
+      if t0 < now - 1 or t0 > now + ahead + 5 then t0 = now end
+      local t1 = now + ahead
+      st.queued = st.queued or {}
+      for id, t in pairs(st.queued) do if t < now - 2 then st.queued[id] = nil end end
+      for _, s in ipairs(M.strikesNear(geo.lat, geo.lon, t0, t1, c)) do
+        -- (each strike once: a window looked up again, or Live switched off with its longer look-ahead queued)
+        local qk = string.format('%d@%.3f', tonumber(s.seed) or 0, tonumber(s.t) or 0)
+        if st.queued[qk] then goto continue end
+        st.queued[qk] = s.t
+        st.upcoming[#st.upcoming + 1] = s
+        if live and a.toGame then           -- (a hint: the distance now; the final one at the strike has the real one)
+          local gx, gy = a.toGame(s.lat, s.lon, 0)
+          if tonumber(gx) and tonumber(gy) then
+            local d = math.sqrt((gx - p.x) ^ 2 + (gy - p.y) ^ 2)
+            local th = M.thunderFor(d)
+            local id = la.thunderId(s)
+            if th and la.synthPlays(th.kind, id, d, false) then
+              la.onThunder(la.thunder(s, d, M.forSynth(th, d), false, true))
+              st.hinted = st.hinted or {}
+              st.hinted[id] = { s = s, d = d }
+            end
+          end
+        end
+        ::continue::
+      end
       st.lastT = math.max(t0, t1)
+      -- the hinted strikes whose distance moved (the listener drove): hinted again, so the synth renders the new one
+      if live and st.hinted and a.toGame then
+        for id, h in pairs(st.hinted) do
+          if h.s.t <= now then
+            st.hinted[id] = nil
+          else
+            local gx, gy = a.toGame(h.s.lat, h.s.lon, 0)
+            if tonumber(gx) and tonumber(gy) then
+              local d = math.sqrt((gx - p.x) ^ 2 + (gy - p.y) ^ 2)
+              if math.abs(d - h.d) > M.REHINT_REL_D * math.max(h.d, 1) then
+                local th = M.thunderFor(d)
+                if th and la.synthPlays(th.kind, id, d, false) then la.onThunder(la.thunder(h.s, d, M.forSynth(th, d), false, true)) end
+                h.d = d
+              end
+            end
+          end
+        end
+      end
     end
   end
   if #st.upcoming > 0 then
@@ -503,7 +750,7 @@ function M.update(dt, c, ctx)
   elseif #st.flashes > 0 and st.flashes[1].held then st.flashes = {} end
   if #st.flashes > 0 or (st.shown and next(st.shown)) then drawFlashes(now, ctx) end
   playThunders(now, ctx.sheltered)
-  if c < 1 then st.upcoming = {} end
+  if c < 1 then st.upcoming = {}; st.hinted = nil end
   if c < 1 and #st.flashes == 0 and #st.thunders == 0 and not (st.shown and next(st.shown)) then
     st.lastT = nil
     return false

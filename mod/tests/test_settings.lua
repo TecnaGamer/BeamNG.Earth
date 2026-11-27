@@ -764,7 +764,7 @@ files[settings.FILE] = nil
 -- the hidden switch's default), a version-3 file's choice kept
 do
   local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
-    'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
+    'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expTerrainBumps', 'expCliffWalls',
     'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
     'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads' }
   local inOrder = {}

@@ -271,24 +271,111 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
   their agency badges are simple drawn shapes (no NPS arrowhead or Forest Service shield). Names come from the map
   data (Overture Maps, © OpenStreetMap contributors, ODbL).
 
-## Weather sounds (bundled, weather phase B)
+## Weather sounds (bundled, weather phase B and the recorded mix)
 
-Thunder and rain recordings from Freesound.org, each under **Creative Commons 0** (public domain dedication, checked
-on each sound's own page 2026-11-25; no credit required, given anyway). Shipped as trimmed, looped and normalised Ogg
-Vorbis files in `mod/beamng_earth/levels/beamng_earth/art/sound/weather/`; every file's source page, direct URL,
-original name, sha256 and processing are in `SOURCES.md` there.
+The sounds are in `mod/beamng_earth/levels/beamng_earth/art/sound/weather/`; how each was made, its seed and its
+loudness are in `SOURCES.md` there.
 
-- Thunder clap: "Thunder Clap" by DaniloSFX, https://freesound.org/s/672776/ (CC0)
-- Thunder clap: "Thunder Clap OWB KY 441x16.wav" by Dave Welsh, https://freesound.org/s/194364/ (CC0)
-- Thunder strike: "Heavy Thunder Strike - no Rain - QUADRO.wav" by BlueDelta, https://freesound.org/s/446753/ (CC0)
-- Distant thunder: "230405 Thunder DRY rolling distant low rumbles" and "230823 Thunder, dry distant rolling" by TRP,
-  https://freesound.org/s/717845/ and https://freesound.org/s/717890/ (CC0)
-- Rolling thunder: "thunder-rolling-170315_0057" by Gerent, https://freesound.org/s/558748/ (CC0)
-- Very close strikes: "Very close lightning strike." by Simon Spiers, https://freesound.org/s/437243/ (CC0), and "Zoom H4n -
-  Super Close Lightning Strike and Thunderstorm" by danielmcadams, https://freesound.org/s/483684/ (CC0)
-- Rain: "Rain light 1 (rural)" and "Rain heavy 1 (rural)" by jmbphilmes, https://freesound.org/s/200271/ and
-  https://freesound.org/s/200270/ (CC0); the muffled rain under roofs is derived from the latter
-- Rain in a car: "Ambiance_Rain_Inside_Car_Close_Roof_Loop_Stereo.wav" by Nox_Sound, https://freesound.org/s/535870/ (CC0)
+- **The Generated rain and thunder (`bne_rain_<kind>` without `_rec_`, `bne_thunder_<class>N`, the defaults):** generated, no
+  third-party audio. BeamNG.Earth's own synthesiser, `native/weathersynth` (Rust, MIT, like the rest of the
+  repository), renders the thunder from a physical model of a lightning channel and the rain from drop impacts and
+  bubbles. Its only outside code is the `libm` crate (MIT / Apache-2.0) and ffmpeg's libvorbis encoder for the Ogg
+  files.
+- **The Recorded thunder (`bne_thunder_rec_<class>N`, the Weather page's Thunder sound: Recorded), and the live
+  Recorded thunder:** short pieces ("grains") of the field recordings below, released under Creative Commons Zero
+  (CC0 1.0, public domain dedication) on Freesound. CC0 needs no attribution; we credit the recordists anyway, with
+  thanks. Each recording was cut into grains, its background (rain, wind, hiss) subtracted, and levelled
+  (`native/weathersynth/assets/grains/`); weathersynth layers and spaces them. Licences were checked on each sound
+  page on the date shown.
+
+| Freesound sound | title | recordist | licence | checked | grains |
+|---|---|---|---|---|---|
+| [719552](https://freesound.org/s/719552/) | Thunder -  (Rumble) | betostado99 | CC0 1.0 | 2026-11-25 | 3 (mid_body, mid_roll) |
+| [347854](https://freesound.org/s/347854/) | thunder crack 2.wav | cognito perceptu | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [536902](https://freesound.org/s/536902/) | thunder sharp crack approaching.wav | cognito perceptu | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [486253](https://freesound.org/s/486253/) | R22-13-Classic Thunder Strike.wav | craigsmith | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [414064](https://freesound.org/s/414064/) | Distant Thunder isolated.wav | dr19 | CC0 1.0 | 2026-11-25 | 3 (far_roll) |
+| [523905](https://freesound.org/s/523905/) | Lightning Strike.mp3 | fattirewhitey | CC0 1.0 | 2026-11-25 | 2 (body, crack) |
+| [534023](https://freesound.org/s/534023/) | Thunderclap | Fission9 | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [242735](https://freesound.org/s/242735/) | thunder | hifijohn | CC0 1.0 | 2026-11-25 | 3 (mid_body, mid_roll) |
+| [338088](https://freesound.org/s/338088/) | Thunder Clap 4 | jzielke011 | CC0 1.0 | 2026-11-25 | 7 (body, clap, crack, roll) |
+| [760214](https://freesound.org/s/760214/) | Thunder Clap And Rumble #7 | Kinoton | CC0 1.0 | 2026-11-25 | 7 (body, clap, crack, roll) |
+| [760216](https://freesound.org/s/760216/) | Thunder Clap And Rumble #9 | Kinoton | CC0 1.0 | 2026-11-25 | 7 (body, clap, crack, roll) |
+| [439550](https://freesound.org/s/439550/) | Single huge clap of thunder | richwise | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [458015](https://freesound.org/s/458015/) | big thunder clap | seth-m | CC0 1.0 | 2026-11-25 | 6 (body, clap, crack, roll) |
+| [336314](https://freesound.org/s/336314/) | 06/10/2014 close lightning strike | supercell10 | CC0 1.0 | 2026-11-25 | 2 (body, crack) |
+| [653664](https://freesound.org/s/653664/) | STE-050-quiet rumble thunder.wav | tams_kp | CC0 1.0 | 2026-11-25 | 1 (mid_body) |
+| [240230](https://freesound.org/s/240230/) | Thunder clap # 1.wav | the_yura | CC0 1.0 | 2026-11-25 | 2 (body, crack) |
+| [240664](https://freesound.org/s/240664/) | MS_Thunderclap Davos Laret.wav | Thomas Bruderer | CC0 1.0 | 2026-11-25 | 5 (body, clap, crack) |
+| [717907](https://freesound.org/s/717907/) | 230713 Thunder, close crack crash big, mixpre6 AT875r EM272s, Stratford ON 2am | TRP | CC0 1.0 | 2026-11-25 | 6 (body, clap, crack, roll) |
+| [717909](https://freesound.org/s/717909/) | 230724 Thunder, close crack light rain, mixpreroof, Toronto 5pm | TRP | CC0 1.0 | 2026-11-25 | 2 (body, crack) |
+| [574387](https://freesound.org/s/574387/) | Rolling thunder closer ms 77mel 190903.flac | TRP | CC0 1.0 | 2026-11-25 | 3 (mid_body, mid_roll) |
+| [616980](https://freesound.org/s/616980/) | 210724 Thunder, single rolling, rain, STRATFORD 10pm.wav | TRP | CC0 1.0 | 2026-11-25 | 3 (mid_body, mid_roll) |
+| [253953](https://freesound.org/s/253953/) | Thunder 1 | Yoyodaman234 | CC0 1.0 | 2026-11-25 | 7 (body, clap, crack, roll) |
+| [267550](https://freesound.org/s/267550/) | Thunder3 | Yoyodaman234 | CC0 1.0 | 2026-11-25 | 3 (far_roll) |
+
+23 recordings, 97 grains, 173.1 s. Source files: the Freesound originals (downloaded 2026-11-25, aligned to the screened previews, every grain checked: normalised correlation >= 0.999, lag 0); each grain's source sha256 is in manifest.json.
+
+- **The Recorded rain, the Recorded wind and the hail (`bne_rain_rec_*`, `bne_wind_light/moderate/strong`, `bne_hail`;
+  the Weather page's Rain sound and Wind sound: Recorded; the hail always), and the live Recorded rain:** stretches
+  of the field recordings below, released under Creative Commons Zero (CC0 1.0, public domain dedication) on
+  Freesound. CC0 needs no attribution; we credit the recordists anyway, with thanks. Each recording was screened in
+  5 s windows (thunder, traffic, voices, birds, hum, clipping, patter in the wind), its clean stretches cut,
+  high-passed and levelled, never denoised; weathersynth's texture renderer crossfades them into loops (`texmix.rs`),
+  the hail as single ice hits cut from the hail takes over a little of the rain. Licences were checked on each sound
+  page on the date shown.
+- **The Generated wind and the drips (`bne_wind_gen_*`, `bne_drips_1/2/3`):** generated by weathersynth (`windsynth.rs`:
+  gusts, rumble, whistling off wires and edges, tree roar; the drips from its rain drop model), no third-party audio.
+
+| Freesound sound | title | recordist | licence | checked | used in |
+|---|---|---|---|---|---|
+| [708557](https://freesound.org/s/708557/) | Moderate_rain_ext | AMCINGSOUNDS | CC0 1.0 | 2026-11-25 | bne_hail.ogg, bne_rain_rec_medium.ogg, bne_rain_rec_muffled.ogg |
+| [640655](https://freesound.org/s/640655/) | Soft rain.WAV | barkenov | CC0 1.0 | 2026-11-26 | bne_rain_rec_light.ogg |
+| [651189](https://freesound.org/s/651189/) | Heavy Rain Regen Starkregen Raining Atmosphere Ambient Forest Wald | Borgory | CC0 1.0 | 2026-11-26 | bne_rain_rec_heavy.ogg |
+| [855678](https://freesound.org/s/855678/) | Rain_insideCar | Brikaro | CC0 1.0 | 2026-11-25 | bne_rain_rec_roof_cabin_heavy.ogg, bne_rain_rec_roof_heavy.ogg |
+| [838007](https://freesound.org/s/838007/) | rain variations on car 1 | bruno.auzet | CC0 1.0 | 2026-11-25 | bne_rain_rec_roof.ogg, bne_rain_rec_roof_cabin.ogg, bne_rain_rec_roof_cabin_heavy.ogg, bne_rain_rec_roof_cabin_light.ogg, bne_rain_rec_roof_heavy.ogg, bne_rain_rec_roof_light.ogg |
+| [838008](https://freesound.org/s/838008/) | rain variations on car 2 | bruno.auzet | CC0 1.0 | 2026-11-25 | bne_rain_rec_roof.ogg, bne_rain_rec_roof_cabin.ogg, bne_rain_rec_roof_cabin_heavy.ogg, bne_rain_rec_roof_cabin_light.ogg, bne_rain_rec_roof_heavy.ogg, bne_rain_rec_roof_light.ogg |
+| [870823](https://freesound.org/s/870823/) | Rain, Heavy in Woods | CHallSmith | CC0 1.0 | 2026-11-26 | bne_rain_rec_heavy.ogg |
+| [488363](https://freesound.org/s/488363/) | Heavy Rain on Car Roof Thirroul SLC North Carpark - Hooke Verse binaural.wav | ChrisHancock | CC0 1.0 | 2026-11-26 | bne_rain_rec_roof_cabin_heavy.ogg, bne_rain_rec_roof_heavy.ogg |
+| [672703](https://freesound.org/s/672703/) | Rain on the roof of car inside 5 | Cinetony | CC0 1.0 | 2026-11-25 | bne_rain_rec_roof.ogg, bne_rain_rec_roof_cabin.ogg |
+| [851610](https://freesound.org/s/851610/) | Hail Storm | codgold2 | CC0 1.0 | 2026-11-26 | bne_hail.ogg |
+| [352281](https://freesound.org/s/352281/) | Hail Stones hitting tin | corkyburger | CC0 1.0 | 2026-11-26 | bne_hail.ogg |
+| [192441](https://freesound.org/s/192441/) | Light rain to drizzle | CraigSnedeker | CC0 1.0 | 2026-11-25 | bne_rain_rec_light.ogg |
+| [448125](https://freesound.org/s/448125/) | Inside a car in the rain | derjuli | CC0 1.0 | 2026-11-25 | bne_rain_rec_roof_cabin_heavy.ogg, bne_rain_rec_roof_cabin_light.ogg, bne_rain_rec_roof_heavy.ogg, bne_rain_rec_roof_light.ogg |
+| [567564](https://freesound.org/s/567564/) | Medium Rain Under Porch | e9118586020 | CC0 1.0 | 2026-11-25 | bne_rain_rec_muffled_open.ogg |
+| [110919](https://freesound.org/s/110919/) | Forest in Tierra del Fuego (Argentina). Trees are cracking, wind is strong... | felix.blume | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [167684](https://freesound.org/s/167684/) | Strong wind blowing in the plain in Anatolia (Turkey) | felix.blume | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [215853](https://freesound.org/s/215853/) | Wind blowing in dry grass, in a field in Texas, USA. | felix.blume | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [217506](https://freesound.org/s/217506/) | Wind blowing in a field in Texas, USA | felix.blume | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [655504](https://freesound.org/s/655504/) | Light rain and thunderstorm. Rain drops with slight bird singing, road traffic far away in a field in Dekalb, Illinois suburbs. | felix.blume | CC0 1.0 | 2026-11-26 | bne_rain_rec_light.ogg |
+| [818934](https://freesound.org/s/818934/) | woodlands downpour Ekelund part 3 | forestfjord | CC0 1.0 | 2026-11-25 | bne_rain_rec_heavy.ogg |
+| [536843](https://freesound.org/s/536843/) | rain in the forest atmo field recording | Garuda1982 | CC0 1.0 | 2026-11-26 | bne_hail.ogg, bne_rain_rec_medium.ogg, bne_rain_rec_muffled.ogg |
+| [757474](https://freesound.org/s/757474/) | Strong Wind in Trees with Suburban Atmosphere | Garuda1982 | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [553733](https://freesound.org/s/553733/) | wind open field | Globofonia | CC0 1.0 | 2026-11-26 | bne_wind_moderate.ogg |
+| [243586](https://freesound.org/s/243586/) | heavy-rain_outside_2014.wav | jalbrecht_d | CC0 1.0 | 2026-11-26 | bne_rain_rec_heavy.ogg |
+| [704395](https://freesound.org/s/704395/) | Rain at night medium.wav | jgxxx | CC0 1.0 | 2026-11-26 | bne_hail.ogg, bne_rain_rec_medium.ogg, bne_rain_rec_muffled.ogg |
+| [440514](https://freesound.org/s/440514/) | 180916-103446 Typhoon.wav | jumpbug99 | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [571965](https://freesound.org/s/571965/) | Rain next door.wav | Kosmoso | CC0 1.0 | 2026-11-26 | bne_hail.ogg, bne_rain_rec_medium.ogg, bne_rain_rec_muffled.ogg |
+| [454360](https://freesound.org/s/454360/) | wind light calm soft breeze deep big gusty.flac | kyles | CC0 1.0 | 2026-11-26 | bne_wind_light.ogg |
+| [454373](https://freesound.org/s/454373/) | wind strong winter through big maple trees with no leaves in suburbs BIG Montreal, Canada.flac | kyles | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [849916](https://freesound.org/s/849916/) | Light Rain inside a car, driver seat | leocb | CC0 1.0 | 2026-11-25 | bne_rain_rec_roof_cabin_light.ogg, bne_rain_rec_roof_light.ogg |
+| [607070](https://freesound.org/s/607070/) | Light rain | morsine | CC0 1.0 | 2026-11-25 | bne_rain_rec_light.ogg |
+| [849019](https://freesound.org/s/849019/) | Hail_car_indoor | nicotep | CC0 1.0 | 2026-11-26 | bne_hail.ogg |
+| [162448](https://freesound.org/s/162448/) | Drops Of Rain Inside a Car | philipecp | CC0 1.0 | 2026-11-26 | bne_rain_rec_roof_cabin_light.ogg, bne_rain_rec_roof_light.ogg |
+| [849799](https://freesound.org/s/849799/) | Rain falling - Awning | prtsfr | CC0 1.0 | 2026-11-25 | bne_rain_rec_muffled_open.ogg |
+| [162572](https://freesound.org/s/162572/) | Mild rain | remcovs | CC0 1.0 | 2026-11-26 | bne_rain_rec_light.ogg |
+| [499791](https://freesound.org/s/499791/) | Rain as heard from inside parked car | richwise | CC0 1.0 | 2026-11-26 | bne_rain_rec_roof.ogg, bne_rain_rec_roof_cabin.ogg, bne_rain_rec_roof_cabin_heavy.ogg, bne_rain_rec_roof_cabin_light.ogg, bne_rain_rec_roof_heavy.ogg, bne_rain_rec_roof_light.ogg |
+| [505473](https://freesound.org/s/505473/) | Storm Force Winds #1 | richwise | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [522901](https://freesound.org/s/522901/) | Heavy rain from inside car | richwise | CC0 1.0 | 2026-11-26 | bne_rain_rec_roof_cabin_heavy.ogg, bne_rain_rec_roof_heavy.ogg |
+| [502523](https://freesound.org/s/502523/) | Stormy winds through the trees.mp3 | Simon Spiers | CC0 1.0 | 2026-11-26 | bne_wind_strong.ogg |
+| [555321](https://freesound.org/s/555321/) | Rain.wav | theStorm666 | CC0 1.0 | 2026-11-25 | bne_rain_rec_light.ogg |
+| [157433](https://freesound.org/s/157433/) | Medium Rain.aif | timgormly | CC0 1.0 | 2026-11-25 | bne_hail.ogg, bne_rain_rec_medium.ogg, bne_rain_rec_muffled.ogg |
+| [18413](https://freesound.org/s/18413/) | tg_on windshield from inside car.wav | Tristan | CC0 1.0 | 2026-11-25 | bne_rain_rec_roof_cabin_light.ogg, bne_rain_rec_roof_light.ogg |
+| [573336](https://freesound.org/s/573336/) | Medium Rain Ambience_edlarez_vsnr.wav | visionear | CC0 1.0 | 2026-11-25 | bne_hail.ogg, bne_rain_rec_medium.ogg, bne_rain_rec_muffled.ogg |
+| [467173](https://freesound.org/s/467173/) | FIELD_LA Rain_Park_Under stone bridge_04.wav | WilliamJMeyer | CC0 1.0 | 2026-11-26 | bne_rain_rec_muffled_open.ogg |
+
+44 recordings. Source files: the Freesound originals (downloaded 2026-11-25 and 2026-11-26, each checked
+against its sha256 before decoding); each block's source, time span and level are in weathersynth's bank manifest.
 
 The lightning bolts, the cloud glow and the rain streak textures and meshes are original (tools/make_weather_assets.py,
 MIT).

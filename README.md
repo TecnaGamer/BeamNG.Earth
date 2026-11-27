@@ -29,8 +29,6 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - A real view distance out to the horizon, with the Earth's curvature.
 - Both poles: Antarctica's ice sheet up to the South Pole (2,835 m) from the Copernicus DEM, the Arctic's sea ice
   at the North Pole, the polar day and night of the real sky, and a minimap compass that points to true north.
-- Opt-in (Settings > Experimental > Road surface from aerial photos, or `BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
-  colour of the regional photo under it (a lane as green as its verges is a grass lane, a pale neutral one gravel).
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes. Squares and pedestrian areas are painted into the ground with their own textures by
   their mapped surface and paving tags (grey stone slabs, red herringbone brick, cobbles; in the US red brick only
@@ -176,8 +174,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   and snow stop in tunnels, parking structures and under bridges, rain thickens the air and turns the fog grey, and
   traffic turns its headlights on and slows down in rain, snow and fog.
 - **Storms**: lightning flashes and bolts with thunder delayed by the distance (the same strikes for everyone with the
-  same weather in multiplayer), darker light under storm clouds, lit rain streaks around you, a wet look on sidewalks,
-  markings, bridges and buildings, and rain sounds that follow the rain's strength and go muffled under cover.
+  same weather in multiplayer), darker light under storm clouds, optional lit rain streaks around you, a wet look on streets,
+  sidewalks, markings, bridges and buildings, puddles that fill in the low spots, along kerbs and in worn wheel ruts and
+  dry up after the rain, wet roads that lose grip in the rain you see (and aquaplaning in deep puddles and heavy rain
+  at speed), and rain sounds that follow the rain's strength and go muffled under cover.
+  An experimental "Weather sounds: Live" setting has the app make the thunder live (the rain stays the pre-recorded
+  loops for now), through your default audio device at the game's volume, with the pre-recorded sounds as the fallback.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
   trees in winter where the photos were taken leaf-off).
 - **Real gravity**: the WGS84 gravity for your latitude and altitude plus the EGM2008 local anomalies, so
@@ -426,7 +428,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   when the real weather brings snow, slush, frost or ice, from an hourly snow model of the last 10 days' weather; main
   roads are cleared and salted first and bridges freeze first; the road's condition shows in the status bar; broadleaf
   trees go bare tree by tree in their winter, near and far, a few oaks and young beeches keeping their dead leaves; snow
-  lies on the ground near and far. `BNE_WINTER=light` or `ice` forces a fixed light-snow or ice-storm state); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too). A switch set by hand in the
+  lies on the ground near and far; snowy streets look the part by road class: main roads plowed and salted to wet
+  black lanes with slush at their edges, side streets packed white with grey wheel tracks, markings fading under the
+  snow, snowbanks along plowed roads (never across junctions, crossings or bridges), sidewalks shovelled, trampled or
+  left covered, white bridge decks. `BNE_WINTER=light`, `heavy` or `ice` forces a fixed light-snow, snowstorm or
+  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too). A switch set by hand in the
   server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
@@ -641,11 +647,10 @@ Update the server zip with every release: it carries the mod the server sends to
 (`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real, real-host (everyone gets the weather
 where the longest-joined player is) or a preset such as clear, overcast, rain, heavyrain, storm, fog, snow, blizzard)
 are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
-little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. Releases may also carry
-ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
-`tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
-checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` with an empty AuthKey for your own.
-With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
+little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. The releases carry only that
+zip: get the BeamMP server program itself from [BeamMP's own releases](https://github.com/BeamMP/BeamMP-Server/releases).
+With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, BeamMP's server with the plugin in a container
+(`tools/build_host.py` builds it), set up through
 its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
 [beammp/README.md](beammp/README.md#docker)).
 

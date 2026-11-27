@@ -57,7 +57,66 @@ import xproc
 log = logging.getLogger("earthd.blockworker")
 
 _s = None       # this process's state (init)
+_main = None    # the server's own process: its stand-in for _s (attach_main), for the reads its own grading makes
 _TRACE = os.environ.get("BNGE_FARTRACE") == "1"
+
+
+class _MainState:
+    """The server's own process's stand-in for _State (attach_main): its map data, DEM, ground rules and plan store,
+    read live from earthd.Server under _State's names. The server's process grades blocks itself (an anchor's first
+    block while driving, a lean tier's blocks, in-process road tiles) through the hooks this module installs at import
+    in every process: grading.PROFILE_PINS = _profile_pins, roadsys.GROUND = plan_elev, roadsys.DISK_FN. They read
+    _s, which only the pools' initializer (init) sets: in the server's process it was None, and every block it graded
+    with a road's profile squares in reach failed (BNE_ROADSYS=surface, a player's log 2026-11-26: the anchor request
+    failed "during terrain" every 6 s from Whitehorse on, the world stopped loading). Same sources as a worker's state
+    (Server.ground is blockworker.ground over the same attributes, the plan store's elev is plan_elev's): the same
+    heights whichever process grades a block."""
+
+    def __init__(self, server):
+        import weakref
+        self._server = weakref.ref(server)      # (never keeps a server alive: tests make many)
+        self.lock = threading.Lock()            # (this module's memos in the server's process: chain stores, parts)
+
+    def _get(name, src=None):
+        return property(lambda self: getattr(self._server(), src or name, None))
+    md = _get("md", "mapdata")
+    widths = _get("widths", "road_widths")
+    dem = _get("dem")
+    grading = _get("grading")
+    sea = _get("sea")
+    airports = _get("airports")
+    lids = _get("lids")
+    surface = _get("surface")
+    cache_dir = _get("cache_dir")
+    plan_store = _get("plan_store")     # (the server's anchors' store, made and set up by Server.grader_for)
+    del _get
+    # (the bus yards' grader _level_yards_of keeps on its holder: the server's own, not a second one; its lazy make
+    # is Server.ground's own, racing as there: two equal graders, the last kept)
+    bus_grader = property(lambda self: getattr(self._server(), "bus_grader", None),
+                          lambda self, v: self._server() is not None and setattr(self._server(), "bus_grader", v))
+
+
+def attach_main(server):
+    """earthd.Server (its __init__): this process's state for the reads above is the server's own (_MainState)."""
+    global _main
+    _main = _MainState(server)
+
+
+def detach_main():
+    """No server's own state any more (tests)."""
+    global _main
+    _main = None
+
+
+def _st():
+    """This process's state: a worker's (_s, init), else the server's own while it lives (_main, attach_main), else
+    None."""
+    if _s is not None:
+        return _s
+    m = _main
+    return m if m is not None and m._server() is not None else None
+
+
 _dem_t = threading.local()
 
 
@@ -132,6 +191,14 @@ class _State:
         budget.register_shed(self._clear_chunks)
         import rangeread            # (the remote files' block LRU, up to rangeread.MEM_BYTES: kept by a shed before)
         budget.register_shed(rangeread.clear_memory)
+        # (the memos that hold map features or native objects past the map data's own drop: a shed left a Baltimore
+        # road process's floor rising 0.8 -> 1.8 GB over 110 jobs, the playtest's 1.6 -> 3.7 GB in 25 minutes,
+        # 2026-11-26: the placements, the road system's tables / ceilings / ends / squares, the rail nodes)
+        budget.register_shed(_roads.clear_placements)
+        import roadsys
+        budget.register_shed(roadsys.clear_memory)
+        import railprofile
+        budget.register_shed(railprofile.clear_memory)
 
     def _clear_chunks(self):
         with self.lock:
@@ -699,23 +766,26 @@ def ground(frame, la, lo, z, grader=None):
     the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps; grader: the
     Grader that grades it after this, which keeps the bumps off the built roads' sides)."""
     import grading
+    st = _st()          # (the server's own process too: _profile_pins' first stage, _elev_stage1)
     z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
                                                           grader)
-    if _s.airports is not None:
-        z = _s.airports.apply(la, lo, z)
-    if getattr(_s, "lids", None) is not None:
-        z = _s.lids.apply(la, lo, z)
-    z = _level_yards_of(_s, z, la, lo)
-    if _s.sea is not None:
-        z = _s.sea.carve(la, lo, z)
+    if st.airports is not None:
+        z = st.airports.apply(la, lo, z)
+    if getattr(st, "lids", None) is not None:
+        z = st.lids.apply(la, lo, z)
+    z = _level_yards_of(st, z, la, lo)
+    if st.sea is not None:
+        z = st.sea.carve(la, lo, z)
     return z
 
 
 def plan_elev(la, lo):
     """The road plans' ground (PlanStore's elev): the DEM at grading.PROFILE_ZOOM with the tunnels' lids
-    (tunnellids), as earthd.Server._plan_elev."""
-    z = _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
-    return _s.lids.apply(la, lo, z) if getattr(_s, "lids", None) is not None else z
+    (tunnellids), as earthd.Server._plan_elev (roadsys.GROUND in every process: the server's own reads its state,
+    _st)."""
+    st = _st()
+    z = st.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
+    return st.lids.apply(la, lo, z) if getattr(st, "lids", None) is not None else z
 
 
 def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
@@ -995,12 +1065,13 @@ def _chain_store(name, cls, elev, setup=None):
             p.PROFILE_OFF = True
             if inner is not None:
                 inner(p)
-    with _s.lock:
-        stores = _s.__dict__.setdefault("chain_stores", {})
+    ps = _st()          # (the server's own process too: _profile_pins under BNE_ROADSHAPE=profile)
+    with ps.lock:
+        stores = ps.__dict__.setdefault("chain_stores", {})
         got = stores.get(name)
         if got is None:
             got = stores[name] = roadsmod.ChainStore(
-                cls, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev, setup)
+                cls, lambda key: ps.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev, setup)
         elif got.elev is None and elev is not None:     # (made as another's preferred one, reading only)
             got.elev = elev
             for st in list(got.stores.values()):
@@ -1030,18 +1101,19 @@ def sample_at_zoom(la, lo):
     lo = np.asarray(lo, np.float64)
     zs = stage_zoom(la.ravel()).reshape(la.shape)
     out = np.zeros(la.shape, np.float64)
+    dem = _st().dem
     for zm in sorted(set(zs.ravel().tolist())):
         m = zs == zm
-        out[m] = np.asarray(_s.dem.sample(la[m], lo[m], int(zm)), np.float64)
+        out[m] = np.asarray(dem.sample(la[m], lo[m], int(zm)), np.float64)
     return out
 
 
 def _elev_stage1(la, lo):
     """BNE_ROADSHAPE=profile (P3b): the physics ground as the road tiles' elev, lifted under roads, graded by the plans'
     first stage alone (no approach pins): the bridge chains' solves read it, the pins are made from them. The DEM at
-    each point's own zoom (stage_zoom)."""
+    each point's own zoom (stage_zoom). In the server's own process too (_st: its grading's PROFILE_PINS)."""
     z = sample_at_zoom(la, lo)
-    g = _frame_grader(_PIN_FRAME) if _s.grading else None
+    g = _frame_grader(_PIN_FRAME) if _st().grading else None
     z = ground(None, la, lo, z, g)
     return g.apply(la, lo, z, gradingmod.ROAD_LIFT, pinned=False) if g is not None else z
 
@@ -1055,8 +1127,9 @@ def _cell_bridge_parts(key):
     kept."""
     import roads as roadsmod
     import revisit
-    memo = _s.__dict__.setdefault("pin_parts", {})
-    with _s.lock:
+    st = _st()          # (the server's own process too: _profile_pins under BNE_ROADSHAPE=profile)
+    memo = st.__dict__.setdefault("pin_parts", {})
+    with st.lock:
         got = memo.get(str(key))
     if got is not None:
         return got
@@ -1065,7 +1138,7 @@ def _cell_bridge_parts(key):
     # parts answer this call alone, its fault the caller's too, BridgeProfiles._cell_entries' rule; Codex review of P3b)
     with revisit.scope() as read:
         try:
-            feats = _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+            feats = st.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
         except netfetch.FetchError:
             # (a cell not at hand, offline or a slow first visit: graded without its chains' pins and not kept as
             # complete, as a road tile without a neighbour cell)
@@ -1077,7 +1150,7 @@ def _cell_bridge_parts(key):
             out = _bridge_parts_of(feats)
     if not read.complete:
         return out
-    with _s.lock:
+    with st.lock:
         if len(memo) >= PIN_PARTS_KEPT:
             memo.clear()
         memo[str(key)] = out
@@ -1113,8 +1186,22 @@ def _joint_built():
 
 
 def _roads_cell(key):
-    """Map cell key's roads layer (the road profile squares' reads: the bridge stores' own cell function's)."""
-    return _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+    """Map cell key's roads layer (the road profile squares' reads: the bridge stores' own cell function's; the server's
+    own process's map data there, _st)."""
+    return _st().md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+
+
+def _pins_legacy(planner):
+    """(636, T1, BNE_ROADSYS_TUNNELS) roadsys.pins_near's legacy(feature, lat, lon): round a tunnel the record does not
+    build (under water: T3) the squares' targets as without the record; the planner's own tunnel networks say which, as
+    its tunnel sections do (TunnelProfiles.feature_drowned). None without the record."""
+    import roadsys
+    if not roadsys.TUNNELS or not hasattr(planner, "_tunnel_chains"):
+        return None
+
+    def legacy(feat, la, lo):
+        return planner._tunnel_chains().store_at(la, lo).feature_drowned(feat, la, lo)
+    return legacy
 
 
 def _profile_pins(planner, la0, lo0, la1, lo1, pad):
@@ -1128,7 +1215,7 @@ def _profile_pins(planner, la0, lo0, la1, lo1, pad):
     if roadsys.HEIGHTS and not roadshape.PROFILE_BUILT:
         # (BNE_ROADSYS=heights: the profile squares' terrain targets, by square: no chain is asked)
         try:
-            return roadsys.pins_near(la0, lo0, la1, lo1, pad, _roads_cell, _elev_stage1)
+            return roadsys.pins_near(la0, lo0, la1, lo1, pad, _roads_cell, _elev_stage1, legacy=_pins_legacy(planner))
         except (netfetch.FetchError, demmod.DemUnavailable):     # (short, not kept)
             import revisit
             revisit.fault()
@@ -1165,12 +1252,13 @@ def _profile_pins(planner, la0, lo0, la1, lo1, pad):
 
 
 def _bridge_setup(p):
-    p.profile_bed_elev = getattr(getattr(_s, "plan_store", None), "elev", None)
-    sea = getattr(_s, "sea", None)
+    st = _st()          # (the server's own process too: _profile_pins under BNE_ROADSHAPE=profile)
+    p.profile_bed_elev = getattr(getattr(st, "plan_store", None), "elev", None)
+    sea = getattr(st, "sea", None)
     p.wet = sea.depth if sea is not None else None        # (decks clear the water: roads.water_clear)
-    p.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
+    p.infra_fn = lambda key: st.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
         "infrastructure")                                   # (bridge:structure tags: bridgetypes)
-    p.water_fn = lambda key: _s.md.cell(key, layers=("water",), kind="demand").layers.get(
+    p.water_fn = lambda key: st.md.cell(key, layers=("water",), kind="demand").layers.get(
         "water")                                            # (the waterways a deck end crosses: roadshape's skew)
 
 
@@ -1334,7 +1422,7 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
         sv = src.version()
     except Exception:
         sv = None
-    k = revisit.key("signs", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(left_hand), bool(mph),
+    k = revisit.key("signs", *revisit.frame_parts(lat, lon), zoom, tx, ty, bool(left_hand), bool(mph),
                     country, bool(dirs), bool(rsigns), bool(dej), bool(towns_on), _md_versions(), repr(sv),
                     ("rules", _ground_rules()), *_radar_key(), *de)
     return _revisit_tile("signs", k, aid, tx, ty, out_dir, vfs_dir, f"signs_{aid}_{tx}_{ty}.json",
@@ -1400,7 +1488,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
     if de_junctions:
         import designs
         de = designs.cache_parts(True, geodesy.EnuFrame(lat, lon), designs.tile_reach(roadsmod_tile_bbox(tx, ty)))
-    k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
+    k = revisit.key("roads", *revisit.frame_parts(lat, lon), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _md_versions(bool(buildings)), float(buried), lamp_region, country, *cliff_settings.cache_parts,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
@@ -1428,7 +1516,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
 def _md_versions(buildings=False):
     """The map data's versions (revisit keys); buildings: with the OSM building years' and colours' identities too (the
     tiles that draw buildings: osmyears.identity, osmcolours.identity, MapData.versions(buildings=True))."""
-    md = _s.md
+    md = getattr(_st(), "md", None)     # (the server's own process too: _square_disk)
     if md is None:
         return None
     if not buildings:
@@ -2277,7 +2365,27 @@ _geo_inputs = {}            # geotile key -> (its session file's _file_sig, its 
 
 def _frame_grader(frame):
     """A grading.Grader view of frame (a geotile's), sharing the process's PlanStore (heights: the planning regions',
-    whatever the frame); None without grading."""
+    whatever the frame); None without grading. In the server's own process (_profile_pins' first stage, _elev_stage1):
+    a view of the server's own store, as its anchors' graders (Server.grader_for made and set it up: the same ground,
+    DEM, water and plan cache as a worker's), nothing of it set again here."""
+    main = _st() if _s is None else None
+    if main is not None:
+        if not main.grading:
+            return None
+        store = main.plan_store
+        if store is None:       # (only a grader's apply asks: grader_for made the store before it)
+            raise RuntimeError("the server's plan store is not made yet")
+        k = (float(frame.lat0), float(frame.lon0))
+        with _geo_lock:
+            # (kept on the store itself, not in _geo_graders: the module's memo would hold the server alive through the
+            # store's elev, a bound method of it, and a later server's process would find another store's views)
+            views = store.__dict__.setdefault("_frame_views", {})
+            got = views.get(k)
+            if got is None:
+                got = views[k] = gradingmod.Grader(frame, store.md, store.elev, store.widths, store=store)
+                while len(views) > GEO_FRAMES_KEPT:
+                    views.pop(next(iter(views)))
+            return got
     if not _s.grading:
         return None
     k = (float(frame.lat0), float(frame.lon0))
@@ -2306,7 +2414,7 @@ def _frame_grader(frame):
 
 def geo_names(key, aid=None):
     """The session files of geotile key: {"json", "skin", what -> shape} of its content (aid None) or of anchor aid's
-    skin ("json", "road", "walk", "walkcol")."""
+    skin ("json", "road", "walk", "walkcol"; "bank" with winter's roads)."""
     import roads as roadsmod
     if aid is None:
         out = {"json": f"rg_{key}.json", "inputs": f"rg_{key}.skin.pkl"}
@@ -2315,7 +2423,10 @@ def geo_names(key, aid=None):
                 out[what] = f"rg_{key}_{what}.cdae"
         return out
     out = {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
-           "walkcol": f"rs_{aid}_{key}_walkcol.cdae"}
+           "walkcol": f"rs_{aid}_{key}_walkcol.cdae", "puddle": f"rs_{aid}_{key}_puddle.cdae"}
+    import snowroad
+    if snowroad.ON:                         # (winter W3's snowbanks: only with winter's roads on)
+        out["bank"] = f"rs_{aid}_{key}_bank.cdae"
     import cliffsettings
     if cliffsettings.SETTINGS.enabled:      # (the cliffs' contact strips: only with BNE_CLIFFS on)
         import cliffscene
@@ -2531,13 +2642,15 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     return k if revisit.has(_s.cache_dir, "roadsg", k) else None
 
 
-def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q):
-    """The revisit key of an anchor's skin of the geotile whose content has key ckey (_geo_skin)."""
+def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q, wear=None):
+    """The revisit key of an anchor's skin of the geotile whose content has key ckey (_geo_skin); winter's roads
+    (snowroad.skin_key of the wear's "snow": nothing without it) last."""
     import revisit
     import heightmap as heightmapmod
-    return revisit.key("rskin", ckey, round(float(lat), 7), round(float(lon), 7), int(zoom), bool(sidewalks),
+    import snowroad
+    return revisit.key("rskin", ckey, *revisit.frame_parts(lat, lon), int(zoom), bool(sidewalks),
                        float(lift), None if q is None else float(q), ("rules", _ground_rules()),
-                       float(heightmapmod.SQUARE))
+                       float(heightmapmod.SQUARE), *snowroad.skin_key(wear))
 
 
 def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings, left_hand,
@@ -2555,7 +2668,7 @@ def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, 
         ck = _geo_content_key(tile_key, gzoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                               pole_profile=pole_profile, models_dir=os.path.dirname(scratch),
                               de_junctions=de_junctions, towns_on=towns_on, wear=wear)
-        return ck, _skin_key(ck, lat, lon, zoom, sidewalks, lift, q)
+        return ck, _skin_key(ck, lat, lon, zoom, sidewalks, lift, q, wear)
     with revisit.stale(()):             # (this version's alone, whatever scope the caller is in)
         ck, sk = keys()
         if not (revisit.has(_s.cache_dir, "roadsg", ck) and revisit.has(_s.cache_dir, "rskin", sk)):
@@ -2830,7 +2943,7 @@ def _clip_mesh(mesh, origin, quad):
     return P2[used], remap[T2], UV2[used], mats, np.asarray(M)[src]
 
 
-def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, ckey=None):
+def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, ckey=None, wear=None):
     """_geo_skin_build, kept in the revisit cache (kind "rskin", since 2026-11-13: keyed by its content's key ckey, the
     anchor and the skin's own settings; teleport anchors are snapped, so a place visited again asks for the same
     skins): a revisit no longer drapes every tile again, and an older generation's skin is shown with the content and
@@ -2841,11 +2954,11 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     import geotiles
     import revisit
     if ckey is None or not revisit.ON or getattr(_s, "cache_dir", None) is None:
-        return _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content)
+        return _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, wear)
     tile = geotiles.geobox(gx, gy)
     names = geo_names(tile.key, aid)
     mine = [(f"{vfs_dir}/", "@V@/"), (f"rs_{aid}_", "rs_@A@_")]
-    k = _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q)
+    k = _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q, wear)
     got = revisit.load(_s.cache_dir, "rskin", k)
     if got is not None:
         blobs, extra = got
@@ -2859,7 +2972,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
         _geo_stats["skin_hits"] += 1
         return f"{vfs_dir}/{names['json']}", {"lift": float(lift), "h": (extra or {}).get("h")}
     with revisit.scope() as f0:
-        res = _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content)
+        res = _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, wear)
     if res is None:
         return None
     try:
@@ -2883,7 +2996,34 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     return res
 
 
-def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content):
+def _snow_lines(frame, bbox, ground_only=False, bridges=False):
+    """Winter W3's lane sheet round a skin's box (snowroad.road_lines of the roads layer's cells within
+    snowroad.LINE_MARGIN_M, in the anchor's frame): every part (ground_only: the ground parts, the banks'; bridges: the
+    bridge parts, the banks' cut lines)."""
+    import mapcells
+    import snowroad
+    m = snowroad.LINE_MARGIN_M
+    x0, y0, x1, y1 = bbox
+    gx = np.array([x0 - m, x1 + m, x0 - m, x1 + m])
+    gy = np.array([y0 - m, y0 - m, y1 + m, y1 + m])
+    la, lo, _ = frame.enu_to_geodetic(gx, gy, np.zeros(4))
+    la, lo = np.asarray(la), np.asarray(lo)
+    feats = []
+    for key in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max())):
+        try:
+            f = _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        except Exception:
+            import revisit
+            revisit.fault()
+            continue
+        if f is not None:
+            feats.append(f)
+    surf = getattr(_s, "surface", None)
+    return snowroad.road_lines(feats, frame, getattr(surf, "urban", None), getattr(_s, "widths", None), ground_only,
+                               (x0 - m, y0 - m, x1 + m, y1 + m), bridges)
+
+
+def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, wear=None):
     """Anchor aid's skin of geotile (gx, gy): the draped road surfaces (the road mesh and plazas: roadmesh.build on the
     anchor's lattice and height quantum q, follow) and the sidewalks (curbs on the drawn ground, their lean collision
     mesh), from the content's skin inputs mapped into the anchor's world, cut exactly at the tile's quad there (its
@@ -2921,6 +3061,13 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
     chunks = _map_chunks(tile.frame, frame, inputs.get("chunks") or [])
     ctx = _map_chunks(tile.frame, frame, inputs.get("ctx") or [])
     mark("map")
+    import snowroad
+    snow = snowroad.snow_of(wear)       # (winter W3: the paint, decks and sidewalks on their winter copies, the banks)
+    snow_lines = None
+    if snow is not None:
+        snow_lines = _snow_lines(frame, bbox)
+        chunks = snowroad.remap_chunks(chunks, snow_lines)
+        mark("snow")
     mesh = roadmeshmod.build(frame, chunks, elev, origin, lift, clip=bbox, follow=True, q=q, drawn=drawn,
                              context=ctx, clip_poly=quad)
     mark("mesh")
@@ -2932,15 +3079,35 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
     names = geo_names(tile.key, aid)
     data = {"v": roadsmod.VERSION, "key": tile.key, "anchorId": aid, "lift": round(float(lift), 3),
             "q": float(q) if q else 0.0}
+    if snow is not None:
+        bm = snowroad.bank_mesh(snow, _snow_lines(frame, bbox, True), snowroad.crossing_cuts(chunks), bbox,
+                                lambda xy: roadmeshmod.drawn_ground(frame, drawn, xy, q), origin,
+                                _snow_lines(frame, bbox, bridges=True))
+        bm = _clip_mesh(bm, origin, quad) if bm is not None else None
+        if bm is not None:
+            cdae.write(os.path.join(out_dir, names["bank"]), bm[0], bm[1], uvs=bm[2], material=bm[3],
+                       tri_materials=bm[4], object_name="bank")
+            data["bank"] = {"shape": f"{vfs_dir}/{names['bank']}", "pos": list(origin)}
+        mark("banks")
     # its pivot: the quad's centre at the median height of its road mesh (the mod moves a kept skin there at a rebase)
     pz = float(np.median(np.asarray(mesh[0], np.float64)[:, 2])) if mesh is not None and len(mesh[0]) else 0.0
     data["pivot"] = [round(float(quad[:, 0].mean()), 3), round(float(quad[:, 1].mean()), 3), round(pz, 3)]
     if mesh is not None:
         roadmeshmod.write(os.path.join(out_dir, names["road"]), mesh)
         data["road"] = {"shape": f"{vfs_dir}/{names['road']}", "pos": list(origin)}
+        # the puddles (roadwear.puddle_chunks): a mesh of their own, draped as the road's, which the mod draws only
+        # while the ground is wet (roads.lua setPuddles)
+        pmesh = roadmeshmod.build(frame, chunks, elev, origin, lift, clip=bbox, follow=True, q=q, drawn=drawn,
+                                  clip_poly=quad, puddles=True) if any(c.get("puddle") for c in chunks) else None
+        if pmesh is not None:
+            roadmeshmod.write(os.path.join(out_dir, names["puddle"]), pmesh)
+            # (with the spots the mod's aquaplaning looks the tyres up in: roadwear.puddle_spots)
+            data["puddle"] = {"shape": f"{vfs_dir}/{names['puddle']}", "pos": list(origin),
+                              "spots": roadwear.puddle_spots(chunks, pmesh, origin)}
+        mark("puddles")
     elif chunks:                    # (no mesh: the mod's DecalRoads, as an anchor tile's)
         data["chunks"] = [dict(c, n=np.asarray(c["n"]).tolist()) if c.get("n") is not None else c
-                          for c in chunks if not c.get("tube_only") and not c.get("tri")]
+                          for c in chunks if not c.get("tube_only") and not c.get("tri") and not c.get("puddle")]
     walks = _map_walks(tile.frame, frame, inputs.get("walks") or []) if sidewalks else []
     if walks:
         def walk_ground(x, y):
@@ -2955,6 +3122,8 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
         if not b.empty():
             P_, T_, UV_, M_ = b.arrays()
             wm = _clip_mesh((P_, T_, UV_, list(b.materials), M_), origin, quad)
+            if wm is not None and snow is not None:
+                wm = snowroad.remap_walks(wm, snow_lines, origin)
             if wm is not None:
                 cdae.write(os.path.join(out_dir, names["walk"]), wm[0], wm[1], uvs=wm[2], material=wm[3],
                            tri_materials=wm[4], object_name="walk")
@@ -3054,7 +3223,10 @@ def _anchor_drawn(aid, lat, lon, zoom, box):
 
     def drawn(la, lo):
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo), box)
-    return frame, drawn, cell_fn
+
+    def pre(la, lo):            # (drawn before the road system's cut: the hand-over's lowering is pre - drawn)
+        return roadsmod._block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo), box)
+    return frame, drawn, cell_fn, pre
 
 
 HANDOVER_GRID_MAX = 400_000     # lattice nodes one deck's hand-over may read (beyond: the sheared deck as it was)
@@ -3103,7 +3275,7 @@ def _deck_handover(blob, pos, tile, frame, piv, aid, lat, lon, zoom, q):
     W = dnp.matmul(P + np.asarray(pos, np.float64), rot.T) + off
     x0, y0 = float(W[:, 0].min()), float(W[:, 1].min())
     x1, y1 = float(W[:, 0].max()), float(W[:, 1].max())
-    fr, drawn, cell_fn = _anchor_drawn(aid, lat, lon, zoom, (x0 - 60.0, y0 - 60.0, x1 + 60.0, y1 + 60.0))
+    fr, drawn, cell_fn, pre = _anchor_drawn(aid, lat, lon, zoom, (x0 - 60.0, y0 - 60.0, x1 + 60.0, y1 + 60.0))
     ends = roadsys.ends_for_box(fr, cell_fn, (x0, y0, x1, y1))
     if ends is None or not ends.count():
         return None
@@ -3131,7 +3303,12 @@ def _deck_handover(blob, pos, tile, frame, piv, aid, lat, lon, zoom, q):
         ys = heightmap.lattice_coords(j0 + b0, b1 - b0 + 1)
         _el, u = heightmap.surface(fr, drawn, xs, ys, keep)
         zq = np.rint(np.asarray(u, np.float64) * (1.0 / q)) * q
-        dr = roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])
+        if roadsys.CEIL:        # (M5: a node the ceiling lowers is the deck's as a dropped one is)
+            dr = roadsys.ground_lowering(fr, cell_fn, keep["lat"], keep["lon"],
+                                         pre(np.asarray(keep["lat"], np.float64), np.asarray(keep["lon"], np.float64)),
+                                         (gx0, gy0, gx1, gy1))
+        else:
+            dr = roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])
         zg[b0:b1 + 1, a0:a1 + 1] = zq
         dg[b0:b1 + 1, a0:a1 + 1] = np.asarray(dr, np.float64).reshape(zq.shape)
     top = names.index(roadmeshmod.DECK_TOP)
@@ -3215,7 +3392,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
                                     models_dir=os.path.dirname(out_dir), de_junctions=de_junctions, towns_on=towns_on,
                                     wear=wear)
             out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content,
-                                    ckey)
+                                    ckey, wear)
             out["stages"]["skin"] = last_tile_stages()
         t2, c2 = time.perf_counter(), time.process_time()
         if exact == "auto":             # (a fresh content: the parts its anchor needs exact, roads.geo_exact_auto)
@@ -3650,7 +3827,7 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
-    k = revisit.key("bldfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
+    k = revisit.key("bldfar", *revisit.frame_parts(lat, lon), zoom, tx, ty,
                     _md_versions(True), lamp_region, bool(left_hand), _nyc_key(frame, roadsmod_tile_bbox(tx, ty)))
     return _revisit_tile("bldfar", k, aid, tx, ty, out_dir, vfs_dir, f"bldfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_tile(frame, tx, ty, _s.md,
@@ -3668,7 +3845,7 @@ def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
-    k = revisit.key("bldsky", round(float(lat), 7), round(float(lon), 7), zoom, ux, uy,
+    k = revisit.key("bldsky", *revisit.frame_parts(lat, lon), zoom, ux, uy,
                     _md_versions(True), lamp_region)
     u = buildingsmod.SKY_UNIT
     sx0, sy0, _, _ = roadsmod_tile_bbox(ux * u, uy * u)
@@ -3700,7 +3877,7 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
         _chain_store(f"far_bridges_{zoom}", roadsmod.BridgeProfiles,
                      lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, zoom)), far_setup), frame,
         prefer=_chain_store("bridges", roadsmod.BridgeProfiles, None, _bridge_setup))
-    k = revisit.key("brfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
+    k = revisit.key("brfar", *revisit.frame_parts(lat, lon), zoom, tx, ty,
                     _s.md.versions() if _s.md is not None else None)
     return _revisit_tile("brfar", k, aid, tx, ty, out_dir, vfs_dir, f"brfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_bridge_tile(frame, tx, ty, _s.md, bridges, out_dir, vfs_dir, aid),
@@ -4029,8 +4206,9 @@ def _far_global_key(z, x, y, zoom, ref_zoom, layout):
 
 
 def _far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
-    """What a far tile's geometry is built from (the revisit cache's key)."""
-    return (round(float(lat), 7), round(float(lon), 7), (tile.level, tile.i, tile.j), zoom,
+    """What a far tile's geometry is built from (the revisit cache's key): the frame exactly (revisit.frame_parts)."""
+    import revisit
+    return (*revisit.frame_parts(lat, lon), (tile.level, tile.i, tile.j), zoom,
             None if q is None else float(q), ref_zoom, bool(with_sink), repr(layout),
             _s.md.versions() if _s.md is not None else None, _s.sea is not None, _s.airports is not None)
 
@@ -4627,22 +4805,28 @@ if _joint_built():
     gradingmod.PROFILE_PINS = _profile_pins
 def _square_disk():
     """roadsys.DISK: the profile squares kept in the revisit cache (kind "rssq", keyed by the code, the switches and
-    the map data's versions; the square's own name holds its region, square and cells' revisions)."""
+    the map data's versions; the square's own name holds its region, square and cells' revisions). The server's own
+    process's too (_st): the squares its grading solves are the workers' (the same name, the same disk)."""
     import revisit
-    if not revisit.ON or getattr(_s, "cache_dir", None) is None:
+    st = _st()
+    if not revisit.ON or getattr(st, "cache_dir", None) is None:
         return None
 
     def load(name):
         k = revisit.key("rssq", name, _md_versions())
-        got = revisit.load(_s.cache_dir, "rssq", k)
+        got = revisit.load(st.cache_dir, "rssq", k)
         return None if got is None else got[0].get("sq")
 
     def save(name, data):
-        revisit.store(_s.cache_dir, "rssq", revisit.key("rssq", name, _md_versions()), {"sq": data})
+        revisit.store(st.cache_dir, "rssq", revisit.key("rssq", name, _md_versions()), {"sq": data})
     return load, save
 
 
 if _roadsys.HEIGHTS:
     _roadsys.GROUND = plan_elev
     _roadsys.DISK_FN = _square_disk
+if _roadsys.CEIL:
+    # (M5: the ground under the decks from the road tiles' own bridge chains: the store every anchor shares, on the
+    # plans' first stage as _bridges makes it under the road system, so the ceiling is the drawn decks' whoever asks)
+    _roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1) if getattr(_s, "md", None) is not None else None
 _roadsys.AREAS_MD_FN = lambda: getattr(_s, "md", None)     # (BNE_ROADSYS_AREAS: the decks' mapped road areas)

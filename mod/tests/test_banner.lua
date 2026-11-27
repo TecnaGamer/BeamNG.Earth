@@ -41,6 +41,16 @@ id, level, text = banner.compute(info({ net = 'connected', session = true, everC
   noteDetail = 'usgs unreachable; 3 tiles without imagery' }), 100)
 T.check(id == 'degraded' and level == 'warn' and text == 'Server OK, some internet data sources not answering: usgs unreachable; 3 tiles without imagery',
   'degraded: the server\'s note')
+-- this PC's own trouble is not "data sources not answering" (the user, 2026-11-26)
+id, level, text = banner.compute(info({ net = 'connected', session = true, everConnected = true, note = 'degraded',
+  noteDetail = 'your drive is nearly full: free some space (the download cache is cut back)' }), 100)
+T.check(id == 'degraded' and level == 'warn' and text == 'Server OK, but your drive is nearly full: free some space (the download cache is cut back)',
+  'degraded: a full drive alone does not blame the data sources')
+T.check(banner.degradedText('usgs unreachable (elevation); slow internet connection: new places take a few minutes to load')
+  == 'Server OK, some internet data sources not answering: usgs unreachable (elevation)\nslow internet connection: new places take a few minutes to load',
+  'degraded: data sources first, this PC\'s own trouble on its own line')
+T.check(banner.degradedText('the server is over its Max RAM') == 'Server OK, but the server is over its Max RAM',
+  'degraded: low RAM alone')
 -- the edge guard's line
 id, level, text = banner.compute(info({ everConnected = true, attempts = 2, edge = 'warn' }), 100)
 T.check(id == 'lost' and level == 'warn' and text:find('\nNear the edge of the loaded ground', 1, true)

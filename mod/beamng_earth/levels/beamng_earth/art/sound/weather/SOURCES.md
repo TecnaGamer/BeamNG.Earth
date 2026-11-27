@@ -1,105 +1,198 @@
-# Weather audio sources (thunder + rain)
+# Weather sounds (thunder, rain, wind, drips and hail)
 
-All sources are from Freesound.org. The licence was checked on each sound's own page: every page
-shows "Creative Commons 0" with a link to https://creativecommons.org/publicdomain/zero/1.0/
-(checked 2026-11-25). Freesound originals need a login, so these are the public HQ previews linked
-from each sound's page (MP3, about 128 kbps VBR). They were checked with `file` and `ffprobe` (all
-MPEG ADTS layer III audio), and their sha256 hashes are recorded. The downloaded files are in
-`originals/fsNNNNNN/`. Candidates that were downloaded but not used are in
-`originals/_unused_candidates/` (also CC0, licence checked on their pages).
+Two thunder sets, picked with the Weather page's Thunder sound (storm.lua `THUNDER_SET`), and the rain:
 
-## Processing
+- **Generated (the default): `bne_thunder_<class>1..6.ogg`.** Method B, a physical model of thunder, rendered by
+  BeamNG.Earth's own synthesiser `native/weathersynth` (Rust, MIT, like the rest of the repository). No third-party
+  audio. These are the 24 files the user approved on 2026-11-25 (finalB), rendered again by the Rust port: before
+  Vorbis every file is within 2e-11 of the approved render (relative to its peak), and the Ogg true peaks are the
+  approved ones to 0.01 dB.
+- **Recorded: `bne_thunder_rec_<class>1..6.ogg`.** Grain bank v3: short pieces of 23 CC0 field recordings from
+  Freesound, cleaned, levelled, then layered and spaced by weathersynth's grain renderer (method A). Seeds 1 and 2 of
+  each class are the references the user approved on 2026-11-25; seeds 3-6 come from the same renderer. Credits: the
+  23 recordings and their recordists are in CREDITS.md ("Weather sounds") and `native/weathersynth/assets/grains/CREDITS.md`.
+- **Rain (Generated): `bne_rain_*.ogg`.** Weathersynth's method B (2026-11-26), a physical model of rain drop by drop
+  (`native/weathersynth/src/rainb.rs`; its parameters against the literature in `~/bnge-tests/weather/rain_research/
+  PARAMS.md`). No third-party audio (details below).
 
-Every output is Ogg Vorbis, mono, 44.1 kHz, `-q:a 4` (about 55-90 kbps).
+The only outside code is the `libm` crate (=0.2.16, pure-Rust maths) and ffmpeg's libvorbis encoder (ffmpeg n9.0.2)
+for the Ogg files. The thunder renders are deterministic: the same bits on Linux x86-64, Windows and macOS arm64
+(checked 2026-11-25).
 
-- **Thunder** (one-shots): stereo downmixed to mono as (L+R)/2, 25 Hz high-pass, trimmed, linear
-  fade-in, quarter-sine fade-out, peak-normalised to -1 dBFS (decoded peaks are -0.8 to -1.4 dBFS).
-  Every variant has the same peak level, so the mod has to turn down far thunder itself.
-- **Rain loops**: mono downmix, 30 Hz high-pass, resampled to 44.1 kHz. A 22 s segment is turned
-  into a 20 s loop by crossfading its last 2 s into its first 2 s with an equal-power (sin/cos)
-  crossfade, so the last sample leads straight into the first. Each loop's integrated loudness is
-  set to -20 LUFS, measured over the loop played twice. A -1.5 dBFS peak limiter (2 ms attack,
-  60 ms release) is then run over three copies of the loop and only the middle copy is kept. This
-  shifts the loop by the limiter's 87-sample lookahead, but it stays seamless because nothing is
-  cut. The limiter catches only single raindrop transients (20 to 244 samples per loop, up to
-  about 7 dB on the medium loop's biggest drops). The wrap was checked after Vorbis decoding: the
-  second difference at the wrap stays inside the file's normal range, with no click.
+## How to rebuild them
+
+```
+cd native/weathersynth && cargo build --release --offline --locked
+# the Generated thunder: the 24 approved files (methodb::SHIPPED: seed and micro-shock weight per file)
+weathersynth methodb-set --out OUT
+# the Recorded thunder: the grain bank, then seeds 1-6 per class
+weathersynth grainbank-pack
+weathersynth grains-set --bank assets/thunder_grains.bin --out OUT --ogg --seeds 1,2,3,4,5,6 --prefix bne_thunder_rec_
+# the Generated rain loops (method B, seed 1)
+weathersynth rainb-modset --out OUT
+```
+
+- **`methodb-set`** renders each file on method B's exact path (the port of the approved Python renderer, render3c
+  for strike / close and render3b for mid / far). It encodes Vorbis q5, decodes it, measures the true peak, and while
+  it is over -1.0 dBTP limits again with a lower ceiling (5 ms look-ahead, 80 ms release), as the approved files were
+  made (close4 and close6 needed that second pass).
+- **`grains-set`** renders each strike from the bank on numpy-compatible draws (the reference renderer's schedule for
+  the seed), levels it to its class (strike -9.5, close -14, mid -18, far -22 LUFS, sample peak at most -1 dBFS) and
+  encodes Vorbis q6.
+- Rebuilt from weathersynth on branch `worktree-agent-aa7211bf2fd0acdb7` at commit `6747425af` (2026-11-25).
+- **`rainb-modset`** renders the 11 Generated rain loops, 30 s each and seamless, at the loudness below. Each is
+  encoded with ffmpeg's libvorbis at q4 (`-map_metadata -1 -fflags +bitexact`). The model is described in
+  rainb.rs: drop sizes for the rain rate, each impact's force radiated as a dipole, splashes, bubbles, leaves, metal
+  panels, distance; the car's cabin (the roof's modes, the headliner, the windscreen); the shelter.
+- The rain was rebuilt with method B on branch `rainb-wire` (2026-11-26). Before, it was rain.rs's procedural drops
+  from commit `caa4b44d4`.
 
 ## Files
 
-| Output | Source page | Direct file | Author | Licence (as on page) | Original | sha256 of original | Processing | Duration | Size |
-|---|---|---|---|---|---|---|---|---|---|
-| bne_thunder_close1.ogg | https://freesound.org/people/DaniloSFX/sounds/672776/ | https://cdn.freesound.org/previews/672/672776_1357949-hq.mp3 | DaniloSFX | Creative Commons 0 | "Thunder Clap" (672776_1357949-hq.mp3) | 813f57934c49e8c5185be340aca884bfdfdc50d208cb042b89f4fb6f1f5483dd | 0.0-14.0 s, fade-in 10 ms, fade-out 2.5 s; bright close crack with a quiet rain bed about 30 dB below | 14.0 s | 111234 B |
-| bne_thunder_close2.ogg | https://freesound.org/people/Dave%20Welsh/sounds/194364/ | https://cdn.freesound.org/previews/194/194364_1985044-hq.mp3 | Dave Welsh | Creative Commons 0 | "Thunder Clap OWB KY 441x16.wav" (194364_1985044-hq.mp3) | eccec72a7155f7002a62d6926393eeb600337efb5c738be7ac9c0c11d6296c0f | 13.0-28.0 s, fade-in 0.3 s, fade-out 4 s; tearing crack, then a bang and a roll; -1.0 dB gain | 15.0 s | 123443 B |
-| bne_thunder_mid1.ogg | https://freesound.org/people/BlueDelta/sounds/446753/ | https://cdn.freesound.org/previews/446/446753_1790434-hq.mp3 | BlueDelta | Creative Commons 0 | "Heavy Thunder Strike - no Rain - QUADRO.wav" (446753_1790434-hq.mp3) | 343c8e7a6d24b7f71fd65117cb0120bb01460127cbfdf00668c42a0b69ad9c00 | 0.5-15.5 s, fade-in 0.2 s, fade-out 4.5 s; heavy strike and roll, no rain, recorded without limiting | 15.0 s | 102358 B |
-| bne_thunder_mid2.ogg | https://freesound.org/people/Gerent/sounds/558748/ | https://cdn.freesound.org/previews/558/558748_556505-hq.mp3 | Gerent | Creative Commons 0 | "thunder-rolling-170315_0057 035-068 032-074.wav" (558748_556505-hq.mp3) | 4219f4a28f6fb04173aefc00ab945139319809b6e05a8463a518fe359ffc948b | revised 2026-11-25 (the user asked for another roll): 4.0-19.0 s, mono, 25 Hz high-pass, fade-in 0.3 s, fade-out 3.5 s, loudest 3 s to -18 LUFS (+0.5 dB), -1 dBFS true-peak limiter; a clean rolling peal a few km off, no crack, no rain (the uploader: noise reduction applied) | 15.0 s | 121984 |
-| bne_thunder_far1.ogg | https://freesound.org/people/TRP/sounds/717845/ | https://cdn.freesound.org/previews/717/717845_97550-hq.mp3 | TRP | Creative Commons 0 | "230405 Thunder DRY rolling distant low rumbles, roof, EM272s, Toronto 7am" (717845_97550-hq.mp3) | 7b68a632e50b44ce266fcf02f1c68b984b79623f4676972ca59ae714515da7ca | 0.5-14.5 s, fade-in 0.5 s, fade-out 3.5 s; low distant rumble with almost nothing above 1 kHz | 14.0 s | 97166 B |
-| bne_thunder_far2.ogg | https://freesound.org/people/TRP/sounds/717890/ | https://cdn.freesound.org/previews/717/717890_97550-hq.mp3 | TRP | Creative Commons 0 | "230823 Thunder, dry distant rolling, R-07 EM272s, Stratford 12pm" (717890_97550-hq.mp3) | 9fef0328de54f0555625235c2a8cc6a76f90f90a8c57df6e9be2f07bda591afe | 149.5-164.5 s, fade-in 0.5 s, fade-out 4 s; distant dry roll | 15.0 s | 106568 B |
-| bne_rain_light.ogg | https://freesound.org/people/jmbphilmes/sounds/200271/ | https://cdn.freesound.org/previews/200/200271_2322692-hq.mp3 | jmbphilmes | Creative Commons 0 | "Rain light 1 (rural)" (200271_2322692-hq.mp3) | 9150f775fea3c4aa020edff9174fb0d1a1d4c5cfe464a0ce6f3dd414065005be | revised 2026-11-25 (see "Revision" below): segment 20.0-42.0 s, 30 Hz high-pass, turned into a 20 s loop (2 s equal-power crossfade), +25.4 dB to -20.2 LUFS, no limiting needed (peak -3.3 dBFS) | 20.0 s loop | 188190 |
-| bne_rain_medium.ogg | https://freesound.org/people/jmbphilmes/sounds/200270/ | https://cdn.freesound.org/previews/200/200270_2322692-hq.mp3 | jmbphilmes | Creative Commons 0 | "Rain heavy 1 (rural)" (200270_2322692-hq.mp3) | 7bb21a259ea30d1336cc6b3b1ea40e2ab65d1142685b0bee43147c67e49cfbb4 | segment 34.0-56.0 s (the take's quieter, early part, -40.7 dBFS RMS) turned into a 20 s loop (2 s crossfade); +19.4 dB to -20.5 LUFS; limiter | 20.0 s loop | 228714 B |
-| bne_rain_heavy.ogg | https://freesound.org/people/jmbphilmes/sounds/200270/ | https://cdn.freesound.org/previews/200/200270_2322692-hq.mp3 | jmbphilmes | Creative Commons 0 | "Rain heavy 1 (rural)" (200270_2322692-hq.mp3) | 7bb21a259ea30d1336cc6b3b1ea40e2ab65d1142685b0bee43147c67e49cfbb4 | segment 192.0-214.0 s (the take's peak, -34.2 dBFS RMS, brighter and denser) turned into a 20 s loop (2 s crossfade); +12.5 dB to -20.3 LUFS; limiter | 20.0 s loop | 225606 B |
-| bne_rain_roof.ogg | https://freesound.org/people/Nox_Sound/sounds/535870/ | https://cdn.freesound.org/previews/535/535870_9250976-hq.mp3 | Nox_Sound | Creative Commons 0 | "Ambiance_Rain_Inside_Car_Close_Roof_Loop_Stereo.wav" (535870_9250976-hq.mp3) | 2f79e90a4f9ace5e4bd36a2d059e8b201ad214175a18333156cfdd3982c2e0a2 | real recording of rain inside a car, mic close to the roof (Rode NT4); segment 0.5-23.0 s turned into a 20 s loop (2 s crossfade); +10.5 dB to -20.4 LUFS; limiter | 20.0 s loop | 211439 B |
-| bne_thunder_strike1.ogg | https://freesound.org/people/Simon%20Spiers/sounds/437243/ | https://cdn.freesound.org/previews/437/437243_213249-hq.mp3 | Simon Spiers | Creative Commons 0 | "Very close lightning strike." (437243_213249-hq.mp3; the uploader: a cloud-to-ground strike within 100 m) | 9e4169956c8ff03d204923cd4e8ef6c036c6724af92c269ef42e484ee583dbe7 | added 2026-11-25 (the 'super close' class): 20.80-34.80 s (the crack at the start), mono, 20 Hz high-pass (sub-bass kept), fade-in 5 ms, fade-out 4 s, +22 dB into a limiter (5 ms attack, 200 ms release, 4x oversampled), loudest 3 s -11.7 LUFS, true peak -0.4 dBFS, Vorbis q5 | 14.0 s | 136270 |
-| bne_thunder_strike2.ogg | https://freesound.org/people/danielmcadams/sounds/483684/ | https://cdn.freesound.org/previews/483/483684_7588344-hq.mp3 | danielmcadams | Creative Commons 0 | "Zoom H4n - Super Close Lightning Strike and Thunderstorm" (483684_7588344-hq.mp3; the uploader: a bolt hit just across the street) | 39a198e33d2ff05172d0b86691a9656a0e6a02cff7589832e310f5399648223b | added 2026-11-25: 19.10-33.10 s (the strike's crack at the start; the storm's rain bed under it), as strike1 with +22 dB, loudest 3 s -10.1 LUFS, true peak -0.3 dBFS | 14.0 s | 144729 |
+### Generated thunder (method B)
 
-Total size of the outputs: 1,505,146 bytes (about 1.44 MiB).
+| File | Seed | Distance | Micro-shock weight | Loudness (loudest 3 s) | True peak (Ogg) | Size |
+|---|---|---|---|---|---|---|
+| bne_thunder_strike1.ogg | 11 | 123 m | 0.300 | -13.1 LUFS | -1.14 dBTP | 63,917 B |
+| bne_thunder_strike2.ogg | 12 | 127 m | 0.300 | -13.2 LUFS | -1.12 dBTP | 65,486 B |
+| bne_thunder_strike3.ogg | 13 | 235 m | 0.350 | -13.1 LUFS | -1.17 dBTP | 64,292 B |
+| bne_thunder_strike4.ogg | 14 | 156 m | 0.138 | -13.2 LUFS | -1.15 dBTP | 63,839 B |
+| bne_thunder_strike5.ogg | 15 | 139 m | 0.216 | -13.2 LUFS | -1.10 dBTP | 63,601 B |
+| bne_thunder_strike6.ogg | 16 | 110 m | 0.113 | -13.1 LUFS | -1.13 dBTP | 63,973 B |
+| bne_thunder_close1.ogg | 21 | 900 m | 0.120 | -14.1 LUFS | -1.20 dBTP | 58,112 B |
+| bne_thunder_close2.ogg | 22 | 600 m | 0.120 | -14.1 LUFS | -1.09 dBTP | 62,734 B |
+| bne_thunder_close3.ogg | 23 | 871 m | 0.120 | -14.1 LUFS | -1.19 dBTP | 60,564 B |
+| bne_thunder_close4.ogg | 24 | 858 m | 0.120 | -14.1 LUFS | -1.30 dBTP | 58,763 B |
+| bne_thunder_close5.ogg | 25 | 1.26 km | 0.120 | -14.2 LUFS | -1.09 dBTP | 58,920 B |
+| bne_thunder_close6.ogg | 26 | 737 m | 0.120 | -14.1 LUFS | -1.20 dBTP | 59,398 B |
+| bne_thunder_mid1.ogg | 31 | 4.23 km | 0.000 | -18.2 LUFS | -1.45 dBTP | 44,498 B |
+| bne_thunder_mid2.ogg | 32 | 4.69 km | 0.000 | -18.0 LUFS | -1.65 dBTP | 42,880 B |
+| bne_thunder_mid3.ogg | 33 | 4.57 km | 0.000 | -18.0 LUFS | -1.74 dBTP | 43,226 B |
+| bne_thunder_mid4.ogg | 34 | 4.95 km | 0.000 | -18.1 LUFS | -1.24 dBTP | 43,643 B |
+| bne_thunder_mid5.ogg | 35 | 3.30 km | 0.000 | -18.1 LUFS | -1.14 dBTP | 48,031 B |
+| bne_thunder_mid6.ogg | 36 | 3.24 km | 0.000 | -18.1 LUFS | -1.17 dBTP | 50,189 B |
+| bne_thunder_far1.ogg | 41 | 11.51 km | 0.000 | -22.0 LUFS | -3.71 dBTP | 37,712 B |
+| bne_thunder_far2.ogg | 42 | 8.79 km | 0.000 | -22.0 LUFS | -2.13 dBTP | 41,629 B |
+| bne_thunder_far3.ogg | 43 | 7.84 km | 0.000 | -22.0 LUFS | -2.67 dBTP | 33,249 B |
+| bne_thunder_far4.ogg | 44 | 7.06 km | 0.000 | -22.0 LUFS | -5.08 dBTP | 45,104 B |
+| bne_thunder_far5.ogg | 45 | 11.24 km | 0.000 | -22.1 LUFS | -1.43 dBTP | 29,351 B |
+| bne_thunder_far6.ogg | 46 | 7.44 km | 0.000 | -22.0 LUFS | -2.71 dBTP | 38,920 B |
 
-## Notes for the mod
+### Recorded thunder (grain bank v3)
 
-- The three outdoor rain loops all come from one recordist with one microphone (Sennheiser ME66 on
-  a boom pole, Tascam HD-P2, rural Brazil, September 2013), so crossfading between them should not
-  change the sound's character. Medium and heavy come from different parts of the same take. Before
-  normalising they were about -54, -41 and -34 dBFS RMS, so the real rain was louder at each step.
-  The mod should restore part of that difference with its volume curve. They now all sit at about
-  -20 LUFS.
-- Thunder "far" variants are peak-normalised like the close ones; play them quieter (and/or
-  later after the flash) by distance.
-- bne_rain_roof is a real interior recording at medium intensity. There is no separate heavy roof
-  loop. If one is needed, use bne_rain_roof at a higher volume, or low-pass bne_rain_heavy
-  (about 1 kHz), which would then be a derived file.
+| File | Seed | Distance | Loudness (loudest 3 s) | True peak (Ogg) | Size |
+|---|---|---|---|---|---|
+| bne_thunder_rec_strike1.ogg | 1 | 183 m | -9.7 LUFS | -0.56 dBTP | 118,254 B |
+| bne_thunder_rec_strike2.ogg | 2 | 123 m | -9.7 LUFS | -0.50 dBTP | 126,745 B |
+| bne_thunder_rec_strike3.ogg | 3 | 81 m | -9.6 LUFS | -0.47 dBTP | 112,359 B |
+| bne_thunder_rec_strike4.ogg | 4 | 286 m | -9.7 LUFS | -0.48 dBTP | 124,711 B |
+| bne_thunder_rec_strike5.ogg | 5 | 253 m | -9.7 LUFS | -0.63 dBTP | 118,447 B |
+| bne_thunder_rec_strike6.ogg | 6 | 189 m | -9.6 LUFS | -0.68 dBTP | 120,702 B |
+| bne_thunder_rec_close1.ogg | 1 | 1.01 km | -14.1 LUFS | -0.94 dBTP | 110,612 B |
+| bne_thunder_rec_close2.ogg | 2 | 809 m | -14.2 LUFS | -0.76 dBTP | 122,360 B |
+| bne_thunder_rec_close3.ogg | 3 | 668 m | -14.0 LUFS | -0.97 dBTP | 110,542 B |
+| bne_thunder_rec_close4.ogg | 4 | 1.35 km | -14.1 LUFS | -0.91 dBTP | 115,310 B |
+| bne_thunder_rec_close5.ogg | 5 | 1.24 km | -14.0 LUFS | -0.84 dBTP | 110,325 B |
+| bne_thunder_rec_close6.ogg | 6 | 1.03 km | -14.0 LUFS | -1.37 dBTP | 109,577 B |
+| bne_thunder_rec_mid1.ogg | 1 | 3.78 km | -18.1 LUFS | -1.24 dBTP | 124,836 B |
+| bne_thunder_rec_mid2.ogg | 2 | 3.15 km | -18.0 LUFS | -2.15 dBTP | 117,039 B |
+| bne_thunder_rec_mid3.ogg | 3 | 2.71 km | -18.0 LUFS | -2.33 dBTP | 113,729 B |
+| bne_thunder_rec_mid4.ogg | 4 | 4.86 km | -18.0 LUFS | -0.95 dBTP | 122,952 B |
+| bne_thunder_rec_mid5.ogg | 5 | 4.51 km | -18.0 LUFS | -2.62 dBTP | 104,176 B |
+| bne_thunder_rec_mid6.ogg | 6 | 3.85 km | -18.1 LUFS | -1.25 dBTP | 117,382 B |
+| bne_thunder_rec_far1.ogg | 1 | 9.56 km | -22.0 LUFS | -3.45 dBTP | 80,381 B |
+| bne_thunder_rec_far2.ogg | 2 | 8.31 km | -22.0 LUFS | -3.44 dBTP | 92,065 B |
+| bne_thunder_rec_far3.ogg | 3 | 7.43 km | -22.0 LUFS | -2.30 dBTP | 94,942 B |
+| bne_thunder_rec_far4.ogg | 4 | 11.72 km | -22.0 LUFS | -3.13 dBTP | 57,013 B |
+| bne_thunder_rec_far5.ogg | 5 | 11.03 km | -22.0 LUFS | -4.54 dBTP | 60,098 B |
+| bne_thunder_rec_far6.ogg | 6 | 9.69 km | -22.0 LUFS | -4.94 dBTP | 65,995 B |
 
-## Credit lines (for CREDITS.md; CC0 needs no credit, given anyway)
+### Rain
 
-- Thunder clap: "Thunder Clap" by DaniloSFX, https://freesound.org/s/672776/ (CC0)
-- Thunder clap: "Thunder Clap OWB KY 441x16.wav" by Dave Welsh, https://freesound.org/s/194364/ (CC0)
-- Thunder strike: "Heavy Thunder Strike - no Rain - QUADRO.wav" by BlueDelta, https://freesound.org/s/446753/ (CC0)
-- Distant thunder: "230405 Thunder DRY rolling distant low rumbles" and "230823 Thunder, dry distant rolling" by TRP, https://freesound.org/s/717845/ and https://freesound.org/s/717890/ (CC0)
-- Rain: "Rain light 2 (rural)" and "Rain heavy 1 (rural)" by jmbphilmes, https://freesound.org/s/200273/ and https://freesound.org/s/200270/ (CC0)
-- Rain in car: "Ambiance_Rain_Inside_Car_Close_Roof_Loop_Stereo.wav" by Nox_Sound, https://freesound.org/s/535870/ (CC0)
+Method B (`rainb-modset`, seed 1), 30 s seamless loops. The true peak is measured on the decoded Ogg.
 
-## Revision (2026-11-25, after the user listened)
+| File | Kind | What it is | Loudness | True peak (Ogg) | Size |
+|---|---|---|---|---|---|
+| bne_rain_light.ogg | light | light rain 0.7 mm/h: a sparse patter of distinct drops | -30.2 LUFS | -2.13 dBTP | 282,210 B |
+| bne_rain_medium.ogg | medium | 5 mm/h: steady patter and wash | -24.2 LUFS | -4.30 dBTP | 268,177 B |
+| bne_rain_heavy.ogg | heavy | 35 mm/h: a dense roar of big drops, standing water, gutters | -17.2 LUFS | -1.62 dBTP | 272,526 B |
+| bne_rain_roof_light.ogg | roof_light | the car's panels from outside near the car, light | -30.0 LUFS | -2.00 dBTP | 285,631 B |
+| bne_rain_roof.ogg | roof | the panels from outside, medium | -24.2 LUFS | -2.75 dBTP | 277,682 B |
+| bne_rain_roof_heavy.ogg | roof_heavy | the panels from outside, heavy | -17.2 LUFS | -1.38 dBTP | 277,943 B |
+| bne_rain_roof_cabin_light.ogg | cabin_light | the roof inside the car (its modes and thumps, the headliner's two 680 Hz low-passes, the windscreen, the outside through the body), light, 6 dB under the outside (rainb.rs CABIN_GAIN_DB) | -36.0 LUFS | -12.31 dBTP | 340,155 B |
+| bne_rain_roof_cabin.ogg | cabin | the roof inside the car, medium | -30.1 LUFS | -10.03 dBTP | 308,311 B |
+| bne_rain_roof_cabin_heavy.ogg | cabin_heavy | the roof inside the car, heavy | -23.2 LUFS | -6.37 dBTP | 283,565 B |
+| bne_rain_muffled.ogg | muffled_closed | enclosed shelters (tunnels, closed bridges, buildings): the medium rain through two 900 Hz low-passes | -25.9 LUFS | -9.92 dBTP | 144,514 B |
+| bne_rain_muffled_open.ogg | muffled | open shelters (bridges, overpasses): a 12 m deck overhead, the open sides, its edges dripping | -25.9 LUFS | -10.70 dBTP | 274,771 B |
 
-- **bne_rain_light.ogg** replaced: the first version (jmbphilmes "Rain light 2 (rural)", freesound 200273, CC0) is a
-  very quiet take (-54 dBFS RMS) that needed +33 dB, and close drops on something nearby sounded like rain on a tarp or
-  a roof. Now the same recordist's "Rain light 1 (rural)" (freesound 200271, licence "Creative Commons 0" checked on its
-  page 2026-11-25; same microphone, place and day as the medium and heavy loops), a steady 20-42 s stretch (-46 dBFS RMS,
-  crest factor ~7, no near transients). Row above.
-- **Thunder by loudness per class** (the first versions were all peak-normalised, so the dry distant roll mid2 sounded
-  quieter than the far rumbles): each file cut again from its original as in the table (same times, fades, 25 Hz
-  high-pass, mono), its loudest 3 s (EBU R128 short-term) set to the class's level, close -14, mid -18, far -22 LUFS,
-  then a -1 dBFS limiter (2 ms attack, 80 ms release), Ogg Vorbis q4. Gains: close1 +1.9, close2 -1.4, mid1 -0.2, mid2
-  -0.3, far1 -0.3, far2 +1.4 dB (relative to the cut, before the limiter). The game still scales each thunder by its
-  distance (storm.lua thunderFor). Sizes now: close1 115,725, close2 125,014, mid1 103,937, mid2 107,854, far1 99,610,
-  far2 108,004 bytes. The first versions are kept outside the repo (~/bnge-tests/weather/b/audio/v1).
+In total 3.0 MB, against 1.05 MB for the 7 procedural loops before: +2.0 MB. Compared with the real recordings
+(compare corpus), method B scores within the real takes' own range outdoors and under shelter. The cabin is
+muffled and quieter than the real in-car takes by the user's choice (2026-11-26: "Make cabin more muffled and quieter").
 
-- **bne_thunder_mid2.ogg** replaced (the user wanted a different roll with more body, not the same one louder): Gerent's
-  "thunder-rolling" (freesound 558748, "Creative Commons 0" on its page, checked 2026-11-25). Two other candidates were
-  made the same way for the user to compare, outside the repo (~/bnge-tests/weather/b/audio/candidates): sarson
-  "Distant Thunder.wav" (freesound 195522, CC0, sha256 8ed08374445e220b14f32b671cc4fa7814bdc261d1ba2ec7991016c78116d179,
-  4.0-19.0 s) and rockyistanbul "Thunder rolls.mp3" (freesound 640249, CC0, sha256
-  ee9f566c3ed4376b5bbb65933661d8a953b378214d12521eb122dc5982ab037c, 33.0-48.0 s).
-- **bne_thunder_strike1/2.ogg** added: the "super close" class (storm.lua STRIKE_M: strikes within 300 m, no delay
-  after the flash, full volume, the rain bed ducked). Recordings made by a strike (rows above). The user's target was -9
-  to -10 LUFS on the loudest 3 s: these recordings are one huge transient each, so they need ~22 dB into the limiter to
-  get there; strike2 reaches -10.1, strike1 stops at -11.7 (more would flatten its crack). Two more candidates for the
-  user, outside the repo (~/bnge-tests/weather/b/audio/candidates): csengeri "Close lightning strike 2018 07 07"
-  (freesound 434359, CC0, sha256 1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02, 2.0-16.0 s, -9.7
-  LUFS) and TRP "210914 Thunder, crack, pretty close" (freesound 616992, CC0, sha256
-  05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008, 0.98-14.98 s, -9.3 LUFS).
-- Every new original was checked with `file` and `ffprobe` (MPEG audio, nothing else) and its sha256 recorded.
 
-## Derived in the mod
+### Recorded rain, wind, drips and hail (the recorded mix, 2026-11-26)
 
-- bne_rain_muffled.ogg: bne_rain_medium.ogg (jmbphilmes, CC0) through two 900 Hz low-pass filters and +4 dB
-  (`ffmpeg -af "lowpass=f=900,lowpass=f=900,volume=1.6" -c:a libvorbis -q:a 3 -ac 1`): the rain heard from under a
-  roof or deck (ambience.lua RAIN_MUFFLED). 20 s loop, 97,920 bytes.
+Rendered by `weathersynth tex-set --bank tex_bank.bin --seed 1 --ogg` (texmix.rs) from the texture bank
+(`texbank-build`, texbuild.rs) cut from the CC0 originals listed in CREDITS.md; Vorbis q4. 30 s loops (wind and drips
+60 s), seamless (the wrap is a crossfade like every other join), each at its class's loudness (the rain at the
+generated loops' levels, so the Rain sound switch changes nothing in loudness). The Generated wind and the drips need
+no recordings.
+
+| File | What | Loudness | True peak (Ogg) | Size |
+|---|---|---|---|---|
+| bne_rain_rec_light.ogg | light rain (sparse close drops: the user's light B) | -30.4 LUFS | -1.6 dBTP | 310,563 B |
+| bne_rain_rec_medium.ogg | medium rain | -24.4 LUFS | -3.5 dBTP | 284,641 B |
+| bne_rain_rec_heavy.ogg | heavy rain | -17.4 LUFS | -1.5 dBTP | 286,244 B |
+| bne_rain_rec_roof_light.ogg | the car roof from outside near the car, light | -30.2 LUFS | -7.1 dBTP | 285,808 B |
+| bne_rain_rec_roof.ogg | the roof from outside, medium | -24.3 LUFS | -4.5 dBTP | 288,924 B |
+| bne_rain_rec_roof_heavy.ogg | the roof from outside, heavy | -17.4 LUFS | -1.2 dBTP | 284,087 B |
+| bne_rain_rec_roof_cabin_light.ogg | the roof inside the car (cabin filter), light | -30.1 LUFS | -6.6 dBTP | 148,443 B |
+| bne_rain_rec_roof_cabin.ogg | the roof inside, medium | -24.2 LUFS | -6.7 dBTP | 148,910 B |
+| bne_rain_rec_roof_cabin_heavy.ogg | the roof inside, heavy | -17.3 LUFS | -1.0 dBTP | 150,353 B |
+| bne_rain_rec_muffled.ogg | muffled A: tunnels, closed bridges, buildings (the medium rain through two 900 Hz low-passes) | -26.0 LUFS | -9.3 dBTP | 144,049 B |
+| bne_rain_rec_muffled_open.ogg | muffled B: open bridges and overpasses (under-bridge recordings) | -26.1 LUFS | -5.7 dBTP | 288,288 B |
+| bne_wind_light.ogg | recorded wind, light (~3 m/s) | -36.1 LUFS | -17.9 dBTP | 523,311 B |
+| bne_wind_moderate.ogg | recorded wind, moderate (~8 m/s) | -30.2 LUFS | -9.7 dBTP | 533,764 B |
+| bne_wind_strong.ogg | recorded wind, strong (~15 m/s) | -24.1 LUFS | -3.4 dBTP | 510,743 B |
+| bne_hail.ogg | hail: ice hits (7 / s, a third bouncing) over a little rain, levelled by its peak | -26.4 LUFS | -3.7 dBTP | 305,368 B |
+| bne_wind_gen_light.ogg | generated wind, light | -36.2 LUFS | -15.3 dBTP | 311,761 B |
+| bne_wind_gen_moderate.ogg | generated wind, moderate | -30.2 LUFS | -10.1 dBTP | 335,961 B |
+| bne_wind_gen_strong.ogg | generated wind, strong | -24.2 LUFS | -4.3 dBTP | 349,180 B |
+| bne_drips_1.ogg | drips after rain, 0.8 drops / s (generated) | -36.2 LUFS | -2.7 dBTP | 35,051 B |
+| bne_drips_2.ogg | drips, 0.3 / s | -37.3 LUFS | -1.7 dBTP | 18,197 B |
+| bne_drips_3.ogg | drips, 0.1 / s | -37.8 LUFS | -4.5 dBTP | 13,288 B |
+
+- **Thunder:** the loudness is that of the loudest 3 s (EBU R128 short-term). Each file starts where the sound
+  becomes audible; the game delays it by the strike's distance after the flash.
+- **Rain:** 20 s seamless loops (written round a circular buffer), integrated loudness over the loop played twice.
+  The three intensities are stepped on purpose: light -30, medium -24, heavy -17 LUFS. The mod's own volume curve
+  (weather.lua `RAIN_CURVE` × `RAIN_GAIN`) adds about 7.5 dB on top, light to heavy.
+
+## How they are made (short; details in native/weathersynth/src)
+
+- **Generated thunder (method B):**
+  - Channel: a random tortuous lightning channel (macro segments, branches, in-cloud channels), cut into pieces.
+  - Source: each piece radiates an N-wave by its distance, grouped in bins by distance, N-wave length and terrain
+    shadow, each bin through ISO 9613-1 air absorption as a minimum-phase filter.
+  - Then: the class's corpus EQ (median of screened real recordings), micro-shocks for strike / close, three
+    compressors, sparse terrain echoes, a 28 Hz high-pass, a true-peak limiter to the class's loudness, and a quiet
+    tear 22 dB under the crack for strikes within 600 m.
+- **Recorded thunder (grain bank v3):** bodies, cracks, claps and rolls cut from the recordings, placed along a random
+  lightning channel's side-on runs, filtered only for the distance beyond each recording's own, with a rumble-balance
+  EQ from 0.6 s after the first arrival.
+- **Rain:**
+  - Drop sizes: Joss drizzle (light), Marshall-Palmer (medium) and Joss thunderstorm (heavy), at terminal speed.
+  - Impacts: amplitude ~ D^1.5·v^2.5 (Guo & Ffowcs Williams 1991).
+  - Surfaces: road, puddles (Minnaert bubbles, van den Doel 2005), grass, leaves and metal, in the tone the user
+    picked ("D": fewer and lower bubbles, splash an octave lower with a 200-800 Hz thud, -4 dB above 4 kHz, leaves
+    and drips a fifth lower, damped metal).
+  - The wash: the drops' mean spectrum at their physical power (after Liu, Cheng & Tong 2019), with ground-effect
+    attenuation on the far rings.
+  - Extras: drip points and canopy drips, near objects, standing water and runoff, depending on intensity.
+  - Car roof: the drops drive the roof panel's plate modes and the windscreen's, heard through the headliner.
+- No third-party audio is used in the rain or the Generated thunder.
+
+## Credits
+
+The Recorded thunder set uses CC0 recordings (no attribution needed; we credit them anyway): CREDITS.md
+"Weather sounds". The rain and the Generated thunder need no credits.

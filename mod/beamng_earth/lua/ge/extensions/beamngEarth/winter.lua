@@ -1,7 +1,8 @@
 -- Winter grip (winter W1, the server's BNE_WINTER; ~/bnge-tests/winterplan/PLAN.md section 4): the server's snow kernel
 -- (server/snow.py, native snow.rs) sends a 'snowstate' per UTC hour / place; here its road and ground conditions become
--- live ground-model values. Loaded by core.lua only when the first snowstate arrives: with winter off nothing here
--- runs, and no ground model is touched.
+-- live ground-model values. Loaded by core.lua when the first snowstate arrives, or by wetlook.lua
+-- when the weather shown wets the road (setShown: the user, 2026-11-26, "grip should follow the weather shown in game",
+-- yes): with neither, nothing here runs, and no ground model is touched.
 --
 -- Ground models are retuned by NAME (W0 probes P1/P5: be:setGroundModel reaches built terrain and mesh collision, no
 -- reloadCollision, ~1 us a call). Several names share a collision id, and aliases share one cdata in
@@ -83,6 +84,7 @@ M.LABEL = { dry = 'Dry road', damp = 'Damp road', wet = 'Wet road', salt_wet = '
   loose = 'Loose snow', packed = 'Packed snow', packed_icy = 'Icy packed snow' }
 
 local state = nil            -- the last snowstate
+local shown = nil            -- the weather shown's road condition (wetlook.lua setShown): 'damp' / 'wet' or nil
 local forced = nil           -- M.force's condition (calibration / the presets on the mod side), nil: the state's
 local applied = {}           -- name -> signature of the values set ('stock' after a restore)
 local keep = {}              -- name -> the ground_model() handed to the engine (kept alive)
@@ -167,6 +169,7 @@ local function setModel(gms, name, v)
   if not h or not h.cdata then return false end
   local s = sig(v)
   if applied[name] == s then return false end
+  if not v and applied[name] == nil then return false end    -- (never set by us: its stock values stand)
   local ok = pcall(function()
     if not v then
       be:setGroundModel(name, h.cdata)
@@ -201,14 +204,42 @@ local function envModels()
   return env and env.groundModels or nil
 end
 
+-- The weather shown (wetlook.lua: its own model of the rain the weather shows; the setting 'Wet roads') and the real
+-- road (the snowstate): the wetter of the two, so a preset storm over a dry real road is wet, and a real wet road
+-- under a clear sky stays wet. Snow and ice (anything not a wet condition) keep priority over a shown wet.
+M.WET_RANK = { dry = 0, damp = 1, wet = 2, salt_wet = 3 }
+
+-- Pure: road row (or nil: no snowstate) with the shown condition (nil, 'damp' or 'wet') taken where it is wetter; a
+-- new row when there is none (no temperature: the readout names no degrees).
+function M.mergeShown(row, cond)
+  local rk = cond and M.WET_RANK[cond]
+  if not rk or rk == 0 then return row end
+  if type(row) ~= 'table' then return { cond, 0, nil, cond, 0, 0, 1 } end
+  local have = M.WET_RANK[row[1]]
+  if not have or have >= rk then return row end
+  local out = {}
+  for i = 1, 7 do out[i] = row[i] end
+  out[1] = cond
+  local edge = M.WET_RANK[row[4]]
+  if edge and edge < rk then out[4] = cond end
+  return out
+end
+
 -- The road row the slots follow now: { road row, bridge row } of the class under the car, or the forced condition's.
 local function rows()
   if forced then
     local r = { forced, 30, -5, forced, 30, 0, 1 }
     return r, r
   end
-  if not state or type(state.roads) ~= 'table' then return nil, nil end
-  return state.roads[cls + 1], type(state.bridges) == 'table' and state.bridges[cls + 1] or nil
+  local road, deck = nil, nil
+  if state and type(state.roads) == 'table' then
+    road, deck = state.roads[cls + 1], type(state.bridges) == 'table' and state.bridges[cls + 1] or nil
+  end
+  if shown then
+    road = M.mergeShown(road, shown)
+    deck = deck and M.mergeShown(deck, shown) or nil
+  end
+  return road, deck
 end
 
 -- Apply the current targets to every name (only the changed ones reach the engine).
@@ -263,7 +294,8 @@ function M.composeReadout(road, deck, ground)
   local snowy = type(ground) == 'table' and (tonumber(ground[2]) or 0) >= 1
   local deckBad = type(deck) == 'table' and deck[1] ~= cond and (M.SPEED[deck[1]] or 1) < (M.SPEED[cond] or 1)
   if cond == 'dry' and not snowy and not deckBad then return '' end
-  local s = (M.LABEL[cond] or cond) .. ', ' .. tempText(tonumber(road[3]) or 0)
+  local tc = tonumber(road[3])
+  local s = (M.LABEL[cond] or cond) .. (tc and ', ' .. tempText(tc) or '')
   if deckBad then s = s .. ', bridges: ' .. string.lower(M.LABEL[deck[1]] or deck[1]) end
   return s
 end
@@ -287,6 +319,10 @@ M.AI_MARGIN = 1.0            -- the share of the grip the AI is told it has (pla
                              -- traffic at a 3.6 mph median, 1.0 at 9.2 mph with the same crashes, 4 vs 5 in 6 min)
 M.AI_AGGRESSION = 0.25       -- traffic base aggression on a slippery road (stock 0.35)
 M.AI_MARGINS = true          -- (false: the AI left as stock: the soak's comparison)
+-- The planning-horizon patch and its fallback cap (below) only below this share of the dry grip: the stock plan floor
+-- assumes 0.2 g of braking, which a wet road (0.83) or a salted wet one (0.75) gives four times over; snow, slush,
+-- frost and ice do not. A wet road (common now: it follows the weather shown) gets the margins alone.
+M.AI_PATCH_GRIP = 0.5
 function M.aiParamsFor(road)
   if not M.AI_MARGINS then return nil end
   local v = M.roadValues(road, 0)
@@ -294,7 +330,7 @@ function M.aiParamsFor(road)
   local grip = math.min(1, v[1] / M.AI_STOCK_STATIC)
   if grip >= 0.9 then return nil end
   return { staticFrictionCoefMult = 0.95 * grip * M.AI_MARGIN,
-    lookAheadKv = math.min(1.8, 0.6 / math.sqrt(math.max(grip, 0.01))) }
+    lookAheadKv = math.min(1.8, 0.6 / math.sqrt(math.max(grip, 0.01))), patch = grip < M.AI_PATCH_GRIP }
 end
 function M.aiParams() return M.aiParamsFor((rows())) end
 
@@ -381,14 +417,14 @@ function M.aiPatchedCar(id) return aiPatched[id] end
 -- The fallback speed cap (m/s) for AI car id on the current road, or nil (no slippery road, or its patch confirmed).
 function M.aiSpeedCap(id)
   local p = M.aiParams()
-  if not p or aiPatched[id] == true then return nil end
+  if not p or not p.patch or aiPatched[id] == true then return nil end
   return math.sqrt(2 * 9.81 * p.staticFrictionCoefMult * M.AI_PLAN_MIN_M)
 end
 
 local function refreshReadout()
   local road, deck = rows()
   readoutText = M.composeReadout(road, deck, state and state.ground)
-  if (state or forced) and M._aggression then M._aggression(M.AI_MARGINS and M.speedFactor() < 0.9) end
+  if (state or forced or shown) and M._aggression then M._aggression(M.AI_MARGINS and M.speedFactor() < 0.9) end
 end
 
 -- The other modules' hooks (only once winter runs): the AI's speed factor, the status bar's readout.
@@ -422,6 +458,12 @@ function M.onState(msg)
   hook(true)
   M.apply()
   refreshReadout()
+  -- winter W3 (the server's snowroad.py): the road skins' winter materials, loaded with the first look
+  if type(msg.look) == 'table' then
+    M._road = M._road or require('beamngEarth/winterroad')
+    local ok, err = pcall(M._road.onState, msg)
+    if not ok and log then log('E', 'beamngEarth.winter', 'winterroad: ' .. tostring(err)) end
+  end
 end
 
 -- core.lua: a new server hello. Its snowstate follows the first pose; none within STALE_S (a server without winter):
@@ -439,6 +481,24 @@ function M.force(cond)
   refreshReadout()
   return forced
 end
+
+-- wetlook.lua: the weather shown's road condition (nil dry, 'damp', 'wet'), at its changes only (its check every
+-- CHECK_S; nil with the weather Off or the setting off). The ground models change here only when that changes.
+function M.setShown(cond)
+  cond = (cond == 'damp' or cond == 'wet') and cond or nil
+  if cond == shown then return false end
+  shown = cond
+  if shown or state or forced then
+    hook(true)
+    M.apply()
+  else
+    hook(false)
+    M.restore()             -- (every name back to stock: nothing of ours left, the check idles)
+  end
+  refreshReadout()
+  return true
+end
+function M.shown() return shown end
 
 local function roadClassUnderCar()
   local ng = package.loaded['beamngEarth/navgraph']
@@ -459,6 +519,11 @@ function M.update(dt)
   timer = M.INTERVAL_S
   if pendingSince and clock - pendingSince > M.STALE_S then
     pendingSince, state = nil, nil
+    if shown and not forced then
+      M.apply()             -- (the weather shown's wet road stays; the snowstate's slots go)
+      refreshReadout()
+      return
+    end
     M.restore()
     readoutText = ''
     if not forced then hook(false) end
@@ -470,23 +535,26 @@ function M.update(dt)
     gmTable, gmProbe = gms, gms and gms.ASPHALT_OLD and gms.ASPHALT_OLD.cdata or nil
     applied, keep = {}, {}
   end
-  local c = roadClassUnderCar()
+  if not (state or forced or shown or next(applied) or M._road) then return end   -- (loaded, nothing to do: dry)
+  local c = state and roadClassUnderCar() or nil     -- (the shown weather's row is the same on every class)
   if c and c ~= cls then
     if c ~= clsCand then clsCand, clsSince = c, clock end
     if clock - clsSince >= M.CLASS_DWELL_S then cls, clsCand = c, nil end
   elseif c == cls then
     clsCand = nil
   end
-  if state or forced then
+  if state or forced or shown then
     M.apply()
     refreshReadout()
   end
+  if M._road then pcall(M._road.check) end     -- (winter W3: the road materials' values still ours)
 end
 
 function M.reset()
+  if M._road then M._road.reset() end
   M.restore()
   hook(false)
-  state, forced, pendingSince, readoutText = nil, nil, nil, ''
+  state, forced, shown, pendingSince, readoutText = nil, nil, nil, nil, ''
   gmTable, gmProbe, cls, clsCand = nil, nil, 2, nil
 end
 

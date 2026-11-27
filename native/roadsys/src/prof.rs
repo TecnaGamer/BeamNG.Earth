@@ -675,17 +675,20 @@ fn half_at(st: &crate::net::Stroke, s: f64, offs: &mut Vec<f64>) -> f64 {
 /// candidates by stroke index.
 pub fn twin_pairs(net: &Net, h: &[f64], nk: &[usize], want: &dyn Fn(usize) -> bool) -> Vec<(usize, usize, usize, f64)> {
     let ns = net.strokes.len();
+    // (T1, Opts.tunnels: twin tunnels too: two carriageways' tubes side by side, each floor solved alone under the
+    // streets' floors over them, came 2 m apart, each tube's walls through the other's lanes: Moscow's Garden Ring)
+    let twin = |k: u8| k == SUP_STRUCT || (net.opts.tunnels && k == SUP_TUNNEL);
     let mut offs = Vec::new();
     let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
     let mut has: Vec<bool> = vec![false; ns];
     for si in 0..ns {
         if !want(si) || nk[si] == 0 { continue; }
         let st = &net.strokes[si];
-        if !st.sup.iter().any(|u| u.kind == SUP_STRUCT) { continue; }
+        if !st.sup.iter().any(|u| twin(u.kind)) { continue; }
         has[si] = true;
         for i in 0..nk[si] {
             let s = (i as f64 * h[si]).min(st.len());
-            if st.support_at(s).kind != SUP_STRUCT { continue; }
+            if !twin(st.support_at(s).kind) { continue; }
             let p = st.line.at(s).0;
             let key = ((p[0] / TWIN_CELL_M).floor() as i64, (p[1] / TWIN_CELL_M).floor() as i64);
             let v = grid.entry(key).or_default();
@@ -701,7 +704,8 @@ pub fn twin_pairs(net: &Net, h: &[f64], nk: &[usize], want: &dyn Fn(usize) -> bo
         let st = &net.strokes[a];
         for i in 0..nk[a] {
             let s = (i as f64 * h[a]).min(st.len());
-            if st.support_at(s).kind != SUP_STRUCT { continue; }
+            let ka = st.support_at(s).kind;
+            if !twin(ka) { continue; }
             let (p, t) = st.line.at(s);
             let (cx, cy) = ((p[0] / TWIN_CELL_M).floor() as i64, (p[1] / TWIN_CELL_M).floor() as i64);
             cand.clear();
@@ -715,7 +719,7 @@ pub fn twin_pairs(net: &Net, h: &[f64], nk: &[usize], want: &dyn Fn(usize) -> bo
                 let sb_ = &net.strokes[b];
                 let (sb, off) = sb_.line.project(p, 0.0, sb_.len());
                 let ub = sb_.support_at(sb);
-                if ub.kind != SUP_STRUCT { continue; }
+                if ub.kind != ka { continue; }
                 let tb = sb_.line.at(sb).1;
                 if absf(dot(t, tb)) < TWIN_COS { continue; }
                 let hb = half_at(sb_, sb, &mut offs);
@@ -1510,5 +1514,22 @@ mod tests {
         let (a, b, n) = solve_pair(20.0);
         assert_eq!(n, 0);
         assert!(absf(a - b) > 1.0, "{a} {b}");
+    }
+
+    /// (T1, Opts.tunnels) Twin tunnels side by side take one floor (their tubes overlapped where their floors parted,
+    /// Moscow's Garden Ring); without the tunnel record they are not paired (dev as before).
+    #[test]
+    fn twin_tunnels_are_paired_only_with_the_record() {
+        let pair = |tunnels: bool| {
+            let mut a = seg("p", &[[-600.0, 4.5], [600.0, 4.5]], None);
+            let mut b = seg("q", &[[600.0, -4.5], [-600.0, -4.5]], None);
+            for s in [&mut a, &mut b] { s.tunnel = vec![(0.3, 0.7)]; s.level = vec![(0.3, 0.7, -1.0)]; }
+            let place = crate::io::Place { segs: vec![a, b], ..Default::default() };
+            let net = crate::net::build_opts(&place, &[0, 1], crate::net::Opts { tunnels, ..Default::default() });
+            let (h, nk, _) = knot_points(&net, Some(&vec![false; net.strokes.len()]));
+            twin_pairs(&net, &h, &nk, &|_| true).len()
+        };
+        assert!(pair(true) > 10);
+        assert_eq!(pair(false), 0);
     }
 }

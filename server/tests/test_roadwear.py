@@ -505,5 +505,78 @@ class SurfaceV2Test(unittest.TestCase):
         self.assertGreaterEqual(float(dz[ok].min()), 0.002 - 1e-6)
 
 
+class PuddleTest(unittest.TestCase):
+    """Puddles (roadwear.puddle_chunks, earthfast.puddle_plan): the sag of a road's profile, kerbs' gutters, worn
+    wheel paths; a chunk of quads marked "puddle" that the road mesh leaves out and the puddle mesh alone draws."""
+
+    @staticmethod
+    def vee(length=400.0, grade=0.01):
+        p = line(0, 128, length, 128, step=2.0)
+        p[:, 2] = np.abs(p[:, 0] - length / 2) * grade
+        return p
+
+    def test_sag_kerbs_and_the_meshes(self):
+        rd = [("p", spec(cls="residential", width=7.0, urban=True), self.vee(), 0.0)]
+        ch = roadwear.puddle_chunks(rd, {}, (0.0, 0.0, 400.0, 256.0), lambda s: True)
+        self.assertEqual(len(ch), 1)
+        c = ch[0]
+        self.assertTrue(c["puddle"] and c["wear"] and c["quads"] and c["m"] == roadwear.PUDDLE_MATERIAL)
+        q = np.asarray(c["poly"], np.float64).reshape(-1, 4, 3)
+        centre = q.mean(axis=1)
+        self.assertTrue(np.any(np.abs(centre[:, 0] - 200.0) < 2.0), "a puddle at the sag")
+        self.assertTrue(np.all(np.abs(centre[:, 1] - 128.0) <= 3.5), "on the carriageway")
+        self.assertEqual(len(c["uvq"]), len(c["poly"]))
+        flat = lambda la, lo: np.zeros(np.shape(la))     # noqa: E731
+        road = roadmesh.build(FRAME, ch, flat, (0.0, 0.0, 0.0))
+        self.assertIsNone(road, "the road mesh leaves them out")
+        pm = roadmesh.build(FRAME, ch, flat, (0.0, 0.0, 0.0), puddles=True)
+        self.assertEqual(len(pm[1]), 2 * len(q))
+        self.assertEqual(pm[3], [roadwear.PUDDLE_MATERIAL])
+        self.assertEqual(roadmesh.layer_of(c), "puddle")       # (its lift: over the paint and the wear)
+        # no kerbs: no gutter puddles (fewer); a flat road: no sag
+        fewer = roadwear.puddle_chunks(rd, {}, (0.0, 0.0, 400.0, 256.0), lambda s: False)
+        self.assertLess(len(fewer[0]["poly"]) if fewer else 0, len(c["poly"]))
+        rd_flat = [("p", spec(cls="residential", width=7.0, urban=True), line(0, 128, 400, 128, step=2.0), 0.0)]
+        for cf in roadwear.puddle_chunks(rd_flat, {}, (0.0, 0.0, 400.0, 256.0), lambda s: False):
+            qf = np.asarray(cf["poly"], np.float64).reshape(-1, 4, 3).mean(axis=1)
+            self.assertFalse(np.any((np.abs(qf[:, 0] - 200.0) < 2.0) & (np.abs(qf[:, 1] - 128.0) > 1.5)))
+
+    def test_spots_for_the_aquaplaning(self):
+        # every puddle quad a spot (its centre, axis, half sizes, cell), its height the puddle mesh's there; a mesh
+        # cut short (the tile's clip) keeps only the spots it still has vertices in
+        rd = [("p", spec(cls="residential", width=7.0, urban=True), self.vee(), 0.0)]
+        ch = roadwear.puddle_chunks(rd, {}, (0.0, 0.0, 400.0, 256.0), lambda s: True)
+        q = np.asarray(ch[0]["poly"], np.float64).reshape(-1, 4, 3)
+        flat = lambda la, lo: np.full(np.shape(la), 2.0)     # noqa: E731
+        origin = (100.0, 50.0, 0.0)
+        pm = roadmesh.build(FRAME, ch, flat, origin, puddles=True)
+        s = roadwear.puddle_spots(ch, pm, origin)
+        self.assertEqual(len(s) % 8, 0)
+        S = np.asarray(s, np.float64).reshape(-1, 8)
+        self.assertEqual(len(S), len(q))
+        centre = q.mean(axis=1)
+        for row, c in zip(S, centre):
+            self.assertAlmostEqual(row[0], c[0] - origin[0], places=2)
+            self.assertAlmostEqual(row[1], c[1] - origin[1], places=2)
+            self.assertAlmostEqual(row[3] ** 2 + row[4] ** 2, 1.0, places=3)
+        self.assertTrue(np.all(np.abs(S[:, 2] - 2.0) < 0.05), "the mesh's height (the ground + its lift)")
+        self.assertTrue(np.all((S[:, 5] > 0.5) & (S[:, 6] > 0.1) & (S[:, 5] >= S[:, 6] - 1e-9)))
+        self.assertTrue(set(int(x) for x in S[:, 7]) <= set(range(16)))
+        self.assertTrue(all(isinstance(x, int) for x in s[7::8]))
+        self.assertEqual(roadwear.puddle_spots(ch, pm, origin), s, "the same every time")
+        half = (pm[0][pm[0][:, 0] + origin[0] < 200.0],) + tuple(pm[1:])
+        self.assertLess(len(roadwear.puddle_spots(ch, half, origin)), len(s))
+        self.assertEqual(roadwear.puddle_spots([], pm, origin), [])
+
+    def test_deterministic_and_switch(self):
+        rd = [("p", spec(cls="residential", width=7.0, urban=True), self.vee(), 0.0)]
+        a = roadwear.puddle_chunks(rd, {}, (0.0, 0.0, 400.0, 256.0), lambda s: True)
+        b = roadwear.puddle_chunks(rd, {}, (0.0, 0.0, 400.0, 256.0), lambda s: True)
+        self.assertEqual(a, b)
+        from unittest import mock
+        with mock.patch.object(roadwear, "PUDDLES", False):
+            self.assertEqual(roadwear.puddle_chunks(rd, {}, (0.0, 0.0, 400.0, 256.0), lambda s: True), [])
+
+
 if __name__ == "__main__":
     unittest.main()
