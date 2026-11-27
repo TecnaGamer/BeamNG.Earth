@@ -4,6 +4,9 @@ What changed in each release of BeamNG.Earth, newest first.
 
 ## Unreleased
 
+### Fixed
+- **Rumble-strip timing at speed.** Wheel contact samples are now taken about every 20 ms, and the trigger interpolates line crossings between samples. Fast crossings are no longer missed or delayed by several metres between 10 Hz checks.
+
 ### Added
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light

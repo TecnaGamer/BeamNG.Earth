@@ -2,7 +2,7 @@
 -- Loaded on demand by beamngEarth/rumble.lua; it does not inspect traffic vehicles or apply physics forces.
 local M = {}
 
-M.SAMPLE_S = 0.10
+M.SAMPLE_S = 0.02
 M.MAX_WHEELS = 16
 
 local enabled = false

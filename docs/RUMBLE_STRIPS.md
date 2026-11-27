@@ -6,6 +6,7 @@ BeamNG.Earth plays a recorded tyre rumble while a player's tyre touches a likely
 
 - The field recording is louder than the previous generated cue, positioned in 3D at each tyre that reaches a candidate line, and looped for as long as the tyre remains there.
 - Volume fades in on contact and fades out after leaving. A narrow contact band plus a wider release band prevents flicker at line edges.
+- Wheel positions are sampled about every 20 ms. If a tyre crosses a candidate line between samples, the crossing point is interpolated and the sound is held briefly so the fade can be heard at highway speed.
 - The game-side graph check uses wheel contact positions sampled by a small player-vehicle Lua extension; no AI or other vehicles are scanned. The contact point is estimated from each wheel node and radius.
 - The trigger does not modify tyres, suspension, road collision or vehicle forces. It is an audio cue only.
 - Controller vibration is not included. BeamNG exposes player-configured gamepad vibration/force feedback, but no supported Lua call was found for injecting a brief mod-triggered haptic pulse. The setting therefore does not claim to provide controller vibration.

@@ -17,4 +17,17 @@ T.check(not innerLaneDivider.centre and not innerLaneDivider.edge, 'same-directi
 local freewayOuterEdge = R.hitZones(5.4, 6.0, true)
 T.check(freewayOuterEdge.edge, 'outer freeway line: candidate')
 
+local centreCrossing, centreFraction = R.crossedLine(-1.2, 0.8, 3.8, false)
+T.check(centreCrossing == 'centre', 'swept crossing: catches centerline between samples')
+T.near(centreFraction, 0.6, 1e-6, 'swept crossing: centerline interpolation fraction')
+T.check(R.crossedLine(-1.2, 0.8, 3.8, true) == nil, 'swept crossing: divided carriageway ignores median')
+local edgeCrossing, edgeFraction = R.crossedLine(3.0, 4.4, 3.8, false)
+T.check(edgeCrossing == 'edge', 'swept crossing: catches outer line between samples')
+T.near(edgeFraction, 5 / 7, 1e-6, 'swept crossing: outer-line interpolation fraction')
+T.check(R.wheelLineAt(3.8, 3.8, false, R.LINE_ENTER_M, R.EDGE_LINE_ENTER_M) == 'edge',
+  'outer edge: tight band starts at inferred road edge')
+T.check(R.wheelLineAt(3.0, 3.8, false, R.LINE_ENTER_M, R.EDGE_LINE_ENTER_M) == nil,
+  'outer edge: no trigger a metre inboard')
+T.check(R.crossedLine(1.0, 2.0, 3.8, false) == nil, 'swept crossing: no sound zone for ordinary lane travel')
+
 T.done('test_rumble')
