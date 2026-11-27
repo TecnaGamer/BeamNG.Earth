@@ -122,12 +122,15 @@ FEATURES = {
     "bld:bdtopo-fr": "IGN BD TOPO",
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
+    "lamps:hk": "HK Gov HyD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
     # (winterpacks.py: the winter looks' packs; the consumer names them where it used them)
     "land:esa-cci-lc": "ESA Land Cover CCI", "land:jrc-gsw": "EC JRC/Google (Global Surface Water)",
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {
+    "lamps:hk": "Street lamp positions in Hong Kong: Lamp Post Location Data of the Highways Department, (c) Government "
+                "of the Hong Kong SAR, from DATA.GOV.HK and the CSDI Portal, data changed",
     "roadz:hk": "Road and bridge heights in Hong Kong: Road Network of the Transport Department and 2020 LiDAR of the "
                 "Civil Engineering and Development Department, (c) Government of the Hong Kong SAR, from DATA.GOV.HK "
                 "and the CSDI Portal, data changed",
@@ -165,6 +168,7 @@ GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation
           ("bridge", "Bridges", "Far bridges"), ("model", "3D models", "Far 3D models"),
           ("roof", "Roofs", "Far roofs"), ("bld", "Buildings", "Far buildings"),
           ("roadz", "Road heights", "Far road heights"),
+          ("lamps", "Street lamps", "Far street lamps"),
           ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
           ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate")]
 # Display order of the ids (unknown ones follow, by name)

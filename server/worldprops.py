@@ -64,11 +64,13 @@ BILL_ROAD_M = 120.0
 ROAD_MARGIN_M = 140.0
 
 
-def tile_props(frame, tx, ty, md, elev, lamps=None):
+def tile_props(frame, tx, ty, md, elev, lamps=None, spec_args=None):
     """(rows, barn ids) of road tile (tx, ty). barn ids are the footprints replaced by the stock barn
     (buildings.road_tile_items skip). elev(lat, lon) is the ground. md None, or a cell that cannot be
     read, yields nothing of that layer. lamps: a list that gets the rows of the mapped street lamps on and within
-    LAMP_NEAR_M of the tile (_street_lamps; furniture.place's mapped_lamps draws the tile's own), None: none made."""
+    LAMP_NEAR_M of the tile (_street_lamps; furniture.place's mapped_lamps draws the tile's own), None: none made.
+    spec_args: (urban_fn, widths, left_hand) as roads.build_tile gets them: the widths of the roads Hong Kong's lamps
+    stand out of (hklamps.road_net); None: the land cover and measured widths left out."""
     import buildings
     import roads
     if md is None:
@@ -85,6 +87,12 @@ def tile_props(frame, tx, ty, md, elev, lamps=None):
     bld_rings = _Once(lambda: _building_rings(frame, blds))
     placed, skip, boxes = [], set(), []
     mapped = [] if lamps is not None else None
+    reach = LAMP_NEAR_M + LAMP_ROAD_M
+    lamp_roads = _Once(lambda: _layer(md, roads.cells_of_tile(frame, tx, ty, margin=reach), "roads"))
+    if mapped is not None:      # (Hong Kong's points: their downloads start before the cells are read, hklamps.py)
+        import hklamps
+        lamp_keys = roads.cells_of_tile(frame, tx, ty, margin=LAMP_NEAR_M)
+        hklamps.prefetch(md, lamp_keys)
     for feats, rows in infra:
         if mapped is not None:
             _street_lamps(frame, feats, rows, (x0 - LAMP_NEAR_M, y0 - LAMP_NEAR_M, x1 + LAMP_NEAR_M, y1 + LAMP_NEAR_M),
@@ -106,10 +114,16 @@ def tile_props(frame, tx, ty, md, elev, lamps=None):
         _barns(frame, feats, rows, (x0, y0, x1, y1), placed, skip)
     boxes.sort(key=lambda b: (b["x"], b["y"]))
     placed.extend(boxes[:CONT_TILE_MAX])
+    if mapped is not None:
+        try:
+            hklamps.add(mapped, md, frame, lamp_keys, (x0 - LAMP_NEAR_M, y0 - LAMP_NEAR_M, x1 + LAMP_NEAR_M,
+                                                       y1 + LAMP_NEAR_M), lamp_roads, spec_args)
+        except Exception as ex:     # (the OpenStreetMap lamps alone; not kept, so the next visit has them)
+            import revisit
+            revisit.fault()
+            log.warning("hklamps: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
     if mapped:
-        reach = LAMP_NEAR_M + LAMP_ROAD_M
-        _aim_lamps(mapped, lambda: _lamp_roads(frame, _layer(md, roads.cells_of_tile(frame, tx, ty, margin=reach), "roads"),
-                                               (x0 - reach, y0 - reach, x1 + reach, y1 + reach)))
+        _aim_lamps(mapped, lambda: _lamp_roads(frame, lamp_roads(), (x0 - reach, y0 - reach, x1 + reach, y1 + reach)))
         placed.extend(mapped)
     if not placed:
         return [], skip

@@ -161,8 +161,9 @@ impl<'py> Sources<'py> {
                 ("nycmassing", "credited_near", "bld:nyc-3d"),
                 ("bdtopo", "credited_near", "bld:bdtopo-fr"),
                 ("roadz", "hk_credited_near", "roadz:hk"),
+                ("hklamps", "credited_near", "lamps:hk"),
             ] {
-                if module == "bdtopo" && attr(&md, "bdtopo").is_none() {
+                if matches!(module, "bdtopo" | "hklamps") && attr(&md, module).is_none() {
                     continue;
                 }
                 if py
