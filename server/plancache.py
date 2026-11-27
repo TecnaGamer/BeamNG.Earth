@@ -125,7 +125,7 @@ def plans_format():
     # profiles: keyed by the switch too, its own suffix as the other plan-changing modes have)
     import roadsys
     rs = f".rsh{revisit.SWITCH_VERSIONS['BNE_ROADSYS']}" if roadsys.HEIGHTS else ""
-    if roadsys.SURFACE:         # (the mapped ranges, roads.MAPPED_RANGES: other plans than heights' and structures')
+    if roads.MAPPED_RANGES():   # (the mapped ranges: other plans than heights' and structures')
         rs += ".rsm"
     if roadsys.TUNNELS:         # (T1: the tunnels' floors and mouths from the road system's record, tunnelrec.py)
         rs += f".rst{revisit.SWITCH_VERSIONS['BNE_ROADSYS_TUNNELS']}"

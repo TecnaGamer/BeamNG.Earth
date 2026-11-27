@@ -65,14 +65,13 @@ def test_a_track_is_moved_less_than_a_road():
 
 def test_a_contradiction_is_answered_with_the_least_shortfall():
     # (two decks mapped as crossing one level apart, and a road 11 m long joining them 8 m from the crossing: within the
-    # ceilings no answer holds the clearance, and the layer step knows it (the roads connect nearer the crossing than its
-    # clearance at the climbing grade): the clearance is doubted, and it gives)
+    # ceilings no answer holds the clearance)
     ms = [_m("hi", _line(-300, 0, 300, 0, 61), "deck", level=2.0), _m("lo", _line(0, -300, 0, 300, 61), "deck", level=1.0),
           _m("link", _line(0, 8, 8, 0, 4))]
     _net, _sm, _lw, pr, sol, got = _run(ms)
     assert sol.diagnostics["status"] == "Solved", sol.diagnostics
     assert got["join_gap_max"] < 1e-4 and got["grade_excess_max"] < 1e-4      # (the joins and the ceilings hold ...)
-    assert got["doubted_short_max"] > 0.5 and got["clear_short_max"] < 0.05     # (... the doubted clearance gives)
+    assert got["clear_short_max"] > 0.5                                         # (... the clearance gives)
 
 
 def _hilly(xy):

@@ -2054,9 +2054,10 @@ _COMPUTED = (
 )
 
 
-# BNE_STRICT: no handler goes on with a fallback, the error goes up (an eval, a test: a fault in the grading seen, not a
-# cell planned without it)
-STRICT = os.environ.get("BNE_STRICT", "") not in ("", "0", "off")
+# No handler goes on with a fallback: the error goes up, to be found and its source fixed, not a cell planned without
+# it (the user, 2026-11-27: "we should not trap exception at this stage so we can capture errors"). BNE_STRICT=off: the
+# fallbacks of _caught as they were.
+STRICT = os.environ.get("BNE_STRICT", "on") not in ("0", "off")
 
 
 def _caught(e):
@@ -3351,7 +3352,8 @@ class _Planner:
         lon0, lat0, lon1, lat1 = key.bounds()
         try:
             return bool(dem.coarse_at((lat0 + lat1) / 2, (lon0 + lon1) / 2))
-        except Exception:
+        except Exception as e:
+            _caught(e)
             return False
 
     def _coarse_ll(self, lonlat):
@@ -3362,7 +3364,8 @@ class _Planner:
         lon, lat = np.asarray(lonlat, np.float64)[len(lonlat) // 2][:2]
         try:
             return bool(dem.coarse_at(float(lat), float(lon)))
-        except Exception:
+        except Exception as e:
+            _caught(e)
             return False
 
 
@@ -3531,7 +3534,10 @@ class _Planner:
                 spec = rs[i] if rs[i] is not None else ts[i]
                 if spec is None:
                     continue
-                for ring in roadsmod.tunnel_parts(f, i):
+                # (the map's own tunnel range with the mapped ranges, not lengthened for its portal (_clear_portals):
+                # lengthened, it lay up to 25 m over the road's own ground piece, the road there twice at two levels)
+                for ring in (roadsmod._parts_by_level(f, i, "tunnel") if roadsmod.MAPPED_RANGES()
+                             else roadsmod.tunnel_parts(f, i)):
                     ring = np.asarray(ring, np.float64)
                     if len(ring) < 2:
                         continue
@@ -4393,8 +4399,7 @@ class _Planner:
                      if ln[:, 0].max() >= x0 and ln[:, 1].max() >= y0 and ln[:, 0].min() <= x1 and ln[:, 1].min() <= y1}
             patches = self._deck_patches(decks)
         except Exception as e:      # (the elevation as it is there rather than no plans; what is planned on it short)
-            if type(e).__name__ == "Abandoned":
-                raise
+            _caught(e)
             log.debug("grading: deck ground of cell %s: %s: %s", key, type(e).__name__, e)
             import revisit
             revisit.fault(here=True)
@@ -5407,7 +5412,8 @@ class _Planner:
                      for c in [bridge] + list(chain or ())]
             try:
                 nav = bridgetypes.nav_clearance(self.frame, lines)
-            except Exception:
+            except Exception as e:
+                _caught(e)
                 nav = 0.0
             req = ch._water(lines, nav, ch._depth(lines))
             if not req:

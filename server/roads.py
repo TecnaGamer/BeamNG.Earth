@@ -550,8 +550,14 @@ def MAPPED_RANGES():
     is the map's own (tag_level_ranges): no range lengthened over the roads under it, joined over lidar stretches or
     inferred from a grade separation, for the deck builder, its bents and caps, the ground roads and the grading alike,
     so a bridge stops at its mapped end and the road goes on onto its graded approach. The facts made from them are
-    keyed apart (_facts_key) and the plans too (plancache.plans_format)."""
-    return roadsys.SURFACE
+    keyed apart (_facts_key) and the plans too (plancache.plans_format). BNE_MAPPED_RANGES=on: the same alone, without
+    the road system's surface (the 3D solve given the map's structure, not our inferences: the Wiedner Guertel's 82 m
+    tunnels under Suedtiroler Platz cut to 45-50 m by the portal rule, _skew_decks, its ground under the square's
+    junction, 2026-11-27)."""
+    return roadsys.SURFACE or MAPPED_ON
+
+
+MAPPED_ON = os.environ.get("BNE_MAPPED_RANGES", "off").strip().lower() == "on"
 
 
 def _level_lists(feats, idx):

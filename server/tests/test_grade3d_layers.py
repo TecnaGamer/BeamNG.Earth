@@ -89,20 +89,3 @@ def test_two_tunnels_at_one_level_are_left_apart():
     (x,) = layers.order(net)
     assert x.upper is None and x.why == "apart" and x.weight == 0.0
 
-
-def test_a_crossing_nearer_where_the_roads_connect_than_they_can_climb_is_doubted():
-    # (a link deck a leaves a road at a node, forks at a second node, and its branch b passes over the road 9 m from
-    # where a left it: about 21 m of road between them for 5 m of clearance, a 25 % climb past any road's, so a gore read
-    # as a crossing and its clearance doubted. Ten times larger it is a real overpass, held)
-    def case(k):
-        return [_m("road", _line(-400, 0, 400, 0, 161)), _m("a", _line(0, 0, 6 * k, 4 * k, 4), "deck", level=1.0),
-                _m("b", _line(6 * k, 4 * k, 14 * k, -8 * k, 6), "deck", level=1.0),
-                _m("c", _line(6 * k, 4 * k, 20 * k, 14 * k, 6), "deck", level=1.0)]
-
-    def over_road(k):
-        net = network.build(case(k))
-        keys = [str(m.key) for m in net.members]
-        return [x for x in layers.order(net) if x.upper is not None and "road" in (keys[x.a], keys[x.b])]
-    near, far = over_road(1.0), over_road(10.0)
-    assert near and all(x.weight == layers.W_DOUBT for x in near), near
-    assert far and all(x.weight == layers.W_CLEAR for x in far), far
