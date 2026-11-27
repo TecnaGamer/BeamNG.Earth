@@ -766,7 +766,9 @@ EMBANK_CREST_FULL = 2.0
 EMBANK_BUILDING_M = 30.0    # m: no building wall within this of the sample (a town's blocks, never an embankment)
 EMBANK_MIN_LIFT = 0.05
 EMBANK_GAP_M = 60.0         # m: a gap of no lift this long at most between lifted samples is filled (embank_along) ...
-EMBANK_TAPER = 0.04         # ... and the lift rises or falls at most this per m along the road
+EMBANK_TAPER = 1.0          # ... and the lift rises or falls at most this per m along the road: no vertical step (0.04
+                            # kept 0bff's embankment from rising where its cut does, 175 m to its 7 m, and 0.25 its
+                            # eastern deck at -17 %: the cut's own rise is the embankment's)
 _EMBANK_DIRS = np.array([[1.0, 0.0], [0.7071067811865476, 0.7071067811865476], [0.0, 1.0],
                          [-0.7071067811865476, 0.7071067811865476], [-1.0, 0.0],
                          [-0.7071067811865476, -0.7071067811865476], [0.0, -1.0],
