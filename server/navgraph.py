@@ -940,10 +940,11 @@ def _traffic_profile(frame, lines, cx, cy):
                 near = (float(dist[j]), lines[int(owner[j])][1])
         dist, sp = near
         cls = sp.cls if sp is not None and dist <= NEAR_ROAD_M else "unknown"
+        lanes = getattr(sp, "lanes", None) if sp is not None and dist <= NEAR_ROAD_M else None
         divided = sp is not None and dist <= NEAR_ROAD_M and traffic.is_divided_road(
             sp.cls, getattr(sp, "median", 0.0), getattr(sp, "link", False), getattr(sp, "oneway", False))
         prof = traffic.calculate(total, urban, major, local, settlement=place, road_class=cls, divided=divided,
-                                 sample_radius_m=radius, max_traffic=traffic.SERVER_TARGET_MAX)
+                                 sample_radius_m=radius, max_traffic=traffic.SERVER_TARGET_MAX, lanes=lanes)
         prof["roadDistanceM"] = round(dist, 1) if dist < math.inf else None
         return prof
     except Exception as e:          # (a graph without a profile rather than none: the mod keeps the player's amount)
