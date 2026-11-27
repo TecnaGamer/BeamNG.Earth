@@ -459,8 +459,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
   own mod manager, after a notice naming the author (they are not made by BeamNG.Earth); each download comes from the
   author's own GitHub releases and is checked against GitHub's checksum. Not while a BeamMP server is joined. Other
-  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`), and programs beside the game can read your
-  position from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md).
+  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`, which also says when the streamed world
+  changes and lists the buildings and towns round a point), and programs beside the game can read your position
+  from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md). Like the stock
+  maps, the level has a police vehicle group of the region you are in and its buildings in a `Buildings` group.
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads

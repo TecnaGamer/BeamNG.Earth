@@ -5,6 +5,13 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased
 
 ### Added
+- **Mod compatibility**: other mods now get more of the map data a stock map gives them. The level's police
+  vehicles (`police.vehGroup.json`) and info.json's region and country follow the region you are in, so the game's
+  police and traffic pick cars of that region. Buildings sit in a `Buildings` group as on the stock maps. The
+  modding API 1.12 adds a notice when the streamed world changes (`onBeamNGEarthContentChanged`), the buildings
+  loaded round a point, the towns round a point and whether the collision round a point is in (docs/ADDONS.md).
+  The AI road graph is no longer applied again when it has not changed, which should reduce the hitches and the
+  reloads that mods listening for it went through.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
