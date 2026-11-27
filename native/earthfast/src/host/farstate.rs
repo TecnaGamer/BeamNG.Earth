@@ -274,6 +274,16 @@ pub fn swap_groups(py: Python<'_>, old: &[Key], new: &[Key], polys: Option<PolyF
             }
         }
     }
+    // A local piece and the global border it follows touch without sharing
+    // area. If both are changing, wait for both in the normal swap group.
+    for (piece, key) in side_k.iter().enumerate() {
+        for edge in key.split("_h").skip(1) {
+            if let Some(&neighbour) = edge.get(1..).and_then(|global| at.get(global)) {
+                let (a, b) = (find(&mut parent, piece), find(&mut parent, neighbour));
+                parent[a] = b;
+            }
+        }
+    }
     let mut comps: Vec<Vec<usize>> = Vec::new();
     let mut comp_of: HashMap<usize, usize> = HashMap::new();
     for q in 0..n {

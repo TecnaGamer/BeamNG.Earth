@@ -613,10 +613,15 @@ class Piece:
     cy: int
     poly: tuple
     quad: tuple
+    seams: tuple = ()       # (side, z, x, y) of visible global neighbours along this piece's cut
 
     @functools.cached_property
     def key(self):
-        return f"{self.level}_{self.i}_{self.j}_c{self.cz}_{self.cx}_{self.cy}"
+        cut = f"{self.level}_{self.i}_{self.j}_c{self.cz}_{self.cx}_{self.cy}"
+        if self.seams:
+            # The same geometry version keys the neighbouring global shape in blockworker.
+            cut += f"_v{GLOBAL_GEO_VERSION}"
+        return cut + "".join(f"_h{side}{global_key(z, x, y)}" for side, z, x, y in self.seams)
 
     @property
     def base(self):

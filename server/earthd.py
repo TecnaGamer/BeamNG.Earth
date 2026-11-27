@@ -143,6 +143,7 @@ import mapcells  # noqa: E402
 import pacer  # noqa: E402
 import deshadow as deshadowmod  # noqa: E402
 import farfield  # noqa: E402
+import farhandoff  # noqa: E402
 import farpvs as farpvsmod  # noqa: E402
 import bc7  # noqa: E402
 import terraincache  # noqa: E402
@@ -6881,7 +6882,7 @@ class Server:
                 self.piece_parts[(anchor.id, node.key)] = {"built": built, "tex": tex}
                 while len(self.piece_parts) > PIECE_PARTS:
                     self.piece_parts.popitem(last=False)
-            built = farfield.clip_built(built, tile.quad)
+            built = self._clip_piece(anchor, tile, built)
         from cliffsettings import SETTINGS as cliff_settings
         cliff_context = {}
         photo = None
@@ -7153,18 +7154,35 @@ class Server:
         except Exception as e:          # the tile without its asphalt layer
             log.debug("road mask of %s: %s", tile.key, e)
 
-    def _tile_geometry(self, anchor, tile):
-        """Geometry for direct builds and photo-driven cliff refreshes, without retaining meshes in RAM."""
+    def _global_geometry(self, z, x, y):
+        zoom = farfield.global_dem_zoom(z, self.layout.cells)
+        ref = farfield.global_dem_zoom(z + 1, self.layout.cells)
+        if self.far_pool is not None:
+            return self.far_pool.submit(blockworker.far_global_geometry, z, x, y, zoom, ref, self.layout).result()
         base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
+        if self.sea is not None:
+            base = seacarvemod.SeaDem(base, None)
+        return farfield.build_global(base, z, x, y, zoom, ref, self.layout)
+
+    @functools.lru_cache(maxsize=PIECE_PARTS)
+    def _handoff_source(self, z, x, y, geometry_version):
+        """Share the global rim by tile and the geometry version used to build it."""
+        return self._global_geometry(z, x, y)
+
+    def _clip_piece(self, anchor, tile, built):
+        clipped = farfield.clip_built(built, tile.quad)
+        quad = np.asarray(tile.quad).reshape(4, 2)
+        edges = []
+        for side, z, x, y in tile.seams:
+            neighbour = self._handoff_source(z, x, y, farfield.GLOBAL_GEO_VERSION)
+            edge = farhandoff.global_edge(neighbour, anchor.frame, tile, side, z, x, y)
+            edges.append((quad[side], quad[(side + 1) % 4], edge, neighbour.size / self.layout.cells))
+        return farhandoff.join_edges(clipped, edges)
+
+    def _tile_geometry(self, anchor, tile):
+        """Geometry for direct builds and photo-driven cliff refreshes."""
         if isinstance(tile, farfield.GTile):
-            zoom = farfield.global_dem_zoom(tile.z, self.layout.cells)
-            ref = farfield.global_dem_zoom(tile.z + 1, self.layout.cells)
-            if self.far_pool is not None:
-                return self.far_pool.submit(blockworker.far_global_geometry, tile.z, tile.x, tile.y,
-                                            zoom, ref, self.layout).result()
-            if self.sea is not None:
-                base = seacarvemod.SeaDem(base, None)
-            return farfield.build_global(base, tile.z, tile.x, tile.y, zoom, ref, self.layout)
+            return self._global_geometry(tile.z, tile.x, tile.y)
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         lvl = node.level
         zoom = anchor.zooms[max(lvl, 0)]
@@ -7174,6 +7192,7 @@ class Server:
             built = self.far_pool.submit(blockworker.far_geometry, anchor.id, anchor.lat, anchor.lon, node,
                                         zoom, q, ref, self.near_visual in BLOCK_DRAWN, self.layout).result()
         else:
+            base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
             if self.sea is not None:
                 base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
             grader = self.grader_for(anchor)
@@ -7181,7 +7200,7 @@ class Server:
                 if grader is not None else base
             built = farfield.build_tile(anchor.frame, src, node, zoom, q, ref,
                                         with_sink=self.near_visual in BLOCK_DRAWN, layout=self.layout)
-        return farfield.clip_built(built, tile.quad) if node is not tile else built
+        return self._clip_piece(anchor, tile, built) if node is not tile else built
 
     def retexture(self, anchor, tile, prev):
         """Refresh the photo and, when enabled, its baked cliff colors at a new immutable shape path."""

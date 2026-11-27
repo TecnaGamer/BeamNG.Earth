@@ -84,6 +84,26 @@ print(string.format('farfield swaps in view: overlap frames per swap %.1f with t
   r1 > 0 and o1 / r1 or 0, r0 > 0 and o0 / r0 or 0))
 T.check(o1 > 0, 'the C2 crossover (CROSS = 1) still runs on request')
 
+do
+  local old = tile(1, 1, 0, 2)
+  old.key = '1_0_2_c14_100_100'
+  farfield.onTile(old)
+  step()
+  farfield.onSwap(swap(1, nextId, { old.key })); nextId = nextId + 1
+  step(2)
+  local previous = obj(old.key)
+  local new = tile(1, 1, 0, 2, { z = 101 })
+  new.key = old.key .. '_h1m14_101_100'
+  crossover.CROSS = 1
+  farfield.onTile(new)
+  step()
+  farfield.onSwap(swap(1, nextId, { new.key }, { old.key }, 2, 2)); nextId = nextId + 1
+  step(2)
+  T.check(visible(obj(new.key)) and not visible(previous), 'a joined border switches without a vertical crossover')
+  T.check(obj(new.key).pos.z == 101, 'the replacement keeps its joined height when it first appears')
+  crossover.CROSS = 0
+end
+
 -- the terrain block newly covering a far tile: it drops to its cover state in the commit frame (detail / terrain
 -- mode: the block drawn). An edge-ring tile sinks under the block at once, an interior one hides at once.
 local function coverFrames(sinkS)
