@@ -810,6 +810,46 @@ pub fn band_table(bands: &[[i64; 4]; 8], z_cell: i32, prev_bins: &[i64]) -> [[i6
     out
 }
 
+/// How far above the highest real ground of its cell (our DEM) a band table reaches, m: a little over what a DEM
+/// sample grid misses of a summit (relief_top).
+pub const RELIEF_MARGIN_M: i64 = 200;
+
+/// W2's band table (band_table) cut to the cell's real relief, ground_max m the highest ground of the cell (our DEM).
+/// The kernel's bands are the cell's forcing carried up a lapse rate to +1,500 m: above the cell's own ground they are
+/// extrapolated, never observed, and the photos hold the top row past it for every higher mountain in view (London's
+/// top band, 1,512 m, said 7/D2 on 2026-11-27, over a cell whose ground stays below a few hundred metres). Here no row lies above
+/// top = ground_max + RELIEF_MARGIN_M: the first band past it is replaced by a row AT top (the two bands round it
+/// blended as band_depth does, its depth bin with that band's hysteresis), the bands above go. The rows below the
+/// cell's ground stay (held downwards they give the lower bands' state, never more snow). Returns the rows (1..8,
+/// lowest first) and the depth bins of all 8 bands (the next call's prev_bins). Integers only.
+pub fn band_table_relief(bands: &[[i64; 4]; 8], z_cell: i32, prev_bins: &[i64], ground_max: i64)
+                         -> (Vec<[i64; 4]>, [i64; 8]) {
+    let full = band_table(bands, z_cell, prev_bins);
+    let mut bins = full.map(|r| r[2]);
+    let top = ground_max + RELIEF_MARGIN_M;
+    let mut rows = Vec::with_capacity(8);
+    for b in 0..8 {
+        let z = z_cell as i64 + BAND_DZ[b] as i64;
+        if z <= top {
+            rows.push(full[b]);
+            continue;
+        }
+        if b == 0 {
+            // (the whole table above the cell's ground: the lowest band, which the photos hold everywhere anyway)
+            rows.push([top, full[0][1], full[0][2], full[0][3]]);
+        } else if rows[b - 1][0] < top {
+            let d = band_depth(bands, top - z_cell as i64, 0);
+            let bin = depth_bin(d, prev_bins.get(b).copied().unwrap_or(-1));
+            let src = if full[b - 1][2] > 0 { b - 1 } else { b };
+            let age = if bin == 0 { 0 } else { age_class(bands[src][3]) };
+            rows.push([top, COVER_OF_BIN[bin as usize], bin, age]);
+            bins[b] = bin;
+        } // (else a band lies exactly at the top: it is the last row)
+        break;
+    }
+    (rows, bins)
+}
+
 /// The share (eighths) of the ground's snow cover a road in this condition keeps (W2's Table.road per plow class).
 pub fn road_share(cond: u8) -> i64 {
     match cond {
@@ -1157,6 +1197,18 @@ pub mod py {
         Ok((rows, road_conds.iter().map(|&c| road_share(c)).collect()))
     }
 
+    /// snow_band_table cut to the cell's real relief (band_table_relief): ground_max m the cell's highest ground
+    /// (our DEM). Returns (rows, road shares, the 8 bands' depth bins for the next call's prev_bins).
+    #[pyfunction]
+    pub fn snow_band_table_relief(bands: Vec<Vec<i64>>, prev_bins: Vec<i64>, road_conds: Vec<u8>, ground_max: i64)
+                                  -> PyResult<(Vec<Vec<i64>>, Vec<i64>, Vec<i64>)> {
+        let t = band_rows(&bands)?;
+        let z_cell = (bands[2][0] - BAND_DZ[2] as i64) as i32;
+        let (rows, bins) = band_table_relief(&t, z_cell, &prev_bins, ground_max);
+        Ok((rows.iter().map(|r| r.to_vec()).collect(), road_conds.iter().map(|&c| road_share(c)).collect(),
+            bins.to_vec()))
+    }
+
     /// W2's frozen-water share 0..8 from the ice thickness mm (snow_state's lake[1]) with hysteresis from prev.
     #[pyfunction]
     pub fn snow_lake_share(ice_mm: i64, prev: i64) -> i64 {
@@ -1193,6 +1245,7 @@ pub mod py {
         m.add_function(wrap_pyfunction!(snow_regime, m)?)?;
         m.add_function(wrap_pyfunction!(snow_band_depth, m)?)?;
         m.add_function(wrap_pyfunction!(snow_band_table, m)?)?;
+        m.add_function(wrap_pyfunction!(snow_band_table_relief, m)?)?;
         m.add_function(wrap_pyfunction!(snow_lake_share, m)?)?;
         m.add_function(wrap_pyfunction!(snow_wet_only, m)?)?;
         m.add_function(wrap_pyfunction!(snow_selftest, m)?)?;
@@ -1432,6 +1485,51 @@ mod tests {
         // a thaw takes it back
         let f = series(&[(48, -500, 0, 0, -500), (72, 500, 0, 0, 500)]);
         assert_eq!(lake_ice(&rows(&f), 119, &FLAT, 0)[0], 0);
+    }
+
+    #[test]
+    fn band_table_cut_to_relief() {
+        // more snow higher up: none at the cell (1000 m), D2 at +150 .. D4 at +1500
+        let mut bands = [[0i64; 4]; 8];
+        for (b, row) in bands.iter_mut().enumerate() {
+            let d = [0, 0, 0, 200, 400, 800, 1200, 1600][b];
+            *row = [d, d, 0, 30];
+        }
+        let full = band_table(&bands, 1000, &[-1; 8]);
+        // the cell's ground reaches 1100 m: rows up to 1300 m; the 1300 m band (dz 300, D2 at 4 cm) is AT the top
+        let (rows, bins) = band_table_relief(&bands, 1000, &[-1; 8], 1100);
+        assert_eq!(rows.len(), 5);
+        assert_eq!(&rows[..4], &full[..4]);
+        assert_eq!(rows[4], full[4]);
+        assert_eq!(bins, full.map(|r| r[2]));
+        // ground to 1250 m: top 1450 m, between the 1300 m (4 cm) and 1600 m (8 cm) bands: 6 cm, D3, settled
+        let (rows, bins) = band_table_relief(&bands, 1000, &[-1; 8], 1250);
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[5], [1450, 8, 3, 1]);
+        assert_eq!(bins[5], 3);
+        assert!(rows.iter().all(|r| r[0] <= 1450));
+        // a flat lowland cell (ground to 50 m, the cell's model ground at 1000 m: the forcing's own point is higher):
+        // one row, the lowest band's state, at the top
+        let (rows, _) = band_table_relief(&bands, 1000, &[-1; 8], 50);
+        assert_eq!(rows, vec![[250, 0, 0, 0]]);
+        // relief above every band: the table as it was
+        let (rows, _) = band_table_relief(&bands, 1000, &[-1; 8], 4000);
+        assert_eq!(rows, full.to_vec());
+        // hysteresis on the cut row from its band's previous bin: 5.2 cm at 1390 m, held at D2 from D2
+        let (rows, _) = band_table_relief(&bands, 1000, &[-1, -1, -1, -1, -1, 2, -1, -1], 1190);
+        assert_eq!(rows[5], [1390, 7, 2, 1]);
+        assert_eq!(band_table_relief(&bands, 1000, &[-1; 8], 1190).0[5], [1390, 8, 3, 1]);
+        // a lowland cell whose only snow is the extrapolated upper bands' (London-like: bands from 30 m, the ground
+        // to 100 m): no row with snow, none above 300 m
+        let mut high = [[0i64; 4]; 8];
+        for (b, row) in high.iter_mut().enumerate() {
+            let d = [0, 0, 0, 0, 0, 300, 900, 1500][b];
+            *row = [d, d, 0, 30];
+        }
+        assert!(band_table(&high, 30, &[-1; 8]).iter().any(|r| r[1] > 0));
+        let (rows, _) = band_table_relief(&high, 30, &[-1; 8], 100);
+        assert_eq!(rows.last().unwrap()[0], 300);
+        assert!(rows.iter().all(|r| r[1] == 0), "{:?}", rows);
     }
 
     #[test]

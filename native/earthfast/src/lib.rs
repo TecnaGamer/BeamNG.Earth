@@ -7854,6 +7854,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // embank_lift / embank_along (embank.rs: a mapped road's embankment the surface model's ground filter cut)
     m.add_function(wrap_pyfunction!(embank::embank_lift, m)?)?;
     m.add_function(wrap_pyfunction!(embank::embank_along, m)?)?;
-    m.add("VERSION", 643)?;
+    // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
+    // tunnels' and the roads' branches)
+    m.add("VERSION", 644)?;
     Ok(())
 }
