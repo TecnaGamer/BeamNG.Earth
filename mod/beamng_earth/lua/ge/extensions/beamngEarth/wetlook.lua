@@ -108,13 +108,17 @@ end
 -- The new puddle look (the puddle plan R1, ~/bnge-tests/puddles/PLAN_FINAL.md; the setting "New puddle look",
 -- weather.lua setPuddleLook, default off: M.v2). On: the wet state is wetstate.lua's integer one (the film for the look
 -- and the grip, the standing water for the puddles: filled by how much it rained, BeamMP-consistent) instead of
--- wetStep / puddleStep, and the puddle material becomes water: a dark base whose brightness is all reflection (a
--- cubemap of the sky over a built-up or an open horizon, V2_CUBES, normalized by the scene's own sky light so it
--- follows the time of day and the weather; probe 2 of R0), very smooth. Its alpha threshold has V2 steps (wetstate's
+-- wetStep / puddleStep; the level's environment map becomes a cubemap of the sky over a built-up or an open horizon
+-- while wet (V2_CUBES, normalized by the scene's own sky light so it follows the time of day; R0 probe 1), and the
+-- puddle material a very smooth lit sky-grey (V2_LOOK). Its alpha threshold has V2 steps (wetstate's
 -- H_STEPS_UM), one material write a step and at most a step a check. Off: everything as before, nothing of it loaded.
 M.v2 = false
 M.V2_REF = { 250, 15 }       -- the alpha threshold at the first and the last step
-M.V2_LOOK = { base = '0.025 0.027 0.03 1', rough = '0.03', metal = '0' }
+-- (R1 broker shots, 2026-11-27: a dark base read as black holes by day at Normal: the engine's reflections do not reach
+-- the alpha-tested puddle material, whatever the cubemap. The mirrored overcast sky as a lit grey instead: bright by
+-- day like the reference photos' puddles, dark at night and dusk with the scene's light; the cubemaps still go on the
+-- level's environment map for every other wet surface)
+M.V2_LOOK = { base = '0.30 0.31 0.33 1', rough = '0.03', metal = '0' }
 M.V2_SKY_FILE = '/levels/beamng_earth/art/shapes/beamngEarth/wetsky.materials.json'
 M.V2_CUBES = true            -- (false: the dark water without a cubemap: the engine's own reflections only)
 -- Where the sky cubemap goes: 'env' the level's environment map (LevelInfo globalEnviromentMap: every wet surface,
@@ -600,6 +604,8 @@ end
 function M.onTeleport()
   own = 0
   timer = M.CHECK_S
+  -- (the new puddle look: wetstate's real-weather memory too, the same way; a preset's or the BeamMP host's stays)
+  if ws then ws.onTeleport() end
 end
 
 -- Off now (the setting, weather Off): every material back at once.

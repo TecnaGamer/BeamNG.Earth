@@ -734,8 +734,9 @@ in 2026-10-10-weather-probe-results.md.
   late joiners of a server preset agree); BeamMP `real-host` clients the host's snapshot `wet` {t, w, i, h} on the
   relayed message (mpsession.sendHostWeather; sanitized by weather.sanitizeMsg and the plugin's G.weatherMsg), caught
   up with that message's rain. The wet look's level and the grip come from w; the puddles' 12 fill steps from h
-  (`H_STEPS_UM`, 0.3 to 9 mm), at most one step a check, none under W1's packed snow or ice; the material becomes dark
-  smooth water with a normalized sky cubemap (`wetsky.materials.json`, `bne_wetsky_<overcast|clear>_<city|open>`,
+  (`H_STEPS_UM`, 0.3 to 9 mm), at most one step a check, none under W1's packed snow or ice; the puddle material becomes a smooth lit
+  sky-grey (a dark base read as black holes: the engine's reflections do not reach that alpha-tested material, R1
+  broker shots) and the level's environment map a normalized sky cubemap while wet (`wetsky.materials.json`, `bne_wetsky_<overcast|clear>_<city|open>`,
   tools/make_wet_cubemaps.py; the horizon by 8 level rays round the camera every 10 s); its own values back when off.
   With it on, `aquaplane.coverCheck`: no rain film under `ambience.shelterAt` cover. Grip (setting `weatherWetGrip`, weather.lua `WET_GRIP`):
   `wetlook.gripCond` (the own rain model as dry / damp / wet, with hysteresis) -> `winter.setShown` at changes only:

@@ -178,7 +178,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   sidewalks, markings, bridges and buildings, puddles that fill in the low spots, along kerbs and in worn wheel ruts and
   dry up after the rain, wet roads that lose grip in the rain you see (and aquaplaning in deep puddles and heavy rain
   at speed), and rain sounds that follow the rain's strength and go muffled under cover. An experimental "New puddle
-  look" (Weather page) makes the puddles dark water mirroring the sky and the buildings, filled by how much it has
+  look" (Weather page) makes the puddles still water mirroring the grey sky and the wet streets reflect an overcast sky, the puddles filled by how much it has
   rained (the same for everyone in multiplayer with the host's weather), with no water film in tunnels.
   An experimental "Weather sounds: Live" setting has the app make the thunder live (the rain stays the pre-recorded
   loops for now), through your default audio device at the game's volume, with the pre-recorded sounds as the fallback.

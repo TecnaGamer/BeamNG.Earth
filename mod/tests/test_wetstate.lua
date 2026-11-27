@@ -163,6 +163,27 @@ local drySpell = {}
 for k = 1, 24 do drySpell[k] = 0 end
 W.sync(dry, 'real', nil, hist(h0 - 24 * 3600, drySpell), 40.75, -73.99)
 check(W.seeds == seeds + 1 and W.state().h == 0, 'a teleport far away: that place\'s own history')
+-- a teleport: the real weather's memory stays behind (dry at once), the live rain wets it, the new place's history
+-- seeds it once its message comes; a preset's state stays
+W.reset()
+W.sync(dry, 'real', nil, hist(h0 - 24 * 3600, wetMorning), 39.28, -76.59)
+for _ = 1, 15 do W.puddleStep(nil, 12) end
+check(W.shownStep() > 0, 'teleport: puddles before')
+W.onTeleport()
+check(W.state().h == 0 and W.state().w == 0 and W.shownStep() == 0, 'teleport: dry at once')
+W.sync(dry, 'real', nil, hist(h0 - 24 * 3600, wetMorning), 39.28, -76.59)
+check(W.state().h == 0, 'teleport: the old place\'s message does not bring its puddles back')
+W.sync(rainy, 'real', nil, nil, 39.28, -76.59)
+now = now + 600
+W.sync(rainy, 'real', nil, nil, 39.28, -76.59)
+check(W.state().w > 0, 'teleport: the rain at the new place wets it again')
+W.sync(dry, 'real', nil, hist(h0 - 24 * 3600, wetMorning), 40.75, -73.99)
+check(W.lastSeed == 'history (after a teleport)' and W.fillStep(W.state().h) > 0, 'teleport: the new place\'s history')
+W.reset()
+W.sync(storm, 'preset', 'storm@1')
+local hp = W.state().h
+W.onTeleport()
+check(W.state().h == hp, 'teleport: a preset\'s state stays')
 -- no history (an old server, BNE_PUDDLES off): the rain now's steady state
 W.reset()
 W.sync(rainy, 'real', nil, nil, 39.28, -76.59)

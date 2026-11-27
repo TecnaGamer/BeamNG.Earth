@@ -212,6 +212,12 @@ function M.sync(msg, src, key, hist, lat, lon, snap)
     if sn and not (seed and seed.kind == 'host' and seed.snapT == sn.t) then
       st, seed, why = sn, { kind = 'host', snapT = sn.t }, 'host snapshot'
     end
+  elseif seed and seed.kind == 'teleport' and src == 'real' then
+    -- (after a teleport: dry, the live rain wetting it, until a message from the new place brings its own history)
+    if hist and (not seed.fromLat or (lat and M.distM(seed.fromLat, seed.fromLon, lat, lon) > M.RESEED_M)) then
+      local s = M.fromHistory(hist, t, r, e)
+      if s then st, seed, why = s, { kind = 'real', lat = lat, lon = lon, hist = true }, 'history (after a teleport)' end
+    end
   elseif src == 'real' or src == 'host' then
     local far = not (seed and seed.lat and lat) or M.distM(seed.lat, seed.lon, lat, lon) > M.RESEED_M
     if not seed or seed.kind ~= 'real' or (hist and (far or not seed.hist)) then
@@ -254,5 +260,19 @@ function M.debugLine()
 end
 
 function M.reset() st, seed, shown = nil, nil, 0 end
+
+-- A teleport (wetlook.onTeleport; the user, 2026-11-27: "roads stay wet if you teleport to a place with different
+-- weather"): this player's own real weather's memory stays behind: dry at once (no puddles shown), the live rain wets
+-- it again, and the new place's history seeds it once its first message comes (from beyond RESEED_M). A preset's or the
+-- BeamMP host's state is the same everywhere and stays.
+function M.onTeleport()
+  if seed and seed.kind ~= 'real' and seed.kind ~= 'teleport' then return end
+  local t = M.tickOf(M.clock())
+  local from = seed or {}
+  st = { t = t, w = 0, i = 0, h = 0 }
+  seed = { kind = 'teleport', fromLat = from.lat or from.fromLat, fromLon = from.lon or from.fromLon }
+  shown = 0
+  M.lastSeed = 'teleport (dry)'
+end
 
 return M

@@ -41,8 +41,8 @@ What changed in each release of BeamNG.Earth, newest first.
 - **Puddles**: in rain, water collects in the low points of roads, along the kerbs and in the wheel ruts of worn
   roads: mirror-like water that reflects the sky and the street. They grow as it keeps raining and shrink as the road
   dries.
-- **New puddle look (Experimental, Weather page, off by default)**: puddles that look like water, dark and mirroring
-  the sky and the buildings around (a darker sky at night), and that fill by how much it has rained: a drizzle only
+- **New puddle look (Experimental, Weather page, off by default)**: puddles that look like still water mirroring the grey
+  sky (dark at night), wet streets that reflect an overcast sky rather than a sunny one, and puddles that fill by how much it has rained: a drizzle only
   wets the road, an hour of heavy rain fills them, and the deep ones stay for hours after. The roads' wetness and grip
   follow the same water, the same on every computer; in multiplayer with the host's real weather everyone sees the
   same puddles, also players who join later. No water film on the road in tunnels and under bridges. With **New
