@@ -1,479 +1,482 @@
-[
- {
-  "name": "i84",
-  "lat": -21.22522,
-  "lon": 55.30441,
-  "r": 800.0,
-  "issue": 84,
-  "kind": "tunnel",
-  "note": "#84 Double Tunnel issue on highways"
- },
- {
-  "name": "i160",
-  "lat": -33.75866,
-  "lon": 151.04854,
-  "r": 800.0,
-  "issue": 160,
-  "kind": "tunnel",
-  "note": "#160 Tunnel entrance half blocked"
- },
- {
-  "name": "i161",
-  "lat": -33.75861,
-  "lon": 151.04901,
-  "r": 800.0,
-  "issue": 161,
-  "kind": "tunnel",
-  "note": "#161 Tunnel completely blocked"
- },
- {
-  "name": "i339",
-  "lat": 45.12131,
-  "lon": 5.6967,
-  "r": 800.0,
-  "issue": 339,
-  "kind": "tunnel",
-  "note": "#339 Tunnel entry obfuscated by terrain glitch"
- },
- {
-  "name": "i342",
-  "lat": -23.88319,
-  "lon": -46.49485,
-  "r": 800.0,
-  "issue": 342,
-  "kind": "tunnel",
-  "note": "#342 1.6.3 - Game crashes when going inside the Imigrantes tunnel (descending) (issue gives 23.88S 46.49W: signs corrected; Imigrantes, Brazil)"
- },
- {
-  "name": "i362",
-  "lat": 48.13983,
-  "lon": 11.5558,
-  "r": 800.0,
-  "issue": 362,
-  "kind": "tunnel",
-  "note": "#362 Double direction tunnel bugged in Munich"
- },
- {
-  "name": "i403",
-  "lat": 34.06924,
-  "lon": -118.70797,
-  "r": 800.0,
-  "issue": 403,
-  "kind": "tunnel",
-  "note": "#403 Mountain tunnel entrance is blocked"
- },
- {
-  "name": "i450",
-  "lat": 36.71872,
-  "lon": -4.59034,
-  "r": 800.0,
-  "issue": 450,
-  "kind": "tunnel",
-  "note": "#450 Tunnel roof overlaps with highway (coordinates from the issue text; tunnelscan's 'malaga' place is 11 km east)"
- },
- {
-  "name": "i464",
-  "lat": -31.94351,
-  "lon": 115.85386,
-  "r": 800.0,
-  "issue": 464,
-  "kind": "tunnel",
-  "note": "#464 Northbridge Tunnel, Perth: one bore above ground, opposite bore missing (corpus had a duplicate with the wrong sign: dropped)"
- },
- {
-  "name": "i660",
-  "lat": 34.10571,
-  "lon": -118.80788,
-  "r": 800.0,
-  "issue": 660,
-  "kind": "tunnel",
-  "note": "#660 Tunnel interior did not render properly"
- },
- {
-  "name": "i790_1",
-  "lat": 67.4711,
-  "lon": 15.5823,
-  "r": 800.0,
-  "issue": 790,
-  "kind": "tunnel",
-  "note": "#790 Aspfjordtunnelen (Nordland): hillside over the tunnel turns into a floating shell wit"
- },
- {
-  "name": "i790_2",
-  "lat": 67.4772,
-  "lon": 15.5938,
-  "r": 800.0,
-  "issue": 790,
-  "kind": "tunnel",
-  "note": "#790 Aspfjordtunnelen (Nordland): hillside over the tunnel turns into a floating shell wit"
- },
- {
-  "name": "i790_3",
-  "lat": 67.4677,
-  "lon": 15.5811,
-  "r": 800.0,
-  "issue": 790,
-  "kind": "tunnel",
-  "note": "#790 Aspfjordtunnelen (Nordland): hillside over the tunnel turns into a floating shell wit"
- },
- {
-  "name": "i1018",
-  "lat": -31.94341,
-  "lon": 115.85345,
-  "r": 800.0,
-  "issue": 1018,
-  "kind": "tunnel",
-  "note": "#1018 Perth, Australia: Graham Farmer Freeway Tunnel"
- },
- {
-  "name": "i1019",
-  "lat": 51.45853,
-  "lon": 0.25001,
-  "r": 800.0,
-  "issue": 1019,
-  "kind": "tunnel",
-  "note": "#1019 Dartford tunnel approach flooded"
- },
- {
-  "name": "i1059",
-  "lat": 40.70577,
-  "lon": -74.01507,
-  "r": 800.0,
-  "issue": 1059,
-  "kind": "tunnel",
-  "note": "#1059 Brooklyn-Battery Tunnel Not enterable"
- },
- {
-  "name": "i1060",
-  "lat": 40.72924,
-  "lon": -74.03452,
-  "r": 800.0,
-  "issue": 1060,
-  "kind": "tunnel",
-  "note": "#1060 Holland Tunnel"
- },
- {
-  "name": "i1066_1",
-  "lat": 68.96627,
-  "lon": 15.63265,
-  "r": 800.0,
-  "issue": 1066,
-  "kind": "tunnel",
-  "note": "#1066 Norway: bridges and tunnel portals use the wrong models (truss instead of concrete,  [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
- },
- {
-  "name": "i1066_2",
-  "lat": 68.627,
-  "lon": 16.59,
-  "r": 800.0,
-  "issue": 1066,
-  "kind": "tunnel",
-  "note": "#1066 Norway: bridges and tunnel portals use the wrong models (truss instead of concrete,  [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
- },
- {
-  "name": "i1066_3",
-  "lat": 69.16917,
-  "lon": 19.15763,
-  "r": 800.0,
-  "issue": 1066,
-  "kind": "tunnel",
-  "note": "#1066 Norway: bridges and tunnel portals use the wrong models (truss instead of concrete,  [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
- },
- {
-  "name": "i1066_4",
-  "lat": 68.677,
-  "lon": 16.509,
-  "r": 800.0,
-  "issue": 1066,
-  "kind": "tunnel",
-  "note": "#1066 Norway: bridges and tunnel portals use the wrong models (truss instead of concrete,  [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
- },
- {
-  "name": "i1083_1",
-  "lat": 48.18609,
-  "lon": 16.37368,
-  "r": 800.0,
-  "issue": 1083,
-  "kind": "tunnel",
-  "note": "#1083 [Map Issue] Ground roads over a tunnel fall into its trench when the elevation data "
- },
- {
-  "name": "i1083_2",
-  "lat": 48.26004,
-  "lon": 16.47572,
-  "r": 800.0,
-  "issue": 1083,
-  "kind": "tunnel",
-  "note": "#1083 [Map Issue] Ground roads over a tunnel fall into its trench when the elevation data "
- },
- {
-  "name": "i1083_3",
-  "lat": 48.25091,
-  "lon": 16.47085,
-  "r": 800.0,
-  "issue": 1083,
-  "kind": "tunnel",
-  "note": "#1083 [Map Issue] Ground roads over a tunnel fall into its trench when the elevation data "
- },
- {
-  "name": "i1083_4",
-  "lat": 48.22963,
-  "lon": 16.45307,
-  "r": 800.0,
-  "issue": 1083,
-  "kind": "tunnel",
-  "note": "#1083 [Map Issue] Ground roads over a tunnel fall into its trench when the elevation data "
- },
- {
-  "name": "i1113_1",
-  "lat": 53.57464,
-  "lon": 9.88143,
-  "r": 800.0,
-  "issue": 1113,
-  "kind": "tunnel",
-  "note": "#1113 Underground Tunnel Clips Road and Terrain"
- },
- {
-  "name": "i1113_2",
-  "lat": 53.58512,
-  "lon": 9.90398,
-  "r": 800.0,
-  "issue": 1113,
-  "kind": "tunnel",
-  "note": "#1113 Underground Tunnel Clips Road and Terrain"
- },
- {
-  "name": "i1157",
-  "lat": 46.63673,
-  "lon": 8.59346,
-  "r": 800.0,
-  "issue": 1157,
-  "kind": "tunnel",
-  "note": "#1157 Tunnel is replaced with solid terrain and map features randomly start and end"
- },
- {
-  "name": "i1160",
-  "lat": 46.64891,
-  "lon": 8.58644,
-  "r": 800.0,
-  "issue": 1160,
-  "kind": "tunnel",
-  "note": "#1160 Tunnel section missing and secondary bridge and road is missing/broken"
- },
- {
-  "name": "i1161",
-  "lat": 46.61631,
-  "lon": 8.56973,
-  "r": 800.0,
-  "issue": 1161,
-  "kind": "tunnel",
-  "note": "#1161 The tunnel is very steep"
- },
- {
-  "name": "i1172",
-  "lat": 48.81611,
-  "lon": 2.36028,
-  "r": 800.0,
-  "issue": 1172,
-  "kind": "tunnel",
-  "note": "#1172 Paris, Porte d Italie, A6b tunnel clips through the surface and obscures P-riph-riq"
- },
- {
-  "name": "i1242",
-  "lat": 25.09704,
-  "lon": 55.1621,
-  "r": 800.0,
-  "issue": 1242,
-  "kind": "tunnel",
-  "note": "#1242 Underpass built as a tunnel in a mound: Al Falak Street under the Sheikh Zayed Road "
- },
- {
-  "name": "i1253",
-  "lat": 59.36152,
-  "lon": 10.83178,
-  "r": 800.0,
-  "issue": 1253,
-  "kind": "tunnel",
-  "note": "#1253 Tripple tunnel Generation"
- },
- {
-  "name": "i1457_1",
-  "lat": 40.44339,
-  "lon": -80.00673,
-  "r": 800.0,
-  "issue": 1457,
-  "kind": "tunnel",
-  "note": "#1457 Pittsburgh PA bridges/tunnels/ramps"
- },
- {
-  "name": "i1457_2",
-  "lat": 40.44647,
-  "lon": -79.99635,
-  "r": 800.0,
-  "issue": 1457,
-  "kind": "tunnel",
-  "note": "#1457 Pittsburgh PA bridges/tunnels/ramps"
- },
- {
-  "name": "i1461",
-  "lat": 46.6477,
-  "lon": 8.59087,
-  "r": 800.0,
-  "issue": 1461,
-  "kind": "tunnel",
-  "note": "#1461 Tunnel exit mid tunnel is broken"
- },
- {
-  "name": "i1508",
-  "lat": 50.87906,
-  "lon": 11.60731,
-  "r": 800.0,
-  "issue": 1508,
-  "kind": "tunnel",
-  "note": "#1508 German Autobahn-Tunnel completely broken"
- },
- {
-  "name": "i896",
-  "lat": 40.43791,
-  "lon": -80.01369,
-  "r": 800.0,
-  "issue": 896,
-  "kind": "tunnel",
-  "note": "#896 "
- },
- {
-  "name": "i722_1",
-  "lat": -27.44562,
-  "lon": 153.0326,
-  "r": 800.0,
-  "issue": 722,
-  "kind": "tunnel",
-  "note": "#722 Brisbane ICB run - Large amount of issues regarding multiple flyovers/bridges and tun"
- },
- {
-  "name": "i722_2",
-  "lat": -27.41225,
-  "lon": 153.07644,
-  "r": 800.0,
-  "issue": 722,
-  "kind": "tunnel",
-  "note": "#722 Brisbane ICB run - Large amount of issues regarding multiple flyovers/bridges and tun"
- },
- {
-  "name": "i722_3",
-  "lat": -27.43357,
-  "lon": 153.08278,
-  "r": 800.0,
-  "issue": 722,
-  "kind": "tunnel",
-  "note": "#722 Brisbane ICB run - Large amount of issues regarding multiple flyovers/bridges and tun [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
- },
- {
-  "name": "i722_4",
-  "lat": -27.4414,
-  "lon": 153.04687,
-  "r": 800.0,
-  "issue": 722,
-  "kind": "tunnel",
-  "note": "#722 Brisbane ICB run - Large amount of issues regarding multiple flyovers/bridges and tun"
- },
- {
-  "name": "i42",
-  "lat": 30.69131,
-  "lon": -88.03109,
-  "r": 800.0,
-  "issue": 42,
-  "kind": "tunnel",
-  "note": "#42 "
- },
- {
-  "name": "i506",
-  "lat": 64.00655,
-  "lon": 11.49992,
-  "r": 800.0,
-  "issue": 506,
-  "kind": "rail",
-  "note": "#506 Railway underpass broken at M-s-rtrauget, Steinkjer"
- },
- {
-  "name": "i1163",
-  "lat": 46.53438,
-  "lon": 8.3487,
-  "r": 800.0,
-  "issue": 1163,
-  "kind": "rail",
-  "note": "#1163 Train tunnel and embankment are broken"
- },
- {
-  "name": "i792",
-  "lat": 59.03858,
-  "lon": 5.93269,
-  "r": 1200.0,
-  "issue": 792,
-  "kind": "subsea",
-  "note": "#792 Sub-sea / sub-fjord road tunnels are missing, e.g. Ryfylketunnelen (Rogaland): the ro"
- },
- {
-  "name": "i815",
-  "lat": 62.20754,
-  "lon": -6.68153,
-  "r": 1200.0,
-  "issue": 815,
-  "kind": "subsea",
-  "note": "#815 Underwater tunnels not generating"
- },
- {
-  "name": "freiburg_b31",
-  "lat": 47.984,
-  "lon": 7.886,
-  "r": 2000.0,
-  "issue": null,
-  "kind": "tunnel",
-  "note": "B31 Freiburg (Tachy's report)"
- },
- {
-  "name": "freiburg_schuetzenallee",
-  "lat": 47.9856,
-  "lon": 7.8749,
-  "r": 400.0,
-  "issue": null,
-  "kind": "tunnel",
-  "note": "B31 Schuetzenallee east portal, Tachy's in-game report 2026-11-22"
- },
- {
-  "name": "freiburg_schuetzenallee_west",
-  "lat": 47.98644,
-  "lon": 7.87071,
-  "r": 600.0,
-  "issue": null,
-  "kind": "tunnel",
-  "note": "B31 Schuetzenallee west entrance, Tachy's Street View photos 2026-11-22: a town ramp's side walls start where it leaves the level road (no earth banks in town; the ramp itself at 47.98843, 7.86448, 510 m west of the given point, hence r 600); no daylight at a tube's unbuilt end"
- },
- {
-  "name": "freiburg_kappler_east",
-  "lat": 47.97952,
-  "lon": 7.90755,
-  "r": 400.0,
-  "issue": null,
-  "kind": "tunnel",
-  "note": "B31 Kappler Tunnel east portals, Tachy's in-game report 2026-11-23 (\"the southern tube far too high\"): the eastbound 36926434's mouth at 47.97949, 7.90731 took the DEM over the mouth as its road's height, 5.3 m over the road 5 m out (portal_high \"dem\"); the westbound 10042282 starts at 47.97956, 7.90777; with BNE_ROADSYS_TUNNELS=on worse than without (Tachy's in-game report 2026-11-26, dev 59367b3f, seen from the eastbound approach at 47.97954, 7.90823): the approach is not dug down to the floor (it stays high up to the mouth), concrete walls close the mouth, and ground is raised further up beside the cut (a concrete ramp over the westbound side). The roof on posts over the mouth was a wrong OSM roof, already deleted there; it goes once Overture takes the change"
- },
- {
-  "name": "gotthard_north",
-  "lat": 46.65,
-  "lon": 8.587,
-  "r": 1200.0,
-  "issue": null,
-  "kind": "tunnel",
-  "note": "Gotthard north (Tachy's report)"
- },
- {
-  "name": "gotthard_south",
-  "lat": 46.55,
-  "lon": 8.57,
-  "r": 2500.0,
-  "issue": null,
-  "kind": "tunnel",
-  "note": "Gotthard south (Tachy's report)"
- }
-]
+{
+ "note": "Holdout corpus of reported tunnel places (#1544, #1564): for judging the road system's tunnel steps only, never for tuning them. A step is tuned on its own unit cases and then scored here; a place that fails is reported, not fitted.",
+ "places": [
+  {
+   "name": "i84",
+   "lat": -21.22522,
+   "lon": 55.30441,
+   "r": 800.0,
+   "issue": 84,
+   "kind": "tunnel",
+   "note": "#84 Double Tunnel issue on highways"
+  },
+  {
+   "name": "i160",
+   "lat": -33.75866,
+   "lon": 151.04854,
+   "r": 800.0,
+   "issue": 160,
+   "kind": "tunnel",
+   "note": "#160 Tunnel entrance half blocked"
+  },
+  {
+   "name": "i161",
+   "lat": -33.75861,
+   "lon": 151.04901,
+   "r": 800.0,
+   "issue": 161,
+   "kind": "tunnel",
+   "note": "#161 Tunnel completely blocked"
+  },
+  {
+   "name": "i339",
+   "lat": 45.12131,
+   "lon": 5.6967,
+   "r": 800.0,
+   "issue": 339,
+   "kind": "tunnel",
+   "note": "#339 Tunnel entry obfuscated by terrain glitch"
+  },
+  {
+   "name": "i342",
+   "lat": -23.88319,
+   "lon": -46.49485,
+   "r": 800.0,
+   "issue": 342,
+   "kind": "tunnel",
+   "note": "#342 1.6.3 - Game crashes when going inside the Imigrantes tunnel (descending) (issue gives 23.88S 46.49W: signs corrected; Imigrantes, Brazil)"
+  },
+  {
+   "name": "i362",
+   "lat": 48.13983,
+   "lon": 11.5558,
+   "r": 800.0,
+   "issue": 362,
+   "kind": "tunnel",
+   "note": "#362 Double direction tunnel bugged in Munich"
+  },
+  {
+   "name": "i403",
+   "lat": 34.06924,
+   "lon": -118.70797,
+   "r": 800.0,
+   "issue": 403,
+   "kind": "tunnel",
+   "note": "#403 Mountain tunnel entrance is blocked"
+  },
+  {
+   "name": "i450",
+   "lat": 36.71872,
+   "lon": -4.59034,
+   "r": 800.0,
+   "issue": 450,
+   "kind": "tunnel",
+   "note": "#450 Tunnel roof overlaps with highway (coordinates from the issue text; tunnelscan's 'malaga' place is 11 km east)"
+  },
+  {
+   "name": "i464",
+   "lat": -31.94351,
+   "lon": 115.85386,
+   "r": 800.0,
+   "issue": 464,
+   "kind": "tunnel",
+   "note": "#464 Northbridge Tunnel, Perth: one bore above ground, opposite bore missing (corpus had a duplicate with the wrong sign: dropped)"
+  },
+  {
+   "name": "i660",
+   "lat": 34.10571,
+   "lon": -118.80788,
+   "r": 800.0,
+   "issue": 660,
+   "kind": "tunnel",
+   "note": "#660 Tunnel interior did not render properly"
+  },
+  {
+   "name": "i790_1",
+   "lat": 67.4711,
+   "lon": 15.5823,
+   "r": 800.0,
+   "issue": 790,
+   "kind": "tunnel",
+   "note": "#790 Aspfjordtunnelen (Nordland): hillside over the tunnel turns into a floating shell wit"
+  },
+  {
+   "name": "i790_2",
+   "lat": 67.4772,
+   "lon": 15.5938,
+   "r": 800.0,
+   "issue": 790,
+   "kind": "tunnel",
+   "note": "#790 Aspfjordtunnelen (Nordland): hillside over the tunnel turns into a floating shell wit"
+  },
+  {
+   "name": "i790_3",
+   "lat": 67.4677,
+   "lon": 15.5811,
+   "r": 800.0,
+   "issue": 790,
+   "kind": "tunnel",
+   "note": "#790 Aspfjordtunnelen (Nordland): hillside over the tunnel turns into a floating shell wit"
+  },
+  {
+   "name": "i1018",
+   "lat": -31.94341,
+   "lon": 115.85345,
+   "r": 800.0,
+   "issue": 1018,
+   "kind": "tunnel",
+   "note": "#1018 Perth, Australia: Graham Farmer Freeway Tunnel"
+  },
+  {
+   "name": "i1019",
+   "lat": 51.45853,
+   "lon": 0.25001,
+   "r": 800.0,
+   "issue": 1019,
+   "kind": "tunnel",
+   "note": "#1019 Dartford tunnel approach flooded"
+  },
+  {
+   "name": "i1059",
+   "lat": 40.70577,
+   "lon": -74.01507,
+   "r": 800.0,
+   "issue": 1059,
+   "kind": "tunnel",
+   "note": "#1059 Brooklyn-Battery Tunnel Not enterable"
+  },
+  {
+   "name": "i1060",
+   "lat": 40.72924,
+   "lon": -74.03452,
+   "r": 800.0,
+   "issue": 1060,
+   "kind": "tunnel",
+   "note": "#1060 Holland Tunnel"
+  },
+  {
+   "name": "i1066_1",
+   "lat": 68.96627,
+   "lon": 15.63265,
+   "r": 800.0,
+   "issue": 1066,
+   "kind": "tunnel",
+   "note": "#1066 Norway: bridges and tunnel portals use the wrong models (truss instead of concrete,  [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
+  },
+  {
+   "name": "i1066_2",
+   "lat": 68.627,
+   "lon": 16.59,
+   "r": 800.0,
+   "issue": 1066,
+   "kind": "tunnel",
+   "note": "#1066 Norway: bridges and tunnel portals use the wrong models (truss instead of concrete,  [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
+  },
+  {
+   "name": "i1066_3",
+   "lat": 69.16917,
+   "lon": 19.15763,
+   "r": 800.0,
+   "issue": 1066,
+   "kind": "tunnel",
+   "note": "#1066 Norway: bridges and tunnel portals use the wrong models (truss instead of concrete,  [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
+  },
+  {
+   "name": "i1066_4",
+   "lat": 68.677,
+   "lon": 16.509,
+   "r": 800.0,
+   "issue": 1066,
+   "kind": "tunnel",
+   "note": "#1066 Norway: bridges and tunnel portals use the wrong models (truss instead of concrete,  [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
+  },
+  {
+   "name": "i1083_1",
+   "lat": 48.18609,
+   "lon": 16.37368,
+   "r": 800.0,
+   "issue": 1083,
+   "kind": "tunnel",
+   "note": "#1083 [Map Issue] Ground roads over a tunnel fall into its trench when the elevation data "
+  },
+  {
+   "name": "i1083_2",
+   "lat": 48.26004,
+   "lon": 16.47572,
+   "r": 800.0,
+   "issue": 1083,
+   "kind": "tunnel",
+   "note": "#1083 [Map Issue] Ground roads over a tunnel fall into its trench when the elevation data "
+  },
+  {
+   "name": "i1083_3",
+   "lat": 48.25091,
+   "lon": 16.47085,
+   "r": 800.0,
+   "issue": 1083,
+   "kind": "tunnel",
+   "note": "#1083 [Map Issue] Ground roads over a tunnel fall into its trench when the elevation data "
+  },
+  {
+   "name": "i1083_4",
+   "lat": 48.22963,
+   "lon": 16.45307,
+   "r": 800.0,
+   "issue": 1083,
+   "kind": "tunnel",
+   "note": "#1083 [Map Issue] Ground roads over a tunnel fall into its trench when the elevation data "
+  },
+  {
+   "name": "i1113_1",
+   "lat": 53.57464,
+   "lon": 9.88143,
+   "r": 800.0,
+   "issue": 1113,
+   "kind": "tunnel",
+   "note": "#1113 Underground Tunnel Clips Road and Terrain"
+  },
+  {
+   "name": "i1113_2",
+   "lat": 53.58512,
+   "lon": 9.90398,
+   "r": 800.0,
+   "issue": 1113,
+   "kind": "tunnel",
+   "note": "#1113 Underground Tunnel Clips Road and Terrain"
+  },
+  {
+   "name": "i1157",
+   "lat": 46.63673,
+   "lon": 8.59346,
+   "r": 800.0,
+   "issue": 1157,
+   "kind": "tunnel",
+   "note": "#1157 Tunnel is replaced with solid terrain and map features randomly start and end"
+  },
+  {
+   "name": "i1160",
+   "lat": 46.64891,
+   "lon": 8.58644,
+   "r": 800.0,
+   "issue": 1160,
+   "kind": "tunnel",
+   "note": "#1160 Tunnel section missing and secondary bridge and road is missing/broken"
+  },
+  {
+   "name": "i1161",
+   "lat": 46.61631,
+   "lon": 8.56973,
+   "r": 800.0,
+   "issue": 1161,
+   "kind": "tunnel",
+   "note": "#1161 The tunnel is very steep"
+  },
+  {
+   "name": "i1172",
+   "lat": 48.81611,
+   "lon": 2.36028,
+   "r": 800.0,
+   "issue": 1172,
+   "kind": "tunnel",
+   "note": "#1172 Paris, Porte d Italie, A6b tunnel clips through the surface and obscures P-riph-riq"
+  },
+  {
+   "name": "i1242",
+   "lat": 25.09704,
+   "lon": 55.1621,
+   "r": 800.0,
+   "issue": 1242,
+   "kind": "tunnel",
+   "note": "#1242 Underpass built as a tunnel in a mound: Al Falak Street under the Sheikh Zayed Road "
+  },
+  {
+   "name": "i1253",
+   "lat": 59.36152,
+   "lon": 10.83178,
+   "r": 800.0,
+   "issue": 1253,
+   "kind": "tunnel",
+   "note": "#1253 Tripple tunnel Generation"
+  },
+  {
+   "name": "i1457_1",
+   "lat": 40.44339,
+   "lon": -80.00673,
+   "r": 800.0,
+   "issue": 1457,
+   "kind": "tunnel",
+   "note": "#1457 Pittsburgh PA bridges/tunnels/ramps"
+  },
+  {
+   "name": "i1457_2",
+   "lat": 40.44647,
+   "lon": -79.99635,
+   "r": 800.0,
+   "issue": 1457,
+   "kind": "tunnel",
+   "note": "#1457 Pittsburgh PA bridges/tunnels/ramps"
+  },
+  {
+   "name": "i1461",
+   "lat": 46.6477,
+   "lon": 8.59087,
+   "r": 800.0,
+   "issue": 1461,
+   "kind": "tunnel",
+   "note": "#1461 Tunnel exit mid tunnel is broken"
+  },
+  {
+   "name": "i1508",
+   "lat": 50.87906,
+   "lon": 11.60731,
+   "r": 800.0,
+   "issue": 1508,
+   "kind": "tunnel",
+   "note": "#1508 German Autobahn-Tunnel completely broken"
+  },
+  {
+   "name": "i896",
+   "lat": 40.43791,
+   "lon": -80.01369,
+   "r": 800.0,
+   "issue": 896,
+   "kind": "tunnel",
+   "note": "#896 "
+  },
+  {
+   "name": "i722_1",
+   "lat": -27.44562,
+   "lon": 153.0326,
+   "r": 800.0,
+   "issue": 722,
+   "kind": "tunnel",
+   "note": "#722 Brisbane ICB run - Large amount of issues regarding multiple flyovers/bridges and tun"
+  },
+  {
+   "name": "i722_2",
+   "lat": -27.41225,
+   "lon": 153.07644,
+   "r": 800.0,
+   "issue": 722,
+   "kind": "tunnel",
+   "note": "#722 Brisbane ICB run - Large amount of issues regarding multiple flyovers/bridges and tun"
+  },
+  {
+   "name": "i722_3",
+   "lat": -27.43357,
+   "lon": 153.08278,
+   "r": 800.0,
+   "issue": 722,
+   "kind": "tunnel",
+   "note": "#722 Brisbane ICB run - Large amount of issues regarding multiple flyovers/bridges and tun [0 tunnel parts at these coordinates in the 2026-11-21 baseline]"
+  },
+  {
+   "name": "i722_4",
+   "lat": -27.4414,
+   "lon": 153.04687,
+   "r": 800.0,
+   "issue": 722,
+   "kind": "tunnel",
+   "note": "#722 Brisbane ICB run - Large amount of issues regarding multiple flyovers/bridges and tun"
+  },
+  {
+   "name": "i42",
+   "lat": 30.69131,
+   "lon": -88.03109,
+   "r": 800.0,
+   "issue": 42,
+   "kind": "tunnel",
+   "note": "#42 "
+  },
+  {
+   "name": "i506",
+   "lat": 64.00655,
+   "lon": 11.49992,
+   "r": 800.0,
+   "issue": 506,
+   "kind": "rail",
+   "note": "#506 Railway underpass broken at M-s-rtrauget, Steinkjer"
+  },
+  {
+   "name": "i1163",
+   "lat": 46.53438,
+   "lon": 8.3487,
+   "r": 800.0,
+   "issue": 1163,
+   "kind": "rail",
+   "note": "#1163 Train tunnel and embankment are broken"
+  },
+  {
+   "name": "i792",
+   "lat": 59.03858,
+   "lon": 5.93269,
+   "r": 1200.0,
+   "issue": 792,
+   "kind": "subsea",
+   "note": "#792 Sub-sea / sub-fjord road tunnels are missing, e.g. Ryfylketunnelen (Rogaland): the ro"
+  },
+  {
+   "name": "i815",
+   "lat": 62.20754,
+   "lon": -6.68153,
+   "r": 1200.0,
+   "issue": 815,
+   "kind": "subsea",
+   "note": "#815 Underwater tunnels not generating"
+  },
+  {
+   "name": "freiburg_b31",
+   "lat": 47.984,
+   "lon": 7.886,
+   "r": 2000.0,
+   "issue": null,
+   "kind": "tunnel",
+   "note": "B31 Freiburg (Tachy's report)"
+  },
+  {
+   "name": "freiburg_schuetzenallee",
+   "lat": 47.9856,
+   "lon": 7.8749,
+   "r": 400.0,
+   "issue": null,
+   "kind": "tunnel",
+   "note": "B31 Schuetzenallee east portal, Tachy's in-game report 2026-11-22"
+  },
+  {
+   "name": "freiburg_schuetzenallee_west",
+   "lat": 47.98644,
+   "lon": 7.87071,
+   "r": 600.0,
+   "issue": null,
+   "kind": "tunnel",
+   "note": "B31 Schuetzenallee west entrance, Tachy's Street View photos 2026-11-22: a town ramp's side walls start where it leaves the level road (no earth banks in town; the ramp itself at 47.98843, 7.86448, 510 m west of the given point, hence r 600); no daylight at a tube's unbuilt end"
+  },
+  {
+   "name": "freiburg_kappler_east",
+   "lat": 47.97952,
+   "lon": 7.90755,
+   "r": 400.0,
+   "issue": null,
+   "kind": "tunnel",
+   "note": "B31 Kappler Tunnel east portals, Tachy's in-game report 2026-11-23 (\"the southern tube far too high\"): the eastbound 36926434's mouth at 47.97949, 7.90731 took the DEM over the mouth as its road's height, 5.3 m over the road 5 m out (portal_high \"dem\"); the westbound 10042282 starts at 47.97956, 7.90777; with BNE_ROADSYS_TUNNELS=on worse than without (Tachy's in-game report 2026-11-26, dev 59367b3f, seen from the eastbound approach at 47.97954, 7.90823): the approach is not dug down to the floor (it stays high up to the mouth), concrete walls close the mouth, and ground is raised further up beside the cut (a concrete ramp over the westbound side). The roof on posts over the mouth was a wrong OSM roof, already deleted there; it goes once Overture takes the change"
+  },
+  {
+   "name": "gotthard_north",
+   "lat": 46.65,
+   "lon": 8.587,
+   "r": 1200.0,
+   "issue": null,
+   "kind": "tunnel",
+   "note": "Gotthard north (Tachy's report)"
+  },
+  {
+   "name": "gotthard_south",
+   "lat": 46.55,
+   "lon": 8.57,
+   "r": 2500.0,
+   "issue": null,
+   "kind": "tunnel",
+   "note": "Gotthard south (Tachy's report)"
+  }
+ ]
+}
