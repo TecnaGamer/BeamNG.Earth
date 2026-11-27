@@ -197,11 +197,18 @@ def _fuse(ms):
 
 
 def _cut(base, structures):
-    """base (a road on the ground, a track) without its stretches along its own way's structures: [pieces]."""
+    """base (a road on the ground, a track) without its stretches along its own way's structures: [pieces]. Along a
+    structure is along its middle: a road that only meets the structure's end (its approach) keeps all of its line,
+    its end where the structure's is (the structure's vertices within OVERLAP_M of its own ends are not read)."""
     line = _dense(base.line)
     cov = np.zeros(len(line), bool)
     for s in structures:
-        cov |= near_line(line, _dense(s.line))
+        sl = _dense(s.line)
+        if len(sl) >= 2:
+            far = (np.hypot(*(sl - sl[0]).T) > OVERLAP_M) & (np.hypot(*(sl - sl[-1]).T) > OVERLAP_M)
+            sl = sl[far]
+        if len(sl):
+            cov |= near_line(line, sl)
     if not cov.any():
         return [base]
     if cov.all():

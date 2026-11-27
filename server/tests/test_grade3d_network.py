@@ -134,3 +134,14 @@ def test_other_ways_are_untouched():
     ms = [_rail("w1", _line(0, 0, 600, 0)), _rail("w2", _line(0, 4, 600, 4)), _m("a", _line(0, 0, 100, 0))]
     out = network.one_way(ms)
     assert len(out) == 3 and all(o is m for o, m in zip(sorted(out, key=str), sorted(ms, key=str)))
+
+
+def test_an_approach_meeting_its_decks_end_keeps_its_whole_line():
+    ms = [_m(("r", "ground", "0"), _line(-300, 0, -100, 0)), _m(("r", "deck", 1), _line(-100, 0, 100, 0), "deck", level=1),
+          _m(("r", "ground", "1"), _line(100, 0, 300, 0))]
+    out = network.one_way(ms)
+    ground = sorted((m for m in out if m.kind == "ground"), key=lambda m: m.line[0, 0])
+    assert len(ground) == 2
+    assert abs(ground[0].line[-1, 0] + 100) < 1e-9 and abs(ground[1].line[0, 0] - 100) < 1e-9
+    net = network.build(ms)
+    assert len(net.paths) == 1 and abs(net.paths[0].length - 600) < 1e-6

@@ -18,7 +18,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 SERVER = os.path.join(REPO, "server")
-STEPS = ("network", "layers", "samples", "ground", "laws", "problem", "solve")
+STEPS = ("network", "layers", "samples", "ground", "laws", "problem", "solve", "outputs")
 
 
 def junction(a):
@@ -87,7 +87,7 @@ def main(argv=None):
     import numpy as np
     import blockworker
     import mapcells
-    from grade3d import ground, laws, layers, network, problem, samples
+    from grade3d import ground, laws, layers, network, outputs, problem, samples
     from grade3d import solve as solve3d
     for kv in a.law:            # (a law tried: module.NAME=float)
         name, value = kv.split("=", 1)
@@ -162,6 +162,29 @@ def main(argv=None):
                       rows=d.get("constraint_rows"), slack=d.get("slack_vars"))
         got = solve3d.measure(pr, sol.z)
         t = clock("solve", "measure", t, **{k: round(v, 3) if isinstance(v, float) else v for k, v in got.items()})
+        if "outputs" in steps:
+            prof = outputs.profiles(whole, sm, sol.z)
+            t = clock("outputs", "profiles", t, **outputs.summary(prof))
+            # (read back as the build reads it: each member's own line through the grader's _shape_at)
+            import grading
+
+            class _Region:
+                frame = planner.frame
+
+                def _shape_region(self, _home):
+                    return prof
+            miss, pts = [], 0
+            for m in whole.members:
+                if len(m.line) < 2:
+                    continue
+                zz, _md = grading._Planner._shape_at(_Region(), m.line, m.line, outputs.fid_of(m), (outputs.MODE[m.kind],))
+                pts += len(zz)
+                if not np.isfinite(zz).all():
+                    miss.append((m.key, m.kind, int((~np.isfinite(zz)).sum()), len(zz)))
+            t = clock("outputs", "read back", t, members=len(whole.members), points=pts, members_missing=len(miss),
+                      points_missing=sum(x[2] for x in miss))
+            for x in miss[:a.worst]:
+                print("  missing", x)
         if a.classify:
             # (per firm crossing short by 5 cm or more: its kinds, whether its two paths are joined anywhere, whether
             # it lies within 20 m of an end of either path)
