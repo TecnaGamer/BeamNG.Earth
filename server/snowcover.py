@@ -137,7 +137,20 @@ class Field:
         return self.uniform if self.uniform is not None else self.cells.get((ci, cj))
 
 
+# The local weather S1 tables (snowfield.py, BNE_LOCAL_WEATHER=snowfield): rows of S1_COLS (z m on the absolute 150 m
+# grid, cover facing the pole 0..8, its depth bin, cover facing the equator, its depth bin, age 0..3), at most S1_ROWS,
+# only where the cell has ground; snowlook.rs reads them by the texel's aspect (S1_COLS of a spec's tables: an S1 field)
+S1_COLS = 6
+S1_ROWS = 40
+
+
+def _is_s1(t):
+    return t is not None and bool(t.rows) and len(t.rows[0]) == S1_COLS
+
+
 def _has_cover(t):
+    if _is_s1(t):
+        return any(int(r[1]) > 0 or int(r[3]) > 0 for r in t.rows)
     return t is not None and any(int(r[1]) > 0 for r in t.rows)
 
 
@@ -278,6 +291,8 @@ def _window(f, south, west, north, east):
                 idx[cj - cj0, ci - ci0] = seen[k]
         if not tabs:
             return None
+    if any(_is_s1(t) for t in tabs):
+        return _window_s1(res, ci0, cj0, idx, tabs)
     tables = np.zeros((len(tabs), 8, 4), np.int32)
     counts = np.zeros((len(tabs), 17), np.int32)
     for n, t in enumerate(tabs):
@@ -287,6 +302,29 @@ def _window(f, south, west, north, east):
         for r, row in enumerate(rows):
             if not (0 <= row[1] <= 8 and 0 <= row[2] <= 6 and 0 <= row[3] <= 3):
                 raise ValueError(f"snow table row out of range: {row}")
+            tables[n, r] = row
+        counts[n, 0] = len(rows)
+        counts[n, 1:16] = road_slots(t.road)
+        counts[n, 16] = min(max(int(t.ice), 0), 8)
+    return (res, ci0, cj0, idx, tables, counts)
+
+
+def _window_s1(res, ci0, cj0, idx, tabs):
+    """_window's arrays of S1 tables: tables (n, rows, S1_COLS) int32 (rows: the longest table's), counts as _window's.
+    A field mixes no table kinds (a W2 table among S1 ones is an error)."""
+    if not all(_is_s1(t) for t in tabs):
+        raise ValueError("snow field: S1 and W2 tables mixed")
+    nr = max(len(t.rows) for t in tabs)
+    if nr > S1_ROWS:
+        raise ValueError(f"snow table (S1) with {nr} rows, at most {S1_ROWS}")
+    tables = np.zeros((len(tabs), nr, S1_COLS), np.int32)
+    counts = np.zeros((len(tabs), 17), np.int32)
+    for n, t in enumerate(tabs):
+        rows = sorted(tuple(int(v) for v in r) for r in t.rows)
+        for r, row in enumerate(rows):
+            if not (0 <= row[1] <= 8 and 0 <= row[2] <= 6 and 0 <= row[3] <= 8 and 0 <= row[4] <= 6
+                    and 0 <= row[5] <= 3) or (r and row[0] <= rows[r - 1][0]):
+                raise ValueError(f"snow table (S1) row out of range or out of order: {row}")
             tables[n, r] = row
         counts[n, 0] = len(rows)
         counts[n, 1:16] = road_slots(t.road)
@@ -333,7 +371,9 @@ def spec_for_box(south, west, north, east):
                            wsh is not None)).encode())
     if win is not None:
         res, ci0, cj0, idx, tables, counts = win
-        h.update(repr((res, ci0, cj0, idx.shape)).encode())
+        # (an S1 field's tables carry their own shape: the kind is in the key, never one table read as the other)
+        h.update(repr((res, ci0, cj0, idx.shape) + (("s1", tables.shape) if tables.shape[2] == S1_COLS else ()))
+                 .encode())
         h.update(idx.tobytes())
         h.update(tables.tobytes())
         h.update(counts.tobytes())

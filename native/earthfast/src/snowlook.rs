@@ -23,7 +23,18 @@ use pyo3::prelude::*;
 
 use crate::dm::Dm;
 
-pub const ROWS: usize = 8;          // band rows per table at most
+pub const ROWS: usize = 8;          // band rows per table at most (W2's tables)
+/// The local weather S1 tables (snowfield.rs, BNE_LOCAL_WEATHER=snowfield): rows on the absolute 150 m grid where
+/// the cell has ground, at most this many, each (z m, cover facing the pole 0..8, its depth bin, cover facing the
+/// equator, its depth bin, age class)
+pub const S1_ROWS: usize = 40;
+pub const S1_COLS: usize = 6;
+/// m: an S1 table's weight fades to nothing this far beyond its first and last rows (its cell's relief: a table
+/// never claims snow where its cell has no ground, PLAN_FINAL S-2)
+const S1_FADE_M: f64 = 150.0;
+/// The slope's shade (snowlook's -(gradient toward the pole) / |n|, the sine of its tilt toward the pole) of the
+/// kernel's pole / equator runs (snow.rs radiation_index: a 25-degree slope): sin 25 deg
+const S1_SHADE_FULL: f64 = 0.4226;
 pub const ROAD_CLASSES: usize = 5;  // plow classes P0..P4: the share of the ground's cover a road keeps, 0..8 ...
 pub const ROAD_ZONES: usize = 3;    // ... per zone (W3, snowroad.rs: lanes, wheel tracks, edge)
 pub const ROAD_SLOTS: usize = ROAD_CLASSES * ROAD_ZONES; // a road mask texel 1 + zone * 5 + class
@@ -128,6 +139,45 @@ pub struct SnowField {
     tables: Vec<[[f64; 4]; ROWS]>,
     nrows: Vec<usize>,
     road: Vec<[f64; RD]>,
+    /// the S1 tables (instead of `tables`: rows of S1_COLS), when the field is one of those
+    s1: Option<Vec<Vec<[f64; S1_COLS]>>>,
+}
+
+/// (cover facing the pole, facing the equator (0..1), their depth bins, age) of an S1 table at height h, linear
+/// between rows, held past the ends (the weight of a table past its ends: s1_weight).
+fn s1_table_at(t: &[[f64; S1_COLS]], h: f64) -> [f64; 5] {
+    let row = |r: &[f64; S1_COLS]| [r[1] / 8.0, r[3] / 8.0, r[2], r[4], r[5]];
+    let n = t.len();
+    if n == 0 {
+        return [0.0; 5];
+    }
+    if h <= t[0][0] {
+        return row(&t[0]);
+    }
+    for k in 0..n - 1 {
+        let (a, b) = (&t[k], &t[k + 1]);
+        if h < b[0] {
+            let w = if b[0] > a[0] { (h - a[0]) / (b[0] - a[0]) } else { 1.0 };
+            let lerp = |x: f64, y: f64| x + (y - x) * w;
+            // (depth and age of the snow that is there, as table_at)
+            let d = |ca: f64, cb: f64, da: f64, db: f64| if ca <= 0.0 { db } else if cb <= 0.0 { da } else { lerp(da, db) };
+            let any_a = a[1] > 0.0 || a[3] > 0.0;
+            let any_b = b[1] > 0.0 || b[3] > 0.0;
+            let g = if !any_a { b[5] } else if !any_b { a[5] } else { lerp(a[5], b[5]) };
+            return [lerp(a[1], b[1]) / 8.0, lerp(a[3], b[3]) / 8.0, d(a[1], b[1], a[2], b[2]), d(a[3], b[3], a[4], b[4]), g];
+        }
+    }
+    row(&t[n - 1])
+}
+
+/// An S1 table's weight at height h: 1 within its rows, fading to 0 over S1_FADE_M beyond them.
+fn s1_weight(t: &[[f64; S1_COLS]], h: f64) -> f64 {
+    let (lo, hi) = match (t.first(), t.last()) {
+        (Some(a), Some(b)) => (a[0], b[0]),
+        _ => return 0.0,
+    };
+    let out = if h < lo { lo - h } else if h > hi { h - hi } else { 0.0 };
+    (1.0 - out / S1_FADE_M).clamp(0.0, 1.0)
 }
 
 /// (cover 0..1, depth bin 0..6, age 0..3) of one table at height h.
@@ -157,6 +207,9 @@ impl SnowField {
                nrows: ArrayView2<i32>) -> PyResult<SnowField> {
         // nrows: (n, 1 + RD): the row count, then the table's road shares, then its lake ice
         let n = tables.shape()[0];
+        if tables.shape()[2] == S1_COLS {
+            return SnowField::new_s1(res, ci0, cj0, idx, tables, nrows);
+        }
         if !(res > 0.0) || tables.shape()[1] != ROWS || tables.shape()[2] != 4 || nrows.shape() != [n, 1 + RD]
             || idx.is_empty() {
             return Err(PyValueError::new_err("snow field: res > 0, tables (n, 8, 4), counts (n, 17), a cell raster"));
@@ -189,7 +242,109 @@ impl SnowField {
         if idx.iter().any(|&i| i >= n as i32) {
             return Err(PyValueError::new_err("snow field: a cell names a table that is not there"));
         }
-        Ok(SnowField { res, ci0, cj0, idx: idx.to_owned(), tables: tabs, nrows: counts, road })
+        Ok(SnowField { res, ci0, cj0, idx: idx.to_owned(), tables: tabs, nrows: counts, road, s1: None })
+    }
+
+    /// An S1 field: tables (n, S1_ROWS or fewer, S1_COLS) on the absolute band grid, counts as `new`'s.
+    fn new_s1(res: f64, ci0: i64, cj0: i64, idx: ArrayView2<i32>, tables: ArrayView3<i32>, nrows: ArrayView2<i32>)
+              -> PyResult<SnowField> {
+        let n = tables.shape()[0];
+        let rmax = tables.shape()[1];
+        if !(res > 0.0) || rmax > S1_ROWS || nrows.shape() != [n, 1 + RD] || idx.is_empty() {
+            return Err(PyValueError::new_err("snow field (S1): res > 0, tables (n, <= 40, 6), counts (n, 17), a cell raster"));
+        }
+        let mut tabs = Vec::with_capacity(n);
+        let mut road = Vec::with_capacity(n);
+        for t in 0..n {
+            let c = nrows[[t, 0]];
+            if !(1..=rmax as i32).contains(&c) {
+                return Err(PyValueError::new_err("snow field (S1): 1 to 40 rows a table"));
+            }
+            let mut tab = Vec::with_capacity(c as usize);
+            for r in 0..c as usize {
+                let mut row = [0.0f64; S1_COLS];
+                for (q, v) in row.iter_mut().enumerate() {
+                    *v = tables[[t, r, q]] as f64;
+                }
+                if r > 0 && tables[[t, r, 0]] <= tables[[t, r - 1, 0]] {
+                    return Err(PyValueError::new_err("snow field (S1): band rows by elevation, lowest first"));
+                }
+                tab.push(row);
+            }
+            tabs.push(tab);
+            let mut rd = [0.0f64; RD];
+            for (k, v) in rd.iter_mut().enumerate() {
+                *v = (nrows[[t, 1 + k]] as f64 / 8.0).clamp(0.0, 1.0);
+            }
+            road.push(rd);
+        }
+        if idx.iter().any(|&i| i >= n as i32) {
+            return Err(PyValueError::new_err("snow field: a cell names a table that is not there"));
+        }
+        Ok(SnowField { res, ci0, cj0, idx: idx.to_owned(), tables: Vec::new(), nrows: Vec::new(), road,
+                       s1: Some(tabs) })
+    }
+
+    /// The S1 field at (lat, lon, h) on a slope of this shade (+ facing the pole): the four nearest cells' tables
+    /// blended bilinearly, each weighted by its reach at h (s1_weight; when none reaches h, the bilinear weights
+    /// alone: the nearest tables' ends held), the pole and equator columns mixed by the shade (the kernel's runs are a
+    /// 25-degree slope each way: flat ground their mean).
+    fn at_s1(&self, tabs: &[Vec<[f64; S1_COLS]>], lat: f64, lon: f64, h: f64, shade: f64)
+             -> (f64, f64, f64, [f64; RD]) {
+        let (nj, ni) = (self.idx.shape()[0] as i64, self.idx.shape()[1] as i64);
+        let u = (lon + 180.0) / self.res - 0.5 - self.ci0 as f64;
+        let v = (90.0 - lat) / self.res - 0.5 - self.cj0 as f64;
+        let (u0, v0) = (u.floor(), v.floor());
+        let (fu, fv) = (u - u0, v - v0);
+        let t_aspect = (shade / S1_SHADE_FULL).clamp(-1.0, 1.0);
+        let wp = 0.5 + 0.5 * t_aspect;
+        let mut picks: Vec<(usize, f64, f64)> = Vec::with_capacity(4);
+        for (dj, wv) in [(0i64, 1.0 - fv), (1, fv)] {
+            for (di, wu) in [(0i64, 1.0 - fu), (1, fu)] {
+                let w = wu * wv;
+                if w <= 0.0 {
+                    continue;
+                }
+                let j = (v0 as i64 + dj).clamp(0, nj - 1) as usize;
+                let i = (u0 as i64 + di).clamp(0, ni - 1) as usize;
+                let t = self.idx[[j, i]];
+                if t < 0 {
+                    continue;
+                }
+                picks.push((t as usize, w, w * s1_weight(&tabs[t as usize], h)));
+            }
+        }
+        let reach: f64 = picks.iter().map(|p| p.2).sum();
+        let (mut c, mut d, mut g) = (0.0, 0.0, 0.0);
+        let mut rd = [0.0f64; RD];
+        let mut wr = 0.0;
+        for &(t, w, wh) in &picks {
+            let w = if reach > 0.0 { wh } else { w };
+            if w <= 0.0 {
+                continue;
+            }
+            let [cp, ce, dp, de, tg] = s1_table_at(&tabs[t], h);
+            c += w * (cp * wp + ce * (1.0 - wp));
+            d += w * (dp * wp + de * (1.0 - wp));
+            g += w * tg;
+            for (k, r) in rd.iter_mut().enumerate() {
+                *r += w * self.road[t][k];
+            }
+            wr += w;
+        }
+        if wr > 0.0 {
+            // (cover, depth, age as the old field's: weights summing to the cells' share present; the road shares
+            // normalised)
+            let present: f64 = picks.iter().map(|p| p.1).sum();
+            let k = present / wr;
+            c *= k;
+            d *= k;
+            g *= k;
+            for r in rd.iter_mut() {
+                *r /= wr;
+            }
+        }
+        (c, d, g, rd)
     }
 
     /// (cover, depth, age, road shares) at (lat, lon, h): the four nearest cells' tables blended bilinearly by the
@@ -621,7 +776,11 @@ impl SnowLook {
         let shade = -pole / (1.0 + tan2).sqrt();
         let he = h + self.p.aspect_m * shade;
         let (mut c, mut d, mut g, rd) = match &self.field {
-            Some(f) => f.at(lat, lon, he),
+            // (S1's tables carry the aspect themselves: the kernel's own pole / equator runs, not a shift)
+            Some(f) => match &f.s1 {
+                Some(t) => f.at_s1(t, lat, lon, h, shade),
+                None => f.at(lat, lon, he),
+            },
             None => (0.0, 0.0, 0.0, [0.0; RD]),
         };
         if ela < NO_ELA * 0.5 {
