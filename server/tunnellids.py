@@ -72,26 +72,44 @@ def _cross(a, b, p, q):
 
 
 def _crossings(T, R):
-    """[(s along T, s along R, sine of the angle)] where the polylines T and R cross. Pure."""
+    """[(s along T, s along R, sine of the angle)] where the polylines T and R cross. Pure. Each road segment's
+    crossing tests against all of T's segments run as arrays (the elementwise float64 operations of _cross, so the same
+    bits: tests/test_tunnellids.py checks it against _crossings_ref); only the hits take the Python path below, in T's
+    order."""
     sT = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(T, axis=0).T))]
     sR = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(R, axis=0).T))]
     out = []
     lo, hi = T.min(axis=0), T.max(axis=0)
+    A = T[:-1]
+    rv = T[1:] - A                          # (the tunnel's segments' vectors)
+    r0, r1 = rv[:, 0], rv[:, 1]
+    la_all = dnp.hypot(r0, r1)
     for j in range(len(R) - 1):
         p, q = R[j], R[j + 1]
         if (np.minimum(p, q) > hi).any() or (np.maximum(p, q) < lo).any():
             continue
-        for i in range(len(T) - 1):
-            got = _cross(T[i], T[i + 1], p, q)
-            if got is None:
-                continue
-            t, u = got
-            a, b = T[i + 1] - T[i], q - p
-            la, lb = dnp.hypot(*a), dnp.hypot(*b)
+        d = q - p
+        den = r0 * d[1] - r1 * d[0]
+        ok = np.abs(den) >= 1e-12
+        if not ok.any():
+            continue
+        idx = np.flatnonzero(ok)
+        dn = den[idx]
+        w0, w1 = p[0] - A[idx, 0], p[1] - A[idx, 1]
+        t = (w0 * d[1] - w1 * d[0]) / dn
+        u = (w0 * r1[idx] - w1 * r0[idx]) / dn
+        hit = (t >= 0.0) & (t <= 1.0) & (u >= 0.0) & (u <= 1.0)
+        if not hit.any():
+            continue
+        lb = dnp.hypot(*d)
+        for k in np.flatnonzero(hit):
+            i = int(idx[k])
+            la = la_all[i]
             if la <= 0 or lb <= 0:
                 continue
-            sin = abs(a[0] * b[1] - a[1] * b[0]) / (la * lb)
-            c = (sT[i] + t * la, sR[j] + u * lb, float(sin))
+            a = rv[i]
+            sin = abs(a[0] * d[1] - a[1] * d[0]) / (la * lb)
+            c = (sT[i] + t[k] * la, sR[j] + u[k] * lb, float(sin))
             if not any(abs(c[0] - o[0]) < 0.5 and abs(c[1] - o[1]) < 0.5 for o in out):    # (at a shared vertex)
                 out.append(c)
     return out

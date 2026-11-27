@@ -27,6 +27,49 @@ def trench(banks=(6.5, 6.5), half=8.0):
     return z_at
 
 
+def _crossings_ref(T, R):
+    """tunnellids._crossings as it was written segment by segment (the reference its array form must equal bit for bit)."""
+    import dnp
+    sT = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(T, axis=0).T))]
+    sR = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(R, axis=0).T))]
+    out = []
+    lo, hi = T.min(axis=0), T.max(axis=0)
+    for j in range(len(R) - 1):
+        p, q = R[j], R[j + 1]
+        if (np.minimum(p, q) > hi).any() or (np.maximum(p, q) < lo).any():
+            continue
+        for i in range(len(T) - 1):
+            got = tunnellids._cross(T[i], T[i + 1], p, q)
+            if got is None:
+                continue
+            t, u = got
+            a, b = T[i + 1] - T[i], q - p
+            la, lb = dnp.hypot(*a), dnp.hypot(*b)
+            if la <= 0 or lb <= 0:
+                continue
+            sin = abs(a[0] * b[1] - a[1] * b[0]) / (la * lb)
+            c = (sT[i] + t * la, sR[j] + u * lb, float(sin))
+            if not any(abs(c[0] - o[0]) < 0.5 and abs(c[1] - o[1]) < 0.5 for o in out):
+                out.append(c)
+    return out
+
+
+class CrossingsTest(unittest.TestCase):
+    def test_array_form_equals_the_segment_loop_to_the_bit(self):
+        rng = np.random.default_rng(7)
+        n_hits = 0
+        for _ in range(60):
+            T = np.cumsum(rng.normal(0, 12.0, (rng.integers(2, 80), 2)), axis=0)
+            R = np.cumsum(rng.normal(0, 15.0, (rng.integers(2, 60), 2)), axis=0) + T[len(T) // 2] * rng.random()
+            if rng.random() < 0.3:          # (shared vertices and repeated points: the 0.5 m dedupe and zero lengths)
+                R[1:3] = T[1:3]
+                R[4:5] = R[3:4]
+            got, want = tunnellids._crossings(T, R), _crossings_ref(T, R)
+            n_hits += len(want)
+            self.assertEqual(got, want)
+        self.assertGreater(n_hits, 50)
+
+
 class LidsOfTest(unittest.TestCase):
     def test_a_square_over_a_cut_and_cover_gets_its_lid(self):
         # Suedtiroler Platz (#1): two ground roads 25 m apart over the Guertel, the DEM at the floor under both
