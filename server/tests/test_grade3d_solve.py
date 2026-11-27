@@ -167,3 +167,34 @@ def test_problem_holds_joins_equal_and_clearances_over():
         assert c[4] == ("eq" if what == "join" else "ge")
     clear = [c for c, (what, _k) in zip(pr.couplings, pr.why) if what == "clear"]
     assert len(clear) >= 3 and len({c[3] for c in clear}) >= 3     # (the lower held along the deck's width)
+
+
+_THREADS_SCRIPT = r"""
+import os, sys, threading
+sys.path.insert(0, sys.argv[1])
+import numpy as np
+from grade3d import solve
+def work():
+    n = 20
+    A = np.random.rand(30, n); b = np.random.rand(30)
+    assert solve.highs(np.ones(n), A_ub=-A, b_ub=-b, bounds=[(0, 10)] * n).status == 0
+for k in range(100):
+    ts = [threading.Thread(target=work) for _ in range(4)]
+    for t in ts: t.start()
+    for t in ts:
+        t.join(20)
+        if t.is_alive():
+            os._exit(2)
+print("ok")
+"""
+
+
+def test_threads_that_solve_end_and_the_process_exits():
+    # (a thread that ran HiGHS itself never ended on Windows, its join waiting for ever: every solve runs on the
+    # process's own HiGHS threads, solve.highs. Run apart, under a limit: a hang is a failure, not a stuck suite)
+    import os
+    import subprocess
+    import sys
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    got = subprocess.run([sys.executable, "-c", _THREADS_SCRIPT, here], capture_output=True, text=True, timeout=120)
+    assert got.returncode == 0 and got.stdout.strip() == "ok", (got.returncode, got.stdout, got.stderr[-2000:])

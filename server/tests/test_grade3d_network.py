@@ -118,6 +118,19 @@ def test_a_copy_drawn_the_other_way_extends_the_start():
     assert abs(xs.min() + 400) < 1e-9 and abs(xs.max() - 600) < 1e-9 and np.all(np.diff(xs) > 0)
 
 
+def test_a_copy_that_leaves_the_line_and_comes_back_is_a_piece_of_its_own():
+    # (a way's second copy along the first for 30 m, 10 m off it for 30 m, back on it: its detour touches the kept line
+    # at both ends, mid-line. It went back on the work list against that same line for ever: Popoli, 2026-11-27)
+    x = np.linspace(10.0, 80.0, 36)     # (shorter than the first, 90 m with its detour: the first is the one kept)
+    detour = np.c_[x, np.where((x > 30) & (x < 60), 10.0, 0.0)]
+    out = network.one_way([_rail("w1", _line(0, 0, 100, 0)), _rail("w1", detour)])
+    assert len(out) == 2
+    off = [m for m in out if np.abs(m.line[:, 1]).max() > 5.0]
+    (d,) = off
+    tol = network.OVERLAP_M     # (its ends on the kept line: within its overlap of it)
+    assert abs(d.line[0, 1]) <= tol and abs(d.line[-1, 1]) <= tol and 25 < d.line[0, 0] < d.line[-1, 0] < 65
+
+
 def test_a_track_under_its_own_deck_is_cut_there_and_chains_through_it():
     ms = [_rail("w1", _line(0, 0, 1000, 0)), _rail("w1", _line(400, 0, 600, 0), "rail_deck"),
           _m("road", _line(500, -100, 500, 100))]

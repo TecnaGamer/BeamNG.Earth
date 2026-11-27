@@ -33,6 +33,8 @@ CELL_PAD_M = 150.0          # m round a cell whose members are its pieces (a pla
 NEAR_M = 3.0                # m: a block's piece this near a point gives its height there (grading.SHAPES_NEAR_M)
 DIR_COS = 0.5               # ... running within 60 deg of the point's line (a road over itself is not its own height)
 KEPT = 128                  # blocks a planner keeps
+BLOCK_SLOW_S = 60.0         # s: a block solve this long is logged as a warning, its stacks dumped while it still runs
+BUILD_SLOW_S = 20.0         # s: a block's network build this long is logged as a warning
 
 
 @dataclass
@@ -95,8 +97,12 @@ def _solve_block(planner, bx, by):
     reach = RAMP_M + MARGIN_M
     ms = members_in(planner, c0 - reach - READ_PAD_M, c1 + reach + READ_PAD_M)
     if not ms:
-        return Block((c0, c1), {}, time.perf_counter() - t0, {})
+        return Block((c0, c1), {}, time.perf_counter() - t0, {"members": 0})
+    t1 = time.perf_counter()
     net = network.build(ms, _linenet.Network())
+    if time.perf_counter() - t1 > BUILD_SLOW_S:
+        log.warning("grading: 3D block (%d, %d) of region %s: its network of %d members took %.1f s to build",
+                    bx, by, planner.region, len(ms), time.perf_counter() - t1)
     sm = samples.sample(net, layers.order(net))
     g = ground.smooth(sm, ground.read(ground.planner_elev(planner), sm))
     pr = problem.pose(net, sm, laws.lay(net, sm, g))
@@ -108,11 +114,14 @@ def _solve_block(planner, bx, by):
         z[b.idx] = zb
     prof = outputs.profiles(net, sm, z)
     dk = decks.find(net, sm, pr, z, c0, c1) if b is not None else []
-    return Block((c0, c1), _segments(prof), time.perf_counter() - t0, {k: d.get(k) for k in ("status", "rows")}, dk)
+    diag = {"status": d.get("status"), "rows": d.get("rows"), "members": len(ms), "samples": len(sm)}
+    return Block((c0, c1), _segments(prof), time.perf_counter() - t0, diag, dk)
 
 
 def block(planner, bx, by):
-    """Block (bx, by), solved once per planner (the first asking thread solves it, the others wait for it)."""
+    """Block (bx, by), solved once a run: the first asking thread of the first asking process solves it, the others
+    wait for it and read it (the shared plan cache's blocks, plancache.block_*; a process without one: once per
+    planner)."""
     with planner.lock:
         memo = planner.__dict__.setdefault("_grade3d_blocks", {})
         locks = planner.__dict__.setdefault("_grade3d_block_locks", {})
@@ -125,8 +134,37 @@ def block(planner, bx, by):
             got = memo.get((bx, by))
         if got is not None:
             return got
-        got = solve_block(planner, bx, by)
-        log.info("grading: 3D solve block (%d, %d): %.1f s, %s", bx, by, got.seconds, got.diagnostics.get("status"))
+        shared = planner.shared
+        tag = None if shared is None else "%d_%d" % tuple(planner.region)
+        got, mine = shared.block_claim(tag, bx, by) if shared is not None else (None, False)
+        try:
+            if got is None:
+                import stackdump    # (a block still solving after BLOCK_SLOW_S: which one, and where it is, while it is)
+                what = "3D block (%d, %d) of region %s still solving after %.0f s" % (bx, by, planner.region,
+                                                                                    BLOCK_SLOW_S)
+                watch = stackdump.watch(BLOCK_SLOW_S, what)
+                try:
+                    got = solve_block(planner, bx, by)
+                except Exception as e:
+                    log.error("grading: 3D block (%d, %d) of region %s: %s: %s", bx, by, planner.region,
+                              type(e).__name__, e)
+                    raise
+                finally:
+                    watch.cancel()
+                dg = got.diagnostics
+                log.log(logging.WARNING if got.seconds > BLOCK_SLOW_S else logging.INFO,
+                        "grading: 3D solve block (%d, %d) of region %s: %.1f s, %s (%s members, %s samples, %s rows, "
+                        "%d decks)", bx, by, planner.region, got.seconds, dg.get("status"), dg.get("members"),
+                        dg.get("samples"), dg.get("rows"), len(got.decks))
+                if dg.get("members") and dg.get("status") != "Solved":
+                    log.warning("grading: 3D block (%d, %d) of region %s: its core has no solved heights (%s)",
+                                bx, by, planner.region, dg)
+                if mine and not shared.block_store(tag, bx, by, got):
+                    log.warning("grading: 3D block (%d, %d) of region %s not written to the shared cache: the run's "
+                                "other processes solve it again", bx, by, planner.region)
+        finally:
+            if mine:
+                shared.block_release(tag, bx, by)
         with planner.lock:
             if len(memo) >= KEPT:
                 memo.clear()

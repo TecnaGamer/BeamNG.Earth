@@ -100,25 +100,31 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class RegionCacheTest(unittest.TestCase):
-    def test_a_region_reads_back_as_written(self):
+class BlockCacheTest(unittest.TestCase):
+    def test_a_3d_block_reads_back_as_written(self):
         import tempfile
         import plancache
-        xy = np.array([[0.0, 0.0], [4.0, 0.0], [8.0, 0.0]])
-        z = np.array([1.0, 1.5, 2.0])
-        k1, k2 = ("g", 0.0, 0.0, 4.0, 0.0), ("b", 4.0, 0.0, 8.0, 0.0)
-        got = {"parts": [(k1, xy[:2], False, "motorway", "w1"), (k2, xy[1:], True, "motorway", "w2"),
-                         (("g", 9.0, 9.0, 9.5, 9.0), np.array([[9.0, 9.0], [9.5, 9.0]]), False, "trunk", None)],
-               "prof": {k1: (xy, z), k2: (xy, z)}}
+        from grade3d.region import Block
+        a = np.array([[0.0, 0.0], [4.0, 0.0]])
+        b = np.array([[4.0, 0.0], [8.0, 0.0]])
+        blk = Block((np.array([0.0, 0.0]), np.array([1500.0, 1500.0])),
+                    {("w1", "set"): (a, b, np.array([1.0, 1.5]), np.array([1.5, 2.0])),
+                     ("w2", "deck"): (a[:1], b[:1], np.array([7.0]), np.array([7.5]))},
+                    3.5, {"status": "Solved", "rows": 12}, [("w1", np.array([1.0, 2.0]), np.array([3.0, 4.0]))])
         with tempfile.TemporaryDirectory() as d:
             pc = plancache.PlanCache(d, "t")
-            self.assertTrue(pc.region_store("f", (14, 1, 2), got))
-            back = pc.region_load("f", (14, 1, 2))
-        self.assertEqual([q[0] for q in back["parts"]], [q[0] for q in got["parts"]])
-        self.assertEqual([q[2:5] for q in back["parts"]], [q[2:5] for q in got["parts"]])
-        self.assertEqual([q[5] for q in back["parts"]], [0.0, 1.0, 0.0])
-        self.assertEqual(set(back["prof"]), {k1, k2})
-        np.testing.assert_array_equal(back["prof"][k2][1], z)
-        np.testing.assert_array_equal(back["parts"][1][1], xy[1:])
+            self.assertTrue(pc.block_store("3_4", -1, 2, blk))
+            back = pc.block_load("3_4", -1, 2)
+            self.assertIsNone(pc.block_load("3_4", 0, 2))
+        self.assertEqual(set(back.prof), set(blk.prof))
+        for k in blk.prof:
+            for x, y in zip(back.prof[k], blk.prof[k]):
+                np.testing.assert_array_equal(x, y)
+        np.testing.assert_array_equal(back.core[1], blk.core[1])
+        self.assertEqual(back.diagnostics, blk.diagnostics)
+        self.assertEqual(back.seconds, 3.5)
+        (f, p, q), = back.decks
+        self.assertEqual(f, "w1")
+        np.testing.assert_array_equal(np.r_[p, q], [1.0, 2.0, 3.0, 4.0])
 
 

@@ -18,7 +18,11 @@ earthwork, the one whose grades change least (TIE of the median sample's cost pe
 With no answer the problem contradicts itself and nothing is made of it (NotSolved): an irreducible set of its laws and
 clearances that cannot hold together with the joins is named, each by its place and its paths, for the map's data
 there to be read."""
+from concurrent.futures import Future
 from dataclasses import dataclass, field
+import os
+import queue
+import threading
 import time
 
 import numpy as np
@@ -26,6 +30,39 @@ import scipy.sparse as sp
 from scipy.optimize import linprog
 
 TIE = 1.0e-3                # of the median sample's cost: per m of path and unit of grade change
+HIGHS_THREADS = max(2, min(8, (os.cpu_count() or 2) // 2))     # threads the process's HiGHS solves run on
+
+# HiGHS (scipy's linprog "highs") keeps a task executor per thread that calls it, with worker threads of its own, torn
+# down when that thread ends. On Windows the thread then never ends: its join waits for ever (scipy 1.17.1, 2026-11-27: a
+# thread that ran one linprog and returned hung its join in PyThread_join_thread; Popoli's plans waited on a pool's
+# shutdown for 30 min, no road in the game). So every solve of the process runs on HIGHS_THREADS threads of its own that
+# live as long as it does (daemon threads, never joined), whatever thread asks.
+_HIGHS_Q = queue.Queue()
+_HIGHS_LOCK = threading.Lock()
+_HIGHS_RUNNING = []
+
+
+def _highs_worker():
+    while True:
+        fut, args, kw = _HIGHS_Q.get()
+        if not fut.set_running_or_notify_cancel():
+            continue
+        try:
+            fut.set_result(linprog(*args, method="highs", **kw))
+        except BaseException as e:      # (the caller's to raise)
+            fut.set_exception(e)
+
+
+def highs(*args, **kw):
+    """scipy.optimize.linprog(*args, method="highs", **kw) on one of the process's HiGHS threads, waited for."""
+    with _HIGHS_LOCK:
+        while len(_HIGHS_RUNNING) < HIGHS_THREADS:
+            t = threading.Thread(target=_highs_worker, daemon=True, name="highs_%d" % len(_HIGHS_RUNNING))
+            t.start()
+            _HIGHS_RUNNING.append(t)
+    fut = Future()
+    _HIGHS_Q.put((fut, args, kw))
+    return fut.result()
 
 
 @dataclass
@@ -157,8 +194,7 @@ def _irreducible(A, b, A_eq, b_eq, bounds, groups):
     zero = np.zeros(A.shape[1])
 
     def feasible(mask):
-        return linprog(zero, A_ub=A[mask], b_ub=b[mask], A_eq=A_eq, b_eq=b_eq, bounds=bounds,
-                       method="highs").status == 0
+        return highs(zero, A_ub=A[mask], b_ub=b[mask], A_eq=A_eq, b_eq=b_eq, bounds=bounds).status == 0
     alive = np.ones(len(b), bool)
     todo = [g for g in gid if g[0] != "earth"]
     core = []
@@ -201,7 +237,7 @@ def _solve(chains, couplings, why, names, what):
     c, A, b, A_eq, b_eq, bounds, groups, n = program(chains, couplings, why)
     if n == 0:
         return np.zeros(0), dict(status="Solved", rows=0)
-    res = linprog(c, A_ub=A, b_ub=b, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs")
+    res = highs(c, A_ub=A, b_ub=b, A_eq=A_eq, b_eq=b_eq, bounds=bounds)
     if res.status == 2:
         core = _irreducible(A, b, A_eq, b_eq, bounds, groups)
         raise NotSolved("grade3d: %s has no answer: these cannot hold together with the map's joins:\n  %s" % (
