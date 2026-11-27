@@ -76,6 +76,14 @@ end
 ------------------------------------------------------------------------------------------
 -- runtime
 
+-- Is a point under cover (ambience.shelterAt: a road tile's tunnel, arch, parking or under-bridge box)?
+function M.covered(p)
+  local amb = package.loaded['beamngEarth/ambience']
+  if not (p and amb and type(amb.shelterAt) == 'function') then return false end
+  local ok, kind = pcall(amb.shelterAt, p.x, p.y, p.z + 0.5)
+  return ok and kind ~= nil or false
+end
+
 local film = 0
 local timer, sinceSend = 0, 0
 local lastCmd, lastId = nil, nil
@@ -110,15 +118,19 @@ function M.update(dt, ref, rainMmH, on)
   dt = tonumber(dt) or 0
   timer, sinceSend = timer + dt, sinceSend + dt
   if timer < M.INTERVAL_S then return lastId ~= nil end
-  local target = on and M.filmMm(rainMmH) or 0
-  film = film + (target - film) * (1 - exp(-timer / M.FILM_TAU_S))
-  if not on then film = 0 end
-  timer = 0
-  ref = on and tonumber(ref) or 255
-  local f = film >= M.FILM_SEND_MIN and film or 0
   local veh = getPlayerVehicle and getPlayerVehicle(0) or nil
   local id = veh and veh:getID() or nil
   if id and not own(id) then veh, id = nil, nil end
+  -- no rain film under cover (the puddle plan D14: a tunnel, an arch, a parking structure, under a bridge's deck)
+  -- (with the new puddle look on, M.coverCheck: weather.lua; off, as before)
+  local covered = M.coverCheck and veh ~= nil and (tonumber(rainMmH) or 0) > 0 and M.covered(veh:getPosition()) or false
+  local target = (on and not covered) and M.filmMm(rainMmH) or 0
+  film = film + (target - film) * (1 - exp(-timer / M.FILM_TAU_S))
+  if not on or covered then film = 0 end
+  M.coveredNow = covered
+  timer = 0
+  ref = on and tonumber(ref) or 255
+  local f = film >= M.FILM_SEND_MIN and film or 0
   if lastId and lastId ~= id then clearCar(lastId); lastId, lastCmd = nil, nil end
   if (ref >= 255 and f == 0) or not veh then
     if lastId then clearCar(lastId) end

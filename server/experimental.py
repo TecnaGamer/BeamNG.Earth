@@ -84,6 +84,8 @@ FEATURES = (
     ("expStaleRevisit", {"BNE_STALE_REVISIT": "on"}, None),               # revisit.STALE_ON (not a key: NOT_SWITCHES)
     ("expWinter", {"BNE_WINTER": "on"}, None),                            # snow.WINTER / snowcover.ON (not a key)
     ("expWetRoads", {"BNE_WET_ROADS": "on"}, None),                       # snow.WET_ROADS: rain's wet roads (not a key)
+    # the puddle plan (R1: the rain history in the weather message, weather.PUDDLES_V2; R2 on: the new puddle geometry)
+    ("expPuddlesV2", {"BNE_PUDDLES": "v2"}, None),                        # weather.PUDDLES_V2, roadwear.PUDDLES
 )
 IDS = tuple(f[0] for f in FEATURES)
 # A setting that counts only in a file of this version or newer (settings.lua M.VERSION): the Road signs switch was on

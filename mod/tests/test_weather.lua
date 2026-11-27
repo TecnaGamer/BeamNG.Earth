@@ -838,6 +838,13 @@ do
   local th = W.sanitizeMsg({ code = 95, capeJkg = 2500, lpi = 3, rainMmH = 6 })
   check(th.capeJkg == 2500 and th.lpi == 3 and W.thunderOf(th) == 2, 'sanitizeMsg: the thunder fields relayed (real-host lightning)')
   check(type(W.targets(W.sanitizeMsg({ code = 61 })).fogSigma) == 'number', 'a sanitized message gives targets')
+  -- the new puddle look on the weather host: ET0 and its wet state's snapshot relayed, integers in range; no history
+  local ws = W.sanitizeMsg({ code = 63, rainMmH = 3, et0Umh = 1e9, hist = { t0 = 1, rain = { 1 } },
+    wet = { t = 58806666.7, w = 4000, i = -2, h = 0 / 0, x = 'y' } })
+  check(ws.et0Umh == 5000 and ws.hist == nil and ws.wet.t == 58806666 and ws.wet.w == 1000 and ws.wet.i == 0
+    and ws.wet.h == 0 and ws.wet.x == nil, 'sanitizeMsg: ET0 and the wet snapshot clamped, no history')
+  check(W.sanitizeMsg({ code = 63, wet = { w = 3 } }).wet == nil and W.sanitizeMsg({ code = 63, wet = 'x' }).wet == nil,
+    'sanitizeMsg: a snapshot without its tick is dropped')
 
   -- the radial ring's choices
   local rc = W.radialChoice('rain')
@@ -1126,6 +1133,36 @@ do
   check(C.checkTimeOfDay == foreign and C.onTrafficTick == tick0, 'another mod\'s wrap is kept')
   C.checkTimeOfDay = check0
   gameplay_traffic = nil
+end
+
+-- the new puddle look's inputs (wetInputs, wetstate.sync): where the weather shown comes from
+do
+  local hist = { t0 = 1764100000, rain = { 1000 }, et0 = { 50 } }
+  W.setPreset(nil)
+  W.setMode('real')
+  W.onWeather({ code = 63, rainMmH = 2, tempC = 9, lat = 39.3, lon = -76.6, hist = hist, cover = { low = 100, mid = 80 } })
+  local c = W._wetInputs()
+  check(c and c.src == 'real' and c.hist == hist and c.lat == 39.3 and c.tC == 9 and c.msg.rainMmH == 2,
+    'wet inputs: the real weather with its history and place')
+  W.setRealPart('precip', false)
+  check(W._wetInputs().hist == nil and W._wetInputs().msg.rainMmH == 0, 'the real rain left out: no history either')
+  W.setRealPart('precip', true)
+  W.setMode('preset')
+  W.setPresetChoice('storm')
+  c = W._wetInputs()
+  check(c.src == 'preset' and c.key == 'storm@' .. tostring(W.choices().intensity) and c.hist == nil, 'wet inputs: a preset')
+  W.setPreset('rain')
+  check(W._wetInputs().src == 'preset' and W._wetInputs().key == 'server:rain', 'wet inputs: a server preset')
+  W.setPreset('real-host', false)
+  W.setHostWeather(W.sanitizeMsg({ code = 63, rainMmH = 3, wet = { t = 7, w = 5, i = 6, h = 8 } }))
+  c = W._wetInputs()
+  check(c.src == 'host' and c.snap and c.snap.t == 7 and c.msg.rainMmH == 3, 'wet inputs: the host\'s weather and snapshot')
+  W.setPreset('real-host', true)
+  check(W._wetInputs().src == 'real' and W._wetInputs().hist == hist, 'wet inputs: the host itself, its own history')
+  W.setPreset(nil)
+  W.setMode('manual')
+  check(W._wetInputs() == nil, 'wet inputs: none with the weather off')
+  W.setMode('real')
 end
 
 T.done('test_weather')

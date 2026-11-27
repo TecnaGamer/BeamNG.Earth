@@ -190,6 +190,7 @@ M.STREAKS = false          -- the settings' "Rain streaks" (rainstreaks.lua): of
 M.WET_LOOK = true          -- the settings' "Wet look" (wetlook.lua)
 M.WET_GRIP = true          -- the settings' "Wet roads": the grip follows the weather shown, aquaplaning in its water
                            -- (wetlook.lua -> winter.lua setShown; aquaplane.lua)
+M.PUDDLE_LOOK = false      -- the settings' "New puddle look" (the puddle plan R1: wetlook.lua M.v2, wetstate.lua)
 M.GRAVITY_ENABLED = true
 M.GRAVITY_EPS = 1e-4       -- m/s^2; ~30 m of climb (setGravity queues Lua into every vehicle)
 M.GRAVITY_CHECK_S = 1
@@ -672,7 +673,9 @@ end
 -- more than an odd weather; nil when it is not a table. No place, time zone or anything else is kept.
 local NUM_FIELDS = { code = { 0, 99 }, visM = { 0, 1e6 }, rainMmH = { 0, 500 }, snowCmH = { 0, 100 },
   hailCmH = { 0, 100 }, slTempC = { -90, 60 }, tempC = { -90, 60 }, baseAglM = { 0, 20000 }, capeJkg = { 0, 10000 },
-  lpi = { 0, 1000 } }
+  lpi = { 0, 1000 }, et0Umh = { 0, 5000 } }
+-- (the new puddle look's wet state on the weather host: wetstate.lua's snapshot, integers in these ranges)
+local WET_FIELDS = { t = { 0, 2 ^ 40 }, w = { 0, 1000 }, i = { 0, 500000 }, h = { 0, 1800000 } }
 local function inRange(v, r)
   v = tonumber(v)
   if not v or v ~= v then return nil end
@@ -693,6 +696,14 @@ function M.sanitizeMsg(t)
     end
   end
   m.fog = t.fog == true or nil
+  if type(t.wet) == 'table' and tonumber(t.wet.t) then
+    local w = {}
+    for k, r in pairs(WET_FIELDS) do
+      local v = inRange(t.wet[k], r)
+      w[k] = v and math.floor(v) or r[1]
+    end
+    m.wet = w
+  end
   return m
 end
 
@@ -1603,6 +1614,32 @@ end
 local streaks = require('beamngEarth/rainstreaks')
 local wetlook = require('beamngEarth/wetlook')
 local aquaplane = require('beamngEarth/aquaplane')
+
+-- The new puddle look's inputs (wetlook.lua calls it at its checks only, wetstate.sync): the message shown, where it
+-- comes from (src 'real': this player's real weather with the server's history and place; 'preset': a preset, key its
+-- name and intensity (or the server's); 'host': BeamMP 'real-host' on a player who is not the host, with the host's
+-- snapshot) and the air shown (tC). nil with nothing shown.
+local function wetInputs()
+  local m = shownMsgOf()
+  if not m then return nil end
+  local ctx = { msg = m, tC = tonumber(m.tempC) or tonumber(m.slTempC) }
+  if preset and preset.preset ~= 'real-host' then
+    ctx.src, ctx.key = 'preset', 'server:' .. tostring(preset.preset)
+  elseif preset and not serverHost then
+    ctx.src, ctx.snap = 'host', type(hostMsg) == 'table' and hostMsg.wet or nil
+  elseif not preset and mode == 'preset' then
+    ctx.src, ctx.key = 'preset', tostring(choice.preset) .. '@' .. tostring(choice.intensity)
+  else                       -- (this player's real weather; on the 'real-host' host, the one it relays)
+    ctx.src = 'real'
+    local real = lastMsg or {}
+    -- (the history only while the real rain is shown: not left out, not at intensity 0)
+    -- (the 'real-host' host shows its real message as it is: always)
+    if preset or (choice.parts.precip ~= false and (choice.intensity or 1) > 0) then ctx.hist = real.hist end
+    ctx.lat, ctx.lon = tonumber(real.lat), tonumber(real.lon)
+  end
+  return ctx
+end
+M._wetInputs = wetInputs     -- (tests)
 local function phaseB(e, dt)
   local rain = (M.rainNow or 0) * (S.shelter or 1)
   if (M.STREAKS and rain > 0) or streaks.shown() then
@@ -1625,10 +1662,22 @@ local function phaseB(e, dt)
   local wetOn = M.WET_LOOK and mode ~= 'manual' and not S.mission
   local gripOn = M.WET_GRIP and mode ~= 'manual' and not S.mission
   local rainMmH = S.cur and S.cur.rainMmH or 0
+  if M.PUDDLE_LOOK ~= wetlook.v2 then pcall(wetlook.setV2, M.PUDDLE_LOOK) end
+  aquaplane.coverCheck = M.PUDDLE_LOOK
   if wetOn or gripOn or S.wetActive then
-    local ok, on = pcall(wetlook.update, dt, rainMmH, wetOn, gripOn)
+    local ok, on = pcall(wetlook.update, dt, rainMmH, wetOn, gripOn, wetlook.v2 and wetInputs or nil)
     S.wetActive = ok and on or false
     if not ok then log('W', 'beamngEarth', 'weather wet look: ' .. tostring(on)) end
+    -- BeamMP 'real-host' on the host: a new seed of its wet state (a teleport, the first history) goes to the others at
+    -- once, not with the next real message in 10 min
+    if wetlook.v2 and serverHost and lastMsg then
+      local wsm = package.loaded['beamngEarth/wetstate']
+      if wsm and wsm.seeds ~= S.wetSeedsSent then
+        S.wetSeedsSent = wsm.seeds
+        local mp = rawget(_G, 'beamngEarth_mpsession')
+        if mp and mp.sendHostWeather then pcall(mp.sendHostWeather, lastMsg) end
+      end
+    end
   end
   -- aquaplaning (the player's car over the puddles shown or the rain's film): only while there is water or it has sent
   if (gripOn and (rainMmH > 0 or wetlook.puddleRefShown() < 255)) or S.aquaActive then
@@ -1882,6 +1931,7 @@ function M.setLightning(on) M.LIGHTNING = on and true or false end
 function M.setStreaks(on) M.STREAKS = on and true or false end
 function M.setWetLook(on) M.WET_LOOK = on and true or false end
 function M.setWetGrip(on) M.WET_GRIP = on and true or false end
+function M.setPuddleLook(on) M.PUDDLE_LOOK = on and true or false end
 function M.setRainVisibility(v) choice.visibility = clamp(tonumber(v) or M.RAIN_VISIBILITY, 0.25, 3) end
 -- the parts of the real weather kept (clouds, fog, wind, precip; false: as on a clear day)
 function M.setRealPart(part, on)
@@ -1906,7 +1956,7 @@ function M.loadChoices(get)
   if g('rainVisibility') ~= nil then choice.visibility = clamp(tonumber(g('rainVisibility')) or M.RAIN_VISIBILITY, 0.25, 3) end
   if g('fogLimit') ~= nil then choice.fogLimitM = math.max(0, tonumber(g('fogLimit')) or 0) end
   for key, f in pairs({ weatherStormLight = 'STORM_LIGHT', weatherLightning = 'LIGHTNING', weatherStreaks = 'STREAKS',
-      weatherWetLook = 'WET_LOOK', weatherWetGrip = 'WET_GRIP' }) do
+      weatherWetLook = 'WET_LOOK', weatherWetGrip = 'WET_GRIP', weatherPuddleLook = 'PUDDLE_LOOK' }) do
     if g(key) ~= nil then M[f] = g(key) ~= false end
   end
   for part, key in pairs({ clouds = 'realClouds', fog = 'realFog', wind = 'realWind', precip = 'realPrecip' }) do
@@ -2065,7 +2115,8 @@ function M.status()
     phaseB = { stormLight = M.STORM_LIGHT, exposure = S.ev, gloom = S.cur and S.cur.gloom, thunder = S.tgt and S.tgt.thunder,
       storm = storm.status(), streaks = streaks.shown(), wet = { level = wetlook.level(), wetness = wetlook.wetness(),
       source = wetlook.source, writes = wetlook.writes, grip = wetlook.grip(), film = aquaplane.film(),
-      aquaSends = aquaplane.sends } },
+      aquaSends = aquaplane.sends, puddleLook = wetlook.v2,
+      wetstate = wetlook.v2 and package.loaded['beamngEarth/wetstate'] and package.loaded['beamngEarth/wetstate'].debugLine() or nil } },
     traffic = S.traffic, lights = S.lightsWant, lightsWrap = wxtraffic.installed, tint = S.tint,
     msg = lastMsg, shown = shownMsgOf(), target = S.tgt, current = S.cur, line = M.statusLine() })
 end

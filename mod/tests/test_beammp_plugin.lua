@@ -194,6 +194,10 @@ T.check(wm and wm.code == 63 and wm.rainMmH == 4 and wm.cover.low == 100 and wm.
   and wm.wind.fromDeg == 0 and wm.visM == nil and wm.fog == nil and wm.lat == nil and wm.tz == nil and wm.evil == nil,
   'the host\'s message: only the weather\'s fields, in range, no place')
 T.check(G.hostWeather == wm, 'kept for players who join later')
+local ww = G.onWeather(5, { code = 63, rainMmH = 4, et0Umh = 30, wet = { t = 58806667, w = 812.6, i = 4000, h = 9e12, z = 1 } })
+T.check(ww.et0Umh == 30 and ww.wet.t == 58806667 and ww.wet.w == 812 and ww.wet.i == 4000 and ww.wet.h == 1800000
+  and ww.wet.z == nil, 'the host\'s wet state (the new puddle look) relayed, integers in range')
+T.check(G.onWeather(5, { code = 63, wet = { w = 1 } }).wet == nil, 'a wet state without its tick: dropped')
 T.check(G.weatherMsg('text') == nil and G.weatherMsg(nil) == nil, 'not a table: nothing')
 G.WEATHER = 'rain'
 T.check(G.onWeather(5, { code = 0 }) == nil and G.config(5).weatherHost == nil, 'another weather: no relay, no host')

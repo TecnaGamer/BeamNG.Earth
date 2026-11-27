@@ -105,6 +105,48 @@ function M.puddleRef(step)
   return math.floor(a + (b - a) * (step - 1) / math.max(1, M.PUDDLE_STEPS - 1) + 0.5)
 end
 
+-- The new puddle look (the puddle plan R1, ~/bnge-tests/puddles/PLAN_FINAL.md; the setting "New puddle look",
+-- weather.lua setPuddleLook, default off: M.v2). On: the wet state is wetstate.lua's integer one (the film for the look
+-- and the grip, the standing water for the puddles: filled by how much it rained, BeamMP-consistent) instead of
+-- wetStep / puddleStep; the level's environment map becomes a cubemap of the sky over a built-up or an open horizon
+-- while wet (V2_CUBES, normalized by the scene's own sky light so it follows the time of day; R0 probe 1), and the
+-- puddle material a very smooth lit sky-grey (V2_LOOK). Its alpha threshold has V2 steps (wetstate's
+-- H_STEPS_UM), one material write a step and at most a step a check. Off: everything as before, nothing of it loaded.
+M.v2 = false
+M.V2_REF = { 250, 15 }       -- the alpha threshold at the first and the last step
+-- (R1 broker shots, 2026-11-27: a dark base read as black holes by day at Normal: the engine's reflections do not reach
+-- the alpha-tested puddle material, whatever the cubemap. The mirrored overcast sky as a lit grey instead: bright by
+-- day like the reference photos' puddles, dark at night and dusk with the scene's light; the cubemaps still go on the
+-- level's environment map for every other wet surface)
+M.V2_LOOK = { base = '0.30 0.31 0.33 1', rough = '0.03', metal = '0' }
+M.V2_SKY_FILE = '/levels/beamng_earth/art/shapes/beamngEarth/wetsky.materials.json'
+M.V2_CUBES = true            -- (false: the dark water without a cubemap: the engine's own reflections only)
+-- Where the sky cubemap goes: 'env' the level's environment map (LevelInfo globalEnviromentMap: every wet surface,
+-- the streets, sidewalks and cars too, while the ground is wet; R0 probe 1, a 0.5 ms write), 'material' the puddle
+-- material's own (R0 probe 2, ~3.5 ms a write), or 'both'.
+M.V2_ROUTE = 'both'
+M.HORIZON_S = 10             -- the horizon (built-up or open) looked at this often while puddles show ...
+M.HORIZON_RAYS, M.HORIZON_RAY_M, M.HORIZON_CITY = 8, 150, 4    -- ... rays round the camera; this many hits: built-up
+M.SKY_OVERCAST = 0.6         -- the deck (max(low, mid) cloud share) from which the sky mirrored is the overcast one
+
+-- Pure: the new look's alpha threshold at a step (255: nothing drawn).
+function M.puddleRefV2(step, n)
+  step = tonumber(step) or 0
+  n = n or #require('beamngEarth/wetstate').H_STEPS_UM
+  if step <= 0 then return 255 end
+  local a, b = M.V2_REF[1], M.V2_REF[2]
+  return math.floor(a + (b - a) * (step - 1) / math.max(1, n - 1) + 0.5)
+end
+
+-- Pure: the cubemap mirrored (bne_wetsky_<sky>_<horizon>) for a shown message (its cloud deck, its rain) and a horizon.
+function M.skyCube(msg, city)
+  local c = type(msg) == 'table' and type(msg.cover) == 'table' and msg.cover or {}
+  local deck = math.max(tonumber(c.low) or 0, tonumber(c.mid) or 0) / 100
+  local wet = type(msg) == 'table' and (tonumber(msg.rainMmH) or 0) > 0
+  local sky = (wet or deck >= M.SKY_OVERCAST) and 'overcast' or 'clear'
+  return 'bne_wetsky_' .. sky .. '_' .. (city and 'city' or 'open')
+end
+
 -- The own wetness as a road condition for the grip (winter.lua's slots): damp from GRIP_DAMP, wet from GRIP_WET (the
 -- midpoints of CONDITION_WET's damp 0.35 and wet 0.8 around dry 0), GRIP_HYST either side of a change.
 M.GRIP_DAMP = 0.18
@@ -214,6 +256,9 @@ local timer, rescan = 0, 0
 local puddle = 0          -- the puddles' step applied
 local grip = nil          -- the grip condition handed to winter.lua (nil dry)
 M.writes, M.source = 0, 'none'
+local ws = nil            -- wetstate.lua, loaded with the new look
+local look = nil          -- the new look on the puddle material: { orig = its own fields, cube = the cubemap set }
+local horizon = { timer = 0, city = nil, pending = nil }
 
 -- The grip condition to winter.lua, at its changes (loading it with the first wet road).
 local function setGrip(cond)
@@ -224,6 +269,105 @@ local function setGrip(cond)
   if wm and wm.setShown then pcall(wm.setShown, cond) end
 end
 
+local function refOf(k) return M.v2 and M.puddleRefV2(k) or M.puddleRef(k) end
+
+-- The level's environment map: ours (cube) while wet with the new look, the level's own back otherwise (only where ours
+-- is still set: someone else's change is theirs).
+local env = nil           -- { orig = the level's own map, set = ours }
+local function setEnv(cube)
+  local li = scenetree and scenetree.findObject('theLevelInfo')
+  if not li then env = nil return end
+  if cube and M.V2_CUBES and M.V2_ROUTE ~= 'material' then
+    if env and env.set == cube then return end
+    if not scenetree.findObject(cube) then return end
+    env = env or { orig = li:getField('globalEnviromentMap', 0) }
+    pcall(function()
+      li:setField('globalEnviromentMap', 0, cube)
+      if li.postApply then li:postApply() end
+    end)
+    env.set = cube
+    M.writes = M.writes + 1
+  elseif env then
+    if li:getField('globalEnviromentMap', 0) == env.set then
+      pcall(function()
+        li:setField('globalEnviromentMap', 0, env.orig or '')
+        if li.postApply then li:postApply() end
+      end)
+      M.writes = M.writes + 1
+    end
+    env = nil
+  end
+end
+
+-- The new look on the puddle material (its own fields kept to put back), once the material is loaded; the sky file's
+-- cubemaps loaded with it (never with the look off).
+local LOOK_FIELDS = { { 'baseColorFactor', 'base' }, { 'roughnessFactor', 'rough' }, { 'metallicFactor', 'metal' } }
+local function applyLook(cube)
+  if look then return true end
+  local m = scenetree and scenetree.findObject(M.PUDDLE_MAT)
+  if not m then return false end
+  look = { orig = { cubemap = m:getField('cubemap', 0) } }
+  for _, f in ipairs(LOOK_FIELDS) do look.orig[f[1]] = m:getField(f[1], 0) end
+  if M.V2_CUBES and cube and not scenetree.findObject(cube) and loadJsonMaterialsFile then
+    pcall(loadJsonMaterialsFile, M.V2_SKY_FILE)
+  end
+  pcall(function()
+    for _, f in ipairs(LOOK_FIELDS) do m:setField(f[1], 0, M.V2_LOOK[f[2]]) end
+    if M.V2_CUBES and M.V2_ROUTE ~= 'env' and cube and scenetree.findObject(cube) then
+      m:setField('cubemap', 0, cube)
+      look.cube = cube
+    end
+    m:setField('alphaRef', 0, tostring(refOf(puddle)))
+    m:flush()
+    m:reload()
+  end)
+  M.writes = M.writes + 1
+  return true
+end
+
+local function restoreLook()
+  puddle = math.min(puddle, M.PUDDLE_STEPS)      -- (the old steps again)
+  setEnv(nil)
+  if not look then return end
+  local m = scenetree and scenetree.findObject(M.PUDDLE_MAT)
+  if m then
+    pcall(function()
+      for _, f in ipairs(LOOK_FIELDS) do m:setField(f[1], 0, look.orig[f[1]] or '') end
+      m:setField('cubemap', 0, look.orig.cubemap or '')
+      m:setField('alphaRef', 0, tostring(M.puddleRef(puddle)))
+      m:flush()
+      m:reload()
+    end)
+    M.writes = M.writes + 1
+  end
+  look = nil
+end
+
+local function setCube(cube)
+  if M.V2_ROUTE == 'env' then return end
+  if not (look and M.V2_CUBES and cube) or look.cube == cube then return end
+  local m = scenetree.findObject(M.PUDDLE_MAT)
+  if not (m and scenetree.findObject(cube)) then return end
+  pcall(function() m:setField('cubemap', 0, cube); m:flush(); m:reload() end)
+  look.cube = cube
+  M.writes = M.writes + 1
+end
+
+-- Is the camera among buildings? HORIZON_RAYS level rays from 2 m over it, HORIZON_CITY of them hitting within
+-- HORIZON_RAY_M.
+local function cityAround()
+  local cam = rawget(_G, 'core_camera')
+  local p = cam and cam.getPosition and cam.getPosition()
+  if not (p and type(castRayStatic) == 'function') then return nil end
+  local hits = 0
+  for k = 0, M.HORIZON_RAYS - 1 do
+    local a = 2 * math.pi * k / M.HORIZON_RAYS
+    local d = castRayStatic(vec3(p.x, p.y, p.z + 2), vec3(math.cos(a), math.sin(a), 0), M.HORIZON_RAY_M)
+    if d and d < M.HORIZON_RAY_M then hits = hits + 1 end
+  end
+  return hits >= M.HORIZON_CITY
+end
+
 -- The puddles to step k: the material's threshold, then shown or hidden (roads.lua setPuddles).
 local function setPuddles(k)
   if k == puddle then return end
@@ -231,7 +375,7 @@ local function setPuddles(k)
   local m = scenetree and scenetree.findObject(M.PUDDLE_MAT)
   if m then
     pcall(function()
-      m:setField('alphaRef', 0, tostring(M.puddleRef(k)))
+      m:setField('alphaRef', 0, tostring(refOf(k)))
       m:flush()
       m:reload()
     end)
@@ -306,20 +450,60 @@ local function startLevel(k)
   table.sort(queue)
 end
 
--- W1's wetness of the road under the car, or nil without a road surface state.
-local function winterWet()
+-- W1's road condition under the car ('dry', 'wet', 'packed' ...), or nil without a road surface state.
+local function winterCond()
   local wm = package.loaded['beamngEarth/winter']
   if not (wm and wm._state) then return nil end
   local ok, state, cls = pcall(wm._state)
   if not ok or type(state) ~= 'table' or type(state.roads) ~= 'table' then return nil end
   local row = state.roads[(tonumber(cls) or 2) + 1]
-  return type(row) == 'table' and M.wetFromCondition(row[1]) or nil
+  return type(row) == 'table' and row[1] or nil
+end
+
+-- W1's wetness of the road under the car, or nil without a road surface state.
+local function winterWet()
+  return M.wetFromCondition(winterCond())
+end
+
+-- The new look's check (every CHECK_S): the wet state synced to the weather shown (src(): weather.lua's wetInputs),
+-- the puddles' step from its standing water (none under snow and ice), the cubemap by the sky and the horizon.
+local function checkV2(on, gripOn, src, dt)
+  ws = ws or require('beamngEarth/wetstate')
+  local ctx = (on or gripOn) and src and src() or nil
+  if ctx then
+    ws.sync(ctx.msg, ctx.src, ctx.key, ctx.hist, ctx.lat, ctx.lon, ctx.snap)
+  else
+    ws.reset()           -- (both off, or the weather off: no memory of the rain kept, as the own model)
+  end
+  own = ws.wetness()
+  local step = on and select(1, ws.puddleStep(winterCond(), ctx and ctx.tC)) or 0
+  if on and (own > 0 or step > 0 or puddle > 0) then
+    -- the horizon: looked at every HORIZON_S while wet; the cubemap follows a class seen twice in a row
+    horizon.timer = horizon.timer + dt
+    if horizon.city == nil or horizon.timer >= M.HORIZON_S then
+      horizon.timer = 0
+      local c = cityAround()
+      if c ~= nil then
+        if horizon.city == nil then horizon.city = c
+        elseif c ~= horizon.city then
+          if horizon.pending == c then horizon.city, horizon.pending = c, nil else horizon.pending = c end
+        else horizon.pending = nil end
+      end
+    end
+    local cube = M.skyCube(ctx and ctx.msg, horizon.city ~= false)
+    if applyLook(cube) then setCube(cube) end
+    setEnv(cube)
+  else
+    setEnv(nil)
+  end
+  return step
 end
 
 -- Every frame from weather.lua while the weather is on or a wet look is applied: rainMmH = the rain shown (mm/h, its
 -- intensity included; 0 with the weather off), on = the wet look's setting, gripOn = the grip's (weather.lua
--- WET_GRIP). Returns true while it has work, a look applied or a wet grip.
-function M.update(dt, rainMmH, on, gripOn)
+-- WET_GRIP), src = with the new look, a function giving the weather shown for wetstate (weather.lua's wetInputs).
+-- Returns true while it has work, a look applied or a wet grip.
+function M.update(dt, rainMmH, on, gripOn, src)
   dt = tonumber(dt) or 0
   if queue then
     for _ = 1, M.BATCH do
@@ -331,13 +515,18 @@ function M.update(dt, rainMmH, on, gripOn)
     return true
   end
   timer, rescan = timer + dt, rescan + dt
-  if timer < M.CHECK_S then return level > 0 or own > 0 or grip ~= nil end
-  own = (on or gripOn) and M.wetStep(own, rainMmH, timer) or 0      -- (both off: no memory of the rain kept)
+  if timer < M.CHECK_S then return level > 0 or own > 0 or grip ~= nil or puddle > 0 end
+  local step = nil
+  if M.v2 then
+    step = checkV2(on, gripOn, src, timer)
+  else
+    own = (on or gripOn) and M.wetStep(own, rainMmH, timer) or 0      -- (both off: no memory of the rain kept)
+  end
   timer = 0
   setGrip(gripOn and M.gripCond(own, grip) or nil)
-  local w, src = M.wetOf(on, winterWet(), own)
-  M.source = src
-  setPuddles(M.puddleStep(w))
+  local w, wsrc = M.wetOf(on, winterWet(), own)
+  M.source = wsrc
+  setPuddles(step or M.puddleStep(w))
   local k = M.levelOf(w)
   if k ~= level then
     startLevel(k)
@@ -349,7 +538,24 @@ function M.update(dt, rainMmH, on, gripOn)
     for name in pairs(known) do if not (before and before[name]) or not orig[name] then queue[#queue + 1] = name end end
     if #queue == 0 then queue = nil end
   end
-  return level > 0 or own > 0 or queue ~= nil or grip ~= nil
+  return level > 0 or own > 0 or queue ~= nil or grip ~= nil or puddle > 0 or (M.v2 and ws ~= nil and ws.active())
+end
+
+-- The new puddle look on or off (weather.lua, the setting): off puts the material's own values back at once and the
+-- old model takes over at the next check (from the film the new one had reached).
+function M.setV2(on)
+  on = on and true or false
+  if on == M.v2 then return end
+  M.v2 = on
+  if not on then
+    restoreLook()
+    if ws then ws.reset() end
+  else
+    horizon = { timer = 0, city = nil, pending = nil }
+    local m = scenetree and scenetree.findObject(M.PUDDLE_MAT)     -- (the threshold on the new steps at the next change)
+    if m and puddle > 0 then pcall(function() m:setField('alphaRef', 0, tostring(refOf(puddle))); m:flush(); m:reload() end) end
+  end
+  timer = M.CHECK_S          -- (checked at the next update)
 end
 
 -- One line on what is wet (the probes' overlay, the console): materials written per class and a few names.
@@ -380,11 +586,13 @@ function M.level() return level end
 function M.wetness() return own end
 function M.grip() return grip end
 -- The puddles' alpha threshold shown now (255: none; aquaplane.lua's water depth in them).
-function M.puddleRefShown() return M.puddleRef(puddle) end
+function M.puddleRefShown() return refOf(puddle) end
 
 -- The level goes: nothing to restore (the materials load again with the next level); state cleared.
 function M.reset()
   own, level, queue, orig, known, timer, rescan, puddle = 0, 0, nil, {}, nil, 0, 0, 0
+  look, horizon, env = nil, { timer = 0, city = nil, pending = nil }, nil   -- (the material and the level info load again)
+  if ws then ws.reset() end
   setGrip(nil)
   local roads = package.loaded['beamngEarth/roads']
   if roads and roads.setPuddles then pcall(roads.setPuddles, false) end      -- (the next level's puddles made hidden)
@@ -396,6 +604,8 @@ end
 function M.onTeleport()
   own = 0
   timer = M.CHECK_S
+  -- (the new puddle look: wetstate's real-weather memory too, the same way; a preset's or the BeamMP host's stays)
+  if ws then ws.onTeleport() end
 end
 
 -- Off now (the setting, weather Off): every material back at once.
@@ -403,6 +613,8 @@ function M.restoreAll()
   for name in pairs(orig) do pcall(writeOne, name, 0) end
   orig, queue, level = {}, nil, 0
   setPuddles(0)
+  restoreLook()
+  if ws then ws.reset() end
   local ter = package.loaded['beamngEarth/terrain']
   if ter and ter.setWet then pcall(ter.setWet, 0) end
 end

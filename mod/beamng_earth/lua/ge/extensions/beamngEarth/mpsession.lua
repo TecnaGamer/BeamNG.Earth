@@ -953,6 +953,10 @@ function M.sendHostWeather(msg)
   if not (rawget(_G, 'TriggerServerEvent') and wx and wx.sanitizeMsg) then return end
   local m = wx.sanitizeMsg(msg)
   if not m then return end
+  -- the new puddle look's wet state now (wetstate.lua): the others start from it, so all show the same puddles and get
+  -- the same grip (the puddle plan 1.5: a late joiner has no history of its own)
+  local wl, ws = package.loaded['beamngEarth/wetlook'], package.loaded['beamngEarth/wetstate']
+  m.wet = (wl and wl.v2 and ws and ws.snapshot) and ws.snapshot() or nil
   local ok, text = pcall(jsonEncode, m)
   if ok and type(text) == 'string' and #text <= M.WEATHER_MAX_BYTES then TriggerServerEvent('bngeWeather', text) end
 end
