@@ -386,6 +386,12 @@ POLICIES.update({
                                       max_wait=3.0, timeout=10.0, max_attempts=2, optional=True),
     "graph.mapillary.com": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=5000,
                                       max_wait=3.0, timeout=8.0, max_attempts=1, optional=True),
+    # Mapillary's image CDN: many hosts (scontent-<pop>.xx.fbcdn.net ...), one policy for the domain (a key starting
+    # with "." covers the hosts under it: Fetcher.policy)
+    ".fbcdn.net": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                             max_wait=3.0, timeout=10.0, max_attempts=2, optional=True),
+    ".mapillary.com": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                 max_wait=3.0, timeout=10.0, max_attempts=2, optional=True),
 })
 # Any other host: the conservative WMS-type row of §5.2 (2/s, 2 at once, no prefetch).
 # Regional orthophoto services (imagery_regional.py): tile caches at a modest shared rate, exports one at a time.
@@ -545,7 +551,9 @@ ROLES.update({f"{lang}.wikipedia.org": "landmarks in the map's search" for lang 
 ROLES.update({"commons.wikimedia.org": "photos of places for add-ons (none meanwhile)",
               "upload.wikimedia.org": "photos of places for add-ons (none meanwhile)",
               "thumb.wikimedia.org": "photos of places for add-ons (none meanwhile)",
-              "graph.mapillary.com": "street photos of places for add-ons (none meanwhile)"})
+              "graph.mapillary.com": "street photos of places for add-ons (none meanwhile)",
+              ".fbcdn.net": "street photos of places for add-ons (none meanwhile)",
+              ".mapillary.com": "street photos of places for add-ons (none meanwhile)"})
 
 
 def role_of(host):
@@ -555,6 +563,9 @@ def role_of(host):
     got = ROLES.get(host)
     if got is not None:
         return got
+    for k, role in ROLES.items():           # (a domain's: ".fbcdn.net" for scontent-yyz1-1.xx.fbcdn.net)
+        if k.startswith(".") and host.endswith(k):
+            return role
     import urllib.parse
     import imagery_regional
     for name, (url, *_rest) in imagery_regional.REGIONAL.items():
@@ -1466,7 +1477,16 @@ class Fetcher:
         # bucket and breaker: get's lane)
         if "#" in host and host in self.policies:
             return self.policies[host]
-        return self.policies.get(host.split("#", 1)[0], self.default_policy)
+        name = host.split("#", 1)[0]
+        p = self.policies.get(name)
+        if p is not None:
+            return p
+        # (a domain's own: a key ".example.com" covers a.example.com, b.c.example.com; the longest wins)
+        best = None
+        for k in self.policies:
+            if k.startswith(".") and name.endswith(k) and (best is None or len(k) > len(best)):
+                best = k
+        return self.policies[best] if best is not None else self.default_policy
 
     def host(self, name):
         with self._lock:

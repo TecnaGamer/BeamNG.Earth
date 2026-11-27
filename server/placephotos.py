@@ -47,6 +47,9 @@ JPEG_QUALITY = 82
 KEEP_S = 30 * 86400         # a photo is looked up again after this
 NONE_S = 7 * 86400          # "no photo" is asked again after this (or at once when a token came since)
 KEEP_FILES = 800            # .jpg files kept (the oldest go first)
+IMG_MAX_BYTES = 4_000_000   # a picture's download: no more is read (netfetch TooLarge)
+IMG_MAX_PIXELS = 25_000_000 # a picture's size by its header, before it is decoded (PIL's own limit is process-wide)
+JSON_MAX_BYTES = 2_000_000  # a Commons / Mapillary answer
 VFS_DIR = "/temp/beamngEarth/photos/"
 TOKEN_RE = re.compile(r"^MLY\|[0-9]+\|[0-9a-fA-F]+$")
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
@@ -207,7 +210,7 @@ class Photos:
         self._since_prune = 10 ** 6
 
     def _json(self, url, headers=None):
-        return json.loads(self.net.get(url, kind="demand", headers=headers).body.decode("utf-8"))
+        return json.loads(self.net.get(url, kind="demand", headers=headers, max_bytes=JSON_MAX_BYTES).body.decode("utf-8"))
 
     def _meta(self, k):
         try:
@@ -234,7 +237,9 @@ class Photos:
         if not url.startswith("https://") or not IMG_HOSTS.match(host):
             raise ValueError(f"not a photo host: {host}")
         from PIL import Image
-        im = Image.open(io.BytesIO(self.net.get(url, kind="demand").body))
+        im = Image.open(io.BytesIO(self.net.get(url, kind="demand", max_bytes=IMG_MAX_BYTES).body))
+        if im.width * im.height > IMG_MAX_PIXELS:   # (open reads the header only: nothing decoded yet)
+            raise ValueError(f"picture too large: {im.width} x {im.height}")
         im.draft("RGB", (MAX_W * 2, MAX_H * 2))
         im = im.convert("RGB")
         im.thumbnail((MAX_W, MAX_H))

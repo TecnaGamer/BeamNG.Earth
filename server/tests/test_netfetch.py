@@ -872,6 +872,19 @@ class PolicyTest(unittest.TestCase):
     def test_unknown_host_default(self):
         f, clock, sleep, tr = fetcher()
         self.assertEqual(f.policy("example.org"), nf.DEFAULT_POLICY)
+        self.assertEqual(f.policy("fbcdn.net.example.org"), nf.DEFAULT_POLICY, "a domain key matches under it only")
+
+    def test_a_domain_key_covers_its_hosts(self):
+        """Mapillary's image CDN has a host per site (scontent-yyz1-1.xx.fbcdn.net ...): the ".fbcdn.net" key covers
+        them all, optional and rate limited like the other photo hosts; an exact host's own key still wins."""
+        f, clock, sleep, tr = fetcher()
+        for h in ("scontent-yyz1-1.xx.fbcdn.net", "scontent.fyto1-1.fna.fbcdn.net"):
+            self.assertIs(f.policy(h), nf.POLICIES[".fbcdn.net"], h)
+        self.assertIs(f.policy("images.mapillary.com"), nf.POLICIES[".mapillary.com"])
+        self.assertIs(f.policy("graph.mapillary.com"), nf.POLICIES["graph.mapillary.com"])
+        for k in (".fbcdn.net", ".mapillary.com"):
+            p = nf.POLICIES[k]
+            self.assertTrue(p.optional and p.rate <= 2.0 and p.daily_hard and not p.allow_prefetch, k)
         self.assertFalse(nf.DEFAULT_POLICY.allow_prefetch)
         self.assertLessEqual(nf.DEFAULT_POLICY.rate, 2.0)
 

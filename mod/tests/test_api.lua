@@ -314,6 +314,18 @@ T.check(#dlate == 1, 'placeDetails: only once')
 
 -- 1.11: place photos (the app's place_photos_result, server placephotos.py)
 T.check(api.has('placePhotos'), 'placePhotos: has()')
+-- off until the player allows them (settings addonPhotos): refused, nothing sent
+local photosOn = false
+package.loaded['beamngEarth/settings'] = { get = function(k) if k == 'addonPhotos' then return photosOn end end }
+local nSent0 = #sent
+local offId, offWhy = api.placePhotos({ row }, {}, print)
+T.check(offId == nil and offWhy == api.PHOTOS_OFF and #sent == nSent0 and not api.placePhotosAllowed(),
+  'placePhotos: off by default (the player setting): refused, nothing sent')
+package.loaded['beamngEarth/settings'] = nil
+T.check(api.placePhotos({ row }, {}, print) == nil and #sent == nSent0, 'placePhotos: no settings module: off')
+package.loaded['beamngEarth/settings'] = { get = function(k) if k == 'addonPhotos' then return photosOn end end }
+photosOn = true
+T.check(api.placePhotosAllowed(), 'placePhotos: allowed once the player turns them on')
 local pgot = nil
 local pid = api.placePhotos({ row, { id = 'p2', lat = 45.41, lon = -75.68 } }, { mapillaryToken = 'MLY|1|ab' },
   function(r) pgot = r end)

@@ -194,6 +194,21 @@ class Lookup(unittest.TestCase):
         self.disk[self.key] = b""
         self.assertEqual(self.lk.find([("p1", LAT, LON)]), ([], ["p1"]))
 
+    def test_a_new_release_is_read_afresh(self):
+        """The kept tiles are the release's: after a data update the new release's tile is read, not the old one's."""
+        rel = ["2026-10-15.0"]
+
+        def tile_bytes(z, x, y):
+            self.reads.append((z, x, y))
+            return self.disk.get((z, x, y))
+        lk = pd.Lookup(tile_bytes, release=lambda: rel[0])
+        self.assertEqual([d["name"] for d in lk.find([("p1", LAT, LON)])[0]], ["Two Chairs"])
+        self.disk[self.key] = gzip.compress(mvt_layer("place", [overture_tags("p1", "Two Chairs Coffee")]))
+        self.assertEqual([d["name"] for d in lk.find([("p1", LAT, LON)])[0]], ["Two Chairs"], "same release: kept")
+        rel[0] = "2026-11-12.0"
+        self.assertEqual([d["name"] for d in lk.find([("p1", LAT, LON)])[0]], ["Two Chairs Coffee"], "new release: read")
+        self.assertEqual(self.reads.count(self.key), 2)
+
 
 class Earthd(unittest.TestCase):
     def conn(self, mapdata):

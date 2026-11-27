@@ -454,12 +454,21 @@ local photoReqs = {}
 -- source = 'Wikimedia Commons' | 'Mapillary', by, year, licence, fx = where across the picture the place should be
 -- (0-1), zoom = how much it may be enlarged round fx } ... }, missing = { id... } (none to be had now), error }.
 -- Show the credit (by, source, licence) with the photo: both sources are CC BY-SA / BY. Returns the request's id, or
--- nil and why.
+-- nil and why. Off until the player allows it (settings addonPhotos, "Photos of places for add-ons": each lookup sends
+-- the place's position and name to Commons, its position to Mapillary): then nil, M.PHOTOS_OFF and nothing is sent.
+M.PHOTOS_OFF = 'photos are off: BeamNG.Earth settings > Interface > Photos of places for add-ons'
+-- Whether the player allows place photos (placePhotos would ask): an add-on can say where to turn them on.
+function M.placePhotosAllowed()
+  local st = mod('settings')
+  return st ~= nil and type(st.get) == 'function' and st.get('addonPhotos') == true
+end
+
 function M.placePhotos(places, opts, callback)
   if type(opts) == 'function' and callback == nil then opts, callback = {}, opts end
   if type(callback) ~= 'function' then return nil, 'no callback' end
   if type(places) ~= 'table' or #places == 0 then return nil, 'no places' end
   if #places > M.PHOTOS_MAX then return nil, 'at most ' .. M.PHOTOS_MAX .. ' places' end
+  if not M.placePhotosAllowed() then return nil, M.PHOTOS_OFF end
   local rows = {}
   for i, p in ipairs(places) do
     local lat, lon = type(p) == 'table' and tonumber(p.lat), type(p) == 'table' and tonumber(p.lon)

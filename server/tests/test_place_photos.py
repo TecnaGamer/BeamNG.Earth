@@ -116,9 +116,11 @@ class FakeNet:
         self.mly = mly if mly is not None else {"data": []}
         self.fail = set(fail)
         self.calls = []
+        self.caps = []
 
-    def get(self, url, kind="demand", headers=None):
+    def get(self, url, kind="demand", headers=None, max_bytes=None):
         self.calls.append((url, dict(headers or {})))
+        self.caps.append(max_bytes)
         host = urlsplit(url).hostname
         if host in self.fail:
             raise IOError("down")
@@ -154,6 +156,23 @@ class Lookups(unittest.TestCase):
         with Image.open(disk) as im:
             self.assertTrue(im.width <= pp.MAX_W and im.height <= pp.MAX_H and im.format == "JPEG")
         self.assertFalse(any("mapillary" in u for u, _ in net.calls), "Commons named it: Mapillary not asked")
+
+    def test_downloads_are_capped(self):
+        """A picture is read to IMG_MAX_BYTES at most, the answers to JSON_MAX_BYTES (netfetch's max_bytes), and one
+        whose header says it is over IMG_MAX_PIXELS is never decoded: no photo, the place missing."""
+        net = FakeNet(commons={"query": {"pages": {"1": page("Aberdeen Pavilion 2019.jpg")}}})
+        found, _ = self.photos(net).find([("p1", *SHOP, "Aberdeen Pavilion")], "")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(net.caps, [pp.JSON_MAX_BYTES, pp.IMG_MAX_BYTES])
+        self.assertLessEqual(pp.IMG_MAX_BYTES, 4_000_000)
+        old = pp.IMG_MAX_PIXELS
+        pp.IMG_MAX_PIXELS = 1024 * 768 - 1          # (the fake's picture: one pixel over)
+        try:
+            net2 = FakeNet(commons={"query": {"pages": {"1": page("Aberdeen Pavilion 2019.jpg")}}})
+            found2, missing2 = pp.Photos(net2, os.path.join(self.root, "b"), clock=lambda: NOW).find([("p1", *SHOP, "Aberdeen Pavilion")], "")
+        finally:
+            pp.IMG_MAX_PIXELS = old
+        self.assertEqual((found2, missing2), ([], ["p1"]))
 
     def test_mapillary_with_token_in_the_header_only(self):
         good = cam(-7.4, -18.3, 0)

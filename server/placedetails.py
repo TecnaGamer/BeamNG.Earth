@@ -237,20 +237,27 @@ def details(tags):
 # --- the lookup ------------------------------------------------------------------------------------------------
 class Lookup:
     """Details from the tiles on disk; tile_bytes(z, x, y) -> bytes as stored, b"" an empty tile, None not on disk
-    (pmtiles.Archive.cached of the places archive)."""
+    (pmtiles.Archive.cached of the places archive). release: the archive's Overture release (a str, or a function
+    returning it): the kept tiles are keyed by it, so a data update never answers from the last release's tiles."""
 
-    def __init__(self, tile_bytes, kept=TILES_KEPT):
+    def __init__(self, tile_bytes, kept=TILES_KEPT, release=""):
         self.tile_bytes, self.kept = tile_bytes, kept
+        self._release = release if callable(release) else (lambda: release)
         self._tiles = OrderedDict()
         self._lock = threading.Lock()
 
     def _tile(self, key):
+        rel = str(self._release() or "")
+        key = (rel,) + tuple(key)
         with self._lock:
+            if rel != getattr(self, "_rel", rel):       # a new release: the last one's tiles go at once
+                self._tiles.clear()
+            self._rel = rel
             got = self._tiles.get(key)
             if got is not None:
                 self._tiles.move_to_end(key)
                 return got
-        raw = self.tile_bytes(*key)
+        raw = self.tile_bytes(*key[1:])
         if raw is None:
             return None
         try:

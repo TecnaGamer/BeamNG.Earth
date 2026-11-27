@@ -8742,8 +8742,9 @@ class Connection:
         if pmt is None:
             return None
         lk = getattr(self.s, "_place_lookup", None)
-        if lk is None or lk[0] is not pmt:
-            lk = self.s._place_lookup = (pmt, placedetailsmod.Lookup(pmt.archive("places").cached))
+        if lk is None or lk[0] is not pmt:      # (a new reader: a new release; the lookup keys its tiles by it too)
+            lk = self.s._place_lookup = (pmt, placedetailsmod.Lookup(pmt.archive("places").cached,
+                                                                      release=lambda: getattr(pmt, "release", "")))
         return lk[1]
 
     async def place_details(self, msg):

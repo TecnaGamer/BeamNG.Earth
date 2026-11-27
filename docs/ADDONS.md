@@ -174,6 +174,7 @@ end
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
 | `placePhotos(places, opts, callback)` | 1.11: a photo of each of up to 8 places as a JPEG file the UI can show by its path, with its credit (see "Place photos" below). Returns the request's id, or `nil, why` |
+| `placePhotosAllowed()` | 1.11: whether the player allows place photos (Settings > Interface > Photos of places for add-ons, off by default); while not, `placePhotos` returns `nil, api.PHOTOS_OFF` |
 | `placeDetails(places, callback)` | 1.11: the address, phones, websites, socials, brand and category path of up to 20 places a `places` answer gave (see "Place details" below). Returns the request's id, or `nil, why` |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
@@ -346,7 +347,17 @@ class from BeamNG.Earth's map data).
 
 `placePhotos` gets a photo of each place an add-on shows: the app looks it up, downloads it, shrinks it to at most
 640 x 420 and writes it as a JPEG under the game's `/temp/beamngEarth/photos/`, so a UI app shows it by its path
-(the game's UI browser may not fetch anything from the internet itself). Two sources:
+(the game's UI browser may not fetch anything from the internet itself).
+
+**Off until the player allows it.** Each lookup sends the place's position and name to Wikimedia Commons, and its
+position to Mapillary, so photos only come once the player turns on **Settings > Interface > Photos of places for
+add-ons** (`addonPhotos`, off by default). Until then `placePhotos` returns `nil, api.PHOTOS_OFF` (a sentence naming
+that setting) and nothing is sent; `api.placePhotosAllowed()` says whether it is on, so an add-on can tell the player
+where to turn it on instead of showing nothing. `has('placePhotos')` is true either way (the call exists).
+
+Each picture is read to 4 MB at most and refused unread when its header says it is over 25 megapixels; the hosts
+(Commons, Mapillary's API and its image CDN, `*.fbcdn.net` and `*.mapillary.com`) are rate limited and optional
+(`server/netfetch.py`). Two sources:
 
 - **Wikimedia Commons**: a file within 120 m whose title names the place (half the name's words, and its own words,
   not just the kind of place: "church" alone never matches).
@@ -357,7 +368,7 @@ class from BeamNG.Earth's map data).
   no more than `zoom`).
 
 ```lua
-if api.has('placePhotos') then
+if api.has('placePhotos') and api.placePhotosAllowed() then
   api.placePhotos({ { id = row.id, lat = row.lat, lon = row.lon, name = row.name } },
     { mapillaryToken = myPlayersToken }, function(r)
       for _, p in ipairs(r.photos) do
