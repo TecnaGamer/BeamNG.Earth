@@ -1221,9 +1221,27 @@ class RoadOverTunnelTest(unittest.TestCase):
         g = types.SimpleNamespace(lock=threading.Lock(), cells={"c": ps}, _cell_plans=lambda k: ps)
         got, own = grading._Planner._cell_own_roads(g, "c")
         self.assertIs(got, ps)
-        self.assertEqual({f for f, _x, _y in own},
+        self.assertEqual(set(own), {"g"})
+        self.assertEqual({f for f, _x, _y in own["g"]},
                          {"g.0#1" + tag, "g.0#1" + tag + "m0", "g", "approach", "at_join", "at_inner"})
         self.assertIs(grading._Planner._cell_own_roads(g, "c")[1], own, "made once per cell")
+
+    def test_own_roads_per_tunnel(self):
+        # (a motorway with a tunnel of its own further on is that tunnel's own road, not the own road of a primary's
+        # tunnel under it: over the primary's tube its grading stays, Vienna's A23, #118)
+        import threading
+
+        def plan(*xy):
+            return grading.Plan(np.array(xy, np.float64), np.zeros(len(xy)), 3.0)
+        tag = grading.TUNNEL_TAG
+        ps = [("m.1#0" + tag, plan((0, 200), (0, 300))),                # the motorway's own tunnel
+              ("m", plan((0, -100), (0, 200))),                         # the motorway on the ground, to its portal
+              ("p.0#0" + tag, plan((-50, 0), (50, 0))),                 # the primary's tunnel under the motorway
+              ("p", plan((-80, 0), (-50, 0)))]                          # the primary's approach
+        g = types.SimpleNamespace(lock=threading.Lock(), cells={"c": ps}, _cell_plans=lambda k: ps)
+        _got, own = grading._Planner._cell_own_roads(g, "c")
+        self.assertEqual({f for f, _x, _y in own["m"]}, {"m.1#0" + tag, "m"})
+        self.assertEqual({f for f, _x, _y in own["p"]}, {"p.0#0" + tag, "p"})
 
     def test_a_tunnel_plans_feature(self):
         # (a tunnel's plans are named for its sections, the map part's id (roads: f"{fid}.{n}") then "#k")

@@ -58,7 +58,7 @@ ROOTS = (("blockworker", "init"), ("blockworker", "_State.anchor"), ("grading", 
 MUST_REACH = (("grading", "_Planner._plan_cell"), ("grading", "PlanStore.planner_of_cell"),
               ("plancache", "PlanCache.store"), ("plancache", "PlanCache._decided"), ("decisions", "plans"),
               ("roads", "_facts_store"), ("roads", "_facts_key"), ("roads", "TunnelProfiles.parts_todo"),
-              ("railways", "grade_plans"), ("gradesep", "_underpasses"), ("decisions", "vkey_doc"))
+              ("railways", "grade_plans"), ("decisions", "vkey_doc"))
 # Tables of switch NAMES (keys, settings), not of their values: reading one is not reading a switch
 NAME_TABLES = {("revisit", "PLAN_NEUTRAL"), ("revisit", "NOT_SWITCHES"), ("experimental", "FEATURES"),
                ("experimental", "IDS"), ("bakepack", "CELL_SCOPED")}

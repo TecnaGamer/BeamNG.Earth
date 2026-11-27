@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import gradesep  # noqa: E402
+import neighbours  # noqa: E402
 import mapcells  # noqa: E402
 import roads  # noqa: E402
 from test_roads import LAT, LON, M_LON, features, rules  # noqa: E402
@@ -41,7 +41,7 @@ _IDS = itertools.count()
 def hooked(f, md, key=KEY):
     """f as cell key's roads layer with md's neighbours (a cell id of its own: roads._FACTS_MEM keeps facts by it)."""
     f.__dict__.update(_bnge_cell=(str(key), "roads", f"t{next(_IDS)}"),
-                      _bnge_neighbours=gradesep.neighbours_hook(md, key))
+                      _bnge_neighbours=neighbours.neighbours_hook(md, key))
     return f
 
 
@@ -52,7 +52,7 @@ def east_edge():
 class HookWantTest(unittest.TestCase):
     def test_only_the_wanted_cells_are_read_and_the_rest_later(self):
         md = Md()
-        hook = gradesep.neighbours_hook(md, KEY)
+        hook = neighbours.neighbours_hook(md, KEY)
         got = hook({str(EAST)})
         self.assertEqual(md.asked, [EAST])
         self.assertEqual(sum(f is not None for f in got), 1)
@@ -65,8 +65,8 @@ class HookWantTest(unittest.TestCase):
         self.assertEqual(md.asked, [])
 
     def test_names_are_the_eight_keys(self):
-        hook = gradesep.neighbours_hook(Md(), KEY)
-        self.assertEqual(hook.names, [str(k) for k in gradesep._neighbour_keys(KEY)])
+        hook = neighbours.neighbours_hook(Md(), KEY)
+        self.assertEqual(hook.names, [str(k) for k in neighbours._neighbour_keys(KEY)])
 
 
 class LaneFlowReadsTest(unittest.TestCase):
@@ -122,17 +122,6 @@ class GradesepManyReadsTest(unittest.TestCase):
         self.assertFalse(roads._home_far(f, hook, str(EAST)))
         self.assertTrue(roads._home_far(f, hook, str(mapcells.CellKey(KEY.z, KEY.x + 2, KEY.y))))
         self.assertEqual(md.asked, [])
-
-    def test_only_the_cells_a_road_reaches_are_read_and_their_spans_taken(self):
-        e = east_edge()
-        line = [[(e - 300.0, 0.0), (e + 300.0, 0.0)]]       # (home here, ends in the cell east of it)
-        east = features(line, ["trunk"], ids=["ca1"])
-        east.__dict__["_bnge_gradesep"] = lambda f: {0: [(0.6, 0.62, "bridge")]}
-        md = Md({EAST: east})
-        f = hooked(features(line, ["trunk"], ids=["ca1"]), md)
-        f.__dict__["_bnge_gradesep"] = lambda f: {}
-        self.assertEqual(roads._gradesep_many(f, [0]), {0: [(0.6, 0.62, "bridge")]})
-        self.assertEqual(md.asked, [EAST])
 
 
 if __name__ == "__main__":

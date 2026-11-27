@@ -499,6 +499,7 @@ def _rail_index(feats, frame):
 # A short road tunnel may be tagged only on the lower road, with no bridge flag on
 # the railway above. Its ballast and grading must not fill the lower carriageway.
 UNDERPASS_CLEAR_M = 3.6
+UNDERPASS_MAX_M = 80.0      # m: a road tunnel part this short is an underpass the tracks pass over
 UNDERPASS_SIDE_M = 1.0
 UNDERPASS_MIN_SIN = 0.25    # conservatively exclude near-parallel tracks beside a tunnel
 
@@ -538,7 +539,7 @@ def raising_underpasses(tunnels, classes):
 
 
 def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
-    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep. classes: a
+    """Short road tunnels near box as (xy, half width). classes: a
     list that gets each one's road class, in the same order (grading's UNDER_TUNNEL_FIXED_ON); without it the native
     selection (_road_underpasses_native: the same tunnels, the classes not kept)."""
     if classes is None:
@@ -549,35 +550,17 @@ def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
         if feats is None or not len(feats):
             continue
         specs = roads.tunnel_specs(feats)
-        ground_specs = None
         tagged_any = _tunnel_tagged(feats)
         has = np.fromiter((sp is not None for sp in specs), bool, len(specs)) | tagged_any
         for i in _box_hits(feats.boxes(frame), near, has):     # (a road with neither: nothing below)
             sp = specs[i]
             rings = roads.tunnel_parts(feats, i) if sp is not None else []
-            # gradesep can turn a short road tunnel into ground and the tracks above it into bridges.
-            # Keep that source clearance evidence (Nashville, Carney Street), including when another
-            # tunnel on the same feature remains. Retained tunnels keep their cleared portal ends.
-            tagged = ([(a, b, kind) for a, b, kind in roads.tag_level_ranges(feats, i) if kind == "tunnel"]
-                      if tagged_any[i] else [])
-            missing = []
-            if tagged:          # (the map's tunnels first: most features have none)
-                effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
-                floor = roads.part_floor(feats, i)
-                missing = [(a, b, kind) for a, b, kind in tagged
-                           if not any(c <= a + floor and d >= b - floor for c, d in effective)]
-            if missing:
-                if ground_specs is None:
-                    ground_specs = roads.road_specs(feats)
-                sp = sp or ground_specs[i]
-                if sp is not None:
-                    rings += roads._parts_by_level_new(feats, i, "tunnel", rngs=missing)
             if sp is None:
                 continue
             for ring in rings:
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 xy = np.column_stack((e, n))
-                if len(xy) < 2 or _arc(xy)[-1] > roads.UNDERPASS_MAX_M:
+                if len(xy) < 2 or _arc(xy)[-1] > UNDERPASS_MAX_M:
                     continue
                 key = (str(feats.ids[i]), tuple(np.round(xy[[0, -1]].ravel(), 2)))
                 if key not in seen:
@@ -589,7 +572,7 @@ def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
 
 
 def _road_underpasses_native(frame, cells, box, reach=REACH_M):
-    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep: layer by
+    """Short road tunnels near box as (xy, half width): layer by
     layer, its roads in its earthfast.UnderpassIndex (_underpass_index), a road's tunnel geometry made once
     (_underpass_entry), the window's selection, specs, arc test and dedupe by (id, ends) one call a layer
     (rail_underpass_select). A road's spec is each call's: its tunnel spec (roads.tunnel_specs, asked every call: a
@@ -615,13 +598,13 @@ def _underpass_index(feats, frame):
     import fast
     xin = feats.xy_in(frame)
     tagged = _tunnel_tagged(feats)
-    src = (xin, feats.__dict__.get("_road_revision", 0), tagged, roads.UNDERPASS_MAX_M)
+    src = (xin, feats.__dict__.get("_road_revision", 0), tagged, UNDERPASS_MAX_M)
     memos = feats.__dict__.setdefault("_rail_underpass_index", [])
     for got_src, got in memos:
         if len(got_src) == len(src) and all(x is y or (k == 1 and x == y) for k, (x, y) in enumerate(zip(got_src, src))):
             return got
     ix = fast._ef.UnderpassIndex(np.asarray(feats.boxes(frame), np.float64).reshape(-1, 4),
-                                 np.ascontiguousarray(tagged, bool), float(roads.UNDERPASS_MAX_M))
+                                 np.ascontiguousarray(tagged, bool), float(UNDERPASS_MAX_M))
     memos.append((src, ix))
     del memos[:-2]
     return ix
@@ -629,23 +612,14 @@ def _underpass_index(feats, frame):
 
 def _underpass_entry(feats, frame, specs, i):
     """(spec, missing, id, tunnel parts, missing tunnels): road i's tunnel geometry in frame for the UnderpassIndex: its
-    tunnel parts when it has a tunnel spec (retained tunnels keep their cleared portal ends) and the map's tunnels that
-    gradesep made ground (missing from its ranges: Nashville's Carney Street keeps that clearance evidence, also when
-    another tunnel on the feature remains), each an (k, 2) array."""
+    tunnel parts when it has a tunnel spec, each an (k, 2) array. Every tunnel the map has is in its ranges (the map's
+    own: roads.level_ranges): none missing."""
     spec = specs[i] is not None
     rings = roads.tunnel_parts(feats, i) if spec else []
-    tagged = ([(a, b, kind) for a, b, kind in roads.tag_level_ranges(feats, i) if kind == "tunnel"]
-              if _tunnel_tagged(feats)[i] else [])
-    missing = []
-    if tagged:          # (the map's tunnels first: most features have none)
-        effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
-        missing = [(a, b, kind) for a, b, kind in tagged
-                   if not any(c <= a + roads.MIN_PART and d >= b - roads.MIN_PART for c, d in effective)]
-    gone = roads._parts_by_level_new(feats, i, "tunnel", rngs=missing) if missing else []
 
     def enu(rs):
         return [np.ascontiguousarray(np.column_stack(mapgeom.enu_xy(feats, frame, r)), np.float64) for r in rs]
-    return spec, bool(missing), str(feats.ids[i]), enu(rings), enu(gone)
+    return spec, False, str(feats.ids[i]), enu(rings), []
 
 
 # A railway's bridge over a road on the ground (findground: a bridge over a plain way leaves the ground, the plain way

@@ -59,7 +59,6 @@ def flat(lat, lon):
     return np.full(np.shape(lat), 10.0)
 
 
-
 def _seg_dist(p, line):
     """Distance from points p (m, 2) to a polyline (k, 2)."""
     a, b = line[:-1], line[1:]
@@ -1417,8 +1416,7 @@ class TileNeedsTest(unittest.TestCase):
         self.assertEqual(far, list(range(far[0], len(needs))), "the water ring last")
         bare = roads.tile_needs(frame, 0, 0, buildings=False, widths=False, water_ring=0)
         self.assertEqual({ly for _, ly in bare}, {"roads", "infrastructure", "land_use"})
-        import gradesep
-        r = 2 if gradesep.ON else 1     # (grading's ring of roads; gradesep's neighbours of those when it is on)
+        r = 1                           # (grading's ring of roads)
         self.assertEqual(sorted({k.x for k, ly in bare if ly == "roads"}), list(range(xs[0] - r, xs[-1] + r + 1)))
 
 

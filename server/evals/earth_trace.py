@@ -175,8 +175,8 @@ def main():
         z_kept[idx] = kept
         with pl.lock:
             zones = [zz for v in pl.covers.values() for zz in v]
-        for xy, hw in zones:
-            covers.append((geotiles.world_xy_map(pl.frame, frame, np.asarray(xy, np.float64)[:, :2]), float(hw)))
+        for z in zones:
+            covers.append((geotiles.world_xy_map(pl.frame, frame, np.asarray(z[0], np.float64)[:, :2]), float(z[1])))
     z_graded = z_graded.reshape(la.shape)
     z_kept = z_kept.reshape(la.shape)
     z_apply = g.apply(la, lo, z_ground, grading.ROAD_LIFT)     # Earth's own call

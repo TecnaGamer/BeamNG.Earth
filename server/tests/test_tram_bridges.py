@@ -9,7 +9,6 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import geodesy
-import gradesep
 import grading
 import mapgeom
 import rails
@@ -63,8 +62,6 @@ class TramBridgeTest(unittest.TestCase):
         parts = railways.parts(FRAME, [f], roads.tile_bbox(0, 0))
         self.assertEqual([(c, kind) for _fid, c, kind, _xy in parts], [("tram", "bridge")])
         self.assertIsNone(railways.drawn(f, 0), "a tram is not a ballasted mainline")
-        self.assertIsNone(gradesep._kind_half(f, 0), "no inferred road underpasses from surface tram crossings")
-        self.assertIsNone(gradesep._kind_half(f, 1), "the metro cannot infer a surface bridge")
         self.assertEqual(railways.crossing_props(FRAME, 0, 0, [f], lambda xy: np.full(len(xy), 10.0)), [])
         grader = SimpleNamespace(frame=FRAME, widths=None,
                                  md=SimpleNamespace(cell=lambda *args, **kw: SimpleNamespace(layers={"roads": f})))

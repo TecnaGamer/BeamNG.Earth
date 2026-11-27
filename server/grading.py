@@ -2177,7 +2177,7 @@ class _Planner:
         self.failed = {}        # cell key -> monotonic time of the last failed fetch
         self.lock = threading.Lock()
         self.key_locks = {}     # cell key -> Lock: one thread plans a cell, the others wait for it
-        self.covers = {}        # cell key -> [(xy (k, 2), half width)]: the tunnels whose ground over them stays
+        self.covers = {}        # cell key -> [(xy (k, 2), half width, tunnel feature)]: the tunnels whose ground over them stays
         self.keeps = {}         # cell key -> [(xy (k, 2), half width)]: the UNGRADED roads' carriageways
         self.opens = {}         # cell key -> [(xy (k, 2), Spec)]: the tunnels' open sections (roads in the open)
         self.dgcells = {}       # cell key -> the corrected decks within reach of it (_cell_deck_patches)
@@ -2232,7 +2232,7 @@ class _Planner:
         def m(xy):
             return geotiles.world_xy_map(src.frame, self.frame, xy)
         got = ([(fid, mapped_plan(p, m)) for fid, p in plans], [(m(xy), hw) for xy, hw in keeps],
-               [(m(xy), w) for xy, w in covers], [(m(xy), sp) for xy, sp in opens],
+               [(m(c[0]),) + tuple(c[1:]) for c in covers], [(m(xy), sp) for xy, sp in opens],
                [(dk, m(line), half, rows) for dk, line, half, rows in dg])
         with self.lock:
             self.cells.setdefault(key, got[0])
@@ -2416,7 +2416,8 @@ class _Planner:
                     p.tunnel_section = BESIDE_TRENCH_KEEPS and not p.open_tunnel
                     plans.append((fid + TUNNEL_TAG, p))
             plans.extend(self._mouth_plans(secs, portals))
-            covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in _twin_trimmed(secs, rec_subs) if k]
+            covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M, _tunnel_feature(f + TUNNEL_TAG))
+                      for f, spec, xy, _z, k in _twin_trimmed(secs, rec_subs) if k]
             opens = [(xy, spec) for _f, spec, xy, _z, k in secs if k == 0]
         return plans, keeps, covers, opens
 
@@ -3534,10 +3535,7 @@ class _Planner:
                 spec = rs[i] if rs[i] is not None else ts[i]
                 if spec is None:
                     continue
-                # (the map's own tunnel range with the mapped ranges, not lengthened for its portal (_clear_portals):
-                # lengthened, it lay up to 25 m over the road's own ground piece, the road there twice at two levels)
-                for ring in (roadsmod._parts_by_level(f, i, "tunnel") if roadsmod.MAPPED_RANGES()
-                             else roadsmod.tunnel_parts(f, i)):
+                for ring in roadsmod.tunnel_parts(f, i):
                     ring = np.asarray(ring, np.float64)
                     if len(ring) < 2:
                         continue
@@ -4909,48 +4907,13 @@ class _Planner:
     def _raw_lines(self, k):
         """FAST_GAP: cell k's roads as mapped, in the frame, before any lane placement (the same copy whichever cell
         or plan asks): {"bridges": [(line (m, 2), class, link)], "ground": [(line, class, link, built, feature id)]}.
-        Its pieces are made here from the published level ranges of the very layers they come from (the layer's own,
-        or its features' home copies' as they are now), read only once every one of them is done and not short (never
-        a row made here, never the pieces or specs another reader left in the layer's memory). Kept per cell when read
-        complete; a read with any of those layers busy (another thread making its ranges), short (roads._cell_ranges'
-        _ranges_short_until, marked before done) or on the lidar rule is said short every time and not kept."""
+        Its pieces are the map's own ranges' (roads.level_ranges), read from the layer alone. Kept per cell."""
         got, res = self._memo_get("_raw_lines_memo", str(k))
         if got:
             return res
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         out = {"bridges": [], "ground": []}
-        short = False
         if f is not None and len(f):
-            # every layer the features take their ranges from (their own, their home copies): each build claimed here
-            # when unstarted (roads._cell_ranges claims it under the facts lock) and all of them published done and not
-            # short before a row or a spec is read; a layer another thread is making (busy) makes the read short with
-            # nothing read from it (a row read there would be made here into its memory, where the build's setdefault
-            # keeps it). Done never goes back: from here on no read makes a row
-            homes = [roadsmod.home_copy(f, i) if roadsmod.HOME_RANGES_ON else None for i in range(len(f))]
-            layers = {id(f): f}
-            for h in homes:
-                if h is not None:
-                    layers.setdefault(id(h[0]), h[0])
-            # (a layer made short stays short until the map data decodes it again: a new layer, its ranges and every
-            # input they are made of (the cell's grade separation hooks, its lidar answers, its raw and rule ranges)
-            # made afresh. Its ranges are never made again in place: those inputs, kept on it, may be short too)
-            # (BNE_ROADSYS=surface, roads.MAPPED_RANGES: the pieces are the map's own tags, tag_level_ranges, read from
-            # the layer alone: no layer's made ranges are read, so none is waited for. A layer another thread was making
-            # its ranges for made this read short and empty: the fast roads' landings, the pins planned with them and
-            # the plans of the cell differed by which thread had touched the layer first, and the bridge chains' end
-            # heights on those plans by ~0.2 mm, railramp and Seal Beach, M5 round 6)
-            mapped = roadsmod.MAPPED_RANGES()
-            for _i, lay in ([] if mapped else sorted(layers.items(), key=lambda kv: kv[0])):
-                roadsmod._cell_ranges(lay)
-            with roadsmod._FACTS_LOCK:
-                short = not mapped and any(lay.__dict__.get("_ranges_state") != "done"
-                                           or lay.__dict__.get("_ranges_short_until") is not None
-                                           for lay in layers.values())
-            if not mapped and any(lay.__dict__.get("_lidar_rule") for lay in layers.values()):
-                import revisit          # (the rule for want of the lidar, as level_ranges says: nothing on it kept)
-                revisit.fault(lidar=True)
-                short = True
-        if f is not None and len(f) and not short:
             # (a road's class from its road spec, its bridge and ground pieces from the published rows read here:
             # never from the layer's kept bridge_specs' being a deck, made from ranges that may have been short since
             # replaced, but for a road with no ground spec)
@@ -4960,16 +4923,7 @@ class _Planner:
             for i in range(len(f)):
                 if rs[i] is None and bs[i] is None:
                     continue
-                h = homes[i]
-                src, j = (h[0], h[1]) if h is not None else (f, i)
-                if roadsmod.MAPPED_RANGES():      # (BNE_ROADSYS=surface: the map's own ranges, roads.MAPPED_RANGES)
-                    rngs = roadsmod.tag_level_ranges(f, i)
-                else:
-                    row = src.__dict__.get("_level_ranges", {}).get(j)
-                    if row is None:
-                        short = True        # (not published: never made here)
-                        continue
-                    rngs = roadsmod.home_ranges(f, i, h[0], h[1], list(row)) if h is not None else list(row)
+                rngs = roadsmod.level_ranges(f, i)
                 for kind, sp, want in (("bridges", rs[i] if rs[i] is not None else bs[i], "bridge"),
                                        ("ground", rs[i], "ground")):
                     if sp is None:
@@ -4993,12 +4947,6 @@ class _Planner:
                         out[kind].append((line, cls, _is_link(sp)))
                     else:
                         out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT, fid))
-        if short:
-            # (ranges made short, or taken from a short shared entry: the layers keep them, and a read again says
-            # nothing. Short here too, every time, and never kept: roads._cell_ranges' mark)
-            import revisit
-            revisit.fault()
-            return out
         return self._memo_put("_raw_lines_memo", str(k), out, cap=256)
 
     def _gap_cells(self, la, lo, reach):
@@ -5018,7 +4966,7 @@ class _Planner:
         if got:
             return res
         # (landings.rs landing_ends: both ends of every deck line of the cells, in their order, the joint test and each
-        # end once at its 0.1 m key. BNE_ROADSYS=surface (roads.MAPPED_RANGES): the end at its key and its direction
+        # end once at its 0.1 m key. With the map's own ranges: the end at its key and its direction
         # to 1e-4, the same whichever copy: every map cell has its own copy of a deck, ~1e-5 m from the others', and
         # the least of those read was taken, so two neighbouring cells' plans, each reading round its own points, took
         # other copies of one end and met apart at their seam, M5 round 7. Reading the end's own cell for its copy cost
@@ -5034,7 +4982,7 @@ class _Planner:
             fast.require(638, "landing_ends")
             rows = fast._ef.landing_ends(np.concatenate(lines), [0] + np.cumsum([len(x) for x in lines]).tolist(),
                                          cls, list(FAST_GAP_CLASSES), FAST_GAP_JOIN_M, roadsmod.TURN_LOOK_M,
-                                         bool(roadsmod.MAPPED_RANGES()))
+                                         True)
         out = []
         for r in rows:
             got = self._landing_chain(r[0], r[1], r[2], r[3], r[4])
@@ -5971,6 +5919,9 @@ class _Planner:
             if race is not None and racedig.ON:
                 keep &= ~race       # (a racetrack over the tunnel: its surface, the tube dug under it, racedig)
             if keep.any():
+                # (each tunnel's cover by that tunnel's own roads alone (_over_tunnels_by): a motorway that has tunnels
+                # of its own further on was the own road of every tunnel in its cell, and its grading over a primary's
+                # tube under it was undone, the bare ground's 2.7 m hump across its lanes, Vienna's A23, #118)
                 # (what is undone there is the tunnels' own roads' grading, whose approaches reached up over the tube;
                 # a road crossing over it keeps its own cutting: undone too, the hillside stood back up across the road
                 # in a strip over each tube, the road's mesh on its profile up to 2.8 m off the ground and banks and
@@ -5979,8 +5930,11 @@ class _Planner:
                 # cut beyond it is undone; the full grading where the other roads cut deeper, so no ledge where a
                 # point's cut reaches OVER_TUNNEL_SMALL_M: a trunk's wheel track over the Peripherique's tube at
                 # Porte Maillot stepped 2.5 m there from its full grading to the other roads', test_drivability)
-                out[keep] = np.maximum(out[keep], self._over_tunnel_ground(keys, e[keep], n[keep], base.ravel()[keep],
-                                                                          lift))
+                ek, nk, bk = e[keep], n[keep], base.ravel()[keep]
+                over = np.full(len(ek), -np.inf)
+                for tfeat, m in self._over_tunnels_by(ek, nk).items():
+                    over[m] = np.maximum(over[m], self._over_tunnel_ground(keys, ek[m], nk[m], bk[m], lift, tfeat))
+                out[keep] = np.maximum(out[keep], over)
         if pinned and PROFILE_PINS is not None and not roads_only and not planned_only:
             # (BNE_ROADSHAPE=profile, P3b: the second stage, the joint profile's approach ground: _pin_field)
             d = self._pin_field(lat.ravel(), lon.ravel(), e, n, out, lift)
@@ -5990,11 +5944,12 @@ class _Planner:
                 out = out + d
         return out.reshape(shape)
 
-    def _over_tunnel_ground(self, keys, e, n, base, lift):
-        """base at the points over covered tunnels graded under the plans of the cells keys that are not a tunnel's
-        own road (its sections, mouths and approaches, _cell_own_roads), so a road crossing over the tube keeps its
-        grading there while the tunnel's approaches leave the ground over it as it is."""
-        mk = tuple(sorted(str(k) for k in keys))
+    def _over_tunnel_ground(self, keys, e, n, base, lift, tfeat=None):
+        """base at the points over tunnel tfeat's cover graded under the plans of the cells keys that are not that
+        tunnel's own road (its sections, mouths and approaches, _cell_own_roads), so a road crossing over the tube keeps
+        its grading there while the tunnel's approaches leave the ground over it as it is. tfeat None: no tunnel's own
+        road (a cover with no feature)."""
+        mk = (tuple(sorted(str(k) for k in keys)), tfeat)
         memo = self.__dict__.setdefault("_over_sets", {})
         with self.lock:
             hit = memo.get(mk, False)
@@ -6002,7 +5957,7 @@ class _Planner:
             # (which plans are a tunnel's own: each cell's own verdict, _cell_own_roads, not one made from whatever
             # cells this call reached: the block and a road tile reaching other cells grade the same point alike)
             cells = [self._cell_own_roads(k) for k in keys]
-            own = set().union(*(o for _ps, o in cells))
+            own = set().union(*(s for _ps, o in cells for t, s in o.items() if tfeat is None or t == tfeat))
             got = {}
             for ps, _o in cells:
                 for fid, p in ps:
@@ -6023,34 +5978,36 @@ class _Planner:
         return np.minimum(grade_points(e, n, base, hit, lift), base)
 
     def _cell_own_roads(self, key):
-        """(plans of cell key, {(fid, first x, first y)} of those that are a tunnel's own road): its sections and mouths
-        (TUNNEL_TAG), the plans of the same map feature as one of them, and a road ending within OVER_TUNNEL_APPROACH_M
-        of one of their ends. Made once per cell from that cell's plans alone, so the verdict on a plan is the same
-        whatever other cells a call reaches; a cell's plans are kept for good, and so is this."""
+        """(plans of cell key, {tunnel feature: {(fid, first x, first y)} of the plans that are its own road}): its
+        sections and mouths (TUNNEL_TAG), the plans of its map feature, and a road ending within OVER_TUNNEL_APPROACH_M
+        of one of their ends. Per tunnel: a road that is one tunnel's own is another's road over it. Made once per cell
+        from that cell's plans alone, so the verdict on a plan is the same whatever other cells a call reaches; a
+        cell's plans are kept for good, and so is this."""
         ps = self._cell_plans(key)
         memo = self.__dict__.setdefault("_own_roads", {})
         with self.lock:
             got = memo.get(key)
         if got is not None and got[0] is ps:
             return got
-        feats = {_tunnel_feature(fid) for fid, _p in ps if TUNNEL_TAG in fid}
+        ends_of = {}            # tunnel feature -> its plans' ends
+        for fid, p in ps:
+            if TUNNEL_TAG in fid:
+                ends_of.setdefault(_tunnel_feature(fid), []).extend(np.asarray(p.xy)[[0, -1], :2])
         # (an approach mapped as a way of its own, ending at the portal: the Peripherique's trunk into its tube at Porte
         # Maillot, its descent cutting the ground over the tube under Avenue de Neuilly)
         # (every end of the tunnel's plans, not its real portals alone (the mouth plans' portal ends): those ends are
         # its sections' joins too, a T junction at a portal or a side road ending at a trench's joint counts as the
         # tunnel's own and loses its grading over the tubes, as every road's was undone before. The portals alone lost
         # that trunk, which reaches its tube at a join: Porte Maillot 296.2 -> 296.8, test_drivability, 2026-11-15)
-        portals = [q for fid, p in ps if TUNNEL_TAG in fid for q in np.asarray(p.xy)[[0, -1], :2]]
-        own = set()
-        if feats or portals:
-            near = np.zeros(len(ps), bool)
-            if portals:
-                pt = np.asarray(portals, np.float64)
-                ends = np.asarray([np.asarray(p.xy)[[0, -1], :2] for _f, p in ps], np.float64)     # (plans, 2, 2)
+        own = {}
+        if ends_of:
+            ends = np.asarray([np.asarray(p.xy)[[0, -1], :2] for _f, p in ps], np.float64)     # (plans, 2, 2)
+            for t, pts in sorted(ends_of.items()):
+                pt = np.asarray(pts, np.float64)
                 d = dnp.hypot(ends[:, :, None, 0] - pt[None, None, :, 0], ends[:, :, None, 1] - pt[None, None, :, 1])
                 near = (d <= OVER_TUNNEL_APPROACH_M).any(axis=(1, 2))
-            own = {(fid, float(p.xy[0, 0]), float(p.xy[0, 1])) for (fid, p), nr in zip(ps, near)
-                   if nr or _tunnel_feature(fid) in feats}
+                own[t] = {(fid, float(p.xy[0, 0]), float(p.xy[0, 1])) for (fid, p), nr in zip(ps, near)
+                          if nr or _tunnel_feature(fid) == t}
         got = (ps, own)
         with self.lock:
             if key in self.cells:
@@ -6328,10 +6285,26 @@ class _Planner:
         fast.require(0, "over_tunnel")      # (Rust: per segment near the points, without the GIL)
         mask = np.zeros(len(e), bool)
         ee, nn = np.ascontiguousarray(e, np.float64), np.ascontiguousarray(n, np.float64)
-        for xy, hw in zones:
-            fast._ef.over_tunnel(mask, ee, nn, np.ascontiguousarray(xy[:, :2], np.float64), float(hw),
+        for z in zones:
+            fast._ef.over_tunnel(mask, ee, nn, np.ascontiguousarray(z[0][:, :2], np.float64), float(z[1]),
                                  float(TUNNEL_KEEP_IN_M))
         return mask if mask.any() else None
+
+    def _over_tunnels_by(self, e, n):
+        """{tunnel feature (None: a cover with none): (n,) bool, the points over its covers} (_over_tunnels per
+        tunnel), in feature order."""
+        with self.lock:
+            zones = [z for v in self.covers.values() for z in v]
+        import fast
+        fast.require(0, "over_tunnel")
+        out = {}
+        ee, nn = np.ascontiguousarray(e, np.float64), np.ascontiguousarray(n, np.float64)
+        for z in zones:
+            t = z[2] if len(z) > 2 else None
+            m = out.setdefault(t, np.zeros(len(e), bool))
+            fast._ef.over_tunnel(m, ee, nn, np.ascontiguousarray(z[0][:, :2], np.float64), float(z[1]),
+                                 float(TUNNEL_KEEP_IN_M))
+        return {t: out[t] for t in sorted(out, key=lambda t: (t is not None, str(t))) if out[t].any()}
 
 
 def mapped_plan(p, fn):

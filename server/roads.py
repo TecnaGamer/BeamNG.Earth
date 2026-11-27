@@ -329,17 +329,12 @@ URBAN_BOTH_SHARE = 0.1          # a motorway or trunk needs built-up land on bot
                                 # side 33 %, the other 0 %) is no town
 
 
-
-
 def _rule_value(table, i):
     """The value of the rule of feature i covering the largest share of it, or None."""
     if table is None or len(table.feature) == 0:
         return None
     j = table.major(i)
     return None if j < 0 else table.value[j]
-
-
-HOME_RANGES_ON = os.environ.get("BNE_HOME_RANGES", "on") != "off"
 
 
 def _home_cell(feats, i):
@@ -404,323 +399,23 @@ def home_copy(feats, i):
     return None if j is None else (other, j)
 
 
-HOME_MAP_ON = os.environ.get("BNE_HOME_RANGES_MAP", "on") != "off"
-HOME_MAP_TOL_M = 1.0        # m: a copy's end this near its home copy's line lies on it (the copies are one segment's)
-
-
-def _single_ring(feats, i):
-    """Feature i's one lon/lat ring (k, 2), or None for a feature of several parts or rings."""
-    parts = feats.parts(i)
-    if len(parts) != 1 or len(parts[0]) != 1:
-        return None
-    r = np.asarray(parts[0][0], np.float64)
-    return r[:, :2] if r.ndim == 2 and len(r) >= 2 else None
-
-
-def _ring_metric(ring):
-    """(c, x (k,), y (k,), dx, dy, arc (k,)) of a lon/lat ring in sub_polyline's metric (m: lon scaled by c, the cos of
-    its mean lat)."""
-    c = dmath.cos(math.radians(float(np.mean(ring[:, 1]))))
-    x, y = ring[:, 0] * (c * 111320.0), ring[:, 1] * 111320.0
-    dx, dy = np.diff(x), np.diff(y)
-    return c, x, y, dx, dy, np.r_[0.0, np.cumsum(dnp.hypot(dx, dy))]
-
-
-def _metric_point(ring, m, f):
-    """The lon/lat point at fraction f of ring's length (m: its _ring_metric)."""
-    s = m[5]
-    return np.array([dnp.interp(f * s[-1], s, ring[:, 0]), dnp.interp(f * s[-1], s, ring[:, 1])])
-
-
-def _metric_project(m, pt):
-    """(m off, fraction along) of the point of the ring (m: its _ring_metric) nearest lon/lat pt."""
-    c, x, y, dx, dy, s = m
-    px, py = float(pt[0]) * c * 111320.0, float(pt[1]) * 111320.0
-    L2 = np.maximum(dx * dx + dy * dy, 1e-12)
-    t = np.clip(((px - x[:-1]) * dx + (py - y[:-1]) * dy) / L2, 0.0, 1.0)
-    ex, ey = x[:-1] + t * dx - px, y[:-1] + t * dy - py
-    d2 = ex * ex + ey * ey
-    k = int(np.argmin(d2))
-    return math.sqrt(float(d2[k])), float((s[k] + t[k] * (s[k + 1] - s[k])) / max(s[-1], 1e-9))
-
-
-def _ring_point(ring, f):
-    """The lon/lat point at fraction f of ring's length (sub_polyline's metric)."""
-    return _metric_point(ring, _ring_metric(ring), f)
-
-
-def _ring_project(ring, pt):
-    """(m off, fraction along) of the point of ring nearest lon/lat pt, in ring's own metric."""
-    return _metric_project(_ring_metric(ring), pt)
-
-
-def map_ranges(home, mine, rngs, tol=HOME_MAP_TOL_M):
-    """Level ranges rngs ((a, b, kind) fractions of lon/lat ring home's length) as fractions of ring mine's, a copy of
-    the same segment cut to another extent (mapdata stitches a long line's copy per cell from the map's tiles: one
-    copy ran on 13.8 km, its home cell's 10.9 km): each end of a range is the same point on the ground in both. Ranges
-    past mine's extent are cut at its ends or dropped. rngs itself where the rings are the same, or where the two do
-    not lie along each other (reversed, another route, a range's end off mine). Pure."""
-    if not rngs or home is None or mine is None:
-        return rngs
-    if home.shape == mine.shape and np.array_equal(home, mine):
-        return rngs
-    mh, mm = _ring_metric(home), _ring_metric(mine)
-    d0, h0 = _metric_project(mh, mine[0])       # (mine's ends on home: where mine starts and stops along it)
-    d1, h1 = _metric_project(mh, mine[-1])
-    on0, on1 = d0 <= tol, d1 <= tol
-    if not on0 and _metric_project(mm, home[0])[0] > tol:
-        return rngs                             # (neither starts on the other: no common line)
-    if not on1 and _metric_project(mm, home[-1])[0] > tol:
-        return rngs
-    h0 = h0 if on0 else 0.0
-    h1 = h1 if on1 else 1.0
-    if h1 <= h0:
-        return rngs
-    out = []
-    for a, b, kind in rngs:
-        if b <= h0 or a >= h1:
-            continue                            # (off this copy)
-        if on0 and a <= h0:
-            a2 = 0.0
-        else:
-            da, a2 = _metric_project(mm, _metric_point(home, mh, a))
-            if da > tol:
-                return rngs
-        if on1 and b >= h1:
-            b2 = 1.0
-        else:
-            db, b2 = _metric_project(mm, _metric_point(home, mh, b))
-            if db > tol:
-                return rngs
-        if b2 > a2:
-            out.append((a2, b2, kind))
-    return out
-
-
-def home_ranges(feats, i, other, j, rngs):
-    """rngs (feature j of layer other: feature i's home copy, home_copy) as fractions of feature i's own copy
-    (map_ranges), kept per layer. The home copy's fractions taken as they were laid a copy of other extent's bridges
-    out of place: the Main-Weser-Bahn's bridge over Friedrich-Ebert-Strasse in Treysa (50.9183 N 9.1963 E) 100 m up
-    the line in the cell whose copy ran 2.9 km further, its ballast across the road under the deck, a wall cars ran
-    into (2026-11-16). BNE_HOME_RANGES_MAP=off: as they were."""
-    if not HOME_MAP_ON or not rngs:
-        return rngs
-    memo = feats.__dict__.setdefault("_home_mapped", {})
-    got = memo.get(i)
-    if got is not None and got[0] is rngs and got[1] == (id(other), j):
-        return got[2]
-    out = map_ranges(_single_ring(other, j), _single_ring(feats, i), rngs)
-    memo[i] = (rngs, (id(other), j), out)
-    return out
-
-
-def level_ranges(feats, i, _home=True):
-    """The off-ground ranges of feature i as sorted (start, end, "bridge" | "tunnel") fractions of its
-    length, from its flags (is_bridge / is_tunnel) and level (> 0 bridge, < 0 tunnel) rules. Overture
-    puts most bridges on a range of a longer segment (2026-10-11: a street with a few metres of bridge
-    was taken whole as a bridge and dropped). Pure. A cell's are made all at once and shared (cell_facts).
-    Its home cell's copy's (home_copy): lengthened over the roads crossing under it and joined over the lidar's
-    elevated stretches, the copy in each cell saw other roads (a ramp by I-395 in Baltimore: one deck from 9.5 % in
-    one cell, two with a ground gap at 14-16 % in the next, both drawn, one 8 m under the other)."""
-    if MAPPED_RANGES():
-        return tag_level_ranges(feats, i)
-    if _home and HOME_RANGES_ON:
-        h = home_copy(feats, i)
-        if h is not None:
-            return list(home_ranges(feats, i, h[0], h[1], level_ranges(h[0], h[1], _home=False)))
-    memo = feats.__dict__.setdefault("_level_ranges", {})
-    got = memo.get(i)
-    if got is None:
-        _cell_ranges(feats)
-        got = memo.get(i)
-        if got is None:
-            if RANGE_OWNERS:
-                got = _level_many_owned(feats, [i])[i]
-            else:
-                _level_many(feats, [i])
-                got = memo[i]
-    if feats.__dict__.get("_lidar_rule"):
-        import revisit                      # (the rule for want of the lidar: nothing built on it is kept)
-        revisit.fault(lidar=True)
-    return list(got)
-
-
-def MAPPED_RANGES():
-    """BNE_ROADSYS=surface (the road system's M5, the user 2026-11-25: "the map's tag strictly"): every off-ground range
-    is the map's own (tag_level_ranges): no range lengthened over the roads under it, joined over lidar stretches or
-    inferred from a grade separation, for the deck builder, its bents and caps, the ground roads and the grading alike,
-    so a bridge stops at its mapped end and the road goes on onto its graded approach. The facts made from them are
-    keyed apart (_facts_key) and the plans too (plancache.plans_format). BNE_MAPPED_RANGES=on: the same alone, without
-    the road system's surface (the 3D solve given the map's structure, not our inferences: the Wiedner Guertel's 82 m
-    tunnels under Suedtiroler Platz cut to 45-50 m by the portal rule, _skew_decks, its ground under the square's
-    junction, 2026-11-27)."""
-    return roadsys.SURFACE or MAPPED_ON
-
-
-MAPPED_ON = os.environ.get("BNE_MAPPED_RANGES", "off").strip().lower() == "on"
+def level_ranges(feats, i):
+    """The off-ground ranges of feature i as sorted (start, end, "bridge" | "tunnel") fractions of its length: the
+    map's own (tag_level_ranges), for the 3D solve, the deck builder, the ground roads and the grading alike. No range
+    is lengthened, inferred or moved by us: those rules rewrote the data before the solve saw it (the Wiedner Guertel's
+    82 m tunnels under Suedtiroler Platz cut to 45-50 m, its ground under the square's junction; the square's streets
+    made decks over it), the user 2026-11-27. Pure."""
+    return tag_level_ranges(feats, i)
 
 
 def _level_lists(feats, idx):
-    """{i: level_ranges(feats, i)} of features idx (the memos' lists themselves: callers must not change them): the
-    home copies' (home_copy) and this layer's each made at once, the neighbours asked once."""
-    if MAPPED_RANGES():
-        return {i: tag_level_ranges(feats, i) for i in idx}
-    out, own, by = {}, [], {}
-    me = feats.__dict__.get("_bnge_cell")
-    hook = feats.__dict__.get("_bnge_neighbours")
-    if HOME_RANGES_ON and me is not None and hook is not None and len(idx):
-        homes = _home_cells(feats)
-        near = {}
-        away = {homes[i] for i in idx if homes[i] != me[0]}
-        if away:
-            try:
-                near = {f.__dict__["_bnge_cell"][0]: f for f in _near_layers(hook, away)
-                        if f is not None and f.__dict__.get("_bnge_cell")}
-            except Exception as e:          # (this cell's own)
-                log.debug("home copy: neighbours: %s: %s", type(e).__name__, e)
-        for i in idx:
-            other = near.get(homes[i]) if homes[i] != me[0] else None
-            j = None
-            if other is not None:
-                pos = other.__dict__.get("_id_pos")
-                if pos is None:
-                    pos = other.__dict__["_id_pos"] = {fid: k for k, fid in enumerate(other.ids.tolist())}
-                j = pos.get(feats.ids[i])
-            if j is None:
-                own.append(i)
-            else:
-                by.setdefault(id(other), (other, []))[1].append((i, j))
-    else:
-        own = list(idx)
-    for other, pairs in by.values():
-        got = _level_memo(other, [j for _, j in pairs])
-        for i, j in pairs:
-            out[i] = home_ranges(feats, i, other, j, got[j])
-    out.update(_level_memo(feats, own))
-    return out
-
-
-def _level_memo(feats, idx):
-    """{i: level_ranges(feats, i, _home=False)} of features idx (the memo's lists), the missing ones made at once."""
-    if not idx:
-        return {}
-    memo = feats.__dict__.setdefault("_level_ranges", {})
-    made = {}
-    if any(i not in memo for i in idx):
-        _cell_ranges(feats)
-        miss = [i for i in idx if i not in memo]
-        if miss:
-            if RANGE_OWNERS:
-                made = _level_many_owned(feats, miss)
-            else:
-                _level_many(feats, miss)
-    if feats.__dict__.get("_lidar_rule"):
-        import revisit                      # (the rule for want of the lidar: nothing built on it is kept)
-        revisit.fault(lidar=True)
-    if RANGE_OWNERS:
-        return {i: made[i] if i in made else memo[i] for i in idx}
-    return {i: memo[i] for i in idx}
-
-
-def _level_many(feats, idx):
-    """level_ranges of features idx into feats' memo where not there yet: their rule ranges with the lidar's elevated
-    stretches (_lidar_answers) made bridge and gap-filled again (one ending 12 m short of the map's deck left a ground
-    piece between them mid-ramp, by I-395 in Baltimore); earthfast.LevelLayer.rules, all at once."""
-    memo = feats.__dict__.setdefault("_level_ranges", {})
-    idx = [i for i in idx if i not in memo]
-    if not idx:
-        return
-    rule = _rule_many(feats, idx)
-    answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
-    lid = [answers.get(str(feats.ids[i])) or () for i in idx] if answers else None
-    for i, r in zip(idx, _level_steps(feats, idx, rule, _STEP_LIDAR | _STEP_GAPS, lid)):
-        memo.setdefault(i, r)
-
-
-# FAST_GAP's range bookkeeping (BNE_FAST_GAP=on; off, the code above as it always was): a layer's ranges are kept in its
-# memo only by the thread making them (_cell_ranges' owner, recorded when it claims the layer), and a layer made short
-# says so on itself (_ranges_short_until) before it is said done, so grading._raw_lines reads only clean, published rows
-RANGE_OWNERS = os.environ.get("BNE_FAST_GAP", "off") == "on"
-
-
-def _level_many_owned(feats, idx):
-    """_level_many with RANGE_OWNERS: {i: its ranges} of every one of idx. A row goes into the memo only from the thread
-    building the layer's ranges (busy, its owner); every other reader's row is its own alone (made short of something,
-    its fault is that reader's: the build would have kept it and said the layer done). A row published meanwhile is
-    the one handed back. The memo's look, the owner's test and the insertion are one step under the facts lock."""
-    st = feats.__dict__
-    memo = st.setdefault("_level_ranges", {})
-    with _FACTS_LOCK:
-        out = {i: memo[i] for i in idx if i in memo}
-    todo = [i for i in idx if i not in out]
-    if not todo:
-        return out
-    rule = _rule_many(feats, todo)
-    answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
-    lid = [answers.get(str(feats.ids[i])) or () for i in todo] if answers else None
-    rows = _level_steps(feats, todo, rule, _STEP_LIDAR | _STEP_GAPS, lid)
-    with _FACTS_LOCK:
-        memo = st.setdefault("_level_ranges", {})
-        mine = st.get("_ranges_state") == "busy" and st.get("_ranges_owner") == threading.get_ident()
-        for i, r in zip(todo, rows):
-            if i in memo:
-                out[i] = memo[i]        # (published meanwhile)
-            elif mine:
-                memo[i] = out[i] = r
-            else:
-                out[i] = r
-    return out
-
-
-def rule_level_ranges(feats, i):
-    """level_ranges before the lidar's elevated stretches (_lidar_gaps): the map's ranges lengthened (_skew_decks) and
-    their short ground gaps between decks filled (_deck_gaps). roadz.py measures the lidar along these (its answer is
-    what level_ranges adds). Remembered on feats."""
-    return list(_rule_many(feats, [i])[0])
-
-
-def _rule_many(feats, idx):
-    """[rule_level_ranges] of features idx (the memo's lists: callers must not change them), the missing ones made at
-    once (earthfast.LevelLayer.rules)."""
-    memo = feats.__dict__.setdefault("_rule_level_ranges", {})
-    miss = [i for i in idx if i not in memo]
-    if miss:
-        raw = _raw_memo(feats)
-        for i, r in zip(miss, _level_steps(feats, miss, [raw[i] for i in miss], _STEP_SKEW | _STEP_GAPS)):
-            memo.setdefault(i, r)
-    return [memo[i] for i in idx]
-
-
-def raw_level_ranges(feats, i):
-    """level_ranges as the map has them, before _skew_decks (road_specs reads these: _skew_decks needs the specs)."""
-    memo = feats.__dict__.setdefault("_raw_level_ranges", {})
-    got = memo.get(i)
-    if got is None:
-        _cell_ranges(feats, load_only=True)
-        got = memo.get(i)
-        if got is None:
-            got = memo[i] = _level_ranges(feats, i)
-    return list(got)
-
-
-def _raw_memo(feats):
-    """{i: raw_level_ranges} of every feature (the memo itself: callers must not change it), the missing ones made at
-    once (_level_ranges_many). The rules after them (earthfast.LevelLayer.rules) read every feature's."""
-    memo = feats.__dict__.setdefault("_raw_level_ranges", {})
-    n = len(feats)
-    if len(memo) < n:
-        _cell_ranges(feats, load_only=True)
-        miss = [i for i in range(n) if i not in memo]
-        if miss:
-            for i, r in zip(miss, _level_ranges_many(feats, miss)):
-                memo.setdefault(i, r)
-    return memo
+    """{i: level_ranges(feats, i)} of features idx."""
+    return {i: tag_level_ranges(feats, i) for i in idx}
 
 
 def _raw_all(feats):
-    """[raw_level_ranges] of every feature (the memo's lists: callers must not change them)."""
-    memo = _raw_memo(feats)
-    return [memo[i] for i in range(len(feats))]
+    """[level_ranges] of every feature (the lists themselves: callers must not change them)."""
+    return _tag_ranges_list(feats)
 
 
 # Per-cell facts shared by the server's processes and kept for the next run (the revisit cache: one file per cell and
@@ -742,7 +437,6 @@ def clear_facts_memory():
         _FACTS_MEM.clear()
 FACTS_MEM_KEPT = 640         # entries (~8 a cell: ranges, specs, bridges ...; a city cell ~0.6 MB in all; budget: fewer when small)
 FACTS_SHORT_S = 10.0        # s a cell's facts made short of something (a fault) are used before they are made again
-FACTS_LOG = bool(os.environ.get("BNGE_FACTS_LOG"))
 
 
 def _facts_key(feats, kind, extra):
@@ -751,9 +445,6 @@ def _facts_key(feats, kind, extra):
     if cid is None or not revisit.ON or revisit.CACHE_DIR is None:
         return None
     # (by FACTS_FORMAT, not the code: kept across updates, the user, 2026-11-02; cid carries the map data's versions)
-    # (MAPPED_RANGES: the facts of the mapped ranges, apart from everyone else's)
-    if MAPPED_RANGES():
-        kind = f"{kind}.mapped"
     return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra)
 
 
@@ -778,14 +469,12 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 34     # 34: upstream dev merged into the fork main, 2026-11-25 (dev's 32: a segment Overture merged from several OSM ways takes the surface most of it has (merged_surface; Sulzburg's Herrenweg, GitHub #1506), 2026-11-24); 33: a piece of a long road under a share of its length is no longer dropped, at most 1 m of it is (roads.MIN_PART_M, part_floor: a share of a 24 km road was 24 m, so its 23 m bridge had no deck while its range was cut out of the ground, a hole of raw terrain in the road; two shorter bridges of it were lost the same way), 2026-11-21; 32: 32: upstream dev's 31 and the fork's 27 merged, 2026-11-19; 27: a track's tunnel judged short or long by its whole run, through the segments the map splits it into at its switches (railways.tunnel_run_m, gradesep 4: Birmingham's lines under the Bullring, 450 m in tunnel in 6-55 m pieces, laid on the ground and bridged by Worcester Street), 2026-11-17; 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads || upstream dev's numbering: 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 35     # 35: every bridge / tunnel range the map's own, no range inferred, lengthened or moved (#118), 2026-11-27; 34: upstream dev merged into the fork main, 2026-11-25 (dev's 32: a segment Overture merged from several OSM ways takes the surface most of it has (merged_surface; Sulzburg's Herrenweg, GitHub #1506), 2026-11-24); 33: a piece of a long road under a share of its length is no longer dropped, at most 1 m of it is (roads.MIN_PART_M, part_floor: a share of a 24 km road was 24 m, so its 23 m bridge had no deck while its range was cut out of the ground, a hole of raw terrain in the road; two shorter bridges of it were lost the same way), 2026-11-21; 32: 32: upstream dev's 31 and the fork's 27 merged, 2026-11-19; 27: a track's tunnel judged short or long by its whole run, through the segments the map splits it into at its switches (railways.tunnel_run_m, gradesep 4: Birmingham's lines under the Bullring, 450 m in tunnel in 6-55 m pieces, laid on the ground and bridged by Worcester Street), 2026-11-17; 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads || upstream dev's numbering: 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
     """A baked pack's facts of this layer's cell (bakepack.py), as JSON bytes, or None."""
     import revisit
-    if MAPPED_RANGES():             # (the shared and baked facts are the lengthened ranges': none here)
-        return None
     cid = feats.__dict__.get("_bnge_cell")
     if cid is None or revisit.CACHE_DIR is None:
         return None
@@ -819,189 +508,7 @@ def _facts_store(feats, kind, extra, data):
     revisit.store(revisit.CACHE_DIR, "cellfacts", k, {"facts.json": json.dumps(data).encode("utf-8")})
 
 
-FACTS_WAIT_S = 3.0          # s a process waits for another making a cell's facts this run before it makes them too
 # (a 30 s wait on a cell's road specs made a Steam Deck's first road tile ~30 s later, 2026-10-26: holders busy)
-
-
-def _run_facts_path(st):
-    """This server run's file of a layer's level ranges (beside its road plans: plancache.RUN_ENV), shared by its
-    processes, the lidar rule's too (a session's answer for the cell: roadz decides it once, on disk), or None."""
-    import revisit
-    cid = st.get("_bnge_cell")
-    run = os.environ.get("BNGE_PLAN_RUN")
-    if cid is None or not run or revisit.CACHE_DIR is None or not revisit.ON:
-        return None
-    import hashlib
-    h = hashlib.sha1(repr((cid, bool(LIDAR_GAPS_ON), revisit.code_key())).encode()).hexdigest()[:20]
-    return os.path.join(revisit.CACHE_DIR, "plans", run, "facts", h + ".json")
-
-
-def _run_facts_load(path, n):
-    try:
-        with open(path, encoding="utf-8") as f:
-            got = json.load(f)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(got, dict) or len(got.get("raw", ())) != n or len(got.get("lvl", ())) != n:
-        return None
-    return got
-
-
-def _run_facts_store(path, data):
-    import staging
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = staging.tmp_for(path)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        staging.replace(tmp, path)
-    except OSError as e:
-        log.debug("cell facts %s not kept for the run: %s", path, e)
-
-
-def _ranges_mem_key(st):
-    """_FACTS_MEM's key of a layer's level ranges: its cell id and the lidar's switch and provider (the same all along
-    in a server; tests change them)."""
-    cid = st.get("_bnge_cell")
-    if cid is None:
-        return None
-    import roadz
-    return (cid, "ranges", bool(LIDAR_GAPS_ON), id(getattr(roadz, "PROVIDER", None)))
-
-
-def _cell_ranges(feats, load_only=False):
-    """Every feature's raw and lengthened level ranges into feats' memos: from the shared facts, or (not load_only)
-    made here and kept there."""
-    st = feats.__dict__
-    with _FACTS_LOCK:
-        if st.get("_ranges_state") is not None:
-            if load_only or st["_ranges_state"] != "loadable":
-                return
-        tried = st.get("_ranges_state")
-        st["_ranges_state"] = "busy"
-        if RANGE_OWNERS:
-            st["_ranges_owner"] = threading.get_ident()     # (only its rows go into the memo while busy)
-    if tried is None:
-        mk = _ranges_mem_key(st)
-        with _FACTS_LOCK:
-            mem = _FACTS_MEM.get(mk) if mk is not None else None
-            if mem is not None:
-                _FACTS_MEM.move_to_end(mk)
-        if mem is not None and mem.get("until") is not None and time.monotonic() > mem["until"]:
-            mem = None                  # (made short of something: made again once FACTS_SHORT_S is past)
-        if mem is not None and len(mem["raw"]) == len(feats):
-            if mem.get("until") is not None:
-                import revisit
-                revisit.fault()         # (made short of something: what is built on it now is not kept either)
-                if RANGE_OWNERS:        # (and said on the layer: grading._raw_lines keeps nothing built on them)
-                    st["_ranges_short_until"] = mem["until"]
-            raw, lvl = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
-            mraw, mlvl = mem["raw"], mem["lvl"]     # (shared: level_ranges and the rest hand out copies)
-            for i in range(len(feats)):
-                raw.setdefault(i, mraw[i])
-                lvl.setdefault(i, mlvl[i])
-            if mem["rule"]:
-                st["_lidar_rule"] = True    # (built on the rule: level_ranges says so, nothing on it kept)
-            st["_ranges_state"] = "done"
-            return
-        got = _facts_load(feats, "ranges", None)
-        if got is not None and len(got.get("raw", ())) == len(feats) and len(got.get("lvl", ())) == len(feats):
-            raw, lvl = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
-            for i in range(len(feats)):
-                raw.setdefault(i, [tuple(r) for r in got["raw"][i]])
-                lvl.setdefault(i, [tuple(r) for r in got["lvl"][i]])
-            st["_ranges_state"] = "done"
-            return
-    if load_only:
-        st["_ranges_state"] = "loadable"        # (the eager build waits for level_ranges: road_specs reads the raw)
-        return
-    import revisit
-    run_path = _run_facts_path(st)
-    mine = False
-    if run_path is not None:            # (this run's: another process's, or theirs being made, waited for briefly)
-        import xproc
-        got, mine = xproc.once(run_path + ".lock", lambda: _run_facts_load(run_path, len(feats)), FACTS_WAIT_S)
-        if got is not None:
-            raw_m, lvl_m = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
-            for i in range(len(feats)):
-                raw_m.setdefault(i, [tuple(r) for r in got["raw"][i]])
-                lvl_m.setdefault(i, [tuple(r) for r in got["lvl"][i]])
-            if got.get("rule"):
-                st["_lidar_rule"] = True
-            st["_ranges_state"] = "done"
-            mk = _ranges_mem_key(st)
-            if mk is not None:
-                with _FACTS_LOCK:
-                    _FACTS_MEM[mk] = {"raw": [raw_m[i] for i in range(len(feats))],
-                                      "lvl": [lvl_m[i] for i in range(len(feats))], "rule": bool(got.get("rule")),
-                                      "until": None}
-            return
-    f0 = revisit.thread_faults()
-    t0 = time.perf_counter()
-    try:
-        raw = [list(r) for r in _raw_all(feats)]
-        # (most roads have no range, no end near a bridge's and no lidar answer: their level ranges are [] whatever the
-        # rules do; the rest made at once, earthfast.LevelLayer.rules: one Python call chain per feature was ~1 s of
-        # CPU a cell on first visits, Fells Point 2026-11-06)
-        near = _near_bridge_ends(feats)
-        answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
-        lvl_memo = st.setdefault("_level_ranges", {})
-        todo, ruled = [], False
-        # (the pre-check and the answered rows as plain Python once: a numpy scalar and an id's str per feature were
-        # ~0.5 % of a cold build's samples)
-        near_l = near.tolist() if near is not None else None
-        answered = set()
-        if answers:
-            ids = feats.ids.tolist() if hasattr(feats.ids, "tolist") else list(feats.ids)
-            answered = {i for i, fid in enumerate(ids) if answers.get(str(fid))}
-        for i in range(len(feats)):
-            if (near_l is not None and not raw[i] and not near_l[i] and i not in lvl_memo
-                    and i not in answered):
-                lvl_memo[i] = []
-            else:
-                ruled = True
-                if i not in lvl_memo:
-                    todo.append(i)
-        _level_many(feats, todo)
-        if ruled and st.get("_lidar_rule"):
-            revisit.fault(lidar=True)       # (as level_ranges: built on the rule for want of the lidar)
-        lvl = [list(lvl_memo[i]) for i in range(len(feats))]
-    except BaseException:
-        if mine:
-            import xproc
-            xproc.release(run_path + ".lock")
-        raise
-    if RANGE_OWNERS and revisit.thread_faults() != f0:     # (the layer's ranges made short: said on it before they
-        st["_ranges_short_until"] = time.monotonic() + FACTS_SHORT_S    # are said done: a reader seeing done sees it)
-    st["_ranges_state"] = "done"
-    if FACTS_LOG:                       # (BNGE_FACTS_LOG: which process made which cell's facts, how long)
-        log.info("cell facts %s made in %.2f s (pid %d)%s", st.get("_bnge_cell"), time.perf_counter() - t0, os.getpid(),
-                 "" if revisit.thread_faults() == f0 else " short")
-    clean = revisit.thread_faults() == f0
-    mk = _ranges_mem_key(st)
-    if mk is not None:                  # (the lidar rule's too: a cell's answer stays the same for the session)
-        with _FACTS_LOCK:
-            # (made short of something (a neighbour not downloaded yet: a first visit): kept FACTS_SHORT_S, not made
-            # again for every reload meanwhile, one cell 14 times in a process down Manhattan, 2026-11-02)
-            _FACTS_MEM[mk] = {"raw": raw, "lvl": lvl, "rule": bool(st.get("_lidar_rule")),
-                              "until": None if clean else time.monotonic() + FACTS_SHORT_S}
-            while len(_FACTS_MEM) > FACTS_MEM_KEPT:
-                _FACTS_MEM.popitem(last=False)
-    # (the stored form only where something keeps it: every feature's lists again, ~1 % of a cold build's samples
-    # with nothing kept)
-    keep_run = clean and run_path is not None
-    keep_facts = clean and not st.get("_lidar_rule") and _facts_key(feats, "ranges", None) is not None
-    data = None
-    if keep_run or keep_facts:
-        data = {"raw": [[[float(a), float(b), k] for a, b, k in r] for r in raw],
-                "lvl": [[[float(a), float(b), k] for a, b, k in r] for r in lvl]}
-    if keep_run:
-        _run_facts_store(run_path, dict(data, rule=bool(st.get("_lidar_rule"))))
-    if mine:
-        import xproc
-        xproc.release(run_path + ".lock")
-    if keep_facts:
-        _facts_store(feats, "ranges", None, data)
 
 
 # A bridge over a road spans more than its carriageway: the road's shoulders and the abutments' slopes stand under it.
@@ -1011,11 +518,6 @@ def _cell_ranges(feats, load_only=False):
 # lengthened until it covers, across the upper road's whole width, the lower road's carriageway, SKEW_MARGIN_M and an
 # abutment slope of SKEW_SLOPE_M either side: (lower half width + margin + slope) / sin + upper half width / tan of
 # the angle between them, at most SKEW_MAX_M more per end (onto the road joined there: _skew_decks).
-SKEW_ON = os.environ.get("BNE_SKEW_DECKS", "on") != "off"
-SKEW_MARGIN_M = 1.5         # m past the lower road's carriageway edge kept level (its shoulder)
-SKEW_SLOPE_M = 6.0          # m for the abutment's slope up to the upper road, under the deck
-SKEW_MAX_M = 30.0           # m a bridge range grows at most at each end
-SKEW_MIN_SIN = dmath.sin(math.radians(20.0))    # flatter crossings are taken as this (the reach would run away)
 
 
 def _feature_boxes(feats):
@@ -1060,48 +562,6 @@ def _ranges_flat(lists):
     return off, np.asarray(flat, np.float64).reshape(-1, 2), np.asarray(kinds, np.int8)
 
 
-def _ranges_lists(off, rng, kinds):
-    """The range lists of the kernels' (off, ranges, kinds)."""
-    rl, kl, ol = rng.tolist(), kinds.tolist(), off.tolist()
-    return [[(rl[r][0], rl[r][1], _KIND_NAMES[kl[r]]) for r in range(ol[k], ol[k + 1])] for k in range(len(ol) - 1)]
-
-
-def _level_layer(feats):
-    """earthfast.LevelLayer of feats: its geometry and every feature's raw_level_ranges as the rules read them, made
-    once (kept on feats: one feature's rules cost that feature's work); and the bridge features among them."""
-    got = feats.__dict__.get("_level_layer")
-    if got is None:
-        import fast
-        fast.require(185, "LevelLayer")
-        raw = _raw_all(feats)
-        off, rng = _raw_flat(feats)
-        kinds = feats.__dict__["_raw_flat_kinds"]
-        ll = np.ascontiguousarray(feats.lonlat, np.float64)
-        got = feats.__dict__["_level_layer"] = (fast._ef.LevelLayer(
-            ll if ll.ndim == 2 else ll.reshape(-1, 2), np.ascontiguousarray(feats.coord_off, np.int64),
-            np.ascontiguousarray(feats.ring_off, np.int64), np.ascontiguousarray(feats.part_off, np.int64),
-            off, rng, kinds), [i for i, rr in enumerate(raw) if any(r[2] == "bridge" for r in rr)])
-    return got
-
-
-def _level_prm():
-    """The rules' constants as earthfast.LevelLayer.rules takes them (read at each call: tests switch them)."""
-    return np.array([float(SKEW_ON), SKEW_MARGIN_M, SKEW_SLOPE_M, SKEW_MAX_M, SKEW_MIN_SIN, GAP_JOIN_M,
-                     float(GAP_DECK_ON), GAP_DECK_M, GAP_JUNCTION_M, GAP_JOIN_M, PORTAL_DECK_M, MIN_PART,
-                     TUNNEL_PORTAL_CLEAR_M, TUNNEL_ROAD_MIN_SIN, TUNNEL_PORTAL_REACH_M, TUNNEL_PORTAL_GROW_M,
-                     TUNNEL_PORTAL_END_M, TUNNEL_PORTAL_SHRINK_M, TUNNEL_PORTAL_MIN_M, float(LIDAR_GAPS_ON), MIN_PART_M],
-                    np.float64)
-
-
-def _spec_widths(feats, specs):
-    """(n,) widths of specs (_road_specs_kept(feats); NaN where none), kept on feats for that list."""
-    got = feats.__dict__.get("_level_spec_w")
-    if got is None or got[0] is not specs:
-        got = feats.__dict__["_level_spec_w"] = (specs, np.fromiter(
-            (np.nan if s is None else float(s.width) for s in specs), np.float64, len(specs)))
-    return got[1]
-
-
 def _structure_widths(feats, idx):
     """(sk (n,) uint8, sw (n,)): _structure_width of features idx as the kernels take it (0 not made, 1 None, 2 its
     width), each made once per layer (kept on feats): the missing ones at once (earthfast.RoadRules.structure_widths)."""
@@ -1120,29 +580,6 @@ def _structure_widths(feats, idx):
     return sk, sw
 
 
-def _level_steps(feats, idx, inputs, steps, lidar=None):
-    """Features idx's ranges after the rules steps (_STEP_*: _skew_decks, _lidar_gaps (lidar: each one's elevated
-    stretches, _lidar_answers), _deck_gaps, _portal_decks, in that order) from inputs (their range lists), all at once
-    (earthfast.LevelLayer.rules: the Python's calls per feature, ~100k a dense cell, were ~30 % of a cold Baltimore
-    tile's planning, 2026-11-10). Pure given feats, road_specs and the lidar's answer."""
-    if not idx:
-        return []
-    layer, bridges = _level_layer(feats)
-    specs = _road_specs_kept(feats)
-    if steps & _STEP_SKEW and not feats.__dict__.get("_structure_w_bridges"):
-        _structure_widths(feats, bridges)           # (_bridge_reach's of the bridges joined at an end)
-        feats.__dict__["_structure_w_bridges"] = True
-    sk, sw = _structure_widths(feats, idx)
-    if lidar is None:
-        lid_off, lid_pts = np.zeros(0, np.int64), np.zeros((0, 4))
-    else:
-        lid_off = np.r_[0, np.cumsum([len(g) for g in lidar])].astype(np.int64)
-        lid_pts = np.asarray([(a[0], a[1], b[0], b[1]) for g in lidar for a, b in g], np.float64).reshape(-1, 4)
-    return _ranges_lists(*layer.rules(_spec_mask(feats, specs), _spec_widths(feats, specs), sk, sw,
-                                      np.asarray(idx, np.int64), *_ranges_flat(inputs), lid_off, lid_pts, steps,
-                                      _level_prm()))
-
-
 def _structure_width(feats, i):
     """m: the carriageway of road feature i as _bridge_specs makes it, without its level ranges (a road bridged along
     its whole length has no road_specs entry: its ranges were never lengthened over the roads under it; from cody196's
@@ -1151,106 +588,38 @@ def _structure_width(feats, i):
     return None if sk[i] == 1 else float(sw[i])
 
 
-# A tunnel's portal moved out past a ground road crossing over the tunnel's road at it (earthfast.tunnel_reach): its
-# carriageway and TUNNEL_PORTAL_CLEAR_M past it (along the road: / the sine of the crossing, at least TUNNEL_ROAD_MIN_SIN),
-# a crossing up to TUNNEL_PORTAL_REACH_M outside the portal, TUNNEL_PORTAL_GROW_M at most. OSM often ends an underpass's
-# tunnel inside the carriageway over it: the portal's approach cut ran through the A-7's lanes near Malaga (GitHub #450).
-TUNNEL_PORTAL_CLEAR_M = 3.0
-TUNNEL_PORTAL_REACH_M = 10.0
-TUNNEL_PORTAL_GROW_M = 30.0
-TUNNEL_PORTAL_END_M = 2.0   # m: a crossing this close to the other road's end is a junction
-# A portal inside the carriageway of a road running along the tunnel (the map's ground stretch of a service tunnel laid
-# in a motorway's lanes: the Gotthard road tunnel's service gallery at Goeschenen, an arch and a mound in the A2's
-# lanes, 2026-10-28) moves into the tunnel until clear, TUNNEL_PORTAL_SHRINK_M at most; a tunnel shorter than
-# TUNNEL_PORTAL_MIN_M left that way is none.
-TUNNEL_PORTAL_SHRINK_M = 60.0
-TUNNEL_PORTAL_MIN_M = 8.0
-
-
 _NO_NEAR = object()
 
 
 def _near_bridge_ends(feats):
-    """Per feature: may an end of its first ring lie within _skew_decks' 0.75 m of a bridge feature's end? A box test
-    in lon / lat, wider than that everywhere (earthfast.LevelLayer.near; most features are nowhere near a bridge, and
-    their exact test was most of _skew_decks' time, 2026-10-25). None: no pre-check (ends past 89 deg). Kept on feats."""
+    """Per feature: may an end of its first ring lie within 0.75 m of a bridge feature's end? A box test in lon / lat,
+    wider than that everywhere (earthfast.LevelLayer.near). None: no pre-check (ends past 89 deg). Kept on feats."""
     got = feats.__dict__.get("_near_bridge_ends", _NO_NEAR)
     if got is _NO_NEAR:
         got = feats.__dict__["_near_bridge_ends"] = _level_layer(feats)[0].near()
     return got
 
 
-def _skew_decks(feats, i, rngs):
-    """rngs (feature i's raw_level_ranges) with its tunnel ranges' portals moved past the ground roads over them
-    (TUNNEL_PORTAL_*), its bridge ranges lengthened over the roads crossing under them (SKEW_*), and a bridge range at
-    an end of i where a bridge feature joined there reaches past its own end onto i (Overture makes most short bridges a
-    segment of their own). Pure given feats (earthfast.LevelLayer.rules)."""
-    return _level_steps(feats, [i], [rngs], _STEP_SKEW)[0]
-
-
-# A ground piece of a road shorter than GAP_DECK_M with a deck on both sides (a bridge range of its own, or another
-# road's bridge going on from its end with nothing else meeting there) and no road joining it is deck too: a viaduct's
-# stretch the map leaves untagged between two bridges was drawn on the ground, each deck eased down to it and up again
-# (with the measured decks, 10-15 m: the Springfield Interchange, 2026-10-28). A junction on it keeps it on the ground.
-GAP_DECK_ON = os.environ.get("BNE_DECK_GAPS", "on") != "off"
-GAP_DECK_M = 60.0
-GAP_JUNCTION_M = 1.5
-GAP_JOIN_M = 0.75           # m: a road's end this near another's is joined to it (_skew_decks: a bridge's reach past
-                            # its end goes on onto it; _deck_gaps: its deck goes on from there)
-
-
-def _spec_mask(feats, specs):
-    """(n,) uint8: 1 where specs (_road_specs_kept(feats)) has a spec, kept on feats for that list."""
-    got = feats.__dict__.get("_deck_gap_specs")
-    if got is None or got[0] is not specs:
-        got = feats.__dict__["_deck_gap_specs"] = (specs, np.fromiter((s is not None for s in specs), np.uint8,
-                                                                       len(specs)))
-    return got[1]
-
-
-# A ground piece shorter than PORTAL_DECK_M between a tunnel's portal and a bridge of the same road, with no other road
-# meeting it, is the bridge going on to the portal: graded on its own it joined a portal floor taken from a steep
-# hillside to an abutment taken lower down it, a 3.7 m drop in 16 m (22 %) out of CA-1's northbound Tom Lantos bore
-# onto its bridge (37.5825, -122.5096, 2026-11-09; the southbound bore's bridge starts at its portal and was level).
-PORTAL_DECK_M = 30.0
-
-
-def _portal_decks(feats, i, rngs):
-    """rngs (feature i's level ranges, sorted) with each short ground gap between a tunnel and a bridge (PORTAL_DECK_M,
-    no road meeting it) made bridge. Pure given feats (earthfast.LevelLayer.rules)."""
-    return _level_steps(feats, [i], [rngs], _STEP_PORTAL)[0]
-
-
-def _deck_gaps(feats, i, rngs):
-    """rngs (feature i's level ranges) with its short ground gaps between decks made bridge (GAP_DECK_*); a road with a
-    tunnel range keeps its own, but for the gap between a portal and a bridge (_portal_decks). Pure given feats
-    (earthfast.LevelLayer.rules)."""
-    return _level_steps(feats, [i], [rngs], _STEP_GAPS)[0]
-
-
-# Ground stretches the lidar shows on a structure (roadz.py, US 3DEP; the user, 2026-10-29: "Sure add the check"): a
-# drawn road's ground piece that touches a deck's end (rule_level_ranges) is measured along its first LIDAR_GAP_REACH_M
-# with the decks' own lidar read, and is deck where its surface goes on from the deck's end well over the DTM (an
-# untagged viaduct stretch: Springfield's, a measured deck eased 10-15 m down to it). roadz answers per map cell (the
-# cell holding the deck's end), the same in every process (kept on disk; a cell whose lidar is not there in time keeps
-# the rule for the session). BNE_LIDAR_GAPS=off: none.
-LIDAR_GAPS_ON = os.environ.get("BNE_LIDAR_GAPS", "on") != "off"
-LIDAR_GAP_TOUCH_M = 1.0     # m: a ground piece's end this near a deck piece's end goes on from it
-LIDAR_GAP_REACH_M = 150.0   # m of a ground piece measured from that end at most
-
-
-def rule_level_ranges_near(feats):
-    """{i: rule_level_ranges} of the features that can have a bridge range by the rule: one of their own (raw) or a
-    bridge ending near them (_skew_decks / _deck_gaps add none elsewhere). Kept on feats."""
-    got = feats.__dict__.get("_rule_near")
-    if got is not None:
-        return got
-    near = _near_bridge_ends(feats)
-    raw = _raw_all(feats)
-    idx = [i for i in range(len(feats)) if any(r[2] == "bridge" for r in raw[i]) or near is None or near[i]]
-    got = {i: list(r) for i, r in zip(idx, _rule_many(feats, idx))}
-    feats.__dict__["_rule_near"] = got
+def _level_layer(feats):
+    """earthfast.LevelLayer of feats: its geometry and every feature's level ranges, made once (kept on feats); and
+    the bridge features among them."""
+    got = feats.__dict__.get("_level_layer")
+    if got is None:
+        import fast
+        fast.require(185, "LevelLayer")
+        raw = _raw_all(feats)
+        off, rng = _raw_flat(feats)
+        kinds = feats.__dict__["_raw_flat_kinds"]
+        ll = np.ascontiguousarray(feats.lonlat, np.float64)
+        got = feats.__dict__["_level_layer"] = (fast._ef.LevelLayer(
+            ll if ll.ndim == 2 else ll.reshape(-1, 2), np.ascontiguousarray(feats.coord_off, np.int64),
+            np.ascontiguousarray(feats.ring_off, np.int64), np.ascontiguousarray(feats.part_off, np.int64),
+            off, rng, kinds), [i for i, rr in enumerate(raw) if any(r[2] == "bridge" for r in rr)])
     return got
+
+
+DECK_END_TOUCH_M = 1.0      # m: a ground piece's end this near a deck piece's end goes on from it
+DECK_END_REACH_M = 150.0    # m of a ground piece taken from that end at most
 
 
 def _level_rows(feats):
@@ -1267,104 +636,32 @@ def _level_rows(feats):
     return got
 
 
-def lidar_gap_candidates(feats):
-    """[(fid, line lon/lat (k, 2) from the deck's end outward, LIDAR_GAP_REACH_M at most, half width m)] of the drawn
-    roads' ground pieces (rule_level_ranges) with an end within LIDAR_GAP_TOUCH_M of a bridge piece's end (any road's).
-    Pure given feats (earthfast.LevelLayer.lidar_lines); kept on it."""
-    got = feats.__dict__.get("_lidar_gap_candidates")
+def deck_end_pieces(feats):
+    """[(fid, line lon/lat (k, 2) from the deck's end outward, DECK_END_REACH_M at most, half width m)] of the drawn
+    roads' ground pieces with an end within DECK_END_TOUCH_M of a bridge piece's end (any road's): what the lidar
+    measures a deck's approaches along (roadz). Pure given feats (earthfast.LevelLayer.lidar_lines); kept on it."""
+    got = feats.__dict__.get("_deck_end_pieces")
     if got is not None:
         return got
     n = len(feats)
-    rules = rule_level_ranges_near(feats)       # (the others: no bridge of their own, none ending at them)
+    near = _near_bridge_ends(feats)
+    raw = _raw_all(feats)
+    rules = {i: list(raw[i]) for i in range(n)
+             if any(r[2] == "bridge" for r in raw[i]) or near is None or near[i]}
     have = np.zeros(n, np.uint8)
     have[list(rules)] = 1
     off, rng, kinds = _ranges_flat([rules.get(i, ()) for i in range(n)])
     sk, sw = _structure_widths(feats, list(rules))
     cf, co, pts, half = _level_layer(feats)[0].lidar_lines(off, rng, kinds, have, sk, sw, *_level_rows(feats),
-                                                           np.array([MIN_PART, LIDAR_GAP_TOUCH_M, LIDAR_GAP_REACH_M, MIN_PART_M]))
+                                                           np.array([MIN_PART, DECK_END_TOUCH_M, DECK_END_REACH_M,
+                                                                     MIN_PART_M]))
     co = co.tolist()
     got = [(str(feats.ids[f]), pts[co[c]:co[c + 1]], float(half[c])) for c, f in enumerate(cf.tolist())]
-    feats.__dict__["_lidar_gap_candidates"] = got
+    feats.__dict__["_deck_end_pieces"] = got
     return got
 
 
-def _lidar_cell(cid):
-    """May the lidar know cell cid ("z/x/y", or a test's name: yes)? (No candidates looked for elsewhere.)"""
-    try:
-        z, x, y = (int(v) for v in str(cid).split("/"))
-    except ValueError:
-        return True
-    import mapcells
-    import roadz
-    la, lo = mapcells.CellKey(z, x, y).center()
-    return "lidar" in roadz.sources_at(la, lo, True)
-
-
-def _lidar_answers(feats):
-    """{fid: [(lon/lat from, lon/lat to)]} of the elevated stretches roadz found on feats' candidates (lidar_gap_
-    candidates), from the answers of the cells holding their deck ends; {} without lidar. Kept on feats."""
-    st = feats.__dict__
-    got = st.get("_lidar_answers")
-    if got is not None:
-        return got
-    lock = st.setdefault("_lidar_answers_lock", threading.Lock())
-    with lock:
-        got = st.get("_lidar_answers")
-        if got is not None:
-            return got
-        got = {}
-        try:
-            import roadz
-            prov = roadz.PROVIDER
-            cid = st.get("_bnge_cell")
-            if (LIDAR_GAPS_ON and prov is not None and prov.enabled and prov.lidar and cid is not None
-                    and hasattr(prov, "gap_answers") and _lidar_cell(cid[0])):
-                cands = lidar_gap_candidates(feats)
-                if cands:
-                    import mapcells
-                    owners = sorted({mapcells.cell_of(float(c[1][0, 1]), float(c[1][0, 0])) for c in cands}, key=str)
-                    fids = {c[0] for c in cands}
-                    for _key, gaps in prov.gap_answers(owners).items():
-                        if gaps is None:
-                            st["_lidar_rule"] = True
-                        for fid, a, b in gaps or ():
-                            if fid in fids:
-                                got.setdefault(fid, []).append((tuple(a), tuple(b)))
-        except Exception as ex:             # (the rule rather than no ranges)
-            log.debug("lidar gaps: %s: %s", type(ex).__name__, ex)
-            got = {}
-        st["_lidar_answers"] = got
-    return got
-
-
-def _level_ranges(feats, i):
-    """tag_level_ranges with the grade separations the map has no bridge for (gradesep.py: the cell's own, from its
-    roads and its neighbours'), where no range of the map's is, and its underpasses' tunnel ranges made ground."""
-    return _level_ranges_many(feats, [i])[0]
-
-
-def _level_ranges_many(feats, idx):
-    """[_level_ranges] of features idx: the grade separations' spans gathered here (the cell's hook, _gradesep_many),
-    merged into the map's ranges at once (earthfast.level_extras)."""
-    tags = _tag_ranges_list(feats)
-    hook = feats.__dict__.get("_bnge_gradesep")
-    own = hook(feats) if hook is not None and idx else None
-    far = _gradesep_many(feats, idx)
-    out, rows = [], []
-    for k, i in enumerate(idx):
-        extra = list(own.get(i) or ()) if own is not None else []
-        extra += far.get(i, ())
-        out.append(list(tags[i]))
-        if extra:
-            rows.append((k, i, extra))
-    if rows:
-        import fast
-        fast.require(185, "level_extras")
-        got = _ranges_lists(*fast._ef.level_extras(*_ranges_flat([tags[i] for _, i, _ in rows]),
-                                                   *_ranges_flat([e for _, _, e in rows])))
-        for (k, _, _), r in zip(rows, got):
-            out[k] = r
-    return out
+                            # its end goes on onto it; _deck_gaps: its deck goes on from there)
 
 
 def _cell_bounds(feats):
@@ -1383,118 +680,12 @@ def _cell_bounds(feats):
     return got
 
 
-def _home_far(feats, near_hook, home):
-    """Is feature home cell `home` none of feats' cell's neighbours (its home copy not at hand, home_copy None)? A
-    long road's copies far from its home (the first point of a 15 km motorway) each took only the spans their own cell
-    found: the A4 at Glaireuse (GitHub #1020), one copy had the bridge over a track's underpass and the next cell's did
-    not, a trench across the motorway; such copies take their neighbours' spans too (adjacent copies then agree near a
-    crossing). Remembered per layer."""
-    memo = feats.__dict__.setdefault("_home_far", {})
-    got = memo.get(home)
-    if got is None:
-        names = getattr(near_hook, "names", None)
-        if names is not None:
-            # (told by the eight cells' names, none read for it: a neighbour's roads layer always comes back; the cells
-            # were all read for this before, each a cold first visit's decode, 2026-11-11)
-            got = memo[home] = home not in names
-            return got
-        try:
-            cells = {f.__dict__["_bnge_cell"][0] for f in near_hook()
-                     if f is not None and f.__dict__.get("_bnge_cell")}
-        except Exception:
-            return False
-        got = memo[home] = home not in cells
-    return got
-
-
-def _cells_reached(hook, boxes):
-    """The names of hook's cells (mapdata's _bnge_neighbours) whose bounds lon/lat boxes (m, 4) reach, as
-    _gradesep_many tests them (the others it skips for every feature); None: every one (a hook without names)."""
-    names = getattr(hook, "names", None)
-    if names is None:
-        return None
-    import mapcells
-    out = set()
-    for nm in names:
-        try:
-            ob = mapcells.CellKey(*(int(v) for v in nm.split("/"))).bounds()
-        except (TypeError, ValueError):
-            return None
-        if np.any(~((boxes[:, 2] < ob[0]) | (boxes[:, 0] > ob[2]) | (boxes[:, 3] < ob[1]) | (boxes[:, 1] > ob[3]))):
-            out.add(nm)
-    return out
-
-
 def _near_layers(hook, want=None):
     """hook(want) (mapdata's _bnge_neighbours: only the cells named in want read), or hook() for one that reads all
     eight (a test's)."""
     if want is not None and getattr(hook, "names", None) is not None:
         return hook(want)
     return hook()
-
-
-def _gradesep_elsewhere(feats, i):
-    """The grade separations (gradesep) the other cells feature i crosses found for it, when this cell is its home
-    (home_copy: every copy of it takes its ranges from here). A cell finds those of the crossings in it, and in the
-    default mode (gradesep.TUNNELS) one with no short tunnel of its own looks for none: CA-1's 952 m segment by Wilder
-    Tunnel (36.9621, -122.0845) is at home in the cell east of the tunnel's, which never found the bridge over it,
-    while the tunnel's cell made the tunnel ground; the path under the highway was graded through its embankment, a
-    trench 2 m deep (2026-11-09). [] where this cell is not its home or it stays in this cell. (The cells it crosses are
-    the neighbours whose bounds its box overlaps, and every feature's home cell is made at once: mapcells.cells_for_bbox
-    and _home_cell per feature were 2.4 of its 3.2 own CPU-s in a cold Queens tile, 2026-11-09.)"""
-    return _gradesep_many(feats, [i]).get(i, [])
-
-
-def _gradesep_many(feats, idx):
-    """{i: _gradesep_elsewhere(feats, i)} of features idx with any: the box tests of all at once (numpy; one feature
-    at a time they were 0.5 of 2.2 CPU-s of 9 Baltimore cells' level ranges, 2026-11-10), the neighbours asked once."""
-    me = feats.__dict__.get("_bnge_cell")
-    near_hook = feats.__dict__.get("_bnge_neighbours")
-    if me is None or near_hook is None or not len(idx):
-        return {}
-    homes = _home_cells(feats)
-    boxes = _feature_boxes(feats)
-    ix = np.asarray(idx, np.int64)
-    b = boxes[ix]
-    keep = np.isfinite(b).all(axis=1)
-    cb = _cell_bounds(feats)
-    if cb is not None:                  # (it stays in this cell)
-        keep &= ~((cb[0] <= b[:, 0]) & (b[:, 2] <= cb[2]) & (cb[1] <= b[:, 1]) & (b[:, 3] <= cb[3]))
-    # (its home copy at hand: level_ranges takes that one's)
-    cand = [i for i in ix[keep].tolist() if homes[i] == me[0] or _home_far(feats, near_hook, homes[i])]
-    if not cand:
-        return {}
-    import revisit
-    want = _cells_reached(near_hook, boxes[np.asarray(cand, np.int64)])
-    try:
-        near = [f for f in _near_layers(near_hook, want) if f is not None and f.__dict__.get("_bnge_cell")]
-    except Exception as e:              # (not kept: made again with them)
-        log.debug("gradesep elsewhere: neighbours: %s: %s", type(e).__name__, e)
-        revisit.fault()
-        return {}
-    out = {}
-    for i in cand:
-        lon0, lat0, lon1, lat1 = (float(v) for v in boxes[i])
-        fid = feats.ids[i]
-        got = []
-        for other in near:
-            if other.__dict__["_bnge_cell"][0] == me[0]:
-                continue
-            ob = _cell_bounds(other)
-            if ob is not None and (lon1 < ob[0] or lon0 > ob[2] or lat1 < ob[1] or lat0 > ob[3]):
-                continue                # (it does not reach that cell)
-            hook = other.__dict__.get("_bnge_gradesep")
-            if hook is None:
-                continue
-            pos = other.__dict__.get("_id_pos")
-            if pos is None:
-                pos = other.__dict__["_id_pos"] = {f: j for j, f in enumerate(other.ids.tolist())}
-            j = pos.get(fid)
-            if j is not None:
-                got.extend(hook(other).get(j) or ())
-        if got:
-            out[i] = got
-    return out
 
 
 def tag_level_ranges(feats, i):
@@ -1731,7 +922,7 @@ def _part_keys_new(feats, i, want, rngs=None):
     stores keep one. A piece over no such range (the lidar's elevated stretch) keys by its own start. rngs: the level
     ranges to take (level_ranges' by default), as _parts_by_level_new's."""
     rngs = level_ranges(feats, i) if rngs is None else rngs
-    raw = raw_level_ranges(feats, i)
+    raw = tag_level_ranges(feats, i)
     floor = part_floor(feats, i, rngs)
     if want == "ground":
         pieces, rawp = ground_ranges(rngs, floor), ground_ranges(raw, floor)
@@ -1839,51 +1030,14 @@ def bridge_parts(feats, i):
 
 
 def tunnel_parts(feats, i):
-    """The tunnel pieces of feature i (lon/lat polylines), each end made longer where its portal would stand on a road
-    it passes under (_clear_portals)."""
-    memo = feats.__dict__.setdefault("_parts_by_level", {})
-    got = memo.get((i, "tunnel+"))
-    if got is None:
-        got = memo[(i, "tunnel+")] = _clear_portals(feats, i, _parts_by_level(feats, i, "tunnel"))
-    return list(got)
+    """The tunnel pieces of feature i (lon/lat polylines): the map's own tunnel ranges (_parts_by_level)."""
+    return _parts_by_level(feats, i, "tunnel")
 
 
-PORTAL_CLEAR_M = 1.0        # m a tunnel's portal face keeps from the edge of a carriageway it passes under, its tube
-PORTAL_EXTEND_MAX_M = 25.0  # going on straight up to this far past the mapped end for it (an underpass mapped short: its
                             # portal face stood across the E6's lanes in Norway, GitHub #2)
+
+
 PORTAL_JOIN_M = 1.5         # a road this near a tunnel's end meets it there (a garage ramp ending in a street), not over it
-UNDERPASS_MAX_M = 80.0      # only tunnel parts this short (an underpass) under roads of PORTAL_CLASSES are carried on
-PORTAL_CLASSES = {"motorway", "trunk", "primary", "secondary"}
-
-
-def _clear_portals(feats, i, parts):
-    """parts (lon/lat polylines of feature i's tunnel ranges) with each end near a road the tube passes under (a road
-    on the ground the part crosses, not joined at that end) carried on straight until the portal face (roadmesh: the
-    tube's half width and its frame either side) is PORTAL_CLEAR_M clear of its carriageway and the mouth past the
-    ground graded with it (grading.T_MAX beyond its edge: the floor at a mouth is that ground's height, and a mouth on
-    the road's level put the tube's end over the road); an end that does not clear within PORTAL_EXTEND_MAX_M stays.
-    Pure."""
-    if not parts:
-        return parts
-    ts = tunnel_specs(feats)
-    if ts[i] is None:
-        return parts
-    import roadmesh
-    half = ts[i].width / 2 + roadmesh.TUNNEL_SHOULDER + roadmesh.PORTAL_FRAME
-    out = []
-    for ring in parts:
-        ring = np.asarray(ring, np.float64)
-        kx = 111320.0 * dmath.cos(math.radians(float(ring[0, 1])))
-        L = float(dnp.hypot(*(np.diff(ring, axis=0) * [kx, 111320.0]).T).sum())
-        if L <= UNDERPASS_MAX_M:
-            for at_start in (True, False):
-                ring = _clear_end(feats, i, ring, at_start, half)
-        elif racedig.ON and L <= racedig.MAX_PART_M:
-            # (a longer tube under a racetrack: its portals off the track's band, racedig; the other roads as before)
-            for at_start in (True, False):
-                ring = _clear_end(feats, i, ring, at_start, half, race_only=True)
-        out.append(ring)
-    return out
 
 
 def _crosses(a, b):
@@ -1899,84 +1053,6 @@ def _crosses(a, b):
     t = np.where(ok, (w[..., 0] * s_[..., 1] - w[..., 1] * s_[..., 0]) / dn, -1.0)
     u = np.where(ok, (w[..., 0] * r[..., 1] - w[..., 1] * r[..., 0]) / dn, -1.0)
     return bool(np.any(ok & (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1)))
-
-
-def _portal_roads(feats):
-    """The ground parts of feats' PORTAL_CLASSES roads (road_specs(feats)) as float arrays with their bounds, in feature
-    order, and their half widths: made once per layer for _clear_end (each tunnel end looked over every feature: 0.85 s
-    of 8 Midtown tiles)."""
-    got = feats.__dict__.get("_portal_roads")
-    if got is not None:
-        return got
-    rs = road_specs(feats)
-    js, parts, hws, race = [], [], [], []
-    for j in range(len(feats)):
-        if rs[j] is None:
-            continue
-        is_race = racedig.ON and rs[j].cls == "raceway"       # (a portal off a racetrack's band: racedig)
-        if rs[j].cls not in PORTAL_CLASSES and not is_race:
-            continue
-        for g in ground_parts(feats, j):
-            js.append(j)
-            parts.append(np.asarray(g, np.float64))
-            hws.append(rs[j].width / 2 + (racedig.BAND_MARGIN_M if is_race else 0.0))
-            race.append(is_race)
-    bb = np.array([(g[:, 0].min(), g[:, 0].max(), g[:, 1].min(), g[:, 1].max()) for g in parts]).reshape(-1, 4)
-    idx = {"j": np.asarray(js, np.int64), "parts": parts, "minx": bb[:, 0], "maxx": bb[:, 1], "miny": bb[:, 2],
-           "maxy": bb[:, 3], "hw": hws, "race": race}
-    feats.__dict__["_portal_roads"] = idx
-    return idx
-
-
-def _clear_end(feats, i, ring, at_start, half, race_only=False):
-    import grading
-    p0 = ring[0] if at_start else ring[-1]
-    kx, ky = 111320.0 * dmath.cos(math.radians(p0[1])), 111320.0      # m per degree there
-    m = (ring - p0) * [kx, ky]
-    tail = m if at_start else m[::-1]                                  # from the end inwards
-    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(tail, axis=0).T))]
-    if s[-1] < 1.0:
-        return ring
-    q = tail[min(np.searchsorted(s, 3.0), len(tail) - 1)]
-    d = -q / max(float(dnp.hypot(*q)), 1e-9)                            # out of the tunnel
-    nrm = np.array([-d[1], d[0]])
-    reach = (half + PORTAL_EXTEND_MAX_M + 40.0) / ky                   # roads that could matter, in degrees
-    roads_m = []
-    idx = _portal_roads(feats)
-    near = np.flatnonzero((idx["miny"] <= p0[1] + reach) & (idx["maxy"] >= p0[1] - reach) &
-                          ((idx["minx"] - p0[0]) * kx / ky <= reach) & ((p0[0] - idx["maxx"]) * kx / ky <= reach) &
-                          (idx["j"] != i)) if len(idx["j"]) else ()
-    for n_ in near:
-        if race_only and not idx["race"][n_]:
-            continue
-        g = idx["parts"][n_]
-        gm = (g - p0) * [kx, ky]
-        a_, d_ = gm[:-1], np.diff(gm, axis=0)
-        t_ = np.clip(-(a_ * d_).sum(1) / np.maximum((d_ * d_).sum(1), 1e-9), 0.0, 1.0)
-        if float(dnp.hypot(*(a_ + t_[:, None] * d_).T).min()) < PORTAL_JOIN_M or not _crosses(m, gm):
-            continue                        # joined here (an end at it or a T junction) / not over the tunnel
-        hw = idx["hw"][n_]
-        roads_m.append((gm, ((0, hw + grading.T_MAX), (1, hw + PORTAL_CLEAR_M), (2, hw + PORTAL_CLEAR_M))))
-
-    def clear(c):
-        pts = np.array([c, c + nrm * half, c - nrm * half])
-        for gm, needs in roads_m:
-            a, b = gm[:-1], gm[1:]
-            dd = b - a
-            L2 = np.maximum((dd * dd).sum(1), 1e-9)
-            for k, need in needs:
-                t = np.clip(((pts[k] - a) * dd).sum(1) / L2, 0.0, 1.0)
-                if dnp.hypot(*(a + t[:, None] * dd - pts[k]).T).min() < need:
-                    return False
-        return True
-    if not roads_m or clear(np.zeros(2)):
-        return ring
-    for ext in np.arange(1.0, PORTAL_EXTEND_MAX_M + 1e-6, 1.0):
-        if clear(d * ext):
-            k = max(1, int(math.ceil(ext / 4.0)))
-            add = np.array([d * ext * (t / k) for t in range(1, k + 1)]) / [kx, ky] + p0
-            return np.vstack([add[::-1], ring]) if at_start else np.vstack([ring, add])
-    return ring
 
 
 # surfaces that belong to the ground layer, not to a road decal: rock and grass are rough, mask-driven terrain
@@ -2267,8 +1343,6 @@ def regional_unpaved(feats):
     return got
 
 
-
-
 def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None, link=False):
     """Paved / dirt width (m) of a road: the width rule if any, else the driving width (OpenStreetMap's lanes x the
     class's LANE_W when known, two lanes for untagged highways, else the class's) plus parking lanes (urban paved
@@ -2280,10 +1354,6 @@ def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None, lin
     w, own = _road_rules().carriageway(str(cls), kind in BUILT, bool(urban), rule_width, bool(oneway), lanes,
                                        bool(link))
     return rule_width if own else w
-
-
-
-
 
 
 RAMP_JOIN_DEG = 1e-5        # (~1 m) a ramp's end this close to a road's end: they meet (_ramp_junction)
@@ -2414,8 +1484,6 @@ def motorway_shoulder(spec):
     return float(np.clip((spec.width - count * lane) / 2, 0., cap))
 
 
-
-
 def _lengths(feats):
     """Length (m, lon scaled by the cos of each feature's first latitude) of every feature's geometry, NaN for
     fewer than two points (earthfast roadnet::columns::layer_lengths)."""
@@ -2431,8 +1499,6 @@ DUAL_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
 DUAL_GAP_M = (4.0, 45.0)    # centreline to centreline of a divided road's two carriageways
 DUAL_SHARE = 0.6            # this share of the shorter one runs beside the other ...
 DUAL_ANGLE_DEG = 25.0       # ... parallel within this
-
-
 
 
 def dual_carriageways(feats, specs, left_hand=False):
@@ -2471,10 +1537,6 @@ def dual_cap(gap, w, lanes=None, other=None):
     shared by their lanes where both counts are known: a 2+1 road's two-lane side next to its one-lane side, not two of
     one width (the user's report 2026-11-02: two lanes' markings on a road far too narrow for them). (earthfast)"""
     return _road_rules().dual_cap(float(gap), float(w), lanes, other)
-
-
-
-
 
 
 def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
@@ -3578,8 +2640,6 @@ def _specs_from(data, n):
 SIDEWALK_TAG = {"both": (1, -1), "left": (1,), "right": (-1,), "no": (), "none": (), "separate": ()}
 
 
-
-
 UNBUILT_SHARE = 0.5     # a feature Overture flags is_under_construction over this share of its length is not built
 
 
@@ -3623,8 +2683,6 @@ def _unbuilt_all(feats):
                     share[i] += (b - a) if b > a else 1.0      # (no range: the whole feature)
             out |= share >= UNBUILT_SHARE
     return out
-
-
 
 
 def _road_specs(feats, urban_fn, left_hand, towns=None):
@@ -4285,10 +3343,6 @@ SE_GRAVEL_CLASSES = {"unclassified", "service", "unknown"}
 SE_NO_STRIPS = {"residential", "living_street", "unclassified", "service", "unknown"}   # no paved edge strips
 
 
-
-
-
-
 # Roundabouts (OpenStreetMap junction=roundabout / circular: osmtags osm_junction): the circulatory roadway as wide as
 # the design guides make it, not a one-way street's lane (3.5-4 m: cars clipped the central island's curb). FHWA /
 # NCHRP Report 672 (Roundabouts: An Informational Guide, 2nd ed., 6.4.5 / 6.5.5): single-lane 16-20 ft (4.9-6.1 m),
@@ -4326,8 +3380,6 @@ def is_ring(feats, i):
     """Is feature i a mapped roundabout ring (osmtags osm_junction)?"""
     col = feats.attrs.get("osm_junction")
     return col is not None and str(col[i]) in RING_JUNCTIONS
-
-
 
 
 def _measure_many(feats, widths, asks):
@@ -4555,8 +3607,8 @@ def _cell_memo(feats, name, make):
             import revisit              # (made on the lidar rule: whatever reads it is not kept either)
             revisit.fault(lidar=True)
         return got
-    mk = _ranges_mem_key(st)
-    mk = None if mk is None else mk[:1] + (name,) + mk[2:]
+    cid = st.get("_bnge_cell")
+    mk = None if cid is None else (cid, name)
     if mk is not None:
         with _FACTS_LOCK:
             got = _FACTS_MEM.get(mk)
@@ -5642,7 +4694,6 @@ def _curve_try(s, want, cap, z0, zL, g0, gL, step, L, K, iters):
     return z
 
 
-
 def _path_curve(lines, order, ground_fn, crossings, spans, clear, lift, max_grade, crest=None, ends=(None, None)):
     """curve_profile along one path of parts (order: [(part, reversed)]). ends: per end None (an abutment:
     the ground's height, the approach grade from the ground beyond it) or (z, grade dz/ds arriving) (a
@@ -5989,8 +5040,6 @@ def _lift_smooth(s, z, floor, iters=8):
     ff = np.maximum(fs, dnp.interp(s, g, fg))
     out[1:-1] = np.maximum(out[1:-1], ff[1:-1])
     return out
-
-
 
 
 DECK_SIGMA = 12.0       # m, deck profile smoothing (at least) ...
@@ -7006,7 +6055,6 @@ def edge_colour(spec, side):
     return 'line_yellow' if spec.oneway and side == (spec.dir or 1) else 'line_white'
 
 
-
 def _lane_runs(line, room):
     """The pieces of a lane separator line (k, c) inside the growing carriageway (room (k,) >= 0: m between the line
     and the carriageway's edge), each with the metres along line before it (its dashes' phase): [(piece, before)]
@@ -7914,8 +6962,7 @@ def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
     """The (cell, layer)s a road tile asks the map data for, nearest first (MapData.warm, before building it): the
     roads, infrastructure (bridges) and land use of the cells under it and their buildings (buildings on), the roads of the ring
     around (grading's neighbours), the buildings of two rings around (widths on: roadwidth's walls) and the water of
-    water_ring cells around (seacarve's rasters and river lines), and the roads of the second ring (gradesep's
-    neighbours of the first)."""
+    water_ring cells around (seacarve's rasters and river lines)."""
     keys = cells_of_tile(frame, tx, ty)
     if not keys:
         return []
@@ -7935,11 +6982,6 @@ def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
     tile = ("roads", "infrastructure", "land_use") + (TILE_BUILDING_LAYERS if buildings else ())
     needs = [(k, ly) for k in sorted(keys) for ly in tile]
     needs += [(k, "roads") for k in ring(1) if k not in own]
-    # (and the ring past that: gradesep reads the neighbours of every cell whose level ranges are asked, the ring's too)
-    import gradesep
-    if gradesep.ON:
-        r1 = set(ring(1))
-        needs += [(k, "roads") for k in ring(2) if k not in r1]
     if widths:      # the walls of the cells the ring's roads cross, each with its neighbours' buildings
         needs += [(k, "buildings") for k in ring(2) if k not in own]
     if water_ring:

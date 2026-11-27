@@ -64,7 +64,7 @@ import numpy as np
 import dnp
 
 import geodesy
-import gradesep
+import neighbours
 import mapcells
 import mapgeom
 import maprasters
@@ -384,7 +384,6 @@ def _raster_from(arrays):
                              meta["nodata"], list(meta["files"]))
 
 
-
 def _savez_deflated(path, arrays, level):
     """np.savez_compressed(path, **arrays) at deflate level `level` (numpy's own writer: each array an .npy member of a
     zip64 archive)."""
@@ -529,7 +528,7 @@ class MapData:
         decisions.register_weekly(self)
         import highwaysigns             # (exit, overhead and mile-marker signs: railtags.SignTags, signstream.py)
         self.highway_signs = highwaysigns.Source(self) if railtags.SIGNS_ON else None
-        self.dem = None                 # (gradesep's ground: the server's dem.Dem, set by its owner, else its own)
+        self.dem = None                 # (the ground: the server's dem.Dem, set by its owner, else its own)
         self._locks = {}
         self._lock = threading.Lock()
         self.pool = ThreadPoolExecutor(LAYER_THREADS, thread_name_prefix="mapdata-layer")
@@ -886,7 +885,6 @@ class MapData:
              # (the OSM road tags joined into the roads at their decode: the run's build of the tag shards,
              # "layercake" without one; roads 10, R7 of ~/bnge-tests/manifestaudit)
              "osmtags": self.osm_tags_build(network=False),
-             "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
              "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
         st = getattr(self, "station_tags", None)
         if st is not None:                      # (the chargers' capacity and charge points: the weekly build in use)
@@ -1870,8 +1868,7 @@ class MapData:
                     # STAND_IN_S after they failed, as before it was kept)
                     f.__dict__["_bnge_fallback"] = since if since is not None else time.monotonic()
                 if layer == "roads":
-                    f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
-                    f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
+                    f.__dict__["_bnge_neighbours"] = neighbours.neighbours_hook(self, key)
                 f.__dict__["_bnge_cell"] = (str(key), layer, json.dumps(self.versions(), sort_keys=True))
             else:
                 f = None if "missing" in arrays else _raster_from(arrays)
@@ -2211,7 +2208,6 @@ class MapData:
             return True
         except DEFERRED:
             return False
-
 
 
 # A mirrored layer's arrays in one file (PACK_FILE, each at a PACK_ALIGN offset; the "ok" marker's header: name, dtype,

@@ -129,16 +129,6 @@ class ShortBridgeOnLongRoadTest(unittest.TestCase):
         f = self.road(('is_bridge', 1012., 1012.5))
         self.assertEqual(roads.bridge_parts(f, 0), [])
 
-    def test_the_bridge_is_a_deck_for_the_guard_and_a_crossing_row_of_gradesep(self):
-        import deckspans
-        import gradesep
-        f = self.road(('is_bridge', 1012., 1035.))
-        self.assertEqual(len(deckspans.cell_pieces(f, FRAME)), 1)
-        kinds, _halves, poff, pk, pa, pb, _ids = gradesep._layer_rows(f)
-        rows = list(zip(pk[poff[0]:poff[1]].tolist(), pa[poff[0]:poff[1]].tolist(), pb[poff[0]:poff[1]].tolist()))
-        self.assertEqual([k for k, _a, _b in rows], [0, -1, 0])      # (ground, deck, ground: no hole)
-        self.assertAlmostEqual(rows[1][2] - rows[1][1], 23. / self.L, delta=1e-6)
-
 
 if __name__ == '__main__':
     unittest.main()
