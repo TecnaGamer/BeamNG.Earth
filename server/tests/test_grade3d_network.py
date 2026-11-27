@@ -48,13 +48,13 @@ def test_a_member_drawn_backwards_is_walked_backwards():
     assert abs(abs(s_b0 - s_a0) - 160.0) < 1e-9
 
 
-def test_a_fork_a_t_and_a_dead_end_end_paths():
+def test_a_fork_a_t_and_a_dead_end_end_paths_the_road_going_straight_on_goes_through():
     ms = [_m("a", _line(0, 0, 100, 0)), _m("b", _line(100, 0, 200, 0)), _m("c", _line(100, 0, 200, 80)),   # (fork)
           _m("d", _line(50, 0, 50, -80))]                                                                   # (T on a)
     net = network.build(ms)
-    assert sorted(_paths(net)) == [["a"], ["b"], ["c"], ["d"]]
+    assert sorted(_paths(net)) == [["a", "b"], ["c"], ["d"]]       # (b goes straight on from a; c leaves at 39 degrees)
     pairs = sorted(tuple(sorted((str(ms[i].key), str(ms[j].key)))) for i, _si, j, _sj in net.joins)
-    assert pairs == [("a", "b"), ("a", "c"), ("a", "d"), ("b", "c")]
+    assert pairs == [("a", "c"), ("a", "d"), ("b", "c")]
     assert net.crossings == []
 
 
@@ -145,3 +145,11 @@ def test_an_approach_meeting_its_decks_end_keeps_its_whole_line():
     assert abs(ground[0].line[-1, 0] + 100) < 1e-9 and abs(ground[1].line[0, 0] - 100) < 1e-9
     net = network.build(ms)
     assert len(net.paths) == 1 and abs(net.paths[0].length - 600) < 1e-6
+
+
+def test_a_road_goes_on_through_a_fork_its_ramp_leaves_it():
+    ms = [_m("in", _line(-300, 0, 0, 0)), _m("on", _line(0, 0, 300, 0)), _m("ramp", _line(0, 0, 200, -120))]
+    net = network.build(ms)
+    keys = [[str(net.members[i].key) for i, _f in path.parts] for path in net.paths]
+    assert sorted(len(k) for k in keys) == [1, 2] and any(set(k) == {"in", "on"} for k in keys)
+    assert len(net.joins) >= 1                      # (the ramp joined to the road going on)
