@@ -1851,6 +1851,11 @@ function M.onDeactivateBigMapCallback()
   S.cur = nil -- from the values it put back
 end
 
+-- core.lua's teleport (a new place's weather): the wet look's memory of the old place's rain goes
+function M.onTeleport()
+  pcall(wetlook.onTeleport)
+end
+
 local function onLevel()
   pcall(storm.reset); pcall(streaks.reset); pcall(wetlook.reset); pcall(aquaplane.reset)
   resetState()

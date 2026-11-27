@@ -594,6 +594,14 @@ function M.reset()
   if roads and roads.setPuddles then pcall(roads.setPuddles, false) end      -- (the next level's puddles made hidden)
 end
 
+-- A teleport: the rain's memory stays behind (the user, 2026-11-27: "roads stay wet if you teleport to a place with
+-- different weather"); the next check (now) dries the look, the puddles and the grip unless the new place's real road
+-- state says wet, and its own rain wets them again within minutes (WET_TAU_S).
+function M.onTeleport()
+  own = 0
+  timer = M.CHECK_S
+end
+
 -- Off now (the setting, weather Off): every material back at once.
 function M.restoreAll()
   for name in pairs(orig) do pcall(writeOne, name, 0) end
