@@ -393,9 +393,7 @@ class KeptEndsTest(unittest.TestCase):
         self.assertEqual(got[0][1], 0.0, "wholly kept")
         self.assertTrue(np.isnan(got[0][2]), "0.2 m off: lifted as before")
         got = fast._ef.roadsys_kept_ends([part], [(68.0, 69.9)], [(60.0, 60.0)], [g], [v], prm)
-        r = roadsys.RAMP_RIDE_A * 40.0 ** 2 / (6 * v * v)
-        self.assertAlmostEqual(got[0][0], 40.0)
-        self.assertAlmostEqual(got[0][1], -(2.0 - r), msg="a junction 60 m on: 40 m of ramp, the rest dropped")
+        self.assertTrue(np.isnan(got[0][0]), "a junction 60 m on: 40 m of ramp take only part of it: not kept")
         got = fast._ef.roadsys_kept_ends([part], [(68.0, 69.9)], [(35.0, 60.0)], [g], [v], prm)
         self.assertTrue(np.isnan(got[0][0]), "no room before the junction")
         dz = np.asarray(fast._ef.roadsys_ramp_dz(np.array([0.0, 10.0, 33.3, 40.0]), 2.0, 33.3))
@@ -431,16 +429,16 @@ class KeptEndsTest(unittest.TestCase):
 
 
 class EmbankTest(unittest.TestCase):
-    """(M5 round 8, surface 13) A road's embankment in the surface model's ground (grading._Planner._embank_obs,
-    earthfast embank_lift): the ground filter's cut given back where it is the road's own (0bff: filtered 68.4, raw 76.6
-    at the road on its crest, 75.0 / 73.2 at 35 m beside: 8.2 m); nothing in a trough, beside a building, over lidar,
-    for a cut deeper than EMBANK_MAX_M; and nothing at all outside BNE_ROADSYS=surface."""
+    """(M5 round 8, surface 14) A road's embankment in the surface model's ground (embankfield, earthfast embank_lift /
+    embank_along): the ground filter's cut given back where it is the road's own (0bff: filtered 68.4, raw 76.6 at
+    the road, 75.0 / 73.2 at 35 m beside: 8.2 m); nothing in a trough, beside a building, over lidar, for a cut deeper
+    than EMBANK_MAX_M; laid over the plans' ground within a road's half width and its taper only; and nothing at all
+    unless BNE_ROADSYS_EMBANK=on with BNE_ROADSYS=surface."""
 
     def test_lift(self):
-        import grading
-        fast.require(grading.EMBANK_KERNEL, "test")
-        prm = (grading.EMBANK_MATCH_M, grading.EMBANK_CUT_MIN, grading.EMBANK_CREST_MIN, grading.EMBANK_CREST_FULL,
-               grading.EMBANK_MAX_M)
+        import embankfield as ef_
+        fast.require(ef_.EMBANK_KERNEL, "test")
+        prm = (ef_.EMBANK_MATCH_M, ef_.EMBANK_CUT_MIN, ef_.EMBANK_CREST_MIN, ef_.EMBANK_CREST_FULL, ef_.EMBANK_MAX_M)
         a = lambda *v: np.array(v, np.float64)      # noqa: E731
         got = np.asarray(fast._ef.embank_lift(a(68.4, 68.4, 68.4, 71.0, 99.0), a(68.4, 68.4, 68.4, 68.4, 99.0),
                                               a(76.6, 70.0, 76.6, 76.6, 125.0), a(75.0, 75.0, 75.0, 75.0, 123.0),
@@ -448,12 +446,29 @@ class EmbankTest(unittest.TestCase):
         self.assertAlmostEqual(got[0], 8.2)
         self.assertEqual(got[1:].tolist(), [0.0, 0.0, 0.0, 0.0], "trough, building, lidar, a 26 m cut")
 
-    def test_off_outside_surface(self):
-        import grading
+    def test_field_near_the_road_only(self):
+        import embankfield as ef_
+        import mapcells
+        fast.require(ef_.EMBANK_KERNEL, "test")
+        fld = ef_.Field(None, None, None)
+        line = (np.full(11, 54.0), np.linspace(12.6, 12.601, 11), np.full(11, 6.0), 5.0)
+        with mock.patch.object(ef_.Field, "_lines", lambda self, key: [line] if str(key) == str(mapcells.cell_of(54.0, 12.6005)) else []):
+            # (on the line, 10 m off (within the half width + taper), 40 m off)
+            la = np.array([54.0, 54.0 + 10.0 / 111320.0, 54.0 + 40.0 / 111320.0])
+            got = fld.apply(la, np.full(3, 12.6005), np.full(3, 70.0))
+        self.assertAlmostEqual(float(got[0]), 76.0, places=3)
+        self.assertTrue(70.0 < float(got[1]) < 76.0, got)
+        self.assertEqual(float(got[2]), 70.0, "away from the road: the ground as it was")
+
+    def test_off_by_default(self):
+        import embankfield as ef_
         import roadsys
-        pl = object.__new__(grading._Planner)
-        with mock.patch.object(roadsys, "SURFACE", False):
-            self.assertIsNone(pl._embank_obs())
+        state = type("S", (), {"md": object(), "dem": type("D", (), {"sample_raw12": None})(), "widths": None})()
+        with mock.patch.object(ef_, "ON", False):
+            self.assertIsNone(ef_.of(state))
+        with mock.patch.object(ef_, "ON", True), mock.patch.object(roadsys, "SURFACE", False):
+            self.assertIsNone(ef_.of(state))
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 14)
 
 
 class StructureDepthTest(unittest.TestCase):

@@ -4037,6 +4037,10 @@ class Server:
     def _plan_elev(self, la, lo):
         """The road plans' ground: the DEM at grading.PROFILE_ZOOM with the tunnels' lids (tunnellids)."""
         z = self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
+        import embankfield
+        emb = embankfield.of(self)        # (M5 round 8: a road's embankment, blockworker.plan_elev's)
+        if emb is not None:
+            z = emb.apply(la, lo, z)
         return self.lids.apply(la, lo, z) if getattr(self, "lids", None) is not None else z
 
     def ground(self, frame, la, lo, z, grader=None):
