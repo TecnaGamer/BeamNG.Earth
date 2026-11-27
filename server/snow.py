@@ -25,6 +25,7 @@ import numpy as np
 import fast
 import netfetch
 import weather
+from snowwind import transport
 
 log = logging.getLogger("earthd.snow")
 
@@ -193,24 +194,33 @@ def w2_table(raw, prev_bins):
     return rows, tuple(int(v) for v in road), [r[2] for r in rows]
 
 
+def cover_cell(lat, lon):
+    """Indices and centre of the live snow field cell (snowlook.rs uses cell centres)."""
+    steps = 1 / CELL_DEG
+    ni, nj = round(360 * steps), round(180 * steps)
+    ci = math.floor(180 * steps + lon * steps) % ni
+    cj = min(max(math.floor(90 * steps - lat * steps), 0), nj - 1)
+    return (ci, cj), round(90 - (cj + 0.5) * CELL_DEG, 4), round((ci + 0.5) * CELL_DEG - 180, 4)
+
+
 def _snowcover():
-    """W2's snowcover module when it is there, on and in its real mode (the provider's consumer), else None."""
+    """W2's consumer in real mode or a preset shared with road snow."""
     try:
         import snowcover
     except ImportError:
         return None
-    return snowcover if getattr(snowcover, "ON", False) and getattr(snowcover, "MODE", "") == "real" else None
+    mode = snowcover.MODE
+    shared = mode in PRESETS and mode in snowcover.PRESETS
+    return snowcover if snowcover.ON and (mode == "real" or shared) else None
 
 
 class Service:
     """The hourly forcing shared by every connection: fetch (injectable: tests pass a fake) + the (cell, UTC hour)
     cache, one fetch in flight per key. get() blocks: run it in an executor.
 
-    For W2's snow on the ground photos (snowcover.py, BNE_SNOW=real): the band table of the last state computed (any
-    connection's) is the provider's Field, one table everywhere (Open-Meteo stage A fetches the player's cell only;
-    the band rows carry the elevation; W5's pack will give tables by cell). The table is quantized (depth bins with
-    hysteresis, age classes): a change is a new key for every texture, so commit() tells the server (snow_changed)
-    only when the table itself changed."""
+    Live ground-cover tables are quantized by weather cell at the forcing elevation. The provider
+    supplies the nearby observed cells, and commit() invalidates textures when their tables change.
+    Synthetic presets still have one table everywhere."""
 
     def __init__(self, fetch=None, mode=None, clock=time.time, retry_s=RETRY_S, cover=None, winter=None):
         self.fetch = fetch if fetch is not None else weather.fetch_hourly
@@ -221,52 +231,111 @@ class Service:
         self.cache, self.inflight = {}, {}
         self.lock = threading.Lock()
         self.fetches = 0
-        self.table = None           # (rows, road) of W2's Table, the provider's
-        self.view = None            # {mode, cover, depth}: winterlook.lua's ('snow' message)
-        self.bins = [-1] * 8
+        self.table = None           # uniform debug preset (rows, road, ice)
+        self.cells = {}             # (ci, cj) -> (forcing hour, table, wind), oldest commit first
         self.bank_bins = [-1] * 5    # W3's bank bins (hysteresis)
         self.road_snow = None        # W3: the road skins' winter part (snowroad.wear_snow; Server.wear_arg)
-        self.ice = -1
         self.table_changes = 0
         self.cover = (cover if cover is not None else _snowcover()) if self.winter else None
         if self.cover is not None:
+            preset = getattr(self.cover, "MODE", None)
+            if mode is None and self.mode == "real" and preset in PRESETS:
+                self.mode = preset
             self.cover.set_provider(self.provider)
 
     def provider(self, south, west, north, east):
-        """snowcover's provider: the last table as a uniform Field (None while there is none or no cover in it)."""
-        t = self.table
-        if t is None or not (any(r[1] > 0 for r in t[0]) or t[2] > 0):
+        """Snapshot the observed cells whose bilinear support reaches the requested box."""
+        if self.mode in PRESETS:
+            t = self.table
+            if self.has_cover(t):
+                return self.cover.Field(CELL_DEG, uniform=self.cover.Table(*t))
             return None
-        try:
-            table = self.cover.Table(t[0], t[1], t[2])
-        except TypeError:           # (a snowcover before Table.ice)
-            table = self.cover.Table(t[0], t[1])
-        return self.cover.Field(CELL_DEG, uniform=table)
+        with self.lock:
+            observed = tuple(self.cells.items())
+        cells, winds = {}, {}
+        covered = False
+        for (ci, cj), (_, table, wind) in observed:
+            lat = 90 - (cj + 0.5) * CELL_DEG
+            lon = (ci + 0.5) * CELL_DEG - 180
+            if not south - CELL_DEG <= lat <= north + CELL_DEG:
+                continue
+            lon += 360 * math.ceil((west - CELL_DEG - lon) / 360)
+            if lon <= east + CELL_DEG:
+                cells[ci, cj] = self.cover.Table(*table)
+                if self.has_cover(table):
+                    covered = True
+                    if wind != (0, 0):
+                        winds[ci, cj] = wind
+        return self.cover.Field(CELL_DEG, cells=cells, winds=winds) if covered else None
+
+    def set_mode(self, mode):
+        """Use a shared snow preset for roads, or resume the live forcing."""
+        if mode == self.mode or (mode not in PRESETS and mode != "real"):
+            return False
+        self.mode = mode
+        return True
+
+    @staticmethod
+    def has_cover(table):
+        return table is not None and (any(r[1] > 0 for r in table[0]) or table[2] > 0)
+
+    def _neighbours_have_cover(self, cell):
+        # Caller holds the lock. A bare cell only matters where it can share a
+        # bilinear stencil with a snowy cell, including across the date line.
+        ci, cj = cell
+        columns = round(360 / CELL_DEG)
+        return any(self.has_cover(self.cells.get(((ci + i) % columns, cj + j), (None, None, None))[1])
+                   for j in (-1, 0, 1) for i in (-1, 0, 1))
 
     def commit(self, conn, raw):
-        """(event loop) The W2 table of a new state: when it differs from the last, the provider's Field changes, the
-        server re-renders what is shown (Server.snow_changed) and every connection gets {"type": "snow"}."""
+        """Apply a new visual state and send ground-view values to the player who supplied them."""
         if raw is not None and raw.get("look") is not None:
-            Service._commit_roads(self, conn, raw["look"])
+            self._commit_roads(conn, raw["look"])
         if self.cover is None or raw is None or not raw.get("bands"):
             return False
+        cell = raw.get("cover_cell")
         with self.lock:
-            rows, road, bins = w2_table(raw, self.bins)
-            self.bins = bins
-            lake = raw.get("lake") or [0, 0, 0]
-            self.ice = int(fast._ef.snow_lake_share(int(lake[1]), self.ice))
-            g = raw["ground"]
-            view = {"mode": "real", "cover": int(g[9]), "depth": int(g[8])}
-            changed = (rows, road, self.ice) != self.table
-            self.table, self.view = (rows, road, self.ice), view
+            if cell is None:
+                table = self.quantize(raw, self.table)
+                changed = table != self.table
+                self.table = table
+            else:
+                stamp, source, wind = raw["cover_state"]
+                previous = self.cells.get(cell)
+                changed = False
+                if previous is None or stamp > previous[0]:
+                    old = previous[1] if previous else None
+                    table = self.quantize(source, old)
+                    self.cells.pop(cell, None)
+                    self.cells[cell] = stamp, table, wind
+                    changed = (old != table or (previous is not None and previous[2] != wind)) and (
+                        self.has_cover(old) or self._neighbours_have_cover(cell))
+                    if len(self.cells) > CACHE_MAX:
+                        expired = next(iter(self.cells))
+                        _, removed, _ = self.cells.pop(expired)
+                        changed |= self.has_cover(removed) or self._neighbours_have_cover(expired)
+        g = raw["ground"]
+        view = {"type": "snow", "snow": {"mode": "real", "cover": int(g[9]), "depth": int(g[8])}}
+        if getattr(self.cover, "MODE", "real") != "real":
+            return changed  # An explicit terrain preset owns its own cover and view.
         if changed:
             self.table_changes += 1
-            s = conn.s
-            if hasattr(s, "snow_changed"):
-                s.snow_changed()
-            for c in list(getattr(s, "connections", ()) or ()):
-                c.send({"type": "snow", "snow": dict(view)})
+            if hasattr(conn.s, "snow_changed"):
+                conn.s.snow_changed()
+        if cell is not None:
+            conn.send(view)
+        elif changed:
+            for c in list(getattr(conn.s, "connections", ()) or ()):
+                c.send(view)
         return changed
+
+    @staticmethod
+    def quantize(raw, previous):
+        bins = [r[2] for r in previous[0]] if previous is not None else [-1] * 8
+        rows, road, _ = w2_table(raw, bins)
+        lake = raw.get("lake") or [0, 0, 0]
+        ice = int(fast._ef.snow_lake_share(int(lake[1]), previous[2] if previous is not None else -1))
+        return rows, road, ice
 
     def _commit_roads(self, conn, look):
         """(event loop) W3's look of a new state: the bank bins kept for the hysteresis; when the road skins' winter
@@ -283,10 +352,14 @@ class Service:
         return changed
 
     def key(self, lat, lon, now):
-        return weather.cell(lat, lon) + (int(now // 3600),)
+        if self.cover is not None:
+            _, clat, clon = cover_cell(lat, lon)
+        else:
+            clat, clon = weather.cell(lat, lon)
+        return clat, clon, int(now // 3600)
 
     def forcing(self, lat, lon):
-        """(records, times, z_cell, cell lat, cell lon) at (lat, lon) for this UTC hour."""
+        """The hourly records, cell centre and a separate wind direction series for the snowfield."""
         k = self.key(lat, lon, self.clock())
         with self.lock:
             hit = self.cache.get(k)
@@ -303,10 +376,12 @@ class Service:
                 return hit
             raise IOError("snow: the shared fetch for this cell failed")
         try:
-            recs, times, z_cell, _off = records(self.fetch(k[0], k[1], *self.window))
+            response = self.fetch(k[0], k[1], *self.window)
+            recs, times, z_cell, _off = records(response)
             if not times:
                 raise IOError("snow: no hourly data")
-            hit = (recs, times, z_cell, k[0], k[1])
+            directions = (response.get("hourly") or {}).get("wind_direction_10m") or ()
+            hit = (recs, times, z_cell, k[0], k[1], directions)
             self.fetches += 1
             with self.lock:
                 self.cache[k] = hit
@@ -319,13 +394,23 @@ class Service:
 
     def get(self, lat, lon, z_site, prev_bin=-1, raw=None):
         """The snowstate message at (lat, lon) with the ground z_site m above sea level (raw: see message)."""
-        if self.mode in PRESETS:
-            return preset_message(self.mode, lat, lon, prev_bin, raw=raw, prev_banks=self.bank_bins)
-        recs, times, z_cell, clat, clon = self.forcing(lat, lon)
+        mode = self.mode
+        if mode in PRESETS:
+            return preset_message(mode, lat, lon, prev_bin, raw=raw, prev_banks=self.bank_bins)
+        recs, times, z_cell, clat, clon, directions = self.forcing(lat, lon)
         now = self.clock()
         i = hour_index(times, now)
-        return message(recs, i, times[i], clat, clon, z_site, z_cell, regime_at(lat, lon), prev_bin, raw=raw,
-                       winter=self.winter, prev_banks=self.bank_bins)
+        prev_banks = self.bank_bins
+        msg = message(recs, i, times[i], clat, clon, z_site, z_cell, regime_at(lat, lon), prev_bin, raw=raw,
+                      winter=self.winter, prev_banks=prev_banks)
+        if self.cover is not None and raw is not None and raw["bands"]:
+            cell, _, _ = cover_cell(clat, clon)
+            source = {}
+            message(recs, i, times[i], clat, clon, z_cell, z_cell, regime_at(clat, clon), raw=source,
+                    prev_banks=prev_banks)
+            w = transport(times, directions, recs[:, F["F_WIND"]], recs[:, F["F_T2M"]], i)
+            raw["cover_cell"], raw["cover_state"] = cell, (times[i], source, w)
+        return msg
 
 
 class Tracker:
@@ -371,11 +456,12 @@ class Tracker:
                     "snow state at %.3f, %.3f failed: %s: %s", lat, lon, type(e).__name__, e)
             finally:
                 self.inflight = False
-                if msg is None:
-                    self.retry_at = svc.clock() + max(svc.retry_s, wait)
-                else:
-                    self.last, self.msg, self.bin = (lat, lon, h, int(now // 3600)), msg, msg["ground"][1]
-            if msg is not None:
+            if conn.snow is not self:
+                return  # A live mode change replaced this tracker while it was computing.
+            if msg is None:
+                self.retry_at = svc.clock() + max(svc.retry_s, wait)
+            else:
+                self.last, self.msg, self.bin = (lat, lon, h, int(now // 3600)), msg, msg["ground"][1]
                 conn.send(msg)
                 svc.commit(conn, raw)
         conn.spawn(run())

@@ -5357,11 +5357,8 @@ class Server:
                 self.base_skipped.add((anchor.id, cx, cy))
                 self.quick_pool.submit(self._quick_later, anchor, cx, cy)
             if photo and info.get("layers") and info.get("ter"):
-                try:                # lawns only where the photo is green (before the game reads the block)
-                    surfacemod.photo_lawns(self.out_dir, info["ter"], info["layers"], photo[0])
-                except Exception as e:
-                    log.info("photo lawns %s: %s", (anchor.id, cx, cy), e)
-                Server._snow_layers(self, anchor, cx, cy, info)
+                Server._photo_lawns(self, (anchor.id, cx, cy), info["ter"], info["layers"], photo[0], info,
+                                    new_anchor=anchor)
         elif (anchor.id, cx, cy) in self.base_skipped and self.near_visual == "detail" and self.imagery is not None:
             # a block built ahead (a fast player's prefetch, not waited on yet) gets its stand-in before it is ready:
             # made after it, the mod could take the block first and show the level's green base until it came (a
@@ -5389,35 +5386,50 @@ class Server:
         info["zoom"] = anchor.hm_zoom
         return info
 
-    def _photo_lawns(self, key, ter, layers, rgb, info=None):
-        if key in self.hm_committed:            # (in use since it was asked for: its .ter is the engine's, _base_later)
+    def _photo_lawns(self, key, ter, layers, rgb, info=None, *, new_anchor=None):
+        # A newly built revision is private even while a provisional block at
+        # the same key is in use. A late photo may refer to the engine's file.
+        if new_anchor is None and key in self.hm_committed:
             return
+        anchor = new_anchor
+        if anchor is None and info is not None:
+            anchor = self.anchors.get(key[0])
         try:
             surfacemod.photo_lawns(self.out_dir, ter, layers, rgb)
         except Exception as e:
             log.info("photo lawns %s: %s", key, e)
-        anchor = self.anchors.get(key[0]) if info is not None else None
-        if anchor is not None and key not in self.hm_committed:
+        if anchor is not None and (new_anchor is not None or key not in self.hm_committed):
             Server._snow_layers(self, anchor, key[1], key[2], info)
 
+    def _block_snow_look(self, anchor, cx, cy, info, spec):
+        sq = heightmap.SQUARE
+        size = self.layout.block * sq
+        x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
+        look = None
+        if spec is not None and info.get("zBase") is not None:
+            step = 16
+            U, _n, _idx = surfacemod.ter_heights(self.out_dir, info["ter"], info["zBase"], info["maxHeight"], step)
+            look = snowcovermod.look(spec, anchor.frame, x0, y0, size, U, x0 + 0.5 * sq, y0 + 0.5 * sq, step * sq,
+                                     dem=getattr(self, "dem", None))
+        return look, x0, y0, sq
+
     def _snow_layers(self, anchor, cx, cy, info):
-        """Winter: the block's samples under deep snow to the snow layer (surface.snow_layers), from the snow its photo
-        was made with (base_snow) at the block's own heights (its .ter). Before the game reads the block, as the lawns.
-        Called as Server._snow_layers(self, ...)."""
+        """Paint deep snow on an unsent block using the same cover as its photo."""
         spec = Server.base_snow(self, anchor, cx, cy)
         if spec is None or not info.get("ter") or not info.get("layers") or info.get("zBase") is None:
             return 0
         try:
-            sq = heightmap.SQUARE
-            size = self.layout.block * sq
-            x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
-            step = 16
-            U, _n, _idx = surfacemod.ter_heights(self.out_dir, info["ter"], info["zBase"], info["maxHeight"], step)
-            look = snowcovermod.look(spec, anchor.frame, x0, y0, size, U, x0 + 0.5 * sq, y0 + 0.5 * sq, step * sq)
-            return surfacemod.snow_layers(self.out_dir, info["ter"], info["layers"], look, x0, y0, sq) if look else 0
+            look, x0, y0, sq = Server._block_snow_look(self, anchor, cx, cy, info, spec)
+            count = surfacemod.snow_layers(self.out_dir, info["ter"], info["layers"], look, x0, y0, sq, remember=info)
+            info["snow_layer_sig"] = spec.sig
+            return count
         except Exception as e:
             log.info("snow layers %s: %s", (anchor.id, cx, cy), e)
             return 0
+
+    def _live_snow_revision(self, anchor, cx, cy, info, spec, rev):
+        look, x0, y0, sq = Server._block_snow_look(self, anchor, cx, cy, info, spec)
+        return surfacemod.snow_revision(self.out_dir, info, look, x0, y0, sq, rev)
 
     def _quick_later(self, anchor, cx, cy):
         """quick_pool: a block sent without its photo gets its stand-in (write_quick_base) onto its entry and to the mod
@@ -5912,10 +5924,11 @@ class Server:
                 make = self.make_heightmap
             fut = self.hm_inflight[key] = loop.run_in_executor(
                 pool, make, anchor, cx, cy, progress, lane, time.perf_counter())
-            fut.add_done_callback(lambda f: self._hm_done(key, f))
+            snow_generation = getattr(self, "snow_changes", 0)
+            fut.add_done_callback(lambda f: self._hm_done(key, f, snow_generation))
         return await asyncio.shield(fut)
 
-    def _hm_done(self, key, fut):
+    def _hm_done(self, key, fut, snow_generation=None):
         self.hm_inflight.pop(key, None)
         if fut.cancelled() or fut.exception() is not None:
             return
@@ -5924,6 +5937,9 @@ class Server:
                  info["seconds"], " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()),
                  info["zBase"], info["maxHeight"], round(1 / info["q"]))
         self.hm[key] = info
+        if (snow_generation is not None and snow_generation != getattr(self, "snow_changes", 0)
+                and self.near_visual == "detail"):
+            self.base_stale.add(key)
         # (its roads and land cover painted once their cells are here: Connection.roads_refresh. A first visit's blocks
         # came before the land cover and kept bare dirt for good, no grass, Harz 2026-10-27, GitHub #316)
         if info.get("roadsComplete") is False or info.get("surfaceComplete") is False:
@@ -7044,7 +7060,8 @@ class Server:
         if isinstance(photo, imagerymod.FarPhoto):
             frame, x0, y0, size = self.tile_where(anchor, tile)
             rock = rockfacemod.tile_inputs(frame, x0, y0, size, px, grid)
-            sl = snowcovermod.look_from_rock(snow, frame, rock, *self.snow_masks(anchor, tile, px, snow))
+            sl = snowcovermod.look_from_rock(snow, frame, rock, *self.snow_masks(anchor, tile, px, snow),
+                                             dem=getattr(self, "dem", None))
             if isinstance(tile, farfield.GTile):
                 return photo.write(path, rock, imagerymod.FAR_SRGB, snow=sl)
             if not surfacemod.far_photo_roads(size, px):
@@ -7074,7 +7091,7 @@ class Server:
             g = None if grid is None else np.asarray(grid, np.float64)
             rgb = snowcovermod.apply_kept(snow, rgb, frame, *imagerymod.gutter_square(x0, y0, size, px), g, x0, y0,
                                           size / (g.shape[1] - 1) if g is not None and g.ndim == 2 else 1.0,
-                                          *self.snow_masks(anchor, tile, px, snow))
+                                          *self.snow_masks(anchor, tile, px, snow), dem=getattr(self, "dem", None))
         return genground.write_far_dds(path, rgb, imagerymod.FAR_SRGB)
 
     def rock_faces(self, anchor, tile, px, rgb, grid):
@@ -9671,8 +9688,11 @@ class Connection:
             self.s.liveaudio.on_message(self, msg)
         elif kind == "snow_mode":               # winter (BNE_WINTER): another snow state live (a preset; dev / tests)
             if snowcovermod.set_mode(msg.get("mode")):
+                refresh_roads = self.s.snow is not None and self.s.snow.set_mode(snowcovermod.MODE)
                 self.s.snow_changed()
                 for c in list(self.s.connections):
+                    if refresh_roads:
+                        c.snow = snowmod.Tracker()
                     c.send({"type": "snow", "snow": snowcovermod.hello()})
         elif kind == "road_wear":               # the settings page's Road detail: the road tiles again, worn or not
             if self.s.set_road_wear(msg.get("value")):
@@ -10787,6 +10807,7 @@ class Connection:
                 # behind it and came late, 2026-11-05)
                 pool = getattr(s, "photo_pool", None) or (s.block_pools[LANE_PREFETCH][0] if s.block_pools else None)
                 rev = next(s.base_rev)
+                snow_generation = getattr(s, "snow_changes", 0)
                 # (its final photo kept in the revisit cache, this version's: taken, not painted again; a block built
                 # again whose photo was skipped (a fast player's prefetch) had it painted again every time)
                 name, _bk = await self.loop.run_in_executor(s.hm_pool, s._base_from_revisit, anchor, key[1], key[2],
@@ -10811,6 +10832,24 @@ class Connection:
                     # A provider has no pixels here yet. Leave other oncoming blocks eligible.
                     info["baseRetryAt"] = time.monotonic() + 5.0
                     return
+                if getattr(s, "snow_changes", 0) != snow_generation:
+                    return  # the block still needs the photo for the latest weather
+                revision = None
+                if snowcovermod.ON and info.get("ter") and info.get("layers") and info.get("zBase") is not None:
+                    spec = s.base_snow(anchor, key[1], key[2])
+                    sig = spec.sig if spec is not None else None
+                    if sig != info.get("snow_layer_sig"):
+                        revision = await self.loop.run_in_executor(
+                            s.hm_pool, s._live_snow_revision, anchor, key[1], key[2], info, spec, rev)
+                        if s.hm.get(key) is not info or getattr(s, "snow_changes", 0) != snow_generation:
+                            if revision is not None:
+                                s.retire_terrain([revision["ter"], *revision["layers"]])
+                            return
+                        if revision is not None:
+                            s.hm[key] = revision
+                            s.retire_terrain([info["ter"], *info["layers"]])
+                            info = revision
+                        info["snow_layer_sig"] = sig
                 info.pop("baseRetryAt", None)
                 old, info["base"] = info.get("base"), name
                 if old and old != name and old != s.base_name(key):
@@ -10825,8 +10864,11 @@ class Connection:
                 # A predicted block still on the server carries this photo in its first terrain message.
                 if key in getattr(s.hm_sent, "ever", s.hm_sent) or key in s.hm_committed:
                     s.note_base(key, name)
-                    self.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
-                               "base": f"{s.vfs_dir}/{name}", "baseSize": size})
+                    if revision is not None:
+                        self.send({"type": "terrain_refresh", "anchorId": key[0], **self.terrain_msg(key, info)})
+                    else:
+                        self.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
+                                   "base": f"{s.vfs_dir}/{name}", "baseSize": size})
                 s.base_skipped.discard(key)
             except Exception:
                 log.exception("base photo refresh %s", key)
@@ -12113,7 +12155,7 @@ async def main_async(args, restart=None):
     if snowmod.ON:      # (BNE_WINTER / BNE_WET_ROADS: from the weather's source, or a winter preset, no network)
         server.snow = snowmod.Service(fetch=lambda lat, lon, past, ahead: weathermod.fetch_hourly(lat, lon, past, ahead,
                                                                                                  net=net))
-        log.info("road surface state %s (winter %s, wet roads %s)", snowmod.MODE, snowmod.WINTER, snowmod.WET_ROADS)
+        log.info("road surface state %s (winter %s, wet roads %s)", server.snow.mode, snowmod.WINTER, snowmod.WET_ROADS)
     if late_pool is not None:
         server.start_late(late_pool)
     if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches: dropped by the free memory / the budget)

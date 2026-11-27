@@ -17,6 +17,9 @@ from (BNE_SNOW):
   dusting light heavy deep alpine spring: a fixed debug preset (PRESETS), the same everywhere and on every machine;
   real (the default with BNE_WINTER on): the provider W1 registers (set_provider); none until it does.
 
+Hourly wind transport is a separate part of the real field. Upwind DEM shelter is sampled on the same geographic
+lattice for near and far terrain. It affects loose seasonal snow, while mapped roads and water use the original table.
+
 Keys: a texture's snow is a pure function of its SPEC (spec_for_box: the tables of the cells round its square, a hash
 of them, and whether permanent snow can occur there); the spec's key part (key_parts) joins the season's in the far
 tiles' and base photos' revisit keys. No snow on a square (no table with cover there, no polar / alpine climate near
@@ -32,6 +35,7 @@ from collections import namedtuple
 import numpy as np
 
 import fast
+import snowwind
 
 # (W1's presets too: BNE_WINTER=light / heavy / ice is the whole winter at that fixed state, its photos from the
 # preset's own band table through W1's provider)
@@ -39,7 +43,7 @@ ON = os.environ.get("BNE_WINTER", "off").strip().lower() in ("on", "1", "yes", "
 MODE = (os.environ.get("BNE_SNOW", "") or ("real" if ON else "none")).strip().lower()
 # The look's own version: in every spec's key part (bump it with any change of PARAMS, the kernel's snow term or how a
 # spec is cut from a field)
-LOOK_VERSION = 2          # (2: W3's road zones)
+LOOK_VERSION = 3          # spatial cover and wind with W3's road zones
 GEO_N = 9               # nodes a side of the geodetic grid over a texture (lat, lon, curvature drop, snowline)
 FIELD_PAD_CELLS = 1     # cells past the square a spec holds (the texels near its edge blend with them)
 
@@ -128,10 +132,11 @@ PARAMS = np.array((
 class Field:
     """A snow state over the world: tables by forcing cell at res degrees, or one table everywhere (uniform)."""
 
-    def __init__(self, res=0.25, cells=None, uniform=None):
+    def __init__(self, res=0.25, cells=None, uniform=None, winds=None):
         self.res = float(res)
         self.cells = dict(cells or {})      # (ci, cj) -> Table
         self.uniform = uniform
+        self.winds = dict(winds or {})  # (ci, cj) -> quantized east/north transport
 
     def table(self, ci, cj):
         return self.uniform if self.uniform is not None else self.cells.get((ci, cj))
@@ -175,7 +180,7 @@ def field_for(south, west, north, east):
 
 # field: (res, ci0, cj0, idx int32 (nj, ni), tables, counts) or None; leaf, wsh: the winter packs' grids round the box
 # (pack_grid: (values uint8, north, west, res, scale, nodata)) or None; credits: the data credits' ids of what it used
-Spec = namedtuple("Spec", "sig field perm leaf wsh credits trees", defaults=(None, None, frozenset(), None))
+Spec = namedtuple("Spec", "sig field perm leaf wsh credits trees wind", defaults=(None, None, frozenset(), None, None))
 
 # The winter packs (winterpacks.py, the data repo's leaftype / watershare: ESA CCI's evergreen share, JRC's water share),
 # set by the server's main process (set_packs); without them the climate's evergreen share and the photo's water.
@@ -264,20 +269,29 @@ def _window(f, south, west, north, east):
         ci1 = int(np.floor((east + 180.0) / res)) + FIELD_PAD_CELLS
         cj0 = int(np.floor((90.0 - north) / res)) - FIELD_PAD_CELLS
         cj1 = int(np.floor((90.0 - south) / res)) + FIELD_PAD_CELLS
+        # The weather field is sparse. Empty cells between the box and the observed area
+        # need only one row/column of padding so the native interpolator fades to zero.
+        ni = round(360 / res)
+        present = {
+            (cj, i): t for (ci, cj), t in f.cells.items() if cj0 <= cj <= cj1
+            for i in range(ci0 + (ci - ci0) % ni, ci1 + 1, ni)
+        }
+        covered = [cell for cell, t in present.items() if _has_cover(t)]
+        if not covered:
+            return None
+        js, is_ = zip(*covered)
+        ci0, ci1 = max(ci0, min(is_) - 1), min(ci1, max(is_) + 1)
+        cj0, cj1 = max(cj0, min(js) - 1), min(cj1, max(js) + 1)
         idx = np.full((cj1 - cj0 + 1, ci1 - ci0 + 1), -1, np.int32)
         tabs, seen = [], {}
-        for cj in range(cj0, cj1 + 1):
-            for ci in range(ci0, ci1 + 1):
-                t = f.table(ci, cj)
-                if not _has_cover(t):
-                    continue
-                k = (tuple(map(tuple, t.rows)), tuple(t.road), int(t.ice))
-                if k not in seen:
-                    seen[k] = len(tabs)
-                    tabs.append(t)
-                idx[cj - cj0, ci - ci0] = seen[k]
-        if not tabs:
-            return None
+        for (cj, ci), t in sorted(present.items()):
+            if not (ci0 <= ci <= ci1 and cj0 <= cj <= cj1):
+                continue
+            k = (tuple(map(tuple, t.rows)), tuple(t.road), int(t.ice))
+            if k not in seen:
+                seen[k] = len(tabs)
+                tabs.append(t)
+            idx[cj - cj0, ci - ci0] = seen[k]
     tables = np.zeros((len(tabs), 8, 4), np.int32)
     counts = np.zeros((len(tabs), 17), np.int32)
     for n, t in enumerate(tabs):
@@ -323,7 +337,8 @@ def spec_for_box(south, west, north, east):
     """The snow a texture over the box (deg) is made with, or None (no snow can lie there: no key part)."""
     if not ON or MODE == "none":
         return None
-    win = _window(field_for(south, west, north, east), south, west, north, east)
+    field = field_for(south, west, north, east)
+    win = _window(field, south, west, north, east)
     perm = perm_possible(south, west, north, east)
     if win is None and not perm:
         return None
@@ -331,13 +346,26 @@ def spec_for_box(south, west, north, east):
     # (the packs' versions, and whether each was had for this box: what the texture is made with)
     h = hashlib.sha1(repr(("snow", LOOK_VERSION, PARAMS.tobytes(), GEO_N, perm, versions, leaf is not None,
                            wsh is not None)).encode())
+    wind = None
     if win is not None:
         res, ci0, cj0, idx, tables, counts = win
         h.update(repr((res, ci0, cj0, idx.shape)).encode())
         h.update(idx.tobytes())
         h.update(tables.tobytes())
         h.update(counts.tobytes())
-    return Spec(("snow", h.hexdigest()[:20]), win, perm, leaf, wsh, credits, trees)
+        if field.winds:
+            vectors = np.zeros((*idx.shape, 2), np.int8)
+            ni = round(360 / res)
+            for (ci, cj), vector in field.winds.items():
+                j = cj - cj0
+                if 0 <= j < idx.shape[0]:
+                    vectors[j, (ci - ci0) % ni::ni] = vector
+            if vectors.any():
+                from mapdata import dem_identity
+                wind = res, ci0, cj0, vectors
+                h.update(repr(("wind", snowwind.VERSION, dem_identity())).encode())
+                h.update(vectors.tobytes())
+    return Spec(("snow", h.hexdigest()[:20]), win, perm, leaf, wsh, credits, trees, wind)
 
 
 def key_parts(spec):
@@ -361,7 +389,7 @@ def spec_for_square(frame, x0, y0, size):
     return spec_for_box(*box_of(frame, x0, y0, size))
 
 
-def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
+def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None, *, dem=None):
     """The earthfast.SnowLook of a texture over [x0, x0 + size]^2 of frame with height grid U (frame z, [j north from
     uy0, i east from ux0], spacing usp), or None (no spec / no heights). road: its plow classes per texel (road_classes),
     or None."""
@@ -370,7 +398,7 @@ def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
     U = np.ascontiguousarray(np.asarray(U, np.float64))
     if U.ndim != 2 or min(U.shape) < 2:
         return None
-    fast.require(640, "SnowLook")      # (640: the road mask by (class, zone): 15 slots)
+    fast.require(642, "SnowLook weather cell support and road zones")
     t = np.linspace(0.0, 1.0, GEO_N)
     e, n = np.meshgrid(x0 + t * size, y0 + size - t * size)       # row 0 north
     lat, lon, h = frame.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)
@@ -395,11 +423,19 @@ def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
         res, ci0, cj0, idx, tables, counts = spec.field
         field = (float(res), int(ci0), int(cj0), np.ascontiguousarray(idx, np.int32),
                  np.ascontiguousarray(tables, np.int32), np.ascontiguousarray(counts, np.int32))
+    wind_kw = {}
+    if getattr(spec, "wind", None) is not None:
+        if dem is None:
+            raise ValueError("wind shelter needs the DEM sampler")
+        fast.require(639, "snow wind shelter")
+        local_lon = frame.lon0 + (lon - frame.lon0 + 180) % 360 - 180
+        wind_kw["wind"] = snowwind.shelter_grid(spec.wind, dem.sample, float(lat.min()), float(local_lon.min()),
+                                                float(lat.max()), float(local_lon.max()))
     return fast._ef.SnowLook((float(x0), float(y0), float(size)), (frame.lat0, frame.lon0), U,
                              (float(ux0), float(uy0), float(usp)), geo, field, PARAMS,
                              None if road is None else np.ascontiguousarray(road, np.uint8),
                              None if water is None else np.ascontiguousarray(water, np.uint8),
-                             getattr(spec, "leaf", None), getattr(spec, "wsh", None), getattr(spec, "trees", None))
+                             getattr(spec, "leaf", None), getattr(spec, "wsh", None), getattr(spec, "trees", None), **wind_kw)
 
 
 # Overture water (the map data's "water" layer): moving water stays open (a river, a canal, a stream: their current),
@@ -529,7 +565,7 @@ def road_classes(frame, x0, y0, size, px, surface, widths=None):
     return np.where(np.asarray(m) >= ROAD_MASK_ON, PHOTO_ROAD_CLASS, 0).astype(np.uint8)
 
 
-def look_from_rock(spec, frame, rock, road=None, water=None):
+def look_from_rock(spec, frame, rock, road=None, water=None, *, dem=None):
     """look() from a far texture's rock inputs (rockface.tile_inputs: (U, (x0, y0, size, ux0, uy0, usp, lat, lon))).
     A spec whose look cannot be made (no heights, an error): None, and the texture is not kept (revisit.fault: its
     key says snow)."""
@@ -539,7 +575,7 @@ def look_from_rock(spec, frame, rock, road=None, water=None):
         if rock is None:
             raise ValueError("no height grid")
         U, (x0, y0, size, ux0, uy0, usp, _lat, _lon) = rock
-        sl = look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road, water)
+        sl = look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road, water, dem=dem)
         if sl is None:
             raise ValueError("no look")
         return sl
@@ -551,17 +587,17 @@ def look_from_rock(spec, frame, rock, road=None, water=None):
         return None
 
 
-def apply(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
+def apply(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None, *, dem=None):
     """rgb (px, px, 3) over [x0, x0 + size]^2 of frame with its snow, or rgb itself (no snow on it). road: its plow
     classes (road_classes) or None."""
-    sl = look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road, water)
+    sl = look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road, water, dem=dem)
     if sl is None:
         return rgb
     out = sl.apply(np.ascontiguousarray(np.asarray(rgb, np.uint8)[..., :3]))
     return rgb if out is None else out
 
 
-def apply_kept(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
+def apply_kept(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None, *, dem=None):
     """apply() for a texture that is kept under its spec's key: when its snow cannot be made (no heights, an error) it
     is shown without it and not kept (revisit.fault: its key says snow)."""
     if spec is None:
@@ -569,7 +605,7 @@ def apply_kept(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road=None, wate
     try:
         if U is None:
             raise ValueError("no height grid")
-        return apply(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road, water)
+        return apply(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road, water, dem=dem)
     except Exception as e:          # (the photo without its snow, this once)
         import logging
         import revisit

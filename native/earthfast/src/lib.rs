@@ -7848,6 +7848,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
-    m.add("VERSION", 641)?;
+    // 642: SnowLook's weather cell support and wind shelter.
+    m.add("VERSION", 642)?;
     Ok(())
 }

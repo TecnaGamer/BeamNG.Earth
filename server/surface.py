@@ -25,6 +25,7 @@ import struct
 import threading
 import time
 import weakref
+import zlib
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
@@ -1569,44 +1570,68 @@ def ter_heights(out_dir, ter_name, z_base, max_height, step=16):
     return heightmap.heights(q[np.ix_(idx, idx)], z_base, max_height), n, idx
 
 
-def snow_layers(out_dir, ter_name, mask_names_, look, x0, y0, square):
-    """Winter: the block's land samples under deep snow (look: its earthfast.SnowLook, the photo's; sample (r from the
-    south, c) at (x0 + (c + 0.5) square, y0 + (r + 0.5) square) of the frame) moved to the snow layer when the .ter lists
-    it (write_ter's winter listing). Patches the .ter and the masks in place, atomically, as photo_lawns. Returns the
-    number of samples changed."""
-    path = os.path.join(out_dir, ter_name)
-    data, n, off, lay, to_local = _read_ter(path)
-    if to_local[SNOW] == heightmap.TER_HOLE:
-        return 0
-    land = np.isin(lay, SNOW_FROM)
-    if not land.any():
-        return 0
+def _snow_layer_map(lay, look, x0, y0, square):
+    """The photo's deep snow over snowable land, on the terrain lattice."""
+    if look is None or not (land := np.isin(lay, SNOW_FROM)).any():
+        return lay
+    n = len(lay)
     k = np.arange(0, n, SNOW_STEP)
     cx, cy = np.meshgrid(x0 + (k + 0.5) * square, y0 + (k + 0.5) * square)
     cov, dep = look.sample(np.ascontiguousarray(cx.ravel()), np.ascontiguousarray(cy.ravel()))
     deep = ((np.asarray(dep) >= SNOW_DEPTH_BIN) & (np.asarray(cov) >= SNOW_COVER)).reshape(len(k), len(k))
     if not deep.any():
-        return 0
+        return lay
     deep = np.repeat(np.repeat(deep, SNOW_STEP, 0), SNOW_STEP, 1)[:n, :n]
-    change = deep & land
-    m = int(change.sum())
-    if not m:
-        return 0
-    before = set(np.unique(lay[change]).tolist())
-    lay = lay.copy()
-    lay[change] = SNOW
-    data[off:off + n * n] = to_local[lay].tobytes()
-    tmp = staging.tmp_for(path)
-    with open(tmp, "wb") as f:
+    return np.where(deep & land, SNOW, lay).astype(np.uint8)
+
+
+def _write_ter_layers(path, data, off, lay, to_local):
+    data[off:off + lay.size] = to_local[lay].tobytes()
+    with staging.staged_write(path) as tmp, open(tmp, "wb") as f:
         f.write(data)
-    staging.replace(tmp, path)
+
+
+def snow_layers(out_dir, ter_name, mask_names_, look, x0, y0, square, *, remember=None):
+    """Paint a terrain block that has yet to be sent. Save its pre-snow layers if it changes."""
+    path = os.path.join(out_dir, ter_name)
+    data, _, off, before, to_local = _read_ter(path)
+    if to_local[SNOW] == heightmap.TER_HOLE:
+        return 0
+    lay = _snow_layer_map(before, look, x0, y0, square)
+    change = lay != before
+    if not change.any():
+        return 0
+    if remember is not None:
+        remember["snow_underlay"] = zlib.compress(before.tobytes(), 1)
+    _write_ter_layers(path, data, off, lay, to_local)
     north = lay[::-1]
-    for i in sorted(before | {SNOW}):
-        p = os.path.join(out_dir, mask_names_[i])
-        tmp = staging.tmp_for(p)
-        Image.fromarray(np.where(north == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)
-        staging.replace(tmp, p)
-    return m
+    for i in sorted(set(np.unique(before[change]).tolist()) | {SNOW}):
+        with staging.staged_write(os.path.join(out_dir, mask_names_[i])) as tmp:
+            Image.fromarray(np.where(north == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)
+    return int(change.sum())
+
+
+def snow_revision(out_dir, info, look, x0, y0, square, rev):
+    """Stage a live snow change beside the terrain already held by the client."""
+    if look is None and not info.get("snow_underlay"):
+        return None
+    data, _, off, before, to_local = _read_ter(os.path.join(out_dir, info["ter"]))
+    if to_local[SNOW] == heightmap.TER_HOLE:
+        return None
+    original = info.get("snow_underlay")
+    base = np.frombuffer(zlib.decompress(original), np.uint8).reshape(before.shape) if original else before
+    lay = _snow_layer_map(base, look, x0, y0, square)
+    if np.array_equal(lay, before):
+        return None
+    if not original:
+        original = zlib.compress(base.tobytes(), 1)
+    if np.array_equal(lay, base):
+        original = None
+    stem = os.path.splitext(info["ter"])[0].partition("_snow")[0] + f"_snow{rev}"
+    ter = f"{stem}.ter"
+    _write_ter_layers(os.path.join(out_dir, ter), data, off, lay, to_local)
+    layers = write_masks(lay, out_dir, stem, south_first=True)
+    return dict(info, ter=ter, layers=layers, snow_underlay=original)
 
 
 def used_materials(idx):

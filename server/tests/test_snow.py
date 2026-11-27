@@ -11,6 +11,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -150,8 +151,9 @@ class FakeCover:
     """W2's snowcover interface (its branch claude-winter-w2: set_provider, Field, Table) without its renders."""
 
     class Field:
-        def __init__(self, res=0.25, cells=None, uniform=None):
+        def __init__(self, res=0.25, cells=None, uniform=None, winds=None):
             self.res, self.cells, self.uniform = res, dict(cells or {}), uniform
+            self.winds = dict(winds or {})
 
     def Table(self, rows, road, ice=0):
         return ("Table", rows, road, ice)
@@ -237,6 +239,75 @@ class W2InterfaceTest(unittest.TestCase):
         self.assertTrue(0 <= t[3] <= 8 and t[3] % 2 == 0)
         self.assertEqual(fast._ef.snow_lake_share(200, -1), 8)
         self.assertEqual(fast._ef.snow_lake_share(55, 2), 2)       # hysteresis
+
+    def test_real_snow_is_local_and_independent_of_player_elevation(self):
+        now = last_hour(RESPONSES["davos"]) - 6 * 3600
+        fetch = FakeHourly()
+        svc = snow.Service(fetch=fetch, mode="real", clock=lambda: now, cover=self.cover, winter=True)
+        other = self.Conn(self.server)
+        self.server.connections.append(other)
+
+        def commit(lat, lon, height, conn=self.conn):
+            raw = {}
+            svc.get(lat, lon, height, raw=raw)
+            return svc.commit(conn, raw)
+
+        self.assertTrue(commit(46.77, 9.84, 1400))
+        self.assertIsNone(self.cover.provider(44, -94, 46, -92))
+        first = self.cover.provider(46.74, 9.84, 46.76, 9.86)
+        self.assertIsNone(first.uniform)
+        self.assertEqual(len(first.cells), 1)
+        self.assertEqual(fetch.calls, [(46.75, 9.85)])
+        self.assertEqual(other.sent, [])
+
+        # A second player at the same site, but higher on the mountain, gets their own ground view.
+        self.assertFalse(commit(46.79, 9.86, 2400, other))
+        self.assertEqual(first.cells, self.cover.provider(46.74, 9.84, 46.76, 9.86).cells)
+        self.assertEqual(len(fetch.calls), 1)
+        self.assertEqual(self.server.changes, 1)
+        self.assertEqual(len(other.sent), 1)
+
+        self.assertTrue(commit(45.00, -93.01, 1400))
+        self.assertEqual(first.cells, self.cover.provider(46.74, 9.84, 46.76, 9.86).cells)
+        self.assertIsNotNone(self.cover.provider(44, -94, 46, -92))
+
+    def test_cell_table_uses_road_zones_and_updates_skins(self):
+        import snowroad
+
+        now = last_hour(RESPONSES["davos"]) - 6 * 3600
+        svc = snow.Service(fetch=FakeHourly(), mode="real", clock=lambda: now, cover=self.cover, winter=True)
+        self.server.snow_roads_changed = mock.Mock()
+        with mock.patch.object(snowroad, "ON", True):
+            raw = {}
+            message = svc.get(46.77, 9.84, 2400, raw=raw)
+            self.assertTrue(svc.commit(self.conn, raw))
+            expected_skin = snowroad.wear_snow(raw["look"])
+
+        self.assertIn("look", message)
+        field = self.cover.provider(46.74, 9.84, 46.76, 9.86)
+        table = field.cells[raw["cover_cell"]]
+        cell_look = raw["cover_state"][1]["look"]
+        self.assertEqual(table[2], tuple(cell_look["shares"][c][z] for z in range(3) for c in range(5)))
+        self.assertEqual(svc.road_snow, expected_skin)
+        self.server.snow_roads_changed.assert_called_once_with()
+        self.assertEqual(self.conn.sent[-1]["snow"]["depth"], message["ground"][1])
+
+    def test_bare_observation_revises_nearby_snow_only(self):
+        svc = snow.Service(fetch=FakeHourly(), mode="real", cover=self.cover, winter=True)
+        wet = (((0, 8, 5, 0),), (8,) * 5, 0)
+        dry = (((0, 0, 0, 0),), (0,) * 5, 0)
+        svc.quantize = lambda raw, previous: raw["table"]
+
+        def commit(cell, table):
+            return svc.commit(self.conn, {"bands": table[0], "ground": [0] * 10, "cover_cell": cell,
+                                          "cover_state": (0, {"table": table}, (0, 0))})
+
+        self.assertFalse(commit((900, 899), dry))
+        self.assertTrue(commit((3599, 899), wet))
+        self.assertTrue(commit((0, 899), dry))
+        self.assertEqual(self.server.changes, 2)
+        field = self.cover.provider(0.04, 179.98, 0.06, 180.02)
+        self.assertEqual(set(field.cells), {(3599, 899), (0, 899)})
 
     def test_lake(self):
         ice = snow.preset_message("ice", 45.0, -93.0)["lake"]
@@ -356,6 +427,32 @@ class ServerSnowTest(test_server.ServerHarness):
         self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})
         again, _ = self.c.until(lambda m: m["type"] == "snowstate", 10)
         self.assertEqual(again, m)
+
+    def test_live_preset_refreshes_road_look_at_same_pose(self):
+        import snowcover
+        import snowroad
+
+        with (mock.patch.multiple(snow, WINTER=True, MODE="real"),
+              mock.patch.multiple(snowcover, ON=True, MODE="light", _provider=None),
+              mock.patch.object(snowroad, "ON", True)):
+            self.server.snow = snow.Service(fetch=FakeHourly(fail=True))
+            self.assertEqual(self.server.snow.mode, "light")
+            aid = self.anchor()
+            self.pose(aid, 0, 0)
+            light, _ = self.c.until(lambda m: m["type"] == "snowstate", 30)
+            self.assertEqual(light["src"], "light")
+            self.c.send({"type": "snow_mode", "mode": "heavy"})
+            self.c.until(lambda m: m["type"] == "snow" and m["snow"]["mode"] == "heavy", 10)
+            self.pose(aid, 0, 0)
+            heavy, _ = self.c.until(lambda m: m["type"] == "snowstate", 30)
+            self.assertEqual(heavy["src"], "heavy")
+            self.assertNotEqual(heavy["look"], light["look"])
+            self.c.send({"type": "snow_mode", "mode": "light"})
+            self.c.until(lambda m: m["type"] == "snow" and m["snow"]["mode"] == "light", 10)
+            self.pose(aid, 0, 0)
+            restored, _ = self.c.until(lambda m: m["type"] == "snowstate", 30)
+            self.assertEqual(restored["src"], "light")
+            self.assertEqual(restored["look"], light["look"])
 
 
 class OffTest(unittest.TestCase):

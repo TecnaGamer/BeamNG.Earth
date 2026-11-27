@@ -13,7 +13,7 @@
 --   ROAD   terrain carriageways: the layer bngEarthGroundAsphalt's ASPHALT_OLD (+ its alias), terrain cobbles
 --   DECK   meshes: bridge decks (bne_bridge_asphalt) and the other asphalt meshes, ASPHALT and two of its aliases
 --          (not 'concrete' / 'concrete2', aliases of ASPHALT: tunnel floors keep their grip)
---   OPEN   the open ground's terrain layers (grass, dirt, sand, mud, the snow layer, gravel, rock)
+--   OPEN   the snow layer on a block that supports one, otherwise the legacy open-ground approximation
 -- The terrain takes one ground model per layer, and every terrain road is one layer (W3 adds a layer per plow class),
 -- so ROAD follows the plow class of the road under the player's car (navgraph: drivability and posted speed), with a
 -- dwell; DECK follows the same class's bridge row (decks freeze first).
@@ -261,9 +261,20 @@ function M.apply()
     if setModel(gms, name, dv) then n = n + 1 end
   end
   local g = (not forced) and state and state.ground or nil
+  local terrain = package.loaded['beamngEarth/terrain']
+  local hasSnowLayer = false
+  for _, name in ipairs(terrain and terrain.slots or {}) do
+    if name == 'bngEarthGroundSnow' then
+      hasSnowLayer = true
+      break
+    end
+  end
+  -- The streamed material map already locates deep snow. A blanket override makes exposed grass, dirt and
+  -- rock behave like snow as well. Keep the approximation for blocks that cannot report a separate snow layer.
   for _, name in ipairs(M.OPEN) do
     local cap = M.TERRAIN_ONLY[name] and M.TERRAIN_DEPTH_MAX or M.MESH_DEPTH_MAX
-    if setModel(gms, name, M.groundValues(g, cap)) then n = n + 1 end
+    local values = (name == 'SNOW' or not hasSnowLayer) and M.groundValues(g, cap) or nil
+    if setModel(gms, name, values) then n = n + 1 end
   end
   if n > 0 then M.applies = M.applies + 1 end
   return n
