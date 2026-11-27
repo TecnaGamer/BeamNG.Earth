@@ -130,8 +130,8 @@ pub struct KeepPrm {
 /// NaN: not read) lies d > prm.dz_m off its profile height takes on its approach as much of d as a ramp at its class
 /// grade (grades, per part) and within prm.ride_a at its design speed (speeds, m/s) fits into the approach's room
 /// (runs: m free of junctions and structures from the read point; NaN: none) less prm.clear_m: r = min(d, grade x R,
-/// ride_a R^2 / (6 v^2)) for R that room, when R is prm.ramp_min_m at least and r more than prm.dz_m; the ramp is
-/// max(prm.ramp_min_m, r / grade, v sqrt(6 r / ride_a)) long and the end is still brought by d - r (its sign's); and
+/// ride_a R^2 / (6 v^2)) for R that room, when R is prm.ramp_min_m at least and r is all of d (more than prm.dz_m: an
+/// end kept in part made lips at Stelvio); the ramp is max(prm.ramp_min_m, r / grade, v sqrt(6 r / ride_a)) long (the lift 0); and
 /// only where the part comes out gentler than brought wholly onto its ground. The profile squares solve the deck
 /// within its class's grades over ground and structure together; lifting a
 /// short deck's end onto an approach ground lying in a hollow of the elevation (a surface model's filtered
@@ -178,7 +178,9 @@ pub fn kept_ends(parts: &[(Vec<P2>, Vec<f64>)], ends: &[(f64, f64)], runs: &[(f6
             let room = run - prm.clear_m;
             if !(d > prm.dz_m) || !(room >= prm.ramp_min_m) { continue; }
             let r = d.min(gr * room).min(prm.ride_a * room * room / (6.0 * v * v));
-            if !(r > prm.dz_m) { continue; }
+            // (wholly or not at all: an end kept in part, its deck still brought most of the way, left Stelvio's 33 m
+            // deck at 37 % for lips over 20 mm 35 -> 80 along its far end's edge)
+            if !(r > prm.dz_m) || r < d { continue; }
             let sign = if g > zz { 1.0 } else { -1.0 };
             out[i][2 * k] = (r / gr).max(prm.ramp_min_m).max(v * (6.0 * r / prm.ride_a).sqrt());
             out[i][2 * k + 1] = sign * (d - r);
@@ -332,9 +334,9 @@ mod tests {
         // the west end's ground 2 m under it (2 / 0.06 = 33.3 m of ramp + 20 m clear in 60 m free), the east's 0.5 m off
         let k = kept_ends(&[a.clone()], &[(68.0, 70.2)], &[(60.0, 60.0)], &[0.06], &[1.0], &prm);
         assert!((k[0][0] - 2.0 / 0.06).abs() < 1e-9 && k[0][1] == 0.0 && k[0][2].is_nan(), "{:?}", k);
-        // a junction 45 m on: 25 m of ramp take 1.5 m, the end still dropped 0.5 m
+        // a junction 45 m on: 25 m of ramp would take only 1.5 m of the 2: not kept (wholly or not at all)
         let k = kept_ends(&[a.clone()], &[(68.0, 70.2)], &[(45.0, 60.0)], &[0.06], &[1.0], &prm);
-        assert!((k[0][0] - 25.0).abs() < 1e-9 && (k[0][1] + 0.5).abs() < 1e-9, "{:?}", k);
+        assert!(k[0][0].is_nan(), "{:?}", k);
         // too little room before a junction: brought onto its ground as before
         assert!(kept_ends(&[a.clone()], &[(68.0, 70.2)], &[(35.0, 60.0)], &[0.06], &[1.0], &prm)[0][0].is_nan());
         // a long chain: never
@@ -343,10 +345,11 @@ mod tests {
         // a small ramp: ramp_min_m at least
         let k = kept_ends(&[a.clone()], &[(69.0, f64::NAN)], &[(60.0, 60.0)], &[0.10], &[1.0], &prm);
         assert!((k[0][0] - 20.0).abs() < 1e-9 && k[0][1] == 0.0 && k[0][2].is_nan(), "{:?}", k);
-        // at 27 m/s within 2.94 m/s^2: 40 m of ramp take 1.075 m (its curve's limit), the end still dropped 0.925 m
+        // at 27 m/s within 2.94 m/s^2: 40 m of ramp take only 1.075 m (its curve's limit): not kept; 110 m take it all
         let p2 = KeepPrm { ride_a: 2.94, ..prm };
-        let k = kept_ends(&[a.clone()], &[(68.0, 70.2)], &[(60.0, 60.0)], &[0.06], &[27.0], &p2);
-        assert!((k[0][0] - 40.0).abs() < 1e-9 && (k[0][1] + (2.0 - 2.94 * 1600.0 / (6.0 * 729.0))).abs() < 1e-9, "{:?}", k);
+        assert!(kept_ends(&[a.clone()], &[(68.0, 70.2)], &[(60.0, 60.0)], &[0.06], &[27.0], &p2)[0][0].is_nan());
+        let k = kept_ends(&[a.clone()], &[(68.0, 70.2)], &[(130.0, 60.0)], &[0.06], &[27.0], &p2);
+        assert!((k[0][0] - 27.0 * (12.0f64 / 2.94).sqrt()).abs() < 1e-9 && k[0][1] == 0.0, "{:?}", k);
         // one end kept far over the ground while the other is brought down: steeper than both brought: not kept
         let t = (vec![[0.0, 0.0], [12.0, 0.0]], vec![1443.0, 1437.0]);
         assert!(kept_ends(&[t], &[(1417.0, 1422.0)], &[(f64::NAN, 170.0)], &[0.10], &[1.0], &prm).iter().flatten().all(|v| v.is_nan()));
