@@ -18,7 +18,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 SERVER = os.path.join(REPO, "server")
-STEPS = ("network", "layers")
+STEPS = ("network", "layers", "samples", "ground")
 
 
 def junction(a):
@@ -79,7 +79,7 @@ def main(argv=None):
     import numpy as np
     import blockworker
     import mapcells
-    from grade3d import layers, network
+    from grade3d import ground, layers, network, samples
 
     aid, anchor, at = junction(a)
     clock = Clock()
@@ -114,6 +114,16 @@ def main(argv=None):
     if "layers" in steps:
         lay = layers.order(whole)
         t = clock("layers", "order", t, **layers.summary(lay))
+    if "samples" in steps:
+        sm = samples.sample(whole, lay)
+        t = clock("samples", "sample", t, samples=len(sm), joins=len(sm.joins), crossings=len(sm.crossings),
+                  steps_m="%.2f-%.2f" % (sm.h[sm.h > 0].min(), sm.h.max()))
+    if "ground" in steps:
+        raw = ground.read(ground.planner_elev(planner), sm)
+        t = clock("ground", "read", t, samples=len(raw), range="%.0f-%.0f m" % (raw.min(), raw.max()))
+        g = ground.smooth(sm, raw)
+        t = clock("ground", "smooth", t, moved_p99="%.2f m" % np.percentile(np.abs(g - raw), 99),
+                  moved_max="%.2f m" % np.abs(g - raw).max())
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
             json.dump(clock.rows, f, indent=1)
