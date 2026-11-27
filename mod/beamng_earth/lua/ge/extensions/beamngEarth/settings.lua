@@ -224,6 +224,9 @@ M.SCHEMA = {
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
   -- town / state / country names from Photon (komoot), sent the position rounded to ~1 km
   placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar' },
+  -- photos of places for add-ons (api.placePhotos, server placephotos.py): each lookup sends the place's position and
+  -- name to Wikimedia Commons (its position to Mapillary), so it is off until the player turns it on
+  addonPhotos = { kind = 'bool', default = false, label = 'Photos of places for add-ons' },
   -- BeamMP started by the BeamNG.Earth app with the game (launcher.py reads this file: bmplaunch.on_launch; its
   -- "don't ask again" writes it off)
   beammpOnLaunch = { kind = 'bool', default = true, label = 'Start BeamMP with BeamNG.Earth' },
@@ -272,7 +275,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
-  'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
+  'placeNamesOnline', 'addonPhotos', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'mainMenuTile', 'cacheCapGb', 'routeDownload', 'routeAvoidHighways', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)

@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 8) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8) |
+| `version()` | `major, minor` (1, 10) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8), `'placeDetails'`, `'placePhotos'` (1.11) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -173,6 +173,9 @@ end
 | `speedLimit()` | 1.5: the posted speed limit of the road the player is on: `{ms, mapped, unit}` (`ms` in m/s; `mapped` true for the map's own limit, false for the road class's default, nil where not known; `unit` `'mph'` or `'kmh'`, the country's signs). Not the AI's target speed, which is lower in bends. nil off the road, before the world is there or on another level |
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
+| `placePhotos(places, opts, callback)` | 1.11: a photo of each of up to 8 places as a JPEG file the UI can show by its path, with its credit (see "Place photos" below). Returns the request's id, or `nil, why` |
+| `placePhotosAllowed()` | 1.11: whether the player allows place photos (Settings > Interface > Photos of places for add-ons, off by default); while not, `placePhotos` returns `nil, api.PHOTOS_OFF` |
+| `placeDetails(places, callback)` | 1.11: the address, phones, websites, socials, brand and category path of up to 20 places a `places` answer gave (see "Place details" below). Returns the request's id, or `nil, why` |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 ### Route maneuvers (1.7)
@@ -303,9 +306,81 @@ end
   and the same on every page, so paging by `next` stays right across it.
 - `buildings` keeps its own 500 m reach and count of 100 whatever `radius` and `cachedOnly` say.
 
+### Place details (1.11)
+
+For a card about one place: a drive-by info mode showing the business the player passes, a job board's employer.
+`places` keeps its rows small (the map's own readers need only names and categories); `placeDetails` reads the rest
+back from Overture's place tile on disk, the one the map cell was built from, for the few places an add-on shows.
+
+```lua
+if api.has('placeDetails') then
+  api.places(lat, lon, { radius = 150, limit = 10 }, function(r)
+    if r.pending then return end
+    api.placeDetails(r.places, function(d)
+      for _, p in ipairs(d.details) do print(p.name, p.address.freeform, p.phones[1], p.websites[1]) end
+    end)
+  end)
+end
+```
+
+`places` is a list of rows from a `places` answer (or of `{id, lat, lon}`), at most 20 (`api.DETAILS_MAX`). The
+callback hears once: `{details, missing, error}`.
+
+- `details`: in the order asked, each `{id, name, category, taxonomy, hierarchy, brand, address, phones, websites,
+  socials, emails, open, confidence, sources}`. `taxonomy` is Overture's most specific category (`barber`, where
+  `category` is the broader `personal_or_beauty_service`) and `hierarchy` its path from the top
+  (`{'lifestyle_services', 'personal_or_beauty_service', 'barber'}`); `brand` `{name, wikidata}`; `address`
+  `{freeform, locality, postcode, region, country}` (`''` where not known); `phones`, `websites`, `socials`, `emails`
+  at most 4 each (links only `http(s)`); `sources` `{dataset, license}` each, for your credits.
+- `missing`: the ids not found in a place tile on disk. Nothing is downloaded for this call: a place the player has
+  not been near, or a world whose map cells came from the parquet copies (`BNGE_MAP_SOURCE=parquet`), has none.
+- One answer, at once (a tile decodes in ~30 ms, and the app keeps the last 24): no `pending`, no paging. An answer
+  that never comes is heard after `api.DETAILS_TIMEOUT_S` (30 s) with `error` `'timed out'`.
+- The text is Overture's as it is: cleaned of control characters and capped at 200 characters, but not checked.
+  Show it as text, never as markup, and let the player open a link rather than opening it for them.
+
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and
 class from BeamNG.Earth's map data).
+
+### Place photos (1.11)
+
+`placePhotos` gets a photo of each place an add-on shows: the app looks it up, downloads it, shrinks it to at most
+640 x 420 and writes it as a JPEG under the game's `/temp/beamngEarth/photos/`, so a UI app shows it by its path
+(the game's UI browser may not fetch anything from the internet itself).
+
+**Off until the player allows it.** Each lookup sends the place's position and name to Wikimedia Commons, and its
+position to Mapillary, so photos only come once the player turns on **Settings > Interface > Photos of places for
+add-ons** (`addonPhotos`, off by default). Until then `placePhotos` returns `nil, api.PHOTOS_OFF` (a sentence naming
+that setting) and nothing is sent; `api.placePhotosAllowed()` says whether it is on, so an add-on can tell the player
+where to turn it on instead of showing nothing. `has('placePhotos')` is true either way (the call exists).
+
+Each picture is read to 4 MB at most and refused unread when its header says it is over 25 megapixels; the hosts
+(Commons, Mapillary's API and its image CDN, `*.fbcdn.net` and `*.mapillary.com`) are rate limited and optional
+(`server/netfetch.py`). Two sources:
+
+- **Wikimedia Commons**: a file within 120 m whose title names the place (half the name's words, and its own words,
+  not just the kind of place: "church" alone never matches).
+- **Mapillary** street-level photos, with `opts.mapillaryToken`: the player's own read-only client token (a free
+  Mapillary developer account; never ship one in an add-on). The app passes it in the request's header and keeps it
+  nowhere. The photo taken from the road 6-48 m from the place, best about 22 degrees off the camera's heading; `fx`
+  says where across the picture the place should be (phone positions are often 5-10 m off: lean a crop that way,
+  no more than `zoom`).
+
+```lua
+if api.has('placePhotos') and api.placePhotosAllowed() then
+  api.placePhotos({ { id = row.id, lat = row.lat, lon = row.lon, name = row.name } },
+    { mapillaryToken = myPlayersToken }, function(r)
+      for _, p in ipairs(r.photos) do
+        -- p.file '/temp/beamngEarth/photos/<key>.jpg'; credit: p.by, p.year, p.source, p.licence; p.fx, p.zoom
+      end
+    end)
+end
+```
+
+The answer comes once, after the downloads (a few seconds the first time; then from disk: a photo is kept 30 days,
+"none" 7 days, or until a token comes). `missing` lists places with none to be had now (a source that did not
+answer is asked again next time). Show the credit with the photo: both sources are CC BY-SA or CC BY.
 
 ## Companion feed
 

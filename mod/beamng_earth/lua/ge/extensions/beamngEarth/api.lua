@@ -31,12 +31,19 @@
 -- A wide search over what is already on disk (1.8, has('cachedPlaces')): opts.cachedOnly takes the map cells the app
 -- has and asks for no others, with no second answer, so opts.radius may go to 25 km; it must name opts.categories,
 -- and result.truncated says the reach was cut back to the app's cell cap.
+-- Place details (1.11, has('placeDetails')): api.placeDetails(places, callback) asks for the address, phones,
+-- websites, socials, brand and category path of up to 20 places an api.places answer gave (one answer, from the
+-- place tiles on disk: nothing is downloaded for it).
+-- Place photos (1.11, has('placePhotos')): api.placePhotos(places, opts, callback) gets a photo of each of up to 8
+-- places as a JPEG file the UI can show by its path (Wikimedia Commons by name, else a Mapillary street-level photo
+-- with opts.mapillaryToken, the player's own), with its credit. The app downloads it: seconds, not a frame.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 8
+M.MAJOR, M.MINOR = 1, 11
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
-  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true }
+  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true,
+  placeDetails = true, placePhotos = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
   waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased' }
@@ -394,6 +401,127 @@ function M._onPlaces(msg)
   placesCall(r, result)
 end
 
+------------------------------------------------------------------------------------------
+-- place details (1.11)
+
+M.DETAILS_MAX = 20
+M.DETAILS_TIMEOUT_S = 30     -- (the app answers from disk at once; this is only for an answer that never comes)
+local detailReqs, detailReqId = {}, 0
+
+-- The details of places an api.places answer gave (1.11, has('placeDetails')): places is a list of its rows (or of
+-- { id, lat, lon }), at most DETAILS_MAX. callback(result) once: { details = { { id, name, category, taxonomy,
+-- hierarchy = { 'lifestyle_services', ... }, brand = { name, wikidata }, address = { freeform, locality, postcode,
+-- region, country }, phones, websites, socials, emails, open, confidence, sources = { { dataset, license } } }... }
+-- in the order asked, missing = { id... } (not in a place tile on disk), error }. Returns the request's id, or nil
+-- and why.
+function M.placeDetails(places, callback)
+  if type(callback) ~= 'function' then return nil, 'no callback' end
+  if type(places) ~= 'table' or #places == 0 then return nil, 'no places' end
+  if #places > M.DETAILS_MAX then return nil, 'at most ' .. M.DETAILS_MAX .. ' places' end
+  local rows = {}
+  for i, p in ipairs(places) do
+    local lat, lon = type(p) == 'table' and tonumber(p.lat), type(p) == 'table' and tonumber(p.lon)
+    if type(p) ~= 'table' or type(p.id) ~= 'string' or p.id == '' or not lat or not lon then
+      return nil, 'place ' .. i .. ' needs id, lat and lon'
+    end
+    rows[i] = { id = p.id, lat = lat, lon = lon }
+  end
+  local net = mod('net')
+  if not (net and M.connected()) then return nil, 'Companion server not connected' end
+  detailReqId = detailReqId + 1
+  detailReqs[detailReqId] = { fn = callback, t = clock }
+  net.send({ type = 'place_details', id = detailReqId, places = rows })
+  return detailReqId
+end
+
+-- (ours: core.lua hands the app's place_details_result here)
+function M._onPlaceDetails(msg)
+  local r = type(msg) == 'table' and detailReqs[msg.id]
+  if not r then return end
+  detailReqs[msg.id] = nil
+  placesCall(r, { details = type(msg.details) == 'table' and msg.details or {},
+    missing = type(msg.missing) == 'table' and msg.missing or {},
+    error = type(msg.error) == 'string' and msg.error or nil })
+end
+
+M.PHOTOS_MAX = 8
+M.PHOTOS_TIMEOUT_S = 60      -- (a lookup takes a few seconds; this is only for an answer that never comes)
+local photoReqs = {}
+
+-- Photos of places (1.11, has('placePhotos')): places is a list of { id, lat, lon, name } (an api.places row works),
+-- at most PHOTOS_MAX; opts { mapillaryToken = 'MLY|...' } (optional: the player's own read-only client token; without
+-- it, Wikimedia Commons only). callback(result) once: { photos = { { id, file = '/temp/beamngEarth/photos/<key>.jpg',
+-- source = 'Wikimedia Commons' | 'Mapillary', by, year, licence, fx = where across the picture the place should be
+-- (0-1), zoom = how much it may be enlarged round fx } ... }, missing = { id... } (none to be had now), error }.
+-- Show the credit (by, source, licence) with the photo: both sources are CC BY-SA / BY. Returns the request's id, or
+-- nil and why. Off until the player allows it (settings addonPhotos, "Photos of places for add-ons": each lookup sends
+-- the place's position and name to Commons, its position to Mapillary): then nil, M.PHOTOS_OFF and nothing is sent.
+M.PHOTOS_OFF = 'photos are off: BeamNG.Earth settings > Interface > Photos of places for add-ons'
+-- Whether the player allows place photos (placePhotos would ask): an add-on can say where to turn them on.
+function M.placePhotosAllowed()
+  local st = mod('settings')
+  return st ~= nil and type(st.get) == 'function' and st.get('addonPhotos') == true
+end
+
+function M.placePhotos(places, opts, callback)
+  if type(opts) == 'function' and callback == nil then opts, callback = {}, opts end
+  if type(callback) ~= 'function' then return nil, 'no callback' end
+  if type(places) ~= 'table' or #places == 0 then return nil, 'no places' end
+  if #places > M.PHOTOS_MAX then return nil, 'at most ' .. M.PHOTOS_MAX .. ' places' end
+  if not M.placePhotosAllowed() then return nil, M.PHOTOS_OFF end
+  local rows = {}
+  for i, p in ipairs(places) do
+    local lat, lon = type(p) == 'table' and tonumber(p.lat), type(p) == 'table' and tonumber(p.lon)
+    if type(p) ~= 'table' or type(p.id) ~= 'string' or p.id == '' or not lat or not lon then
+      return nil, 'place ' .. i .. ' needs id, lat and lon'
+    end
+    rows[i] = { id = p.id, lat = lat, lon = lon, name = type(p.name) == 'string' and p.name or '' }
+  end
+  local net = mod('net')
+  if not (net and M.connected()) then return nil, 'Companion server not connected' end
+  detailReqId = detailReqId + 1
+  photoReqs[detailReqId] = { fn = callback, t = clock }
+  local tok = type(opts) == 'table' and type(opts.mapillaryToken) == 'string' and opts.mapillaryToken or nil
+  net.send({ type = 'place_photos', id = detailReqId, places = rows, mapillaryToken = tok })
+  return detailReqId
+end
+
+-- (ours: core.lua hands the app's place_photos_result here)
+function M._onPlacePhotos(msg)
+  local r = type(msg) == 'table' and photoReqs[msg.id]
+  if not r then return end
+  photoReqs[msg.id] = nil
+  placesCall(r, { photos = type(msg.photos) == 'table' and msg.photos or {},
+    missing = type(msg.missing) == 'table' and msg.missing or {},
+    error = type(msg.error) == 'string' and msg.error or nil })
+end
+
+local function photoTimeouts()
+  local late = {}
+  for id, r in pairs(photoReqs) do
+    if clock - r.t > M.PHOTOS_TIMEOUT_S then late[#late + 1] = id end
+  end
+  table.sort(late)
+  for _, id in ipairs(late) do
+    local r = photoReqs[id]
+    photoReqs[id] = nil
+    placesCall(r, { photos = {}, missing = {}, error = 'timed out' })
+  end
+end
+
+local function detailTimeouts()
+  local late = {}
+  for id, r in pairs(detailReqs) do
+    if clock - r.t > M.DETAILS_TIMEOUT_S then late[#late + 1] = id end
+  end
+  table.sort(late)
+  for _, id in ipairs(late) do
+    local r = detailReqs[id]
+    detailReqs[id] = nil
+    placesCall(r, { details = {}, missing = {}, error = 'timed out' })
+  end
+end
+
 local function placesTimeouts(dt)
   clock = clock + (tonumber(dt) or 0)
   local late = {}
@@ -446,7 +574,11 @@ end
 local wasReady, teleporting = false, false
 
 function M.onUpdate(dtReal)
-  if next(placeReqs) then placesTimeouts(dtReal) end
+  if next(placeReqs) or next(detailReqs) or next(photoReqs) then
+    placesTimeouts(dtReal)
+    if next(detailReqs) then detailTimeouts() end
+    if next(photoReqs) then photoTimeouts() end
+  end
   local st = state()
   if not st then wasReady, teleporting = false, false return end
   if st.pending and st.pending.purpose == 'teleport' then teleporting = true end
@@ -460,6 +592,8 @@ function M.onUpdate(dtReal)
   wasReady = ready
 end
 
-function M._reset() listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0 end
+function M._reset()
+  listeners, wasReady, teleporting, placeReqs, detailReqs, photoReqs, clock = {}, false, false, {}, {}, {}, 0
+end
 
 return M
