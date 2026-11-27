@@ -125,7 +125,8 @@ def state_message(line):
     if isinstance(d.get("thunderSets"), list):
         out["thunderSets"] = [v for v in d["thunderSets"][:4] if v in ("generated", "recorded")]
     if isinstance(d.get("rainSets"), list):
-        out["rainSets"] = [v for v in d["rainSets"][:4] if v in ("generated", "recorded")]
+        # ('generated_b': the synth's Generated rain is method B's live engine; liveaudio.lua LIVE_RAIN_NEEDS)
+        out["rainSets"] = [v for v in d["rainSets"][:4] if v in ("generated", "generated_b", "recorded")]
     if isinstance(d.get("readyThunders"), list):
         out["readyThunders"] = [[v[0][:64], float(v[1])] for v in d["readyThunders"][:24]
                                 if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)

@@ -371,6 +371,23 @@ def puddle_chunks(roads, seen, box, has_sidewalks, exclude=None, skip=()):
              "poly": corners, "uvq": uvs, "quads": 1}]
 
 
+def puddle_spots(chunks, mesh, origin):
+    """A skin's puddles as spots for the mod's aquaplaning (the native earthfast.puddle_spots: per quad of the chunks
+    marked "puddle" its centre, along axis, half sizes and atlas cell, its height the mean of the puddle mesh's
+    vertices inside it; quads the tile's clip left without any are not there): one flat list, 8 numbers a spot
+    (x, y, z relative to origin, ux, uy, a, b, cell), for the skin's "puddle" part (blockworker _geo_skin_build)."""
+    import fast
+    polys = [c for c in chunks if c.get("puddle") and c.get("quads") and c.get("poly") and c.get("uvq")]
+    if not polys or mesh is None or not len(mesh[0]):
+        return []
+    fast.require(641, "puddle_spots")
+    poly = np.ascontiguousarray(np.concatenate([np.asarray(c["poly"], np.float64)[:, :2] for c in polys]))
+    uvq = np.ascontiguousarray(np.concatenate([np.asarray(c["uvq"], np.float64)[:, :2] for c in polys]))
+    S = fast._ef.puddle_spots(poly, uvq, np.ascontiguousarray(np.asarray(mesh[0], np.float64)[:, :3]),
+                              np.asarray(origin, np.float64)[:3])
+    return [int(x) if k % 8 == 7 else float(x) for k, x in enumerate(np.asarray(S, np.float64).ravel().tolist())]
+
+
 def surface_chunks(pts, off, rows, excl, box, tier):
     """The v2 surface pieces (SURFACE_V2: earthfast.surface_plan) as road mesh chunks; tile_chunks's arrays (the roads'
     centre lines, offsets, attrs rows, excluded pairs), box and tier. Each strip carries its end fade ("fend_m")."""

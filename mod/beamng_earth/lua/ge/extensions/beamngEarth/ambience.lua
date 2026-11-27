@@ -457,7 +457,11 @@ M.RAIN_DIR = '/levels/beamng_earth/art/sound/weather/'
 M.RAIN_LAYERS = { { 'light', 'bne_rain_light.ogg', 0.7 }, { 'medium', 'bne_rain_medium.ogg', 5 },
   { 'heavy', 'bne_rain_heavy.ogg', 35 } }
 M.RAIN_ROOF_LAYERS = { light = 'bne_rain_roof_light.ogg', medium = 'bne_rain_roof.ogg', heavy = 'bne_rain_roof_heavy.ogg' }
+-- (the Generated set since method B, 2026-11-26: the roof heard inside the car, and the open shelter's own loop)
+M.RAIN_CABIN_LAYERS = { light = 'bne_rain_roof_cabin_light.ogg', medium = 'bne_rain_roof_cabin.ogg',
+  heavy = 'bne_rain_roof_cabin_heavy.ogg' }
 M.RAIN_MUFFLED = 'bne_rain_muffled.ogg'
+M.RAIN_MUFFLED_OPEN = 'bne_rain_muffled_open.ogg'
 M.RAIN_UNDER_ROOF = 0.7  -- the muffled layer's share of the rain's volume under a roof ...
 M.RAIN_IN_TUNNEL = 0.15  -- ... and in a tunnel
 M.RAIN_CABIN = 0.35      -- the outside layers in the driver's camera
@@ -468,6 +472,14 @@ M.RAIN_ROOF = 0.9        -- the roof drumming there
 -- ROOF_NEAR_M or closer, none from ROOF_FAR_M ("lightly in orbit").
 M.RAIN_CABIN_CAMS = { driver = true }
 M.RAIN_NEAR_CAMS = { onboard = true }
+-- (BeamNG 0.40 names the seat cameras 'occupant.<seat>' and the hood / bumper ones 'onboard.hood' ...: core/camera.lua;
+-- the user, 2026-11-26: "the rain sound doesn't change when the camera is inside the cabin")
+function M.camKind(n)
+  if type(n) ~= 'string' then return nil end
+  if M.RAIN_CABIN_CAMS[n] or n:find('^occupant%.') or n == 'onboard.driver' then return 'cabin' end
+  if M.RAIN_NEAR_CAMS[n] or n:find('^onboard%.') then return 'near' end
+  return nil
+end
 M.ROOF_ORBIT = 0.5
 M.ROOF_NEAR_M, M.ROOF_FAR_M = 4, 12
 M.RAIN_TRACK = 'amb_rain_medium'
@@ -495,7 +507,8 @@ local layersOk = nil                  -- the files are there (checked once)
 M.rainVol = 0
 M.rainLayers = layerVol
 
--- The Weather page's Rain sound: 'generated' (weathersynth's physical model, the bne_rain_*.ogg above) or 'recorded'
+-- The Weather page's Rain sound: 'generated' (weathersynth's method B, a physical model drop by drop: the bne_rain_*.ogg
+-- above, 30 s loops; native/weathersynth/src/rainb.rs, SOURCES.md) or 'recorded'
 -- (CC0 field recordings, screened, cut and crossfaded by weathersynth's texture renderer: bne_rain_rec_*.ogg, the same
 -- loudness per file; credits in CREDITS.md "Weather sounds"). A set whose files are missing falls back to generated.
 M.RAIN_SET = 'generated'
@@ -503,8 +516,8 @@ M.REC_PREFIX = 'bne_rain_rec_'
 -- The Weather page's sound sets, one row per family (the hook for more: a family's set picks its files here, and
 -- liveaudio.LIVE_RAIN / LIVE_WIND say whether the live synth plays that set itself; the settings page's entry and
 -- settings.lua's apply function call the setter). Both sets of a family play at the same loudness.
---   rain: 'generated' bne_rain_*.ogg (weathersynth's physical model; its live engine is liveaudio.LIVE_RAIN.generated,
---         off until it is fixed) / 'recorded' bne_rain_rec_*.ogg (CC0 recordings mixed by texmix.rs)
+--   rain: 'generated' bne_rain_*.ogg (weathersynth's method B; its live engine, rainb_live.rs, is
+--         liveaudio.LIVE_RAIN.generated) / 'recorded' bne_rain_rec_*.ogg (CC0 recordings mixed by texmix.rs)
 --   wind: 'generated' bne_wind_gen_*.ogg (windsynth.rs) / 'recorded' bne_wind_*.ogg (CC0 recordings); files in both
 --         weather sound modes (the live synth plays no wind: liveaudio.LIVE_WIND)
 -- The default of each is thunder's (settings.lua weatherThunderSound): 'generated'.
@@ -609,8 +622,8 @@ end
 
 -- Pure: the plain roof's share outside for a camera mode and its distance d (m) to the car.
 function M.roofNearFor(camName, d)
-  if M.RAIN_CABIN_CAMS[camName] then return 0 end
-  if M.RAIN_NEAR_CAMS[camName] then return 1 end
+  if M.camKind(camName) == 'cabin' then return 0 end
+  if M.camKind(camName) == 'near' then return 1 end
   d = tonumber(d)
   if not d then return 0 end
   return M.ROOF_ORBIT * math.max(0, math.min(1, (M.ROOF_FAR_M - d) / (M.ROOF_FAR_M - M.ROOF_NEAR_M)))
@@ -627,15 +640,14 @@ local function layerFile(name)
   if M.EXTRA_FILES[name] then return M.EXTRA_FILES[name] end
   local rec = recorded()
   if name == 'muffled' then return rec and (M.REC_PREFIX .. 'muffled.ogg') or M.RAIN_MUFFLED end
-  -- (the generated set has one muffled loop and one roof set, recorded inside the car's model: used for both)
-  if name == 'muffled_open' then return rec and (M.REC_PREFIX .. 'muffled_open.ogg') or M.RAIN_MUFFLED end
+  if name == 'muffled_open' then return rec and (M.REC_PREFIX .. 'muffled_open.ogg') or M.RAIN_MUFFLED_OPEN end
   local roof = name:match('^roof_(%a+)$')
   if roof then
     return rec and (M.REC_PREFIX .. (roof == 'medium' and 'roof' or ('roof_' .. roof)) .. '.ogg') or M.RAIN_ROOF_LAYERS[roof]
   end
   local cab = name:match('^roofcab_(%a+)$')
   if cab then
-    return rec and (M.REC_PREFIX .. (cab == 'medium' and 'roof_cabin' or ('roof_cabin_' .. cab)) .. '.ogg') or M.RAIN_ROOF_LAYERS[cab]
+    return rec and (M.REC_PREFIX .. (cab == 'medium' and 'roof_cabin' or ('roof_cabin_' .. cab)) .. '.ogg') or M.RAIN_CABIN_LAYERS[cab]
   end
   for _, l in ipairs(M.RAIN_LAYERS) do if l[1] == name then return rec and (M.REC_PREFIX .. name .. '.ogg') or l[2] end end
 end
@@ -806,14 +818,14 @@ end
 
 local function cabinCam()
   local n = camName()
-  return n and M.RAIN_CABIN_CAMS[n] or false
+  return M.camKind(n) == 'cabin'
 end
 
 -- The plain roof's share outside now (M.roofNearFor: the camera's mode and its distance to the player's car).
 local function roofNear()
   local n = camName()
-  if not n or M.RAIN_CABIN_CAMS[n] then return 0 end
-  if M.RAIN_NEAR_CAMS[n] then return 1 end
+  if not n or M.camKind(n) == 'cabin' then return 0 end
+  if M.camKind(n) == 'near' then return 1 end
   local cam = rawget(_G, 'core_camera')
   local p = cam and cam.getPosition and cam.getPosition()
   local veh = rawget(_G, 'be') and be.getPlayerVehicle and be:getPlayerVehicle(0)

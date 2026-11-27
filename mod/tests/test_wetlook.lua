@@ -107,4 +107,37 @@ do
   package.loaded['beamngEarth/roads'] = nil
 end
 
+-- grip (the user, 2026-11-26: "grip should follow the weather shown in game"): the own wetness as dry / damp / wet,
+-- with a margin either side of a change; handed to winter.lua at changes only, the wet look on or off
+check(W.gripCond(0) == nil and W.gripCond(0.3) == 'damp' and W.gripCond(0.9) == 'wet', 'grip conditions')
+check(W.gripCond(W.GRIP_DAMP + 0.01, nil) == nil and W.gripCond(W.GRIP_DAMP + 0.01, 'damp') == 'damp'
+  and W.gripCond(W.GRIP_DAMP - 0.01, 'damp') == 'damp' and W.gripCond(W.GRIP_DAMP - 0.04, 'damp') == nil,
+  'damp: a margin either side')
+check(W.gripCond(W.GRIP_WET + 0.01, 'damp') == 'damp' and W.gripCond(W.GRIP_WET - 0.01, 'wet') == 'wet'
+  and W.gripCond(W.GRIP_WET + 0.04, 'damp') == 'wet' and W.gripCond(W.GRIP_WET - 0.04, 'wet') == 'damp',
+  'wet: a margin either side')
+do
+  local got = {}
+  package.loaded['beamngEarth/winter'] = { setShown = function(c) got[#got + 1] = tostring(c) end }
+  W.reset()
+  check(#got == 0, 'dry at a reset: winter not called')
+  W._setOwn(0.97)
+  W.update(W.CHECK_S, 8, false, true)
+  check(got[#got] == 'wet' and W.grip() == 'wet' and W.level() == 0, 'the storm shown, wet look off: wet grip, no look')
+  local n = #got
+  for _ = 1, 20 do W.update(W.CHECK_S, 8, false, true) end
+  check(#got == n, 'steady: winter not called again')
+  W._setOwn(0.3)
+  W.update(W.CHECK_S, 0, false, true)
+  check(got[#got] == 'damp', 'drying: damp')
+  W.update(W.CHECK_S, 0, false, false)
+  check(got[#got] == 'nil' and W.grip() == nil and W.wetness() == 0, 'the setting off: dry grip, no memory')
+  W._setOwn(0.97)
+  W.update(W.CHECK_S, 8, true, true)
+  W.reset()
+  check(got[#got] == 'nil', 'a level end: dry grip')
+  check(W.puddleRefShown() == 255, 'no puddles shown: threshold 255')
+  package.loaded['beamngEarth/winter'] = nil
+end
+
 T.done('test_wetlook')

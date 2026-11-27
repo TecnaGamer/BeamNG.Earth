@@ -166,6 +166,7 @@ class _Cells:
         self._fn = cell_fn
         self.memo = {}
         self.rows = {}
+        self.short = {}         # (str(key) -> monotonic time: tables built short (a fault while reading), SHORT_TTL_S)
         self.xext = {}          # (_xsec_extents per cell: a pure function of its table, by the table's stamp)
         self.lock = threading.Lock()
 
@@ -176,19 +177,33 @@ class _Cells:
 
     def table(self, key):
         import lanegraph
+        import revisit
         feats = self.cell_fn(key)
         stamp = (str(key), getattr(feats, "_road_revision", 0) if feats is not None else None)
         with self.lock:
             got = self.rows.get(str(key))
             if got is not None and got[0] == stamp:
-                return got[1]
+                t0 = self.short.get(str(key))
+                if t0 is None:
+                    return got[1]
+                if time.monotonic() - t0 < SHORT_TTL_S:
+                    # (a table built while a read failed: the same table for SHORT_TTL_S, each use faulted so what is
+                    # built on it is never kept; then read again)
+                    revisit.fault(here=True)
+                    return got[1]
         tab = None
-        if feats is not None and len(feats):
-            rows, _idx = lanegraph._cell_lane_segments(key, self.cell_fn, self.memo)
-            tab = _table(str(key), feats, rows)
+        with revisit.scope() as b:
+            if feats is not None and len(feats):
+                rows, _idx = lanegraph._cell_lane_segments(key, self.cell_fn, self.memo)
+                tab = _table(str(key), feats, rows)
         with self.lock:
             self.rows[str(key)] = (stamp, tab)
+            if b.complete:
+                self.short.pop(str(key), None)
+            else:
+                self.short[str(key)] = time.monotonic()
             while len(self.rows) > 512:
+                self.short.pop(next(iter(self.rows)), None)
                 self.rows.pop(next(iter(self.rows)))
         return tab
 
