@@ -228,7 +228,7 @@ class FieldTest(unittest.TestCase):
         import urllib.parse
         self.calls = []
 
-        def fetch_json(url):
+        def fetch_json(url, kind="background"):
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
             n = len(q["latitude"][0].split(","))
             self.calls.append(n)
@@ -257,10 +257,12 @@ class FieldTest(unittest.TestCase):
 
     def test_mild_and_bare_is_no_snow(self):
         sf, f = self.field(6.0, 0.0, 2)
-        changed = f.update(39.9, -105.1)
+        self.assertTrue(f.due(39.9, -105.1))
+        changed = f.update(39.9, -105.1, "near") + f.update(39.9, -105.1, "far")
         self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
         self.assertEqual(changed, [])
         self.assertEqual(len(self.calls), 2)        # (the near ring and the far ring: one request each)
+        self.assertFalse(f.due(39.9, -105.1))
 
     def test_observed_snow_without_snowfall_is_thin_cover(self):
         sf, f = self.field(2.0, 0.0, 4)
@@ -278,13 +280,89 @@ class FieldTest(unittest.TestCase):
 
     def test_bare_two_days_vetoes_model_snow(self):
         sf, f = self.field(-3.0, 0.0, 2, depth_m=0.3)
-        f.update(39.9, -105.1)
+        f.update(39.9, -105.1, "near")
+        f.update(39.9, -105.1, "far")
         self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
 
     def test_weight_cap(self):
         sf, f = self.field(2.0, 0.0, 4, cap=1.0)
         self.assertEqual(f.update(39.9, -105.1), [])
         self.assertEqual(self.calls, [])
+
+
+class WiringTest(unittest.TestCase):
+    """The server side (S-6 / S-7): snow.Service draws the field's tables and runs its rings; Server.snow_changed(cells)
+    re-renders only the tiles and photos over the changed cells."""
+
+    def test_snow_changed_by_cells(self):
+        need()
+        from types import SimpleNamespace
+        import earthd
+        import farfield
+        import geodesy
+        import snowfield
+        frame = geodesy.EnuFrame(39.875, -105.125)
+        here = SimpleNamespace(material="m", texture="t", stale=False, tile=object())
+        far_ = SimpleNamespace(material="m", texture="t", stale=False, tile=object())
+        where = {id(here.tile): (frame, -1000.0, -1000.0, 2000.0), id(far_.tile): (frame, 200000.0, 0.0, 2000.0)}
+        queued = []
+        srv = SimpleNamespace(tiles={(1, "a"): here, (1, "b"): far_}, near_visual="detail", anchors={1: SimpleNamespace(
+            frame=frame)}, hm={(1, 0.0, 0.0): {}, (1, 300000.0, 0.0): {}}, base_stale=set(),
+            layout=SimpleNamespace(block=256))
+        srv.tile_where = lambda anchor, tile: where[id(tile)]
+        srv.retex_request = lambda ck, pump=True: queued.append(ck)
+        srv._retex_pump = lambda: None
+        self.assertTrue(hasattr(farfield, "GTile"))
+        cell = snowfield.cell_of(39.875, -105.125)
+        self.assertEqual(earthd.Server.snow_changed(srv, cells=[cell]), 1)
+        self.assertEqual((queued, here.stale, far_.stale), ([(1, "a")], True, False))
+        self.assertEqual(srv.base_stale, {(1, 0.0, 0.0)})
+        # no cell: nothing; no cells argument: everything (W2's change)
+        self.assertEqual(earthd.Server.snow_changed(srv, cells=[]), 0)
+        self.assertEqual(earthd.Server.snow_changed(srv), 2)
+
+    def test_service_draws_the_field(self):
+        need()
+        import snow
+
+        class Cover:
+            def set_provider(self, fn, climate=False):
+                self.provider = fn
+
+        class Field:
+            calls = []
+
+            def provider(self, s, w, n, e):
+                return ("field", s)
+
+            def due(self, lat, lon):
+                return True
+
+            def update(self, lat, lon, ring="near"):
+                self.calls.append(ring)
+                return [(1, 2)] if ring == "near" else []
+
+        cover, field = Cover(), Field()
+        svc = snow.Service(fetch=lambda *a: {}, mode="real", cover=cover, winter=True, field=field)
+        self.assertEqual(cover.provider(1, 2, 3, 4), ("field", 1))
+        # a preset's snow stays the preset's
+        self.assertIsNone(snow.Service(fetch=lambda *a: {}, mode="light", cover=Cover(), field=field).field)
+        # the rings in order, the changed cells drawn again
+        import asyncio
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        changed = []
+        conn = SimpleNamespace(loop=loop, s=SimpleNamespace(snow_changed=lambda cells=None: changed.append(cells)))
+        tasks = []
+        conn.spawn = lambda coro: tasks.append(loop.create_task(coro))
+        svc.field_tick(conn, 39.9, -105.1, arrived=True)
+        loop.run_until_complete(asyncio.gather(*tasks))
+        self.assertEqual(field.calls, ["near", "far"])
+        self.assertEqual(changed, [[(1, 2)]])
+        self.assertFalse(svc.field_busy)
+
+
+from types import SimpleNamespace  # noqa: E402
 
 
 if __name__ == "__main__":

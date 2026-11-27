@@ -4966,25 +4966,56 @@ class Server:
         return snowcovermod.spec_for_square(anchor.frame, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M,
                                             size)
 
-    def snow_changed(self):
+    def snow_changed(self, cells=None):
         """(event loop) The snow state changed (W1's state, a preset set live: snow_mode): every far tile with a
         texture re-rendered at the live retexture's pace, nearest a player first (each takes its new spec: far_snow),
         every block's photo at its next base refresh (base_stale). A committed block's snow layer follows with its next
-        build (its .ter is the engine's). Returns the far tiles queued."""
+        build (its .ter is the engine's). cells: the local weather snow field's cells whose tables changed
+        (snowfield.py, (ci, cj) at its CELL_DEG): only the tiles and photos within a cell's pad of one (their specs
+        read the cells round their square, snowcover.FIELD_PAD_CELLS) (S-7: a new hour that changes one valley's
+        table does not re-texture the world). Returns the far tiles queued."""
+        near = None
+        if cells is not None:
+            import snowfield
+            pad = snowcovermod.FIELD_PAD_CELLS * snowfield.CELL_DEG
+            boxes = [snowfield.cell_box(ci, cj) for ci, cj in cells]
+            if not boxes:
+                return 0
+
+            def near(frame, x0, y0, size):      # (the square's lat / lon box within a pad of a changed cell)
+                la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0 + size, x0, x0 + size]),
+                                                  np.array([y0, y0, y0 + size, y0 + size]), 0.0)
+                s_, n_, w_, e_ = float(np.min(la)), float(np.max(la)), float(np.min(lo)), float(np.max(lo))
+                return any(s_ <= b[2] + pad and n_ >= b[0] - pad and w_ <= b[3] + pad and e_ >= b[1] - pad
+                           for b in boxes)
         n = 0
         for ck, info in list(self.tiles.items()):
             if getattr(info, "material", None) is None or getattr(info, "texture", None) is None:
                 continue
+            if near is not None:
+                anchor = self.anchors.get(ck[0])
+                tile = info.tile if info.tile is not None else farfield.tile_of(ck[1])
+                if anchor is None and not isinstance(tile, farfield.GTile):
+                    continue
+                if not near(*self.tile_where(anchor, tile)):
+                    continue
             info.stale = True
             self.retex_request(ck, pump=False)
             n += 1
         if n:
             self._retex_pump()
+        nb = 0
         if self.near_visual == "detail":
-            self.base_stale.update(k for k in self.hm if k[0] in self.anchors)
+            size = self.layout.block * heightmap.SQUARE if near is not None else 0.0
+            for k in self.hm:
+                a = self.anchors.get(k[0])
+                if a is None or (near is not None and not near(a.frame, k[1] - size / 2, k[2] - size / 2, size)):
+                    continue
+                self.base_stale.add(k)
+                nb += 1
         self.snow_changes = getattr(self, "snow_changes", 0) + 1
-        log.info("snow state changed (%s): %d far tiles to texture again, %d block photos", snowcovermod.MODE, n,
-                 len(self.base_stale))
+        log.info("snow state changed (%s%s): %d far tiles to texture again, %d block photos", snowcovermod.MODE,
+                 f", {len(cells)} cells" if cells is not None else "", n, nb)
         return n
 
     def snow_roads_changed(self):
@@ -12112,9 +12143,14 @@ async def main_async(args, restart=None):
     server.make_fast_pool = make_fast_pool
     if snowmod.ON:      # (BNE_WINTER / BNE_WET_ROADS: from the weather's source, or a winter preset, no network)
         # (the band table cut to each forcing cell's real relief in our DEM: snow.cell_relief)
+        field = None
+        if snowmod.WINTER and snowcovermod.ON:
+            import snowfield
+            if snowfield.ON:        # (local weather S1, the Experimental "Local snow": the photos' snow by cell)
+                field = snowfield.make(server.dem, net, args.cache_dir)
         server.snow = snowmod.Service(fetch=lambda lat, lon, past, ahead: weathermod.fetch_hourly(lat, lon, past, ahead,
                                                                                                  net=net),
-                                      relief=lambda lat, lon: snowmod.cell_relief(server.dem, lat, lon))
+                                      relief=lambda lat, lon: snowmod.cell_relief(server.dem, lat, lon), field=field)
         log.info("road surface state %s (winter %s, wet roads %s)", snowmod.MODE, snowmod.WINTER, snowmod.WET_ROADS)
     if late_pool is not None:
         server.start_late(late_pool)

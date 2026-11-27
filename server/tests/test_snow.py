@@ -184,6 +184,12 @@ class W2InterfaceTest(unittest.TestCase):
             self.sent.append(m)
 
     def setUp(self):
+        # (W2's own interface: W3's road look off, whatever an earlier test module imported snowroad with; test_snowcover
+        # imports it under BNE_WINTER=on and its ON stayed True: the 15 road shares instead of 5 when run before this)
+        import snowroad
+        on = snowroad.ON
+        snowroad.ON = False
+        self.addCleanup(setattr, snowroad, "ON", on)
         self.cover = FakeCover()
         self.svc = snow.Service(fetch=FakeHourly(), mode="light", cover=self.cover)
         self.server = self.Server()

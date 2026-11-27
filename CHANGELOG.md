@@ -17,6 +17,10 @@ What changed in each release of BeamNG.Earth, newest first.
   wheel tracks, road markings fading under the snow, snowbanks along plowed roads that grow with each storm and go
   grey with dirt over the days after (never across junctions, crossings or bridges), sidewalks shovelled on main
   streets and some residential frontages and trampled or covered elsewhere, and white bridge decks.
+- **Local snow (Experimental, needs Winter).** The snow on the ground is worked out for every area round you by
+  height and slope, from that area's own weather and NOAA's daily satellite snow map: mountains are white above
+  their real snowline (lower on slopes facing away from the sun once the snow starts melting), valleys and mild
+  places stay bare unless it really snowed there, and high peaks keep their old snow through dry spells.
 - **Winter (Experimental): bare trees.** With Winter on, oaks, beeches, birches, aspens and poplars lose their leaves
   tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
   young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green. Each tree has one

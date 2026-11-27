@@ -56,6 +56,9 @@ LOCATIONS_MAX = 200             # locations a request (Open-Meteo allows 1,000; 
 TABLE_TTL_S = 24 * 3600.0
 GROUND_ZOOM = 9
 GROUND_RES = 0.002              # deg a DEM sample under the IMS pixels (~220 m: ~20 a 1 km pixel)
+FAR_GROUND_ZOOM = 8             # ... the far ring's cells (~1,000 of them: a quarter of the tiles, ~5 samples a pixel)
+FAR_GROUND_RES = 0.004
+RETRY_S = (15.0, 300.0)         # a failed ring's next try: from 15 s doubling to 5 min
 GROUND_VERSION = 1
 IMS_URL = "https://noaadata.apps.nsidc.org/NOAA/G02156/GIS/1km/{y}/ims{y}{doy:03d}_1km_GIS_v1.3.tif.gz"
 IMS_DAYS_BACK = 4               # the newest file is looked for this many days back
@@ -122,10 +125,11 @@ def ims_url(day):
 
 
 class _Cell:
-    __slots__ = ("key", "point", "ground", "table", "made", "states", "z_cell", "rows")
+    __slots__ = ("key", "point", "ground", "table", "made", "states", "z_cell", "rows", "far")
 
     def __init__(self, key, point):
         self.key, self.point = key, point
+        self.far = False            # (a far-ring cell: its ground from FAR_GROUND_ZOOM)
         self.ground = None          # (z, aspect, lat_e5, lon_e5, n, r, c, zmin, zmax) or False (no ground: the sea)
         self.table = None           # snowcover.Table of S1 rows (or None: no snow)
         self.made = 0.0             # when the table was made (clock)
@@ -149,7 +153,8 @@ class SnowField:
         self.ims_reader = ims_reader if ims_reader is not None else fast._ef.snowobs_ims_windows
         self.lock = threading.Lock()
         self.cells = {}             # (ci, cj) -> _Cell
-        self.refreshed = {}         # ring name -> clock of its last forcing
+        self.refreshed = {}         # ring name -> (anchor cell, refresh slot) of its last forcing
+        self.retry = {}             # ring name -> (clock of the next try, failures in a row)
         self.weight_day = (None, 0.0)
         self.ims = {}               # day -> (r0, c0, window uint8) round the last box
         self.changes = 0
@@ -228,18 +233,19 @@ class SnowField:
         if cell.ground is not None:
             return cell.ground
         ci, cj = cell.key
-        path = os.path.join(self.dir, "ground", f"v{GROUND_VERSION}_{NATIVE}_z{GROUND_ZOOM}", f"{ci}_{cj}.npz")
+        zoom, res = (FAR_GROUND_ZOOM, FAR_GROUND_RES) if cell.far else (GROUND_ZOOM, GROUND_RES)
+        path = os.path.join(self.dir, "ground", f"v{GROUND_VERSION}_{NATIVE}_z{zoom}", f"{ci}_{cj}.npz")
         if os.path.exists(path):
             with np.load(path) as g:
                 cell.ground = tuple(g[k] for k in ("z", "aspect", "lat", "lon", "n", "r", "c")) + \
                     (int(g["zmin"]), int(g["zmax"]))
             return cell.ground
         s, w, n, e = cell_box(ci, cj)
-        m = 2 * GROUND_RES
-        rows, cols = int(round((n - s + 2 * m) / GROUND_RES)), int(round((e - w + 2 * m) / GROUND_RES))
-        la = (n + m) - (np.arange(rows) + 0.5) * GROUND_RES
-        lo = (w - m) + (np.arange(cols) + 0.5) * GROUND_RES
-        z = np.asarray(self.dem.sample(la[:, None], lo[None, :], GROUND_ZOOM), np.float32)
+        m = 2 * res
+        rows, cols = int(round((n - s + 2 * m) / res)), int(round((e - w + 2 * m) / res))
+        la = (n + m) - (np.arange(rows) + 0.5) * res
+        lo = (w - m) + (np.arange(cols) + 0.5) * res
+        z = np.asarray(self.dem.sample(la[:, None], lo[None, :], zoom), np.float32)
         inner = z[2:-2, 2:-2]
         land = inner[np.isfinite(inner) & (inner > 0.5)]
         if land.size == 0:
@@ -252,8 +258,7 @@ class SnowField:
             gz = tuple(np.zeros(0, t) for t in (np.int32, np.int8, np.int32, np.int32, np.uint32, np.int64, np.int64))
         else:
             r0, r1, c0, c1 = int(pr.min()) - 2, int(pr.max()) + 2, int(pc.min()) - 2, int(pc.max()) + 2
-            gz_, ga, gla, glo, gn = ef.snowobs_ground_ims(z, n + m, w - m, GROUND_RES, r0, c0, r1 - r0 + 1,
-                                                         c1 - c0 + 1)
+            gz_, ga, gla, glo, gn = ef.snowobs_ground_ims(z, n + m, w - m, res, r0, c0, r1 - r0 + 1, c1 - c0 + 1)
             ix = np.arange(gz_.size)
             box = (int(round(s * 1e5)), int(round(w * 1e5)), int(round(n * 1e5)), int(round(e * 1e5)))
             keep = (gn > 0) & (gla >= box[0]) & (gla < box[2]) & (glo >= box[1]) & (glo < box[3])
@@ -282,8 +287,9 @@ class SnowField:
         return fast._ef.snowobs_cell_counts(g[0], g[1], g[2], g[3], g[4], obs, box, k0, n).astype(np.int64)
 
     # -- forcing and tables
-    def _forcing(self, points):
-        """[(records, times, z_cell)] of the points (one request a LOCATIONS_MAX), or None (over budget, failed)."""
+    def _forcing(self, points, kind="background"):
+        """[(records, times, z_cell)] of the points (one request a LOCATIONS_MAX), or None (over budget). A failed
+        request raises (update: the ring's retry)."""
         import snow as snowmod
         out = []
         for i in range(0, len(points), LOCATIONS_MAX):
@@ -291,7 +297,7 @@ class SnowField:
             if not self._spend(om_weight(len(part))):
                 log.info("snow field: Open-Meteo weight cap (%d a day) reached: tables kept as they are", WEIGHT_CAP)
                 return None
-            body = self.fetch_json(hourly_url_many(part))
+            body = self.fetch_json(hourly_url_many(part), kind)
             body = body if isinstance(body, list) else [body]
             if len(body) != len(part):
                 raise IOError(f"snow field: {len(body)} answers for {len(part)} locations")
@@ -335,48 +341,74 @@ class SnowField:
                 changed.append(cell.key)
         return changed
 
-    def update(self, lat, lon):
-        """(executor) The anchor at (lat, lon): the rings' due work (the near ring hourly, the far ring every 3 h, the
-        IMS days once a day). Returns the cells whose table changed (the server re-renders what shows them)."""
+    def _ring_key(self, ring, lat, lon):
+        return (cell_of(lat, lon), int(self.clock() // (REFRESH_NEAR_S if ring == "near" else REFRESH_FAR_S)))
+
+    def due(self, lat, lon):
+        """Is a ring's work due round (lat, lon) (a new anchor cell, a new hour or 3 h, a failed ring's retry time)?"""
+        now = self.clock()
+        return any(self.refreshed.get(r) != self._ring_key(r, lat, lon) and now >= self.retry.get(r, (0.0, 0))[0]
+                   for r in ("near", "far"))
+
+    def update(self, lat, lon, ring="near"):
+        """(executor) The anchor at (lat, lon): one ring's due work ("near": hourly, its own forcing a cell, asked for
+        as demand: the teleport's own place is never dropped; "far": every 3 h, a 1-degree block's forcing, background),
+        the IMS days once a day. Returns the cells whose table changed (the server re-renders what shows them)."""
         now = self.clock()
         near, far = rings(lat, lon, NEAR_KM, FAR_KM)
         with self.lock:
             # (S-6: a table older than a day, or out of the rings, goes: never another place's snow)
             keep = set(near) | {c for v in far.values() for c in v}
-            gone = [k for k, c in self.cells.items() if k not in keep or (c.made and now - c.made > TABLE_TTL_S)]
-            for k in gone:
-                self.cells.pop(k, None)
+            out = [k for k, c in self.cells.items() if k not in keep or (c.made and now - c.made > TABLE_TTL_S)]
+            # (only the ones that had snow change what is drawn)
+            gone = [k for k in out if self.cells.pop(k).table is not None]
             for k in keep:
                 if k not in self.cells:
                     s, w, n, e = cell_box(*k)
                     self.cells[k] = _Cell(k, (0.5 * (s + n), 0.5 * (w + e)))
-        changed = [k for k in gone]
-        box = self._ims_box(lat, lon)
-        obs = self._ims_newest(box) if box is not None else []
-        ring_key = (cell_of(lat, lon), int(now // REFRESH_NEAR_S))
-        if self.refreshed.get("near") != ring_key:
-            cells = [self.cells[k] for k in near]
-            forcing = self._forcing([c.point for c in cells])
-            if forcing is not None:
-                changed += self._make(cells, forcing, obs)
-                self.refreshed["near"] = ring_key
-        far_key = (cell_of(lat, lon), int(now // REFRESH_FAR_S))
-        if self.refreshed.get("far") != far_key and far:
-            pts = list(far)
-            forcing = self._forcing(pts)
-            if forcing is not None:
-                for bc, f in zip(pts, forcing):
-                    cells = [self.cells[k] for k in far[bc]]
-                    changed += self._make(cells, [f] * len(cells), obs)
-                self.refreshed["far"] = far_key
+            for v in far.values():
+                for k in v:
+                    self.cells[k].far = True
+        changed = list(gone)
+        key = self._ring_key(ring, lat, lon)
+        if self.refreshed.get(ring) == key or now < self.retry.get(ring, (0.0, 0))[0]:
+            return changed
+        try:
+            box = self._ims_box(lat, lon)
+            obs = self._ims_newest(box) if box is not None else []
+            if ring == "near":
+                cells = [self.cells[k] for k in near]
+                forcing = self._forcing([c.point for c in cells], "demand")
+                if forcing is not None:
+                    changed += self._make(cells, forcing, obs)
+            else:
+                pts = list(far)
+                forcing = self._forcing(pts, "background") if pts else []
+                if forcing is not None:
+                    for bc, f in zip(pts, forcing):
+                        cells = [self.cells[k] for k in far[bc]]
+                        changed += self._make(cells, [f] * len(cells), obs)
+        except Exception as e:      # (network, budget, a DEM tile: this ring again after the backoff)
+            fails = self.retry.get(ring, (0.0, 0))[1] + 1
+            wait = min(RETRY_S[1], RETRY_S[0] * 2 ** (fails - 1))
+            self.retry[ring] = (now + wait, fails)
+            log.info("snow field: the %s ring round %.2f, %.2f failed: %s: %s (again in %.0f s)", ring, lat, lon,
+                     type(e).__name__, e, wait)
+            return changed
+        self.retry.pop(ring, None)
+        if forcing is not None:
+            self.refreshed[ring] = key
         if changed:
             self.changes += 1
-            log.info("snow field: %d cells changed round %.2f, %.2f (%d with snow)", len(changed), lat, lon,
-                     sum(1 for c in self.cells.values() if c.table is not None))
+            log.info("snow field: %s ring, %d cells changed round %.2f, %.2f (%d with snow)", ring, len(changed), lat,
+                     lon, sum(1 for c in self.cells.values() if c.table is not None))
         return changed
 
     def _ims_box(self, lat, lon):
-        """The IMS window (r0, r1, c0, c1) round the rings, or None (the southern hemisphere)."""
+        """The IMS window (r0, r1, c0, c1) round the rings, or None (the southern hemisphere); from the anchor cell's
+        centre, so it stays one window (and the day's file is read once) while the anchor stays in its cell."""
+        s_, w_, n_, e_ = cell_box(*cell_of(lat, lon))
+        lat, lon = 0.5 * (s_ + n_), 0.5 * (w_ + e_)
         span = FAR_KM / 111.2 + CELL_DEG
         spl = span / max(0.05, math.cos(math.radians(min(abs(lat) + span, 89.0))))
         la = np.clip(np.array([lat - span, lat - span, lat + span, lat + span, lat]), -89.9, 89.9)
@@ -396,3 +428,23 @@ class SnowField:
         if not cells:
             return None
         return snowcover.Field(CELL_DEG, cells=cells)
+
+
+def make(dem, net, cache_dir):
+    """The server's SnowField (earthd, when the part is on): Open-Meteo and the IMS days through the server's
+    netfetch.Fetcher (its policies: api.open-meteo.com, noaadata.apps.nsidc.org), its files under cache_dir/snowfield
+    (the IMS days prune themselves to IMS_KEEP; a cell's ground is a few kB)."""
+    import json
+    import netfetch
+
+    def fetch_json(url, kind="background"):
+        with netfetch.stale_ok():
+            return json.loads(net.get(url, kind=kind).body.decode("utf-8"))
+
+    def fetch_bytes(url):
+        try:
+            return net.get(url, kind="background").body
+        except netfetch.NotFound:        # (the day's file not published yet)
+            return None
+
+    return SnowField(dem, fetch_json, fetch_bytes, os.path.join(cache_dir, "snowfield"))
