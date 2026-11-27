@@ -16,7 +16,7 @@ MISSING = -2 ** 31
 F = {"t": 0, "td": 1, "p": 3, "swe": 4, "wind": 5, "sw": 6, "ts": 7, "depth": 9, "rh": 10, "hour": 11, "month": 12,
      "cloud": 13}
 # a golden hash of snowfield.rs selftest(1, 24): the same number on Linux and Windows (the kernel is integer-only)
-SELFTEST = None
+SELFTEST = 16759692160481620274     # (Linux release build, 2026-11-27)
 
 
 def window(spec, depth_mm=0, month=1):
