@@ -124,12 +124,31 @@ class KeyTest(unittest.TestCase):
             self.assertIsNone(sc.spec_for_box(*self.box()), "real without W1's state: none")
 
     def test_permanent_snow_only_in_polar_alpine_climates(self):
-        with winter("real") as sc:
-            self.assertIsNone(sc.spec_for_box(*self.box(PLAINS)))
+        # (a preset: the climatic snowline's permanent snow drawn; the real state never: test_snow_place)
+        with winter("dusting") as sc:
             sp = sc.spec_for_box(*self.box(ALPS))
-            self.assertTrue(sp is not None and sp.perm and sp.field is None)
+            self.assertTrue(sp is not None and sp.perm)
+            self.assertFalse(sc.spec_for_box(*self.box(PLAINS)).perm)
             self.assertTrue(sc.perm_possible(71.9, -40.1, 72.0, -40.0), "Greenland")
             self.assertFalse(sc.perm_possible(-1.0, 20.0, -0.9, 20.1), "the Congo")
+
+    def test_no_climatic_snow_in_the_real_state(self):
+        """The user, 2026-11-27: snow only where it really snowed. In the real mode a polar / alpine climate alone gives
+        no snow (no spec, no key part) whether W1's state is there or not; W1's presets keep it."""
+        with winter("real") as sc:
+            self.assertFalse(sc.climate_snow())
+            self.assertIsNone(sc.spec_for_box(*self.box(ALPS)), "no state: nothing")
+            bare = sc.Table(((0, 0, 0, 0),), sc.NO_ROAD)
+            sc.set_provider(lambda s, w, n, e: sc.Field(0.1, uniform=bare))
+            self.assertIsNone(sc.spec_for_box(*self.box(ALPS)), "a state without snow: nothing")
+            white = sc.Table(((0, 8, 3, 0),), sc.NO_ROAD)
+            sc.set_provider(lambda s, w, n, e: sc.Field(0.1, uniform=white))
+            self.assertFalse(sc.spec_for_box(*self.box(ALPS)).perm, "the state's snow, never the climate's")
+            sc.set_provider(lambda s, w, n, e: sc.Field(0.1, uniform=bare), climate=True)      # (W1's preset)
+            self.assertTrue(sc.climate_snow())
+            self.assertTrue(sc.spec_for_box(*self.box(ALPS)).perm)
+            sc.set_provider(None, climate=True)
+            self.assertFalse(sc.climate_snow())
 
     def test_server_specs(self):
         """earthd's base photo key and render take one spec of write_base's square; the far tiles' of tile_where's."""
@@ -202,8 +221,11 @@ class LookTest(unittest.TestCase):
             self.assertLess(int(wall.sample(xs, ys)[0].max()), 3)
 
     def test_permanent_snow(self):
+        # (a preset's: W1's preset provider, climate=True; with no cover of its own below the snowline)
         frame = geodesy.EnuFrame(*ALPS)
         with winter("real") as sc:
+            sc.set_provider(lambda s, w, n, e: sc.Field(0.1, uniform=sc.Table(((0, 0, 0, 0),), sc.NO_ROAD)),
+                            climate=True)
             sp = sc.spec_for_square(frame, -500, -500, 1000)
             hi = sc.look(sp, frame, -500, -500, 1000, np.full((65, 65), 4200.0), -500, -500, 1000 / 64)
             lo = sc.look(sp, frame, -500, -500, 1000, np.full((65, 65), 1200.0), -500, -500, 1000 / 64)

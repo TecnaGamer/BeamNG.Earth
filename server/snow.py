@@ -40,13 +40,25 @@ WINDOW_WINTER = (240, 6)
 WINDOW_WET = (24, 6)
 VERSION = 1                 # snowstate.v: the message layout
 NATIVE = 624                # earthfast: snow_state / snow_preset / snow_regime
+NATIVE_RELIEF = 644         # earthfast: snow_band_table_relief
 
 CELL_DEG = weather.CELL_DEG     # the forcing's cell (~11 km): the weather's
 CACHE_MAX = 64
 REFETCH_M = 5000.0          # a new state after this far ...
 REZ_M = 25.0                # ... or this much higher / lower (the snow line) ...
-RETRY_S = 300.0             # ... or after a failed fetch
+RETRY_S = 300.0             # ... or after a failed fetch: at most this long, ...
+RETRY_FAST_S = 15.0         # ... from this, doubling (netfetch's background requests: one per 10 s, dropped while a
+                            # teleport loads: Pikes Peak's first state waited the whole 300 s, 2026-11-27)
 TIMEOUT_S = weather.TIMEOUT_S
+# A teleport: the player this far from its last pose AND from the place of the shared table (its state's site): the
+# table is that other place's, dropped until this place's state is in (no snow rather than another place's snow: Valdez,
+# Alaska's deep snow drawn over Pikes Peak for 5 min, 2026-11-27). A rebase or a short hop keeps it.
+NEW_PLACE_M = 50000.0
+# The cell's real relief (our DEM) the band table is cut to (snow.rs band_table_relief): the highest of a grid of
+# samples over the forcing cell at this zoom (512 px tiles: ~150 m pixels at the equator)
+RELIEF_ZOOM = 9
+RELIEF_N = 41               # samples a side (~280 m apart over a 0.1-degree cell)
+RELIEF_MAX = 512            # cells kept
 
 # Open-Meteo hourly name -> (kernel field, scale to the kernel's integer unit)
 FIELDS = (("temperature_2m", "F_T2M", 100), ("dew_point_2m", "F_TD", 100), ("wet_bulb_temperature_2m", "F_TW", 100),
@@ -184,13 +196,62 @@ def preset_message(name, lat, lon, prev_bin=-1, raw=None, prev_banks=None):
 def w2_table(raw, prev_bins):
     """(rows, road shares, new bins) of W2's snowcover.Table from message()'s raw parts: up to 8 rows (z m, cover 0..8,
     depth bin 0..6, age 0..3) lowest first, the bins with 15 % hysteresis from prev_bins; road = the eighths of the
-    ground's cover a P0..P4 road keeps (by its condition)."""
-    rows, road = fast._ef.snow_band_table([list(b) for b in raw["bands"]], list(prev_bins), raw["conds"])
+    ground's cover a P0..P4 road keeps (by its condition). raw["relief"] (the cell's highest ground, m: Service's
+    cell_relief), when there: no row above it (snow.rs band_table_relief: the kernel's bands past the cell's real
+    ground are extrapolated, and the photos hold the top row for every higher mountain in view)."""
+    bands = [list(b) for b in raw["bands"]]
+    relief = raw.get("relief")
+    if relief is None:
+        rows, road = fast._ef.snow_band_table(bands, list(prev_bins), raw["conds"])
+        bins = [int(r[2]) for r in rows]
+    else:
+        fast.require(NATIVE_RELIEF, "the snow bands cut to the relief")
+        rows, road, bins = fast._ef.snow_band_table_relief(bands, list(prev_bins), raw["conds"], int(relief))
+        bins = [int(b) for b in bins]
     rows = tuple(tuple(int(v) for v in r) for r in rows)
     look = raw.get("look")
     if look:        # (W3: the lanes', wheel tracks' and edges' shares per class)
         road = tuple(int(look["shares"][c][z]) for z in range(3) for c in range(5))
-    return rows, tuple(int(v) for v in road), [r[2] for r in rows]
+    return rows, tuple(int(v) for v in road), bins
+
+
+def cell_relief(dem, lat, lon):
+    """The highest ground (m, rounded up) of the forcing cell centred on (lat, lon) in our DEM (dem.Dem): the highest
+    of RELIEF_N x RELIEF_N samples at RELIEF_ZOOM over it (snow.rs RELIEF_MARGIN_M covers the summits the grid
+    misses), or None (no finite height). Blocks (the DEM's tiles): run it in an executor."""
+    h = CELL_DEG / 2.0
+    t = np.linspace(-h, h, RELIEF_N)
+    la, lo = np.meshgrid(np.clip(lat + t, -89.9, 89.9), ((lon + t) + 180.0) % 360.0 - 180.0, indexing="ij")
+    z = np.asarray(dem.sample(la, lo, RELIEF_ZOOM), np.float64)
+    z = z[np.isfinite(z)]
+    return int(math.ceil(float(z.max()))) if z.size else None
+
+
+def _row_text(r):
+    return "none" if r is None else f"{r[0]}/8 D{r[1]} a{r[2]}"
+
+
+def table_change(old, new, old_view, view):
+    """What changed between two shared tables ((rows, road, ice) or None) and the player's own views (the grass): the
+    log line's text (the plan's 14:53:44 re-texture of the whole world while driving down, its cause unlogged)."""
+    parts = []
+    if old is None:
+        parts.append("a first table for this place")
+    else:
+        if old[0] != new[0]:
+            a = {r[0]: r[1:] for r in old[0]}
+            b = {r[0]: r[1:] for r in new[0]}
+            parts.append("bands " + ", ".join(f"{z} m {_row_text(a.get(z))} -> {_row_text(b.get(z))}"
+                                              for z in sorted(set(a) | set(b)) if a.get(z) != b.get(z)))
+        if tuple(old[1]) != tuple(new[1]):
+            parts.append(f"road shares {list(old[1])} -> {list(new[1])}")
+        if old[2] != new[2]:
+            parts.append(f"lake ice {old[2]} -> {new[2]}")
+    ov, nv = old_view or {}, view or {}
+    if (ov.get("cover"), ov.get("depth")) != (nv.get("cover"), nv.get("depth")):
+        parts.append(f"grass (the player's cover) {ov.get('cover')}/8 D{ov.get('depth')} -> "
+                     f"{nv.get('cover')}/8 D{nv.get('depth')}")
+    return "; ".join(parts) or "nothing"
 
 
 def _snowcover():
@@ -202,6 +263,11 @@ def _snowcover():
     return snowcover if getattr(snowcover, "ON", False) and getattr(snowcover, "MODE", "") == "real" else None
 
 
+def _drawn(t):
+    """A shared table (rows, road, ice) as the photos draw it: None when there is none or nothing white in it."""
+    return t if t is not None and (any(r[1] > 0 for r in t[0]) or t[2] > 0) else None
+
+
 class Service:
     """The hourly forcing shared by every connection: fetch (injectable: tests pass a fake) + the (cell, UTC hour)
     cache, one fetch in flight per key. get() blocks: run it in an executor.
@@ -210,38 +276,54 @@ class Service:
     connection's) is the provider's Field, one table everywhere (Open-Meteo stage A fetches the player's cell only;
     the band rows carry the elevation; W5's pack will give tables by cell). The table is quantized (depth bins with
     hysteresis, age classes): a change is a new key for every texture, so commit() tells the server (snow_changed)
-    only when the table itself changed."""
+    only when the table itself changed, and logs what in it did (table_change).
 
-    def __init__(self, fetch=None, mode=None, clock=time.time, retry_s=RETRY_S, cover=None, winter=None):
+    The table belongs to the place its state was computed at (site): a teleport far from it (Tracker: NEW_PLACE_M)
+    drops it (leave) until the new place's state is in, so no place is drawn with another's snow. relief(lat, lon):
+    the highest ground (m) of the forcing cell centred there (earthd: cell_relief over the server's DEM), the band
+    table cut to it (w2_table); None (or failing): the kernel's bands as they are."""
+
+    def __init__(self, fetch=None, mode=None, clock=time.time, retry_s=RETRY_S, cover=None, winter=None, relief=None,
+                 retry_fast_s=RETRY_FAST_S):
         self.fetch = fetch if fetch is not None else weather.fetch_hourly
         self.mode = mode or MODE or "real"
         self.winter = (WINTER or self.mode in PRESETS) if winter is None else bool(winter)
         self.window = WINDOW_WINTER if self.winter else WINDOW_WET
-        self.clock, self.retry_s = clock, retry_s
+        self.clock, self.retry_s, self.retry_fast_s = clock, retry_s, retry_fast_s
+        self.relief = relief
+        self.reliefs = {}           # forcing cell -> its highest ground m (relief's, kept)
         self.cache, self.inflight = {}, {}
         self.lock = threading.Lock()
         self.fetches = 0
-        self.table = None           # (rows, road) of W2's Table, the provider's
+        self.table = None           # (rows, road, ice) of W2's Table, the provider's
+        self.site = None            # (lat, lon) of the state behind the table: its place
         self.view = None            # {mode, cover, depth}: winterlook.lua's ('snow' message)
         self.bins = [-1] * 8
         self.bank_bins = [-1] * 5    # W3's bank bins (hysteresis)
         self.road_snow = None        # W3: the road skins' winter part (snowroad.wear_snow; Server.wear_arg)
         self.ice = -1
         self.table_changes = 0
+        self.places_left = 0
         self.cover = (cover if cover is not None else _snowcover()) if self.winter else None
         if self.cover is not None:
-            self.cover.set_provider(self.provider)
+            # (a preset's provider draws the climatic permanent snow too, as BNE_SNOW's presets; the real state never:
+            # snow only where its forcing put it)
+            self.cover.set_provider(self.provider, climate=self.mode in PRESETS)
 
     def provider(self, south, west, north, east):
         """snowcover's provider: the last table as a uniform Field (None while there is none or no cover in it)."""
-        t = self.table
-        if t is None or not (any(r[1] > 0 for r in t[0]) or t[2] > 0):
+        t = _drawn(self.table)
+        if t is None:
             return None
         try:
             table = self.cover.Table(t[0], t[1], t[2])
         except TypeError:           # (a snowcover before Table.ice)
             table = self.cover.Table(t[0], t[1])
         return self.cover.Field(CELL_DEG, uniform=table)
+
+    def backoff(self, fails):
+        """Seconds before another try after `fails` failed fetches in a row: retry_fast_s doubling, at most retry_s."""
+        return min(float(self.retry_s), float(self.retry_fast_s) * 2.0 ** max(0, int(fails) - 1))
 
     def commit(self, conn, raw):
         """(event loop) The W2 table of a new state: when it differs from the last, the provider's Field changes, the
@@ -257,16 +339,57 @@ class Service:
             self.ice = int(fast._ef.snow_lake_share(int(lake[1]), self.ice))
             g = raw["ground"]
             view = {"mode": "real", "cover": int(g[9]), "depth": int(g[8])}
-            changed = (rows, road, self.ice) != self.table
+            old, old_view = self.table, self.view
+            changed = (rows, road, self.ice) != old
             self.table, self.view = (rows, road, self.ice), view
+            site = raw.get("site")
+            if site is not None:
+                self.site = (float(site[0]), float(site[1]))
         if changed:
             self.table_changes += 1
+            drawn = _drawn(old) != _drawn(self.table)
+            if site is not None:
+                log.info("snow table changed at %.3f, %.3f, %d m (cell ground to %s m)%s: %s", site[0], site[1],
+                         site[2], raw.get("relief"), "" if drawn else " (no snow drawn before or after)",
+                         table_change(old, self.table, old_view, view))
             s = conn.s
-            if hasattr(s, "snow_changed"):
+            if drawn and hasattr(s, "snow_changed"):     # (no snow before and after: nothing drawn changes)
                 s.snow_changed()
             for c in list(getattr(s, "connections", ()) or ()):
                 c.send({"type": "snow", "snow": dict(view)})
         return changed
+
+    def leave(self, conn, lat, lon):
+        """(event loop) A connection's player arrived at (lat, lon) far from its last pose (Tracker: a teleport). When
+        the shared table's place is far from there too (NEW_PLACE_M), the table, its hysteresis, the player's view and
+        the road skins' winter part are dropped until this place's state is in: no snow rather than another place's.
+        What was drawn with snow is drawn again without (Server.snow_changed, 'snow' with no cover; the road tiles:
+        snow_roads_changed). A preset is the same everywhere: kept. True when a table went."""
+        if self.mode in PRESETS:
+            return False
+        with self.lock:
+            site = self.site
+            if self.table is None and self.road_snow is None:
+                self.site = None
+                return False
+            if site is not None and weather.distance_m(site[0], site[1], lat, lon) <= NEW_PLACE_M:
+                return False
+            had = _drawn(self.table) is not None
+            roads = self.road_snow is not None
+            self.table, self.view, self.site = None, None, None
+            self.bins, self.ice, self.bank_bins, self.road_snow = [-1] * 8, -1, [-1] * 5, None
+            self.places_left += 1
+        log.info("snow: a new place at %.3f, %.3f (the last place's table %s): dropped until this one's state is in",
+                 lat, lon, "had snow" if had else "had none")
+        s = conn.s
+        if had:
+            if hasattr(s, "snow_changed"):
+                s.snow_changed()
+            for c in list(getattr(s, "connections", ()) or ()):
+                c.send({"type": "snow", "snow": {"mode": "real", "cover": 0, "depth": 0}})
+        if roads and hasattr(s, "snow_roads_changed"):
+            s.snow_roads_changed()
+        return True
 
     def _commit_roads(self, conn, look):
         """(event loop) W3's look of a new state: the bank bins kept for the hysteresis; when the road skins' winter
@@ -284,6 +407,28 @@ class Service:
 
     def key(self, lat, lon, now):
         return weather.cell(lat, lon) + (int(now // 3600),)
+
+    def relief_at(self, clat, clon):
+        """The highest ground (m) of the forcing cell centred on (clat, clon) (relief's, kept per cell), or None (no
+        relief function, or it failed: asked again next time)."""
+        if self.relief is None:
+            return None
+        k = (clat, clon)
+        with self.lock:
+            if k in self.reliefs:
+                return self.reliefs[k]
+        try:
+            z = self.relief(clat, clon)
+        except Exception as e:      # (the DEM's tiles unavailable: the bands uncut this time)
+            log.info("snow: no relief for the cell at %.2f, %.2f: %s: %s", clat, clon, type(e).__name__, e)
+            return None
+        if z is None:
+            return None
+        with self.lock:
+            self.reliefs[k] = int(z)
+            while len(self.reliefs) > RELIEF_MAX:
+                self.reliefs.pop(next(iter(self.reliefs)))
+        return int(z)
 
     def forcing(self, lat, lon):
         """(records, times, z_cell, cell lat, cell lon) at (lat, lon) for this UTC hour."""
@@ -318,26 +463,38 @@ class Service:
         return hit
 
     def get(self, lat, lon, z_site, prev_bin=-1, raw=None):
-        """The snowstate message at (lat, lon) with the ground z_site m above sea level (raw: see message)."""
+        """The snowstate message at (lat, lon) with the ground z_site m above sea level (raw: see message; it gets the
+        site too, and the cell's relief for the band table)."""
         if self.mode in PRESETS:
             return preset_message(self.mode, lat, lon, prev_bin, raw=raw, prev_banks=self.bank_bins)
         recs, times, z_cell, clat, clon = self.forcing(lat, lon)
         now = self.clock()
         i = hour_index(times, now)
-        return message(recs, i, times[i], clat, clon, z_site, z_cell, regime_at(lat, lon), prev_bin, raw=raw,
-                       winter=self.winter, prev_banks=self.bank_bins)
+        msg = message(recs, i, times[i], clat, clon, z_site, z_cell, regime_at(lat, lon), prev_bin, raw=raw,
+                      winter=self.winter, prev_banks=self.bank_bins)
+        if raw is not None:
+            raw["site"] = (float(lat), float(lon), int(z_site))
+            if self.winter and self.cover is not None:
+                raw["relief"] = self.relief_at(clat, clon)
+        return msg
 
 
 class Tracker:
     """Per connection: when to compute (a new UTC hour, a move of REFETCH_M, a climb of REZ_M), the last message (re-sent
-    on hello) and the depth bin's hysteresis."""
+    on hello), the depth bin's hysteresis, the retry's backoff after failed fetches (Service.backoff) and the place: a
+    jump of more than NEW_PLACE_M between two poses (a teleport), or a first pose far from the table's place, is a new
+    place (Service.leave) whose state is asked for at once; a state still being fetched for the old place is dropped
+    when it comes."""
 
     def __init__(self):
         self.last = None            # (lat, lon, z, hour)
         self.inflight = False
         self.retry_at = 0.0
+        self.fails = 0              # failed fetches in a row
         self.msg = None
         self.bin = -1
+        self.pose = None            # (lat, lon) of the last pose
+        self.epoch = 0              # the place's number: a teleport makes a new one
 
     def due(self, svc, lat, lon, z, now):
         if self.inflight or now < self.retry_at:
@@ -348,6 +505,23 @@ class Tracker:
         return (int(now // 3600) != lh or abs(z - lz) >= REZ_M
                 or weather.distance_m(llat, llon, lat, lon) > REFETCH_M)
 
+    def arrive(self, conn, svc, lat, lon):
+        """The player at (lat, lon): True (the last place's state dropped, this one's asked for at once) when that is
+        more than NEW_PLACE_M from the last pose."""
+        p, self.pose = self.pose, (lat, lon)
+        if p is None:
+            # (this connection's first pose: a game that started elsewhere than the server's last place, "Where you
+            # left off": the table goes when its place is far from here)
+            svc.leave(conn, lat, lon)
+            return False
+        if weather.distance_m(p[0], p[1], lat, lon) <= NEW_PLACE_M:
+            return False
+        self.epoch += 1
+        self.last, self.msg, self.bin = None, None, -1
+        self.inflight, self.retry_at, self.fails = False, 0.0, 0
+        svc.leave(conn, lat, lon)
+        return True
+
     def on_pose(self, conn, frame, x, y, z):
         """earthd Connection._pose_ground: the player at (x, y, z) in its anchor's frame. Nothing without the service
         (BNE_WINTER off)."""
@@ -355,27 +529,36 @@ class Tracker:
         if svc is None:
             return
         lat, lon, h = (float(v) for v in frame.enu_to_geodetic(x, y, z))
+        if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(h)):
+            return
+        self.arrive(conn, svc, lat, lon)
         now = svc.clock()
-        if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(h)) or not self.due(svc, lat, lon, h, now):
+        if not self.due(svc, lat, lon, h, now):
             return
         self.inflight = True
         zq = int(round(h / 10.0)) * 10
+        epoch = self.epoch
 
         async def run():
-            msg, wait, raw = None, 0.0, {}
+            msg, wait, raw, current = None, 0.0, {}, False
             try:
                 msg = await conn.loop.run_in_executor(None, svc.get, lat, lon, zq, self.bin, raw)
             except Exception as e:      # network, HTTP, JSON, the rate limiter: keep the last state
                 wait = getattr(e, "retry_after", 0.0) or 0.0
                 (log.info if isinstance(e, netfetch.Offline) else log.warning)(
-                    "snow state at %.3f, %.3f failed: %s: %s", lat, lon, type(e).__name__, e)
+                    "snow state at %.3f, %.3f failed: %s: %s (again in %.0f s)", lat, lon, type(e).__name__, e,
+                    max(svc.backoff(self.fails + 1), wait))
             finally:
-                self.inflight = False
-                if msg is None:
-                    self.retry_at = svc.clock() + max(svc.retry_s, wait)
-                else:
-                    self.last, self.msg, self.bin = (lat, lon, h, int(now // 3600)), msg, msg["ground"][1]
-            if msg is not None:
+                current = epoch == self.epoch       # (else a teleport since: the old place's state, dropped)
+                if current:
+                    self.inflight = False
+                    if msg is None:
+                        self.fails += 1
+                        self.retry_at = svc.clock() + max(svc.backoff(self.fails), wait)
+                    else:
+                        self.fails = 0
+                        self.last, self.msg, self.bin = (lat, lon, h, int(now // 3600)), msg, msg["ground"][1]
+            if msg is not None and current:
                 conn.send(msg)
                 svc.commit(conn, raw)
         conn.spawn(run())
