@@ -40,6 +40,28 @@ class RoadMeshTest(unittest.TestCase):
                 for surface in (pavement([road, line]), pavement([road], [line])):
                     np.testing.assert_allclose(surface, control)
 
+
+    def test_own_marking_still_ends_at_trimmed_deck_edge(self):
+        road = dict(chunk("road_asphalt_2lane", 12., [(0, 0, 10), (40, 0, 10)]),
+                    fixed=True, deck=True, fid="road")
+        ramp = dict(chunk("road_asphalt_2lane", 12., [(0, 8, 11), (48, 8, 11)]),
+                    fixed=True, deck=True, fid="ramp")
+
+        for coplanar in (False, True):
+            with self.subTest(coplanar=coplanar), patch.object(roadmesh, "_coplanar_decks", return_value=coplanar):
+                with patch.object(roadmesh.shells, "ON", True):
+                    line = dict(chunk("line_white", .15, [(0, 3.7, 10), (50, 3.7, 10)]),
+                                fixed=True, layer="mark", fid="road")
+                    p, t, _, mats, mi = roadmesh.build(FRAME, [road, ramp, line], slope, (0., 0., 0.))
+                    pavement = p[t[(mi == mats.index(road["m"])) & (p[t[:, 0], 2] < 10.5)]]
+                    mark = p[t[mi == mats.index(line["m"])]]
+                    self.assertAlmostEqual(pavement[:, :, 1].max(), 4. - roadmesh.TRIM_GAP_M)
+                    self.assertAlmostEqual(mark[:, :, 0].max(), 40.)
+                    self.assertAlmostEqual(mark[:, :, 1].max(), 3.775)
+
+                    outside = dict(line, n=[[0., 4.25, 10.], [50., 4.25, 10.]])
+                    _, _, _, mats, mi = roadmesh.build(FRAME, [road, ramp, outside], slope, (0., 0., 0.))
+                    self.assertNotIn(line["m"], [mats[i] for i in mi])
     def test_sharp_ground_ribbon_covers_both_arms_without_miter_pinching(self):
         """#740: every interior point of both mapped road rectangles remains covered at an isolated hairpin."""
         for degrees in (121, 130, 150, -130, -150):
@@ -316,6 +338,14 @@ class TrimOverlapsTest(unittest.TestCase):
         np.testing.assert_allclose(m[0][:, 1], 19.4)                            # the far edges as they were
         np.testing.assert_allclose(r[1][:, 1], -5.8)
 
+
+    def test_raw_deck_extents_still_participate_in_trim(self):
+        # roads._deck_reach has physical extents but no material or layer.
+        main, ramp = self.ribbon(10., 9.4, 95., "main"), self.ribbon(0., 5.8, 92.6, "ramp")
+        extents = [(r[:2] + (None, None, None, r[5]), c) for r, c in (main, ramp)]
+        (m, _), (r, _) = roadmesh.trim_overlaps(extents)
+        np.testing.assert_allclose(m[1][:, 1], 5. + roadmesh.TRIM_GAP_M)
+        np.testing.assert_allclose(r[0][:, 1], 5. - roadmesh.TRIM_GAP_M)
     def test_one_surface_or_stacked_kept(self):
         for dz in (0.1, 6.0):            # (one surface at a split; an upper roadway over a lower one)
             main = self.ribbon(10.0, 9.4, 95.0, "main")
