@@ -19,6 +19,7 @@ in a few minutes. No programming needed.
    - Windows: double-click `run_server.bat`. The first time, it runs the installer for you. (Or
      open a terminal in the folder and type `py install.py`.)
    - Linux: open a terminal in the folder and run `python3 install.py`.
+   - macOS (CrossOver): see [MACOS_CROSSOVER.md](MACOS_CROSSOVER.md). Experimental, community-tested.
 
    The installer finds your BeamNG.drive user folder, copies the mod into it, and downloads the
    server's Python packages (a few minutes). If it finds more than one BeamNG folder it asks which
