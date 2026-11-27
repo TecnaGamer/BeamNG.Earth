@@ -72,9 +72,63 @@ pub fn embank_lift<'py>(py: Python<'py>, fine: PyReadonlyArray1<'py, f64>, g12: 
     Ok(PyArray1::from_vec(py, lift(f, g, c, l, r, n, &p)))
 }
 
+/// The lifts along a road (arc m s, ascending) as one embankment: a gap of no lift up to gap_m long between two lifted
+/// samples filled linearly between them (a building or a side road beside a few metres of it: the embankment goes on;
+/// alone, its samples left at their ground made a 7 m notch, 0bff), then limited to rise or fall at most grade per m
+/// along the road (the largest such profile under it: a run's ends taper, never a step). Pure.
+pub fn along(s: &[f64], lift: &[f64], gap_m: f64, grade: f64) -> Vec<f64> {
+    let n = lift.len().min(s.len());
+    let mut out: Vec<f64> = lift[..n].to_vec();
+    let on: Vec<usize> = (0..n).filter(|&i| out[i] > 0.0).collect();
+    for w in on.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if b > a + 1 && s[b] - s[a] <= gap_m {
+            for i in a + 1..b {
+                let u = (s[i] - s[a]) / (s[b] - s[a]);
+                out[i] = out[a] + (out[b] - out[a]) * u;
+            }
+        }
+    }
+    // (the largest profile under it with |slope| <= grade: one pass each way)
+    for i in 1..n {
+        let c = out[i - 1] + grade * (s[i] - s[i - 1]);
+        if out[i] > c { out[i] = c; }
+    }
+    for i in (0..n.saturating_sub(1)).rev() {
+        let c = out[i + 1] + grade * (s[i + 1] - s[i]);
+        if out[i] > c { out[i] = c; }
+    }
+    out
+}
+
+/// embank_along(arc m (n,), lifts (n,), gap_m, grade) -> the lifts as one embankment (see along).
+#[pyfunction]
+pub fn embank_along<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, lift: PyReadonlyArray1<'py, f64>, gap_m: f64,
+                         grade: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (s, l) = (s.as_slice()?, lift.as_slice()?);
+    if s.len() != l.len() {
+        return Err(PyValueError::new_err("embank_along: arrays of one length"));
+    }
+    Ok(PyArray1::from_vec(py, along(s, l, gap_m, grade)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_embankment_goes_on_past_a_short_gap_and_tapers_at_its_ends() {
+        let s: Vec<f64> = (0..11).map(|i| i as f64 * 10.0).collect();
+        let l = vec![0.0, 0.0, 6.0, 6.0, 0.0, 0.0, 6.0, 6.0, 0.0, 0.0, 0.0];
+        // the 30 m gap filled; the ends at most 0.6 per m: kept
+        assert_eq!(along(&s, &l, 30.0, 1.0), vec![0.0, 0.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 0.0, 0.0, 0.0]);
+        // at most 0.2 per m: the ends taper
+        let got = along(&s, &l, 30.0, 0.2);
+        let want = [0.0, 0.0, 2.0, 4.0, 6.0, 6.0, 4.0, 2.0, 0.0, 0.0, 0.0];
+        assert!(got.iter().zip(want.iter()).all(|(a, b)| (a - b).abs() < 1e-9), "{:?}", got);
+        // a longer gap stays
+        assert_eq!(along(&s, &l, 15.0, 1.0)[4], 0.0);
+    }
 
     #[test]
     fn an_embankment_on_the_crest_is_given_back() {

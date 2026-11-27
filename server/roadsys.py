@@ -911,6 +911,9 @@ DECK_HALF_MIN_M = 2.0       # m: a deck part's half width at least, for the ends
 # RAMP_CLEAR_M more: the ramp ends that far short of a junction, so the roads there (and their own pins) keep theirs.
 KEEP_ON = SURFACE
 KEPT_KERNEL = 643
+# (the roads built to a design grade: a track's or a path's profile follows its ground, and a 12 m track deck kept at
+# its profile over a gully stood 15 m off it, Stelvio)
+KEEP_CLASSES = ("motorway", "trunk", "primary", "secondary", "tertiary")
 KEEP_SHORT_M = 60.0
 KEEP_DZ_M = 0.75
 RAMP_MIN_M = 20.0
@@ -1055,6 +1058,9 @@ def _keep_ends(store, sf, ks, parts_in, plist, ep, gu):
     runs, appr = [], {}
     for i, k in enumerate(ks):
         r = [float("nan"), float("nan")]
+        if getattr(parts_in[k][0], "cls", None) not in KEEP_CLASSES:
+            runs.append((r[0], r[1]))
+            continue
         for e in (0, 1):
             g = float(gu[2 * i + e])
             if np.isfinite(g) and abs(g - zend[2 * i + e]) > KEEP_DZ_M:

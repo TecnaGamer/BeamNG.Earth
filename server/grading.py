@@ -763,6 +763,8 @@ EMBANK_CREST_MIN = 1.0      # ... its centre over its sides' mean by this (nothi
 EMBANK_CREST_FULL = 2.0
 EMBANK_BUILDING_M = 30.0    # m: no building wall within this of the sample (a town's blocks, never an embankment)
 EMBANK_MIN_LIFT = 0.05
+EMBANK_GAP_M = 60.0         # m: a gap of no lift this long at most between lifted samples is filled (embank_along) ...
+EMBANK_TAPER = 0.04         # ... and the lift rises or falls at most this per m along the road
 _EMBANK_DIRS = np.array([[1.0, 0.0], [0.7071067811865476, 0.7071067811865476], [0.0, 1.0],
                          [-0.7071067811865476, 0.7071067811865476], [-1.0, 0.0],
                          [-0.7071067811865476, -0.7071067811865476], [0.0, -1.0],
@@ -3637,11 +3639,16 @@ class _Planner:
                                                    np.ascontiguousarray(rs[k:]), np.ascontiguousarray(near, bool),
                                                    (EMBANK_MATCH_M, EMBANK_CUT_MIN, EMBANK_CREST_MIN, EMBANK_CREST_FULL,
                                                     EMBANK_MAX_M)), np.float64)
-            out = np.full(len(xy), np.nan)
-            on = lift > EMBANK_MIN_LIFT
+            # (along the road as one embankment: short gaps filled, its ends tapered: earthfast embank_along)
+            full = np.zeros(len(xy))
+            full[idx] = lift
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+            full = np.asarray(fast._ef.embank_along(np.ascontiguousarray(s), full, EMBANK_GAP_M, EMBANK_TAPER), np.float64)
+            on = full > EMBANK_MIN_LIFT
             if not on.any():
                 return None
-            out[idx[on]] = fine[idx[on]] + lift[on]
+            out = np.full(len(xy), np.nan)
+            out[on] = fine[on] + full[on]
             return out
         return emb
 
