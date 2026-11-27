@@ -1,7 +1,8 @@
 # Running BeamNG.Earth on macOS with CrossOver
 
-> **Status: community-tested, experimental.** Verified on an Apple Silicon Mac with CrossOver (Wine 11.0),
-> BeamNG.drive 0.40.6.0 from Steam, and BeamNG.Earth 1.10.1-beta. Intel Macs are untested.
+> **Status: community-tested, experimental.** Verified on an Apple M1 Pro Mac (macOS 27.0.1) with
+> CrossOver 26.3 (Wine 11.0), BeamNG.drive 0.40.6.0 from Steam, and BeamNG.Earth 1.10.1-beta.
+> Intel Macs are untested.
 
 ## How it works
 
