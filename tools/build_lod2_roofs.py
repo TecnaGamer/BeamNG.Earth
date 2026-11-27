@@ -2,7 +2,7 @@
 """Measured roofs: the shards server/lod2roofs.py reads, from open national and state LoD2 building models.
 
 Each source's tiles are fetched one at a time, reduced to one small row per building and thrown away, so the ~600 GB of
-CityGML never lie on disk at once (rows: ~20 bytes; shards: ~6 bytes a building).
+CityGML never lie on disk at once (rows: ~20 bytes; shards: ~7 bytes a building).
 
   python tools/build_lod2_roofs.py fetch HE [workers]    resumable: <root>/out/HE.done, HE.csv.gz
   python tools/build_lod2_roofs.py shards DIR HE BY ...  <DIR>/<x>/<y>.npz and manifest.json
@@ -52,7 +52,13 @@ OUT = os.path.join(ROOT, "out")
 TMP = os.path.join(ROOT, "tmp")
 ZOOM = 10
 CHUNK = 1 << 20
-RECORD = np.dtype([("lat", "<i4"), ("lon", "<i4"), ("code", "<i2"), ("height", "<u2"), ("roof", "<u2")])
+# ridge: the azimuth of the roof's ridge in whole degrees 0..179 from grid north (ridge()), NO_RIDGE none (a flat roof,
+# a pyramid). It was in the rows from the start but left out of the shards, so every roof's ridge followed its
+# footprint's long axis (server/lod2roofs.py, buildings.ridge_frame). The rows already fetched have it: `shards` again
+# is enough, no new download.
+RECORD = np.dtype([("lat", "<i4"), ("lon", "<i4"), ("code", "<i2"), ("height", "<u2"), ("roof", "<u2"),
+                   ("ridge", "u1")])
+NO_RIDGE = 255
 
 
 FIELDS = ("x", "y", "epsg", "area", "roof", "height", "z0", "zr", "zt", "ridge", "part")
@@ -570,7 +576,7 @@ def num(s):
 
 
 def read(state):
-    """(epsg, rows) of a state, a chunk at a time: (x, y, code, height, roof height)."""
+    """(epsg, rows) of a state, a chunk at a time: (x, y, code, height, roof height, ridge degrees or NO_RIDGE)."""
     out = {}
     for x, y, epsg, area, roof, height, z0, zr, zt, ridge, part in rows(state):
         try:
@@ -585,7 +591,8 @@ def read(state):
         if not 0.5 < h < 400:
             continue
         v = out.setdefault(int(epsg or 0), [])
-        v.append((float(x), float(y), code, h, rh))
+        az = num(ridge)
+        v.append((float(x), float(y), code, h, rh, round(az) % 180 if math.isfinite(az) else NO_RIDGE))
         if len(v) >= CHUNK:
             yield int(epsg or 0), v
             out[int(epsg or 0)] = []
@@ -606,6 +613,7 @@ def spool(tmp, epsg, v):
     r["lat"], r["lon"] = np.round(lat * 1e6), np.round(lon * 1e6)
     r["code"], r["height"] = a[:, 2], np.round(a[:, 3] * 10)
     r["roof"] = np.round(np.minimum(a[:, 4], 200) * 10)
+    r["ridge"] = a[:, 5]
     tx, ty = tiles(lat, lon)
     t = tx.astype(np.int64) * (1 << ZOOM) + ty
     order = np.argsort(t, kind="stable")

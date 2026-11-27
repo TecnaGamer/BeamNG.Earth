@@ -19,12 +19,16 @@ LAT, LON = 50.9, 9.1
 
 
 def shard(rows):
-    """npz bytes of [(lat, lon, code, height m, roof m)]."""
+    """npz bytes of [(lat, lon, code, height m, roof m)], or [(..., ridge degrees)] (lr.NO_RIDGE: none): a shard
+    without the ridge column is one built before the ridge was kept."""
     a = np.array(rows, np.float64)
     buf = io.BytesIO()
-    np.savez_compressed(buf, lat=np.round(a[:, 0] * 1e6).astype(np.int32), lon=np.round(a[:, 1] * 1e6).astype(np.int32),
-                        code=a[:, 2].astype(np.int16), height=np.round(a[:, 3] * 10).astype(np.uint16),
-                        roof=np.round(a[:, 4] * 10).astype(np.uint16))
+    cols = dict(lat=np.round(a[:, 0] * 1e6).astype(np.int32), lon=np.round(a[:, 1] * 1e6).astype(np.int32),
+                code=a[:, 2].astype(np.int16), height=np.round(a[:, 3] * 10).astype(np.uint16),
+                roof=np.round(a[:, 4] * 10).astype(np.uint16))
+    if a.shape[1] > 5:
+        cols["ridge"] = a[:, 5].astype(np.uint8)
+    np.savez_compressed(buf, **cols)
     return buf.getvalue()
 
 
@@ -92,6 +96,70 @@ class FillTest(Base):
         at = rec.fill({"class": "house", "roof_shape": None, "height": None, "seed_id": "a"}, e, n)
         spec = bld.plan(np.stack([e, n], 1), at)
         self.assertEqual(spec.roof, "mansard")
+
+
+def long_ring(cx, cy, along_east, half_long=8.0, half_short=4.0):
+    """A 16 x 8 m footprint, its long side east-west (along_east) or north-south."""
+    hx, hy = (half_long, half_short) if along_east else (half_short, half_long)
+    return np.array([cx - hx, cx + hx, cx + hx, cx - hx]), np.array([cy - hy, cy - hy, cy + hy, cy + hy])
+
+
+class RidgeTest(Base):
+    """The measured ridge says which way a pitched roof runs (2026-11-27: on an LGL LoD2 tile 641 of 2174 pitched roofs
+    run across their footprint's long axis; the ridge was measured by the build tool but left out of the shards)."""
+
+    def spec(self, rows, along_east=True, **mapped):
+        rec, _ = self.records(rows)
+        e, n = long_ring(0, 0, along_east)
+        at = rec.fill(dict({"class": "house", "roof_shape": None, "height": None, "seed_id": "a"}, **mapped), e, n)
+        return at, bld.plan(np.stack([e, n], 1), at)
+
+    def test_a_ridge_across_the_long_side_turns_the_roof(self):
+        at, spec = self.spec([(LAT, LON, 3100, 9.0, 3.0, 0)])          # (the ridge north-south, the house east-west)
+        self.assertEqual(at["roof_ridge"], 0.0)
+        self.assertTrue(spec.across)
+        _, spec = self.spec([(LAT, LON, 3100, 9.0, 3.0, 90)])           # (along it)
+        self.assertFalse(spec.across)
+        _, spec = self.spec([(LAT, LON, 3100, 9.0, 3.0, 90)], along_east=False)
+        self.assertTrue(spec.across)
+
+    def test_a_shard_without_the_ridge_draws_as_before(self):
+        at, spec = self.spec([(LAT, LON, 3100, 9.0, 3.0)])
+        self.assertNotIn("roof_ridge", at)
+        self.assertFalse(spec.across)
+        at, spec = self.spec([(LAT, LON, 3100, 9.0, 3.0, lr.NO_RIDGE)])
+        self.assertNotIn("roof_ridge", at)
+        self.assertFalse(spec.across)
+
+    def test_the_maps_orientation_and_direction_win(self):
+        _, spec = self.spec([(LAT, LON, 3100, 9.0, 3.0, 0)], roof_orientation="along")
+        self.assertFalse(spec.across)
+        # (a roof:direction 0: the slopes face north, so the ridge runs east-west, along this house)
+        _, spec = self.spec([(LAT, LON, 3100, 9.0, 3.0, 0)], roof_direction=0.0)
+        self.assertFalse(spec.across)
+
+    def test_records_whose_ridges_disagree_give_none(self):
+        d = 2e-5
+        at, _ = self.spec([(LAT, LON, 3100, 9.0, 3.0, 0), (LAT + d, LON, 3100, 7.0, 3.0, 85)])
+        self.assertNotIn("roof_ridge", at)              # (a cross wing: the tallest part's ridge would turn it all)
+        at, _ = self.spec([(LAT, LON, 3100, 9.0, 3.0, 0), (LAT + d, LON, 3100, 7.0, 3.0, 175)])
+        self.assertAlmostEqual(at["roof_ridge"], 0.0)   # (a terrace: 0 and 175 degrees are 5 apart)
+        at, _ = self.spec([(LAT, LON, 3100, 9.0, 3.0, 0), (LAT + d, LON, 1000, 7.0, 0.0, lr.NO_RIDGE)])
+        self.assertAlmostEqual(at["roof_ridge"], 0.0)   # (a flat annex says nothing about the ridge)
+
+    def test_a_flat_tallest_record_gives_no_ridge(self):
+        d = 2e-5
+        at, _ = self.spec([(LAT, LON, 1000, 12.0, 0.0, lr.NO_RIDGE), (LAT + d, LON, 3100, 7.0, 3.0, 0)])
+        self.assertNotIn("roof_ridge", at)
+
+    def test_ridge_frame_alone(self):
+        e, n = long_ring(0, 0, True)
+        ring = np.stack([e, n], 1)
+        self.assertEqual(bld.ridge_frame(ring, "gabled", None, None, 10.0), (True, None))
+        self.assertEqual(bld.ridge_frame(ring, "gabled", None, None, 100.0), (False, None))
+        self.assertEqual(bld.ridge_frame(ring, "gabled", "", float("nan"), None), (False, None))
+        self.assertEqual(bld.ridge_frame(ring, "flat", None, None, 10.0), (False, None))
+        self.assertEqual(bld.ridge_frame(ring, "gabled", "across", None, 100.0), (True, None))
 
 
 class ShardTest(Base):

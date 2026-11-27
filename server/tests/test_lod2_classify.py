@@ -163,10 +163,36 @@ class BuilderTest(unittest.TestCase):
         self.assertAlmostEqual(r["y"], 6584004.0, 1)
         self.assertEqual(r["height"], 9.0)
         self.assertAlmostEqual(r["zt"] - r["zr"], 3.0, 2)
+        self.assertEqual(r["ridge"], 90)                    # (the ridge runs east-west: along the 10 m side)
 
     def test_foundations_and_ruins_are_left_out(self):
         from lxml import etree
         self.assertIsNone(self.B.row(etree.fromstring(self.gml("30")), 3301, False))
+
+    def test_the_shards_keep_each_roofs_ridge(self):
+        """The rows had the ridge from the start, the shards left it out: every roof's ridge then followed its
+        footprint (2026-11-27). A row without one (a flat roof) is NO_RIDGE; 179.6 degrees is 0."""
+        import csv, gzip, os, tempfile
+        rows = [(500000.0, 5300000.0, "3100", 9.0, 92.0), (500100.0, 5300000.0, "1000", 6.0, ""),
+                (500200.0, 5300000.0, "3100", 8.0, 179.6)]
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "out"))
+            with gzip.open(os.path.join(root, "out", "XX.csv.gz"), "wt", newline="") as f:
+                w = csv.writer(f)
+                for x, y, code, h, az in rows:
+                    w.writerow([x, y, 25832, 120.0, code, h, 300.0, 305.0, 308.0, az, 0])
+            old, self.B.ROOT = self.B.ROOT, root
+            try:
+                dest = os.path.join(root, "shards")
+                self.B.build(dest, ["XX"])
+            finally:
+                self.B.ROOT = old
+            shards = [os.path.join(dp, n) for dp, _, ns in os.walk(dest) for n in ns if n.endswith(".npz")]
+            self.assertEqual(len(shards), 1)
+            with np.load(shards[0]) as z:
+                order = np.argsort(z["lon"])
+                self.assertEqual(z["ridge"][order].tolist(), [92, self.B.NO_RIDGE, 0])
+                self.assertEqual(z["code"][order].tolist(), [3100, 1000, 3100])
 
     def test_a_point_inside_a_u_shaped_footprint(self):
         u = np.array([(0, 0), (30, 0), (30, 20), (20, 20), (20, 5), (10, 5), (10, 20), (0, 20)], float)
