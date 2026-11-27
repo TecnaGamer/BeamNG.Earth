@@ -72,8 +72,9 @@ class Laws:
     def chain(self, samples, p):
         """The kernel's chain dict of path p (carriageways.solve)."""
         sl = samples.of(p)
+        ds = np.maximum(np.diff(samples.s[sl]), 1e-3)
         return dict(t=self.t[sl], w=self.w[sl], lo=self.lo[sl], hi=self.hi[sl], grade=float(self.grade[p]),
-                    K=float(self.K[p]), lam=float(self.lam[p]), step=max(float(samples.h[p]), 1e-3), length=0.0,
+                    K=float(self.K[p]), lam=float(self.lam[p]), step=max(float(samples.h[p]), 1e-3), length=0.0, ds=ds,
                     soft_grade=float(self.soft_grade[p]), w_grade=float(self.w_grade[p]),
                     soft_K=float(self.soft_K[p]), w_curve=float(self.w_curve[p]), w_bound=W_BOUND)
 
@@ -121,6 +122,29 @@ def member_law(m, urban=False):
     return float(_gsh.max_grade(m)), float(_gsh.curve_radius(m)), float(_gsh.speed(m))
 
 
+DRIVE_GRADE = 0.15          # the steepest a major road is driven (tests/drivability.py: grade)
+DRIVE_LIFT_G = 0.20         # the vertical acceleration a crest or a dip gives at the class's speed, at most (lift_g)
+DRIVE_KMH = {"motorway": 130.0, "trunk": 100.0, "primary": 90.0, "secondary": 80.0}   # (drivability.SPEED_MS)
+
+
+def drive_ceiling(network, path):
+    """(grade, vertical curve radius m) a major road's path may not go past, whatever its comfortable laws: the drivable
+    ones at its fastest class's driving speed (DRIVE_KMH, not its limit: a car drives a city's 50 km/h secondary at 80);
+    (None, None) for others (a link, a street, a track)."""
+    best = None
+    for i in path.members():
+        m = network.members[i]
+        if _network.family(m.kind) != "road":
+            continue
+        v = DRIVE_KMH.get(str(m.cls or ""))
+        if v is not None and (best is None or v > best):
+            best = v
+    if best is None:
+        return None, None
+    v = best / 3.6
+    return DRIVE_GRADE, v * v / (DRIVE_LIFT_G * 9.81)
+
+
 def path_law(network, path, urban=False):
     """member_law of the path's fastest member (its strictest)."""
     return max((member_law(network.members[i], urban) for i in path.members()), key=lambda law: law[2])
@@ -160,6 +184,12 @@ def lay(network, samples, ground):
         grade[p] = g * CEIL_GRADE_X if CEIL_GRADE_X else _cw.NO_GRADE_CEILING        # (0: no ceiling, the cost alone)
         soft_K[p], w_curve[p] = rad / 100.0, W_CURVE * x
         K[p] = rad / 100.0 / CEIL_CURVE_X if CEIL_CURVE_X else _cw.NO_CURVE_CEILING
+        dg, dr = drive_ceiling(network, path)
+        if dg is not None:          # (no ceiling past what a car drives: the drivable laws)
+            grade[p] = min(grade[p], max(dg, soft_grade[p]))
+            K[p] = max(K[p], dr / 100.0)
+            if soft_K[p] < K[p]:
+                soft_K[p] = K[p]    # (the comfortable curve no sharper than the ceiling: the ceiling alone)
         sl = samples.of(p)
         mem = samples.member[sl]
         kk = kind[mem]
@@ -175,6 +205,13 @@ def lay(network, samples, ground):
         tun = away & (kk == "tunnel")
         if tun.any():
             hi[sl.start + np.flatnonzero(tun)] = t[sl][tun] - _gsh.COVER_M - _gsh.HEADROOM_M
+        free = w[sl] == 0.0
+        if free.any() and not free.all():
+            # (the kernel draws every sample to its t at W_MIN at least: a tunnel's to the mountain over it, a deck's
+            # to the valley under it. Casagranda's road climbed 55 m into its tunnel at the soft grade, its bridge 25 m
+            # over the valley. A sample off the ground is drawn to the line between the ground on either side.)
+            s = samples.s[sl]
+            t[sl.start + np.flatnonzero(free)] = np.interp(s[free], s[~free], t[sl][~free])
     return Laws(soft_grade, grade, w_grade, soft_K, K, w_curve, lam, kmh, urban, t, w, lo, hi)
 
 

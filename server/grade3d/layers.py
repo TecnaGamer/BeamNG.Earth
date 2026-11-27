@@ -13,7 +13,9 @@ clearance short costs W_CLEAR per m^2; one the levels alone ask near an end of a
 end of the ramp's path, not of a member a path goes on from), W_DOUBT, and so does one by the kinds near an end of a path
 where the map also joins the two paths within JOINED_NEAR_M (a street ending where it meets the ramp off the deck it is
 mapped under: the map has it both meet the deck and pass under it).
-At one level the two meet: their heights equal at the crossing, W_GRADE per m^2 of a step there."""
+At one level the two meet: their heights equal at the crossing, W_GRADE per m^2 of a step there; two tunnels at one
+level do not (why "apart", weight 0: a road tunnel and a track's crossing in a mountain pass far apart, the one under
+the other, and the map does not say which; Casagranda's road climbed 60 m in its tunnel to meet a track's)."""
 from dataclasses import dataclass
 
 import numpy as np
@@ -30,7 +32,7 @@ JOINED_NEAR_M = 40.0    # ... and one by the kinds too, where the map joins the 
 @dataclass(frozen=True)
 class Layer:
     """A crossing of members a and b (at sa, sb; at q): upper "a", "b" or None (at grade); need (m) the upper's road
-    over the lower's at least (0 at grade); why "kinds", "levels" or "grade"; weight: what a metre short (or of step)
+    over the lower's at least (0 at grade); why "kinds", "levels", "grade" or "apart" (no coupling); weight: what a metre short (or of step)
     squared costs."""
     a: int
     sa: float
@@ -81,6 +83,8 @@ def layer(network, a, sa, b, sb, q, joins=None):
     net = network.net
     ma, mb = net.m[a], net.m[b]
     up = _gsh._over(ma, mb)
+    if up is None and ma.kind == "tunnel" and mb.kind == "tunnel":
+        return Layer(a, sa, b, sb, q, None, 0.0, "apart", 0.0)     # (two tunnels: one under the other, which unknown)
     if up is None:
         return Layer(a, sa, b, sb, q, None, 0.0, "grade", W_GRADE)
     by_kind = _gsh.LEVEL_BAND[ma.kind] != _gsh.LEVEL_BAND[mb.kind]

@@ -62,7 +62,7 @@ def measure(problem, z, doubt_w=None):
             bound = max(bound, float(out.max()))
             n_bound += int((out > 0.05).sum())
         if len(zp) >= 2 and c["step"] > 0:
-            g = np.abs(np.diff(zp)) / c["step"]
+            g = np.abs(np.diff(zp)) / (np.asarray(c["ds"]) if c.get("ds") is not None else c["step"])
             gx.append(float(max(0.0, (g - c["grade"]).max())))
             sgx.append(float(np.percentile(np.maximum(0.0, g - c["soft_grade"]), 99)))
     moved = np.concatenate(moved) if moved else np.zeros(1)
@@ -123,15 +123,45 @@ class Block:
     idx: np.ndarray
 
 
+def block_of(problem, samples, c0, c1, reach, path_of=None):
+    """The Block of core c0..c1 ((2,) each; an infinite side has no seam): a path's samples within reach of the core are
+    its runs (a path leaving and coming back two), a coupling is the block's where both its samples are. None when no
+    sample is in reach."""
+    xy = samples.xy
+    if path_of is None:
+        path_of = np.repeat(np.arange(len(samples.h)), np.diff(samples.off))
+    k = np.flatnonzero(((xy >= np.asarray(c0) - reach) & (xy <= np.asarray(c1) + reach)).all(1))
+    if not len(k):
+        return None
+    runs, idx = [], []
+    run_of = np.full(len(xy), -1, np.int64)
+    pos_in = np.zeros(len(xy), np.int64)
+    brk = np.flatnonzero((np.diff(k) != 1) | (np.diff(path_of[k]) != 0)) + 1
+    for seg in np.split(k, brk):
+        p = int(path_of[seg[0]])
+        run_of[seg] = len(runs)
+        pos_in[seg] = np.arange(len(seg))
+        runs.append((p, int(seg[0] - samples.off[p]), int(seg[-1] - samples.off[p])))
+        idx.append(seg)
+    cps, soft = [], []
+    for c, w in zip(problem.couplings, problem.soft):
+        n_a = samples.off[c[0] + 1] - samples.off[c[0]]
+        n_b = samples.off[c[2] + 1] - samples.off[c[2]]
+        fa, fb = samples.off[c[0]] + c[1] % n_a, samples.off[c[2]] + c[3] % n_b
+        if run_of[fa] < 0 or run_of[fb] < 0:
+            continue
+        cps.append((int(run_of[fa]), int(pos_in[fa]), int(run_of[fb]), int(pos_in[fb])) + tuple(c[4:]))
+        soft.append(w)
+    return Block((np.asarray(c0, np.float64), np.asarray(c1, np.float64)), runs, cps, soft, np.concatenate(idx))
+
+
 def blocks(problem, samples, block_m=BLOCK_M, ramp_m=RAMP_M, margin_m=MARGIN_M):
-    """[Block] of the problem over its samples' extent: a path's samples within the block's reach are its runs (a path
-    leaving and coming back two), a coupling is the block's where both its samples are."""
+    """[Block] of the problem over its samples' extent, cores of block_m from the samples' least corner (block_of)."""
     xy = samples.xy
     if not len(xy):
         return []
     lo, hi = xy.min(0), xy.max(0)
     nx, ny = (max(1, int(np.ceil((hi[k] - lo[k]) / block_m))) for k in (0, 1))
-    reach = ramp_m + margin_m
     path_of = np.repeat(np.arange(len(samples.h)), np.diff(samples.off))
     out = []
     for bx in range(nx):
@@ -141,30 +171,26 @@ def blocks(problem, samples, block_m=BLOCK_M, ramp_m=RAMP_M, margin_m=MARGIN_M):
             # (the area's own edges are no seam: an outer core reaches past them, its weight 1 to the last sample)
             c0 = np.where([bx == 0, by == 0], -np.inf, c0)
             c1 = np.where([bx == nx - 1, by == ny - 1], np.inf, c1)
-            k = np.flatnonzero(((xy >= c0 - reach) & (xy <= c1 + reach)).all(1))
-            if not len(k):
-                continue
-            runs, idx = [], []
-            run_of = np.full(len(xy), -1, np.int64)
-            pos_in = np.zeros(len(xy), np.int64)
-            brk = np.flatnonzero((np.diff(k) != 1) | (np.diff(path_of[k]) != 0)) + 1
-            for seg in np.split(k, brk):
-                p = int(path_of[seg[0]])
-                run_of[seg] = len(runs)
-                pos_in[seg] = np.arange(len(seg))
-                runs.append((p, int(seg[0] - samples.off[p]), int(seg[-1] - samples.off[p])))
-                idx.append(seg)
-            cps, soft = [], []
-            for c, w in zip(problem.couplings, problem.soft):
-                n_a = samples.off[c[0] + 1] - samples.off[c[0]]
-                n_b = samples.off[c[2] + 1] - samples.off[c[2]]
-                fa, fb = samples.off[c[0]] + c[1] % n_a, samples.off[c[2]] + c[3] % n_b
-                if run_of[fa] < 0 or run_of[fb] < 0:
-                    continue
-                cps.append((int(run_of[fa]), int(pos_in[fa]), int(run_of[fb]), int(pos_in[fb])) + tuple(c[4:]))
-                soft.append(w)
-            out.append(Block((c0, c1), runs, cps, soft, np.concatenate(idx)))
+            b_ = block_of(problem, samples, c0, c1, ramp_m + margin_m, path_of)
+            if b_ is not None:
+                out.append(b_)
     return out
+
+
+def solve_block(problem, b, rounds=_cw.ROUNDS):
+    """(z (len(b.idx),), the kernel's diagnostics, seconds) of block b of the problem."""
+    chains = []
+    for p, a, e in b.runs:
+        ch = dict(problem.chains[p])
+        for key in ("t", "w", "lo", "hi"):
+            ch[key] = np.asarray(ch[key])[a:e + 1]
+        if ch.get("ds") is not None:
+            ch["ds"] = np.asarray(ch["ds"])[a:e]
+        chains.append(ch)
+    d = {}
+    s0 = time.perf_counter()
+    zs = _cw.solve(chains, b.couplings, rounds=rounds, diagnostics=d, soft=b.soft if b.couplings else None)
+    return np.concatenate(zs), d, time.perf_counter() - s0
 
 
 def blend_weight(xy, core, ramp_m=RAMP_M):
@@ -187,16 +213,7 @@ def solve_blocks(problem, samples, block_m=BLOCK_M, ramp_m=RAMP_M, margin_m=MARG
     bl = blocks(problem, samples, block_m, ramp_m, margin_m)
 
     def one(b):
-        chains = []
-        for p, a, e in b.runs:
-            ch = dict(problem.chains[p])
-            for key in ("t", "w", "lo", "hi"):
-                ch[key] = np.asarray(ch[key])[a:e + 1]
-            chains.append(ch)
-        d = {}
-        s0 = time.perf_counter()
-        zs = _cw.solve(chains, b.couplings, rounds=rounds, diagnostics=d, soft=b.soft if b.couplings else None)
-        return np.concatenate(zs), d, time.perf_counter() - s0
+        return solve_block(problem, b, rounds)
     n = int(workers or max(1, min(WORKERS, (os.cpu_count() or 2) // 2)))
     with ThreadPoolExecutor(n) as ex:
         got = list(ex.map(one, bl))

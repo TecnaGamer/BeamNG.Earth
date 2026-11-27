@@ -110,6 +110,42 @@ def main(argv=None):
     lo, hi = c - a.size / 2.0, c + a.size / 2.0
     t = clock("setup", "planner", t, at="%.5f,%.5f" % at, size="%.0f m" % a.size)
     steps = [s for s in a.steps.split(",") if s]
+    if "region" in steps:
+        # (the build's way: the junction's cell and its east neighbour, each from the blocks round it; where both have a
+        # road, the heights each gives its points)
+        from grade3d import region
+        import grading
+        home = mapcells.cell_of(*at)
+        east = mapcells.CellKey(home.z, home.x + 1, home.y)
+        profs = {}
+        for cell in (home, east):
+            nb = len(planner.__dict__.get("_grade3d_blocks", {}))
+            profs[cell] = region.cell_profiles(planner, cell)
+            t = clock("region", "cell %s" % (cell,), t, fids=len(profs[cell]),
+                      blocks_solved=len(planner.__dict__.get("_grade3d_blocks", {})) - nb,
+                      **{k: v for k, v in outputs.summary(profs[cell]).items() if k != "fids"})
+        for b_ in sorted(planner.__dict__.get("_grade3d_blocks", {}).values(), key=lambda b_: -b_.seconds)[:a.slowest]:
+            print("  block %s  %.1f s  %s" % (np.round(b_.core[0]).tolist(), b_.seconds, b_.diagnostics))
+
+        class _Region:
+            frame = planner.frame
+
+            def __init__(self, prof):
+                self.prof = prof
+
+            def _shape_region(self, _home):
+                return self.prof
+        diffs = []
+        for fid, lst in profs[home].items():
+            if fid not in profs[east]:
+                continue
+            for xy, zz, mode in lst:
+                zb, _md = grading._Planner._shape_at(_Region(profs[east]), xy, xy, fid, (mode,))
+                ok = np.isfinite(zb)
+                diffs.append(np.abs(zb[ok] - zz[ok]))
+        dd = np.concatenate(diffs) if diffs else np.zeros(1)
+        t = clock("region", "seam", t, shared_points=len(dd), max_m="%.3f" % dd.max(),
+                  p99_m="%.3f" % np.percentile(dd, 99))
     if "network" in steps:
         members = network.area(planner, lo, hi)
         t = clock("network", "area (read)", t, members=len(members), points=sum(len(m.line) for m in members))

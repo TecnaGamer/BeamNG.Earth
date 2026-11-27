@@ -125,3 +125,24 @@ def test_problem_couples_joins_hard_and_layers_soft():
         assert (c[4] == "eq") == (what == "join") and (w == 0.0) == (what == "join")
     clear = [c for c, (what, _k) in zip(pr.couplings, pr.why) if what == "clear"]
     assert len(clear) >= 3 and len({c[3] for c in clear}) >= 3     # (the lower held along the deck's width)
+
+
+def test_carriageways_side_by_side_meet_and_a_bridge_ramp_beside_its_street_does_not():
+    # (two roads 6 m apart, 4 m half widths: their carriageways overlap; the ground under one 1.5 m higher)
+    ms = [_m("a", _line(0, 0, 400, 0, 41)), _m("b", _line(0, 6, 400, 6, 41))]
+    net, sm, _lw, pr, sol, got = _run(ms, lambda xy: np.where(xy[:, 1] > 3, 11.5, 10.0))
+    za, zb = _z(net, sm, sol, "a", x=200.0), _z(net, sm, sol, "b", x=200.0)
+    assert abs(za - zb) < 0.1, (za, zb)
+    assert any(w == "beside" for w, _k in pr.why)
+    # (a bridge over a street, its west ramp beside the street for 100 m: no batter between them near the crossing)
+    linenet.reset()
+    ms = [_m("w", np.array([[-300.0, 20.0], [-60.0, 20.0]])), _m("deck", _line(-60, 20, 60, 20, 13), "deck", level=1.0),
+          _m("e", _line(60, 20, 300, 20)), _m("st", _line(0, -300, 0, 300, 61)),
+          _m("side", _line(-150, 14, -20, 14, 14))]
+    net = network.build(ms)
+    sm = samples.sample(net, layers.order(net))
+    pairs = problem.beside(net, sm)
+    names = {(str(net.members[sm.member[sm.off[p] + i]].key), str(net.members[sm.member[sm.off[r] + j]].key))
+             for p, i, r, j, _g in pairs}
+    assert ("w", "side") in names or ("side", "w") in names           # (two streets side by side: a batter)
+    assert not any("st" in n for n in names)                          # (the street the bridge crosses: its clearance)

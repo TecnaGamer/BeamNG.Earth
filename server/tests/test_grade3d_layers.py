@@ -81,3 +81,10 @@ def test_an_order_by_the_kinds_is_doubted_where_the_map_also_joins_them_there():
     net = network.build(ms)
     (x,) = layers.order(net)
     assert x.why == "kinds" and x.weight == layers.W_CLEAR
+
+
+def test_two_tunnels_at_one_level_are_left_apart():
+    ms = [_m("road", _line(-200, 0, 200, 0), "tunnel", level=-1.0), _m("track", _line(0, -200, 0, 200), "tunnel", level=-1.0)]
+    net = network.build(ms)
+    (x,) = layers.order(net)
+    assert x.upper is None and x.why == "apart" and x.weight == 0.0

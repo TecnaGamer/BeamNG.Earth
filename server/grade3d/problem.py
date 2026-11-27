@@ -59,6 +59,77 @@ def _reach(samples, p, i, other, k_other, half):
     return list(range(max(0, i - k), min(n - 1, i + k) + 1))
 
 
+BESIDE_M = 8.0              # m between two carriageways' edges within which the ground between them is held to ...
+BATTER = 0.5                # ... rising or falling at most this (1:2) from one to the other; overlapping, one height
+W_BESIDE = 1.0e3            # per m^2 past it
+BESIDE_EVERY = 2            # one pair every this many samples of a path
+LAYERED_NEAR_M = 150.0      # m along either path from where the two cross at two levels: no batter between them
+
+
+def beside(network, samples):
+    """[(path a, sample i, path b, sample j, gap m)]: the samples of roads on the ground and tracks (not decks, not
+    tunnels) whose carriageways come within BESIDE_M of another path's (gap: between their edges, negative where they
+    overlap), each sample's nearest of that path, one pair per BESIDE_EVERY samples, each pair once. A path's own samples
+    far along it (a hairpin) count as another's."""
+    kinds = np.array([m.kind for m in network.members], dtype=object)
+    half = np.array([float(m.half) for m in network.members])
+    on = np.flatnonzero(np.isin(kinds[samples.member], ("ground", "rail")))
+    if not len(on):
+        return []
+    path_of = np.repeat(np.arange(len(samples.h)), np.diff(samples.off))
+    xy, hs = samples.xy[on], half[samples.member[on]]
+    cell = float(2.0 * hs.max() + BESIDE_M)
+    key = np.floor(xy / cell).astype(np.int64)
+    W = int(key[:, 1].max() - key[:, 1].min()) + 3
+    lin = (key[:, 0] - key[:, 0].min() + 1) * W + (key[:, 1] - key[:, 1].min() + 1)
+    order = np.argsort(lin, kind="stable")
+    sk = lin[order]
+    best = {}
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            q = lin + dx * W + dy
+            a, b = np.searchsorted(sk, q, "left"), np.searchsorted(sk, q, "right")
+            cnt = b - a
+            src = np.repeat(np.arange(len(on)), cnt)
+            if not len(src):
+                continue
+            first = np.repeat(a - np.r_[0, np.cumsum(cnt)[:-1]], cnt)
+            dst = order[first + np.arange(len(src))]
+            pa, pb = path_of[on[src]], path_of[on[dst]]
+            same = pa == pb
+            far_along = np.abs(samples.s[on[src]] - samples.s[on[dst]]) > 3.0 * cell
+            keep = (src != dst) & (~same | far_along) & (on[src] % BESIDE_EVERY == 0)
+            src, dst = src[keep], dst[keep]
+            d = np.hypot(*(xy[src] - xy[dst]).T)
+            gap = d - hs[src] - hs[dst]
+            ok = gap <= BESIDE_M
+            for i, j, g, dd in zip(on[src[ok]].tolist(), on[dst[ok]].tolist(), gap[ok].tolist(), d[ok].tolist()):
+                k = (i, int(path_of[j]))
+                if k not in best or dd < best[k][2]:
+                    best[k] = (j, g, dd)
+    # (two paths that cross at two levels are held apart by their clearance near the crossing: a ramp beside the street
+    # its bridge goes over, an abutment's wall between them, not a batter)
+    layered = {}
+    for pa, ia, pb, ib, lay in samples.crossings:
+        if lay.upper is not None:
+            layered.setdefault((pa, pb), []).append((ia, ib))
+            layered.setdefault((pb, pa), []).append((ib, ia))
+    out, seen = [], set()
+    for (i, _q), (j, g, _d) in best.items():
+        u = (min(i, j), max(i, j))
+        if u in seen:
+            continue
+        seen.add(u)
+        p, r = int(path_of[i]), int(path_of[j])
+        a, b = int(i - samples.off[p]), int(j - samples.off[r])
+        if any(abs(samples.s[i] - samples.s[samples.off[p] + x]) < LAYERED_NEAR_M
+               or abs(samples.s[j] - samples.s[samples.off[r] + y]) < LAYERED_NEAR_M
+               for x, y in layered.get((p, r), ())):
+            continue
+        out.append((p, a, r, b, float(g)))
+    return out
+
+
 def pose(network, samples, laws):
     """The Problem of the network (step 1) on its samples (step 3) at its laws (step 5)."""
     chains = []
@@ -76,6 +147,8 @@ def pose(network, samples, laws):
     for k, (pa, ia, pb, ib) in enumerate(samples.joins):
         add((pa, ia, pb, ib, "eq", 0.0), 0.0, ("join", k))
     for k, (pa, ia, pb, ib, lay) in enumerate(samples.crossings):
+        if lay.upper is None and lay.weight <= 0.0:
+            continue
         if lay.upper is None:
             add((pa, ia, pb, ib, "ge", 0.0), lay.weight, ("meet", k))
             add((pa, ia, pb, ib, "le", 0.0), lay.weight, ("meet", k))
@@ -88,4 +161,8 @@ def pose(network, samples, laws):
         pairs |= {(j, il) for j in _reach(samples, pu, iu, pl, il, half_l)}
         for ju, jl in sorted(pairs):
             add((pu, ju, pl, jl, "ge", float(lay.need)), lay.weight, ("clear", k))
+    for k, (pa, ia, pb, ib, gap) in enumerate(beside(network, samples)):
+        v = BATTER * max(0.0, gap)
+        add((pa, ia, pb, ib, "le", v), W_BESIDE, ("beside", k))
+        add((pa, ia, pb, ib, "ge", -v), W_BESIDE, ("beside", k))
     return pr

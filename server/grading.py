@@ -774,6 +774,17 @@ import crossings as _xs
 import structures as _st
 import carriageways as _cw
 CW_ON = _xs.ON and os.environ.get("BNE_CARRIAGEWAYS", "on") != "off"          # carriageways.py: a motorway's roads and decks as one profile (with BNE_INTERCHANGE)
+# The 3D solve (grade3d, #100): with the shapes on, one solve gives every road, deck, tunnel and track its height
+# (_shape_region_calc: grade3d.region), the plans take it (_apply_shapes, "set"), and the passes that set heights of their
+# own are the solve's and off: the interchange pipeline, the carriageways' profiles, the underpasses' dips, the snaps,
+# welds, corridors, laws and guard, and the railways' bed lattice (railprofile: the tracks' beds are the solve's,
+# railways.TRACK_Z_HOOK). BNE_GRADE3D=off: the shapes from the interchange pipeline, as before.
+GRADE3D_ON = SHAPES_ON and os.environ.get("BNE_GRADE3D", "on") != "off"
+if GRADE3D_ON:
+    CW_ON = UNDER_ON = WELD_ON = CORRIDOR_ON = JUNCTION_SNAP_ON = ROAD_LAWS_ON = GUARD_ON = False
+    COARSE_EASE_ON = NEIGHBOUR_ON = False
+    import railprofile as _railprofile
+    _railprofile.ENABLED = False
 CW_MAX_M = 8000.0       # m: a carriageway chain is cut here (a branch point or a loose end comes long before)
 CW_HEADROOM_M = roadsmod.MIN_BRIDGE_HEADROOM_M + roadsmod.BRIDGE_HEADROOM_MARGIN_M   # m of headroom the carriageways
                         # keep over one another, the roads and the tracks under them (+ the deck's depth): the decks' own
@@ -5329,7 +5340,11 @@ class _Planner:
         return out
 
     def _shape_region_calc(self, home, hk):
-        """The ix pipeline's region() (the s1..s6 steps, ix/SPEC.md): the same {road feature id: [(xy, z, mode)]}."""
+        """The 3D solve's heights of the cell (grade3d.region, GRADE3D_ON), else the ix pipeline's region() (the s1..s6
+        steps, ix/SPEC.md): the same {road feature id: [(xy, z, mode)]}."""
+        if GRADE3D_ON:
+            from grade3d import region as _g3d_region
+            return _g3d_region.cell_profiles(self, home)
         return ix_pipeline.region(self, home, hk)
 
     def _shape_debug(self, net, sysm, pcs, smp, zs, ground, fixed_z, diag):

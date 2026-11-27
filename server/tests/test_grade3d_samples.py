@@ -54,3 +54,26 @@ def test_the_flat_arrays_are_the_paths_in_order():
     assert sm.off[-1] == len(sm) == len(sm.xy) == len(sm.member)
     assert [sm.of(p).stop - sm.of(p).start for p in range(3)] == [11, 11, 1]
     assert sm.h[2] == 0.0
+
+
+def test_a_join_and_a_crossing_are_exactly_at_a_sample():
+    # (a T 61.3 m along a road, a deck crossing it at 137.9 m: neither on the even 4 m grid)
+    ms = [_m("a", _line(0, 0, 301, 0, 31)), _m("t", _line(61.3, 0, 61.3, 120, 13)),
+          _m("x", _line(137.9, -60, 137.9, 60, 13), "deck", 1.0)]
+    net = network.build(ms)
+    sm = samples.sample(net, layers.order(net))
+    (pa, ia, pb, ib), = sm.joins
+    for p, i in ((pa, ia), (pb, ib)):
+        assert np.hypot(*(sm.xy[sm.of(p)][i] - [61.3, 0])) < 1e-6
+    (pa, ia, pb, ib, _lay), = sm.crossings
+    for p, i in ((pa, ia), (pb, ib)):
+        assert np.hypot(*(sm.xy[sm.of(p)][i] - [137.9, 0])) < 1e-6
+    for p in range(len(sm.h)):
+        d = np.diff(sm.s[sm.of(p)])
+        assert (d > 0).all() and d.max() <= 1.5 * sm.h[p] + 1e-9          # (a sample moved half a step at most)
+
+
+def test_grid_moves_the_nearest_sample_or_puts_one_in():
+    s = samples.grid(40.0, [9.0, 9.02, 21.9, 40.0])
+    assert np.allclose(s, [0, 4, 9.0, 12, 16, 20, 21.9, 28, 32, 36, 40][:len(s)]) or (9.0 in s and 21.9 in s)
+    assert 9.0 in s and 21.9 in s and np.all(np.diff(s) > 0) and s[0] == 0 and s[-1] == 40.0
