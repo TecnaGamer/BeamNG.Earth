@@ -281,6 +281,27 @@
     ],
     "translucent": false
   },
+  "bne_bld_roof_corrugated": {
+    "name": "bne_bld_roof_corrugated",
+    "mapTo": "bne_bld_roof_corrugated",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "4f0c1d52-7a3e-5b6c-9d18-2e6a8f3b7c41",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/metal/m_metal_wall_corrugate/t_metal_wall_corrugated_b.color.png",
+        "normalMap": "/assets/materials/tileable/metal/m_metal_wall_corrugate/t_metal_wall_corrugated_nm.normal.png",
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0,
+        "baseColorFactor": [1, 1, 1, 1],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
   "bne_bld_panel": {
     "name": "bne_bld_panel",
     "mapTo": "bne_bld_panel",

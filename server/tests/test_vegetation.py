@@ -350,6 +350,54 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_SHRUB, 1, 35.0, -116.0, 20, u=0.3), veg.G_CREOSOTE, "the Mojave")
         self.assertEqual(self.g(veg.G_SHRUB, 1, 38.6, -109.5, 20, u=0.3), veg.G_DESERT_SHRUB, "Moab: cold desert")
 
+    def nz(self, group, lat, lon=175.0, lcls="tree", n=20000):
+        rng = np.random.default_rng(5)
+        return veg.nz_groups(np.full(n, group, np.uint8), np.full(n, lat), np.full(n, lon),
+                             np.full(n, veg.WC[lcls], np.uint8), rng.random(n), rng.random(n))
+
+    def test_new_zealand_trees(self):
+        """Northern conifers and oaks are not New Zealand's; tropical in the north only."""
+        for lat, want in ((-35.0, (0.65, 0.12, 0.15, 0.08)), (-39.5, (0.45, 0.35, 0.15, 0.05)),
+                          (-45.9, (0.05, 0.75, 0.20, 0.00))):
+            for g in (veg.G_DECIDUOUS, veg.G_CONIFER):
+                got = self.nz(g, lat)
+                for group, share in zip(veg.NZ_TREES, want):
+                    self.assertAlmostEqual(float(np.mean(got == group)), share, delta=0.02, msg=(lat, group))
+        self.assertFalse(np.any(self.nz(veg.G_DECIDUOUS, -43.6) == veg.G_NZ_PALM), "no palms by Christchurch")
+        for m in veg.NZ_MIX:
+            self.assertAlmostEqual(sum(m), 1.0)
+        for lat, share in ((-36.0, 0.10), (-45.5, 0.35)):
+            self.assertAlmostEqual(float(np.mean(self.nz(veg.G_CONIFER, lat, lcls="built") == veg.G_DECIDUOUS)), share,
+                                   delta=0.02, msg="towns keep some European trees")
+
+    def test_new_zealand_bushes_and_rocks(self):
+        north, south = self.nz(veg.G_SHRUB, -35.0), self.nz(veg.G_DESERT_SHRUB, -45.9)
+        self.assertTrue(np.all(north == veg.G_NZ_SHRUB_NORTH))
+        self.assertTrue(np.all(south == veg.G_NZ_SHRUB_SOUTH), "no desert bushes")
+        self.assertTrue(np.all(self.nz(veg.G_DESERT_ROCK, -39.0) == veg.G_ROCK))
+        self.assertTrue(np.all(self.nz(veg.G_ROCK, -39.0) == veg.G_ROCK))
+
+    def test_new_zealand_only(self):
+        for lat, lon in ((-33.9, 151.2), (-42.9, 147.3), (39.3, -76.6)):
+            for g in (veg.G_DECIDUOUS, veg.G_SHRUB, veg.G_DESERT_SHRUB):
+                self.assertTrue(np.all(self.nz(g, lat, lon, n=100) == g), (lat, lon, g))
+
+    def test_new_zealand_palms_stay_low(self):
+        v = veg.Vegetation.__new__(veg.Vegetation)
+        v._tl = __import__("threading").local()
+
+        class Hills:
+            def sample(self, lat, lon, zoom):
+                return np.where(np.asarray(lon) > 175.0, 600.0, 20.0)
+        v.dem = Hills()
+        n = 4000
+        rng = np.random.default_rng(5)
+        lon = np.where(np.arange(n) % 2, 175.5, 174.5)
+        got = v._nz(np.full(n, veg.G_DECIDUOUS, np.uint8), np.full(n, -36.0), lon, np.full(n, veg.WC["tree"]),
+                    rng.random(n), rng.random(n))
+        self.assertFalse(np.any((got == veg.G_NZ_PALM) & (lon > 175.0)))
+        self.assertTrue(np.any((got == veg.G_NZ_PALM) & (lon < 175.0)))
+
     def test_beyond_north_america(self):
         """2026-10-15: Douglas firs in Punjab's fields; the Sahara's bushes were the East's."""
         self.assertLess(float(veg._conifer_share(30.9, 75.8)), 0.1, "Punjab: hardly any conifers")

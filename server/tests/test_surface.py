@@ -85,6 +85,19 @@ class ClassifyTest(unittest.TestCase):
                 mk = np.array(Image.open(os.path.join(d, masks[i])))
                 self.assertTrue(np.array_equal(mk == 255, old == i), m)
 
+    def test_new_zealand_bush_has_no_grass(self):
+        """No grass under the trees of New Zealand's bush."""
+        classes = np.array([[10, 30], [10, 20]], np.uint8)
+        u = np.zeros((2, 2))
+        nz = sf.classify(classes, u, 1.0, np.full((2, 2), -35.6), np.full((2, 2), 174.0))
+        self.assertEqual(nz.tolist(), [[sf.BUSH, sf.GRASS], [sf.BUSH, sf.DUSTY]])
+        for lat, lon in ((-33.9, 151.2), (52.0, 5.0)):
+            got = sf.classify(classes, u, 1.0, np.full((2, 2), lat), np.full((2, 2), lon))
+            self.assertEqual(got.tolist(), [[sf.FOREST, sf.GRASS], [sf.FOREST, sf.DUSTY]], "elsewhere as before")
+        self.assertEqual(sf.MATERIALS[sf.BUSH], ("bngEarthGroundBush", "DIRT"))
+        import vegetation
+        self.assertEqual(sf.NZ_BOX, vegetation.NZ_BOX)
+
     def test_unknown_class_is_dirt(self):
         self.assertEqual(sf.classify(np.array([[7, 255]], np.uint8), np.zeros((1, 2)), 2.0).tolist(), [[sf.DIRT, sf.DIRT]])
 

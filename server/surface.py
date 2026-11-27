@@ -80,10 +80,14 @@ MATERIALS = (
     ("bngEarthGroundDryGrass", "GRASS"),
     ("bngEarthGroundCrop", "DIRT"),
     ("bngEarthGroundSand", "SAND"),
+    # New Zealand's bush floor (2026-11-27): no grass under its trees; ferns and jungle plants grow on it
+    # (groundcover.lua)
+    ("bngEarthGroundBush", "DIRT"),
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
     GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT, \
-    FOREST, DRYGRASS, CROP, SAND = range(len(MATERIALS))
+    FOREST, DRYGRASS, CROP, SAND, BUSH = range(len(MATERIALS))
+NZ_BOX = (-47.6, 166.0, -34.0, 179.0)      # south, west, north, east: where tree cover is BUSH (vegetation.NZ_BOX)
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -145,10 +149,37 @@ def classify(classes, u, square, lat=None, lon=None):
             grid = climate._load()
     else:
         lat = lon = None
-    return fast._ef.landcover_classify(classes, np.asarray(u, np.float64), square, lat, lon, grid, climate.RES, _LUT,
+    out = fast._ef.landcover_classify(classes, np.asarray(u, np.float64), square, lat, lon, grid, climate.RES, _LUT,
                                        (LAWN, DRYGRASS, SAND, ROCK, SNOW), DRY_KOPPEN,
                                        dmath.tan(math.radians(ROCK_SLOPE_DEG)),
                                        (LAWN_PATCH_M, LAWN_SHARE_DRY, LAWN_SHARE_HUMID), beaches.grid_distances())
+    if lat is not None:             # (New Zealand's forest floor: its bush, without grass)
+        bush = (out == FOREST) & _in_nz(lat, lon)
+        if bush.any():
+            out = np.where(bush, np.uint8(BUSH), out)
+    return out
+
+
+def _in_nz(lat, lon):
+    """Per point: inside NZ_BOX."""
+    return (lat >= NZ_BOX[0]) & (lat <= NZ_BOX[2]) & (lon >= NZ_BOX[1]) & (lon <= NZ_BOX[3])
+
+
+def _value_noise(x, y, seed):
+    """Smooth value noise in [-1, 1] at points (x, y) given in lattice units."""
+    return _value_noises(x, y, (seed,))[0]
+
+
+def _value_noises(x, y, seeds):
+    """_value_noise(x, y, seed) for each of seeds (warp's dx and dy share their points): earthfast.value_noises (the
+    hash of each lattice corner, smoothstep weights, bilinear; ported 2026-11-01 from the numpy version, the same
+    values bit for bit)."""
+    fast.require(139, "value noise")
+    x = np.asarray(x, np.float64)
+    y = np.asarray(y, np.float64)
+    out = fast._ef.value_noises(np.ascontiguousarray(x.ravel()), np.ascontiguousarray(y.ravel()),
+                                [int(v) for v in seeds])
+    return [o.reshape(x.shape) for o in out]
 
 
 def warp(lat, lon):
@@ -425,7 +456,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         # Material layers drive BeamNG's stock GroundCover. Keep the strip green
         # even on WorldCover's built-up village pixels, while roads and footways
         # still win below.
-        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT, FOREST, DRYGRASS, CROP))] = GRASS
+        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT, FOREST, DRYGRASS, CROP, BUSH))] = GRASS
     if footpaths[0]:
         out[mask(footpaths)] = ROAD_MATERIAL["paved"]
     for k in ROAD_ORDER:
@@ -1036,7 +1067,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None, corners=True):
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
 VERGE_M = 1.0 + 0.5 * heightmap.SQUARE     # (1.5 m at 1 m squares, 2 m at 2 m)
-VERGE_FROM = (GRASS, LAWN, DUSTY, FOREST, DRYGRASS)
+VERGE_FROM = (GRASS, LAWN, DUSTY, FOREST, DRYGRASS, BUSH)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
 PARKING_CLASSES = {"parking"}     # Overture infrastructure (transit) polygons drawn as asphalt: no grass on a lot
@@ -1205,7 +1236,7 @@ def paint_frontage_pads(idx, lat, lon, pads, material=ASPHALT):
         hit = polygon.contains_points(xy, np.c_[x.ravel(), y.ravel()])
         y, x = y.ravel()[hit], x.ravel()[hit]
         if material == GRASS:
-            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY, FOREST, DRYGRASS, CROP))
+            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY, FOREST, DRYGRASS, CROP, BUSH))
             y, x = y[keep], x[keep]
         out[y, x] = material
     return out
@@ -1406,6 +1437,8 @@ def paint_natural(idx, lat, lon, land):
     import natural
     mats = {"rock": ROCK, "loose": LOOSE, "sand": SAND, "snow": SNOW, "mud": MUD, "grass": GRASS, "forest": FOREST,
             "bare": (DIRT, DUSTY, LOOSE, ROCK, SAND)}     # (the land cover's open ground: no vegetation, snow or water)
+    if np.size(lat) and bool(_in_nz(np.mean(lat), np.mean(lon))):
+        mats["forest"] = BUSH           # (New Zealand's mapped woods: its bush floor)
     return natural.paint_ground(idx, lat, lon, land, mats, grid_affine_coef(lat, lon))
 
 
@@ -1530,7 +1563,7 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
 # the snow layer (the plan's 3.1 "better" half): its detail texture and ground model, no 3D grass. Land layers only:
 # roads, paving and squares stay theirs (plowed or not is W3's), as do the wetlands' mud and the snow itself.
 SNOW_FROM = (GRASS, DUSTY, LOOSE, ROCK, LAWN, GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT, FOREST, DRYGRASS,
-             CROP, SAND)
+             CROP, SAND, BUSH)
 SNOW_DEPTH_BIN = 3
 SNOW_COVER = 230            # of 255
 SNOW_STEP = 4               # samples between the cover's evaluations (nearest in between: 4 m at 1 m squares)
@@ -1636,7 +1669,7 @@ def used_materials(idx):
 # pair one ground model), then folds its least used land-cover layers whatever their size: a visible but rare loss,
 # against a 250-560 ms swap with ten materials (in-game probes 2026-10-18). BNE_LAYER_FOLD=off: every layer kept.
 FOLD_ON = os.environ.get("BNE_LAYER_FOLD", "on").lower() not in ("off", "0", "false", "no")
-FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW, FOREST, DRYGRASS, CROP, SAND)
+FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW, FOREST, DRYGRASS, CROP, SAND, BUSH)
 FOLD_SHARE = 0.01
 FOLD_CORE_R_M = 2.0
 FOLD_CORE_M2 = 256.0
