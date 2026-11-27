@@ -40,7 +40,8 @@ import fast
 log = logging.getLogger("earthd.snowfield")
 
 SWITCH = "BNE_LOCAL_WEATHER"
-PARTS = frozenset(p.strip() for p in os.environ.get(SWITCH, "").lower().replace(";", ",").split(",") if p.strip())
+PARTS = frozenset(p.strip() for p in os.environ.get("BNE_LOCAL_WEATHER", "").lower().replace(";", ",").split(",")
+                  if p.strip())
 ON = "snowfield" in PARTS
 NATIVE = 645
 

@@ -189,6 +189,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expWetRoads", type: "bool", default: false, name: "Wet roads", desc: "Experimental. Rain leaves the roads wet for hours as they dry: less grip and tyre spray while they are wet (included in Winter grip).",
         note: RESTART_NOTE },
+      { id: "expLocalSnow", type: "bool", default: false, name: "Local snow", desc: "Experimental, needs Winter. The snow on the ground is worked out for every area round you by height and slope, from that area's own weather and the satellites' snow maps (NOAA IMS): white only where it really snowed or snow still lies, mountains white above their real snowline, valleys and mild places bare. Uses more weather downloads while it is on.",
+        note: RESTART_NOTE },
     ],
   },
   {
