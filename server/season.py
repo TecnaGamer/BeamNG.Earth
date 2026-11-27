@@ -45,6 +45,7 @@ def season_amounts(date, lat):
 # "auto" grades with the date of the week it is in (UTC, slots of SEASON_SLOT_DAYS from a fixed Monday), not today's:
 # what a texture is graded with is then a function of its cache key (season_key), the same on every machine, and the
 # far tiles and block photos made in October are not served as late November's (their keys held "auto" alone).
+WINTER_GRADE_REV = 2  # smooth grass retains its source colour
 SEASON_SLOT_DAYS = 7
 _SLOT_EPOCH = datetime.date(2026, 1, 5)     # a Monday
 SEASON_KEY_LAT_PAD = 1.0    # deg: a key holds the slot where the season changes within this of its latitude
@@ -76,16 +77,15 @@ def season_key(mode, lat, today=None):
     Auto keys use the slot's date when any grade is active within SEASON_KEY_LAT_PAD of lat (the spread of far
     tiles from their anchor). In the tropics and full summer, auto textures stay cached across slots.
     """
-    winter_grade = "canopy-only"
     if mode == "winter":
-        return (mode, winter_grade)
+        return (mode, WINTER_GRADE_REV)
     if mode != "auto":
         return mode
     d = slot_date(today)
     lats = (float(lat) - SEASON_KEY_LAT_PAD, float(lat), float(lat) + SEASON_KEY_LAT_PAD)
     amounts = [season_amounts(d, max(-90.0, min(90.0, la))) for la in lats]
     if any(a["winter"] > 0.0 for a in amounts):
-        return ("auto", d.isoformat(), winter_grade)
+        return ("auto", d.isoformat(), WINTER_GRADE_REV)
     if any(any(value > 0.0 for value in a.values()) for a in amounts):
         return ("auto", d.isoformat())
     return ("auto", "none")

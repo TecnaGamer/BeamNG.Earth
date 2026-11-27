@@ -53,8 +53,8 @@ class ColourTest(unittest.TestCase):
         self.assertEqual(season.amounts_for("auto", 45.0, d), season.season_amounts(start, 45.0),
                          "graded with the slot's date: the key says it all")
         k = season.season_key("auto", 45.0, d)
-        self.assertEqual(k, ("auto", "2026-11-23", "canopy-only"))
-        self.assertEqual(season.season_key("winter", 45.0, d), ("winter", "canopy-only"))
+        self.assertEqual(k, ("auto", "2026-11-23", season.WINTER_GRADE_REV))
+        self.assertEqual(season.season_key("winter", 45.0, d), ("winter", season.WINTER_GRADE_REV))
         self.assertEqual(season.season_key("auto", 45.0, start + datetime.timedelta(days=6)), k, "same week, same key")
         self.assertNotEqual(season.season_key("auto", 45.0, d + datetime.timedelta(days=7)), k, "next week: another")
         self.assertEqual(season.season_key("auto", 0.0, d), ("auto", "none"), "the tropics: no season, one key")
