@@ -310,6 +310,7 @@ class Service:
         # snow stays the preset's
         self.field = field if (self.cover is not None and self.mode not in PRESETS) else None
         self.field_busy = False
+        self.field_task = None      # (the running ring job: the server's task, field_tick)
         if self.cover is not None:
             # (a preset's provider draws the climatic permanent snow too, as BNE_SNOW's presets; the real state never:
             # snow only where its forcing put it)
@@ -424,22 +425,44 @@ class Service:
         if f is None or self.field_busy or not (arrived or f.due(lat, lon)):
             return
         self.field_busy = True
+        loop, server = conn.loop, conn.s
 
         async def run():
             try:
                 for ring in ("near", "far"):
-                    before = f.provider(-90.0, -180.0, 90.0, 180.0)     # (the field before: its tables by cell)
                     try:
-                        changed = await conn.loop.run_in_executor(None, f.update, lat, lon, ring)
+                        staged = await loop.run_in_executor(None, f.update, lat, lon, ring)
                     except Exception as e:      # (update keeps its own retry; a bug here must not stop the rings)
                         log.warning("snow field %s ring: %s: %s", ring, type(e).__name__, e)
                         continue
-                    if changed and hasattr(conn.s, "snow_changed"):
-                        # (the server's snow generations: only the textures whose look changed, near the cells)
-                        conn.s.snow_changed(fields=(before, f.provider(-90.0, -180.0, 90.0, 180.0)), cells=changed)
+                    if staged is not None:
+                        Service._publish(server, f, staged)
             finally:
                 self.field_busy = False
-        conn.spawn(run())
+        # (the server's task, not the connection's: a disconnect while a ring runs cancels none of it, and the tables
+        # it made are published with their renders' invalidation in one step)
+        self.field_task = loop.create_task(run())
+
+    @staticmethod
+    def _publish(server, f, staged):
+        """(event loop) A ring's staged tables published and the renders invalidated in the same step: the field
+        before, its tables taken (snowfield.publish), the field after, Server.snow_changed with both (its snow
+        generation: renders in flight are checked) and the changed cells; when that fails, every texture again
+        (no table may change without its renders' invalidation)."""
+        before = f.provider(-90.0, -180.0, 90.0, 180.0)
+        changed = f.publish(staged)
+        if not changed or not hasattr(server, "snow_changed"):
+            return changed
+        try:
+            server.snow_changed(fields=(before, f.provider(-90.0, -180.0, 90.0, 180.0)), cells=changed)
+        except Exception as e:
+            log.warning("snow field: the change's invalidation failed (%s: %s): every texture again",
+                        type(e).__name__, e)
+            try:
+                server.snow_changed()
+            except Exception as e2:
+                log.error("snow field: no invalidation at all: %s: %s", type(e2).__name__, e2)
+        return changed
 
     def _commit_roads(self, conn, look):
         """(event loop) W3's look of a new state: the bank bins kept for the hysteresis; when the road skins' winter

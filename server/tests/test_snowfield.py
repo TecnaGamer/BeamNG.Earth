@@ -201,7 +201,8 @@ class CoverTest(unittest.TestCase):
 
 
 class FieldTest(unittest.TestCase):
-    """snowfield.SnowField (stage A glue) with a fake DEM, fake Open-Meteo answers and fake IMS windows."""
+    """snowfield.SnowField (stage A glue) with a fake DEM, fake Open-Meteo answers and fake IMS windows. update()
+    stages, publish() takes effect (snow.Service._publish on the event loop)."""
 
     T0 = 1768910400             # 2026-01-20 12:00 UTC
 
@@ -221,12 +222,13 @@ class FieldTest(unittest.TestCase):
              "snow_depth": [depth_m] + [0.0] * 246, "relative_humidity_2m": [70.0] * 247, "cloud_cover": [30.0] * 247}
         return [{"hourly": h, "elevation": 1500.0, "utc_offset_seconds": 0} for _ in range(n)]
 
-    def field(self, t, p, ims_class, depth_m=0.0, cap=None):
+    def field(self, t, p, ims_class, depth_m=0.0, cap=None, near_km=30.0, far_km=60.0):
         need()
         import tempfile
         import snowfield
         import urllib.parse
         self.calls = []
+        self.now = self.T0
 
         def fetch_json(url, kind="background"):
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
@@ -240,13 +242,32 @@ class FieldTest(unittest.TestCase):
         d = tempfile.mkdtemp(prefix="snowfield-test-")
         self.addCleanup(__import__("shutil").rmtree, d, True)
         old = (snowfield.NEAR_KM, snowfield.FAR_KM, snowfield.WEIGHT_CAP)
-        snowfield.NEAR_KM, snowfield.FAR_KM = 30.0, 60.0
+        snowfield.NEAR_KM, snowfield.FAR_KM = near_km, far_km
         if cap is not None:
             snowfield.WEIGHT_CAP = cap
         self.addCleanup(lambda: setattr(snowfield, "NEAR_KM", old[0]) or setattr(snowfield, "FAR_KM", old[1])
                         or setattr(snowfield, "WEIGHT_CAP", old[2]))
-        return snowfield, snowfield.SnowField(self.Dem(), fetch_json, lambda url: b"ims", d, clock=lambda: self.T0,
-                                              ims_reader=reader)
+        return snowfield, snowfield.SnowField(self.Dem(), fetch_json, lambda url: b"ims", d,
+                                              clock=lambda: self.now, ims_reader=reader)
+
+    @staticmethod
+    def run_ring(f, lat, lon, ring="near"):
+        st = f.update(lat, lon, ring)
+        return f.publish(st) if st is not None else []
+
+    def gibs(self, f, viirs_bare=True):
+        """GIBS answers: the colour map, a bare clear VIIRS day (NDSI 0 everywhere), no MODIS; IMS's file as given."""
+        import io
+        from PIL import Image
+        cmap = (b'<ColorMaps><ColorMap><Entries><ColorMapEntry rgb="0,255,0" sourceValue="[0]"/>'
+                b'<ColorMapEntry rgb="0,191,255" sourceValue="[250]"/></Entries></ColorMap></ColorMaps>')
+        im = Image.new("P", (512, 512), 0)
+        im.putpalette([0, 255, 0, 0, 191, 255] + [0] * (254 * 3))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        tile = buf.getvalue()
+        f.fetch_bytes = lambda url: cmap if url.endswith(".xml") else tile if "VIIRS" in url else \
+            None if "MODIS" in url else b"ims"
 
     def test_rings_nearest_first(self):
         import snowfield
@@ -258,7 +279,7 @@ class FieldTest(unittest.TestCase):
     def test_mild_and_bare_is_no_snow(self):
         sf, f = self.field(6.0, 0.0, 2)
         self.assertTrue(f.due(39.9, -105.1))
-        changed = f.update(39.9, -105.1, "near") + f.update(39.9, -105.1, "far")
+        changed = self.run_ring(f, 39.9, -105.1, "near") + self.run_ring(f, 39.9, -105.1, "far")
         self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
         self.assertEqual(changed, [])
         self.assertEqual(len(self.calls), 2)        # (the near ring and the far ring: one request each)
@@ -266,8 +287,10 @@ class FieldTest(unittest.TestCase):
 
     def test_observed_snow_without_snowfall_is_thin_cover(self):
         sf, f = self.field(2.0, 0.0, 4)
-        changed = f.update(39.9, -105.1)
-        self.assertTrue(changed)
+        st = f.update(39.9, -105.1)
+        # staged: nothing drawn changes until it is published
+        self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
+        self.assertTrue(f.publish(st))
         fld = f.provider(39.0, -106.0, 41.0, -104.0)
         self.assertIsNotNone(fld)
         t = next(iter(fld.cells.values()))
@@ -275,41 +298,84 @@ class FieldTest(unittest.TestCase):
         self.assertTrue(any(r[2] in (1, 2) for r in t.rows))
         # nothing to do again within the hour: no request
         n = len(self.calls)
-        self.assertEqual(f.update(39.9, -105.1), [])
+        self.assertEqual(self.run_ring(f, 39.9, -105.1), [])
         self.assertEqual(len(self.calls), n)
 
     def test_a_clear_satellite_day_overrules_ims(self):
         """IMS white everywhere, the clear VIIRS day before (GIBS) bare: no snow (the clear-satellite rule)."""
-        import io
-        from PIL import Image
         sf, f = self.field(2.0, 0.0, 4)
-        cmap = (b'<ColorMaps><ColorMap><Entries><ColorMapEntry rgb="0,255,0" sourceValue="[0]"/>'
-                b'<ColorMapEntry rgb="0,191,255" sourceValue="[250]"/></Entries></ColorMap></ColorMaps>')
-        im = Image.new("P", (512, 512), 0)
-        im.putpalette([0, 255, 0, 0, 191, 255] + [0] * (254 * 3))
-        buf = io.BytesIO()
-        im.save(buf, format="PNG")
-        tile = buf.getvalue()
-        f.fetch_bytes = lambda url: cmap if url.endswith(".xml") else tile if "VIIRS" in url else \
-            None if "MODIS" in url else b"ims"
-        f.update(39.9, -105.1, "near")
+        self.gibs(f)
+        self.run_ring(f, 39.9, -105.1, "near")
         self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
         # the far ring reads IMS alone: white there
-        f.update(39.9, -105.1, "far")
+        self.run_ring(f, 39.9, -105.1, "far")
         fld = f.provider(39.0, -106.0, 41.0, -104.0)
         self.assertIsNotNone(fld)
         self.assertTrue(all(f.cells[k].far for k in fld.cells))
 
+    def test_far_to_near_takes_the_clear_day(self):
+        """Codex on 70e2880b: a far cell that comes into the near ring takes the near tier both ways (its ground
+        again from the near zoom, the clear day read): white by IMS while far, bare by the clear VIIRS day once near."""
+        sf, f = self.field(2.0, 0.0, 4)
+        self.gibs(f)
+        self.run_ring(f, 39.9, -105.1, "near")
+        self.run_ring(f, 39.9, -105.1, "far")
+        x = next(k for k, c in f.cells.items() if c.far and c.table is not None)
+        far_ground = f.cells[x].ground
+        s_, w_, n_, e_ = sf.cell_box(*x)
+        lat, lon = 0.5 * (s_ + n_), 0.5 * (w_ + e_)
+        self.now += 3600.0          # (the next hour: the near ring due round the new anchor)
+        self.run_ring(f, lat, lon, "near")
+        self.assertFalse(f.cells[x].far)
+        self.assertIsNot(f.cells[x].ground, far_ground)
+        self.assertIsNone(f.cells[x].table, "the clear day moved the snowline: bare")
+        # and back out to the far ring: far again, IMS's white
+        self.now += 7 * 3600.0
+        self.run_ring(f, 39.9, -105.1, "near")
+        self.run_ring(f, 39.9, -105.1, "far")
+        self.assertTrue(f.cells[x].far)
+        self.assertIsNotNone(f.cells[x].table)
+
     def test_bare_two_days_vetoes_model_snow(self):
         sf, f = self.field(-3.0, 0.0, 2, depth_m=0.3)
-        f.update(39.9, -105.1, "near")
-        f.update(39.9, -105.1, "far")
+        self.run_ring(f, 39.9, -105.1, "near")
+        self.run_ring(f, 39.9, -105.1, "far")
         self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
 
-    def test_weight_cap(self):
+    def test_weight_cap_defers_until_the_day_refills(self):
         sf, f = self.field(2.0, 0.0, 4, cap=1.0)
-        self.assertEqual(f.update(39.9, -105.1), [])
+        self.assertIsNone(f.update(39.9, -105.1, "near"))
+        self.assertIsNone(f.update(39.9, -105.1, "far"))
         self.assertEqual(self.calls, [])
+        # both held back until the next UTC midnight: not due on every pose meanwhile
+        self.assertFalse(f.due(39.9, -105.1))
+        self.now = (self.now // 86400 + 1) * 86400 + 60
+        self.assertTrue(f.due(39.9, -105.1))
+
+    def test_a_stationary_alpine_day_stays_under_the_cap(self):
+        """Codex on 70e2880b: at 46.5 N 10.5 E the real rings (48 near cells, ~90 far points) every 10 min for a day:
+        the near ring hourly, the far ring as the reserve allows, under the day's weight cap; forcing reused within its
+        slot (a move inside the hour asks only for the new points)."""
+        import snowfield
+        sf, f = self.field(2.0, 0.0, 2, near_km=snowfield.NEAR_KM, far_km=snowfield.FAR_KM)
+        day0 = (self.T0 // 86400) * 86400
+        self.now = day0 + 30
+        near_fetches = 0
+        for step in range(144):
+            self.now = day0 + 30 + step * 600
+            n0 = len(self.calls)
+            for ring in ("near", "far"):
+                if f.due(46.5, 10.5):
+                    self.run_ring(f, 46.5, 10.5, ring)
+            near_fetches += sum(1 for c in self.calls[n0:] if c < 60)
+        used = f.weight_day[1]
+        self.assertLessEqual(used, sf.WEIGHT_CAP, f"{used} weighted calls")
+        self.assertEqual(near_fetches, 24, self.calls)
+        self.assertGreaterEqual(sum(1 for c in self.calls if c >= 60), 1)
+        # a move within the hour into the next cell asks only for the new points
+        n0 = len(self.calls)
+        self.run_ring(f, 46.5, 10.75, "near")
+        self.assertLess(sum(self.calls[n0:]), 20, self.calls[n0:])
 
 
 class WiringTest(unittest.TestCase):
@@ -349,47 +415,111 @@ class WiringTest(unittest.TestCase):
         self.assertEqual(earthd.Server.snow_changed(srv, fields=(new, new), cells=[cell]), 0)
         self.assertEqual(earthd.Server.snow_changed(srv), 2)
 
-    def test_service_draws_the_field(self):
-        need()
+    class FakeField:
+        """update stages {"ring": ...}; publish says which cells changed; a ring may raise or wait on an event."""
+
+        def __init__(self, fail=(), gate=None):
+            self.calls, self.published, self.fail, self.gate = [], [], set(fail), gate
+
+        def provider(self, s, w, n, e):
+            return ("field", len(self.published))
+
+        def due(self, lat, lon):
+            return True
+
+        def update(self, lat, lon, ring="near"):
+            self.calls.append(ring)
+            if self.gate is not None:
+                self.gate.wait(5)
+            if ring in self.fail:
+                raise IOError("a ring failed")
+            return {"ring": ring}
+
+        def publish(self, staged):
+            self.published.append(staged["ring"])
+            return [(1, 2)] if staged["ring"] == "near" else []
+
+    def service(self, field):
         import snow
 
         class Cover:
             def set_provider(self, fn, climate=False):
                 self.provider = fn
 
-        class Field:
-            calls = []
+        cover = Cover()
+        return snow.Service(fetch=lambda *a: {}, mode="real", cover=cover, winter=True, field=field), cover
 
-            def provider(self, s, w, n, e):
-                return ("field", s)
-
-            def due(self, lat, lon):
-                return True
-
-            def update(self, lat, lon, ring="near"):
-                self.calls.append(ring)
-                return [(1, 2)] if ring == "near" else []
-
-        cover, field = Cover(), Field()
-        svc = snow.Service(fetch=lambda *a: {}, mode="real", cover=cover, winter=True, field=field)
-        self.assertEqual(cover.provider(1, 2, 3, 4), ("field", 1))
-        # a preset's snow stays the preset's
-        self.assertIsNone(snow.Service(fetch=lambda *a: {}, mode="light", cover=Cover(), field=field).field)
-        # the rings in order, the changed cells drawn again
+    def loop_conn(self, snow_changed):
         import asyncio
         loop = asyncio.new_event_loop()
         self.addCleanup(loop.close)
+        server = SimpleNamespace(snow_changed=snow_changed)
+        return loop, SimpleNamespace(loop=loop, s=server)
+
+    def test_service_draws_the_field(self):
+        need()
+        import snow
+        field = self.FakeField()
+        svc, cover = self.service(field)
+        self.assertEqual(cover.provider(1, 2, 3, 4), ("field", 0))
+        # a preset's snow stays the preset's
+        self.assertIsNone(snow.Service(fetch=lambda *a: {}, mode="light", cover=type(cover)(), field=field).field)
         changed = []
-        conn = SimpleNamespace(loop=loop, s=SimpleNamespace(
-            snow_changed=lambda fields=None, cells=None: changed.append((fields, cells))))
-        tasks = []
-        conn.spawn = lambda coro: tasks.append(loop.create_task(coro))
+        loop, conn = self.loop_conn(lambda fields=None, cells=None: changed.append((fields, cells)))
         svc.field_tick(conn, 39.9, -105.1, arrived=True)
-        loop.run_until_complete(asyncio.gather(*tasks))
+        loop.run_until_complete(svc.field_task)
         self.assertEqual(field.calls, ["near", "far"])
-        self.assertEqual(changed, [((("field", -90.0), ("field", -90.0)), [(1, 2)])])
+        self.assertEqual(field.published, ["near", "far"])
+        # the near ring's change: the field before and after its publish, with its cells, in one step
+        self.assertEqual(changed, [((("field", 0), ("field", 1)), [(1, 2)])])
         self.assertFalse(svc.field_busy)
 
+    def test_a_disconnect_during_a_ring_loses_no_invalidation(self):
+        """Codex on 70e2880b: the ring job is the server's: the player's connection going away while a ring runs
+        (earthd cancels its tasks) neither stops the publish nor its renders' invalidation."""
+        need()
+        import threading
+        gate = threading.Event()
+        field = self.FakeField(gate=gate)
+        svc, _cover = self.service(field)
+        changed = []
+        loop, conn = self.loop_conn(lambda fields=None, cells=None: changed.append(cells))
+        conn_tasks = []
+        conn.spawn = lambda coro: conn_tasks.append(loop.create_task(coro))
+        svc.field_tick(conn, 39.9, -105.1, arrived=True)
+        self.assertEqual(conn_tasks, [], "not the connection's task")
+        del conn                    # (the connection gone mid-ring)
+        loop.call_later(0.05, gate.set)
+        loop.run_until_complete(svc.field_task)
+        self.assertEqual(field.published, ["near", "far"])
+        self.assertEqual(changed, [[(1, 2)]])
+
+    def test_a_failure_during_a_ring_publishes_nothing_half(self):
+        """A ring that fails in the executor publishes nothing (no table changes without its invalidation); the next
+        ring still runs; an invalidation that fails falls back to every texture."""
+        need()
+        field = self.FakeField(fail={"near"})
+        svc, _cover = self.service(field)
+        changed = []
+        loop, conn = self.loop_conn(lambda fields=None, cells=None: changed.append(cells))
+        svc.field_tick(conn, 39.9, -105.1, arrived=True)
+        loop.run_until_complete(svc.field_task)
+        self.assertEqual(field.published, ["far"])
+        self.assertEqual(changed, [])
+
+        calls = []
+
+        def flaky(fields=None, cells=None):
+            calls.append(cells)
+            if cells is not None:
+                raise RuntimeError("compare failed")
+
+        field2 = self.FakeField()
+        svc2, _ = self.service(field2)
+        loop2, conn2 = self.loop_conn(flaky)
+        svc2.field_tick(conn2, 39.9, -105.1, arrived=True)
+        loop2.run_until_complete(svc2.field_task)
+        self.assertEqual(calls, [[(1, 2)], None], "the cells' invalidation failed: every texture")
 
 from types import SimpleNamespace  # noqa: E402
 

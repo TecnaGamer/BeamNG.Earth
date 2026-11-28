@@ -50,7 +50,7 @@ BLOCK_DEG = 1.0
 NEAR_KM = 90.0
 FAR_KM = 450.0
 REFRESH_NEAR_S = 3600.0
-REFRESH_FAR_S = 3 * 3600.0
+REFRESH_FAR_S = 6 * 3600.0      # (an Alpine anchor: 48 near cells hourly + 90 far points every 6 h = 1,814 of 2,000)
 WEIGHT_CAP = 2000.0             # Open-Meteo weighted calls a day (PLAN_FINAL D-3: Experimental parts)
 LOCATIONS_MAX = 200             # locations a request (Open-Meteo allows 1,000; a near ring holds ~40)
 TABLE_TTL_S = 24 * 3600.0
@@ -136,6 +136,10 @@ def ims_url(day):
     return IMS_URL.format(y=day.year, doy=day.timetuple().tm_yday)
 
 
+class _Deferred(Exception):
+    """A ring held back by the day's Open-Meteo weight."""
+
+
 class _Cell:
     __slots__ = ("key", "point", "ground", "table", "made", "states", "z_cell", "rows", "far", "gground")
 
@@ -168,6 +172,7 @@ class SnowField:
         self.cells = {}             # (ci, cj) -> _Cell
         self.refreshed = {}         # ring name -> (anchor cell, refresh slot) of its last forcing
         self.retry = {}             # ring name -> (clock of the next try, failures in a row)
+        self.fcache = {}            # ((lat, lon), ring, refresh slot) -> (records, times, z_cell): forcing reused
         self.weight_day = (None, 0.0)
         self.ims = {}               # day -> (r0, c0, window uint8) round the last box
         self.changes = 0
@@ -443,16 +448,53 @@ class SnowField:
         return fast._ef.snowobs_cell_counts(g[0], g[1], g[2], g[3], g[4], obs, box, k0, n).astype(np.int64)
 
     # -- forcing and tables
-    def _forcing(self, points, kind="background"):
-        """[(records, times, z_cell)] of the points (one request a LOCATIONS_MAX), or None (over budget). A failed
-        request raises (update: the ring's retry)."""
+    def _slot(self, ring):
+        return int(self.clock() // (REFRESH_NEAR_S if ring == "near" else REFRESH_FAR_S))
+
+    @staticmethod
+    def _pkey(point):
+        return (round(float(point[0]), 4), round(float(point[1]), 4))
+
+    def _missing(self, points, ring):
+        """The points whose forcing for this refresh slot is not had yet (forcing is reused by location and slot: a
+        ring that moved within its slot asks only for its new points)."""
+        slot = self._slot(ring)
+        return [q for q in points if (self._pkey(q), ring, slot) not in self.fcache]
+
+    def _admit(self, ring, n_new, n_near):
+        """May a ring ask Open-Meteo for n_new locations now (the day's weight cap; the far ring only while the near
+        ring's weight for the rest of the UTC day stays reserved: n_near locations an hour)? Checked before any of the
+        ring's work (the IMS days, the ground, the kernel)."""
+        now = self.clock()
+        today = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).date()
+        day, used = self.weight_day
+        if day != today:
+            used = 0.0
+        w = om_weight(n_new) if n_new else 0.0
+        if ring == "far":
+            left_h = math.ceil((86400.0 - now % 86400.0) / REFRESH_NEAR_S)
+            w += om_weight(n_near) * left_h if n_near else 0.0
+        return used + w <= WEIGHT_CAP
+
+    def _defer(self, ring, why):
+        """A ring held back until the day's weight refills (the next UTC midnight): no retry on every pose meanwhile."""
+        now = self.clock()
+        until = (math.floor(now / 86400.0) + 1) * 86400.0
+        self.retry[ring] = (until, self.retry.get(ring, (0.0, 0))[1])
+        log.info("snow field: the %s ring waits for the next day's Open-Meteo weight (%s, cap %d)", ring, why,
+                 WEIGHT_CAP)
+
+    def _forcing(self, points, ring, kind="background"):
+        """[(records, times, z_cell)] of the points, those not had for this slot fetched (one request a
+        LOCATIONS_MAX), the rest from the cache. A failed request raises (update: the ring's retry); the weight of
+        one that was not answered is given back."""
         import snow as snowmod
-        out = []
-        for i in range(0, len(points), LOCATIONS_MAX):
-            part = points[i:i + LOCATIONS_MAX]
+        slot = self._slot(ring)
+        need = [q for q in points if (self._pkey(q), ring, slot) not in self.fcache]
+        for i in range(0, len(need), LOCATIONS_MAX):
+            part = need[i:i + LOCATIONS_MAX]
             if not self._spend(om_weight(len(part))):
-                log.info("snow field: Open-Meteo weight cap (%d a day) reached: tables kept as they are", WEIGHT_CAP)
-                return None
+                raise _Deferred("weight cap")
             try:
                 body = self.fetch_json(hourly_url_many(part), kind)
             except Exception:
@@ -461,29 +503,30 @@ class SnowField:
             body = body if isinstance(body, list) else [body]
             if len(body) != len(part):
                 raise IOError(f"snow field: {len(body)} answers for {len(part)} locations")
-            for om in body:
+            for q, om in zip(part, body):
                 recs, times, z_cell, _off = snowmod.records(om)
-                out.append((recs, times, z_cell))
-        return out
+                self.fcache[(self._pkey(q), ring, slot)] = (recs, times, z_cell)
+        for k in [k for k in self.fcache if k[2] < self._slot(k[1]) - 1]:
+            del self.fcache[k]
+        return [self.fcache[(self._pkey(q), ring, slot)] for q in points]
 
-    def _make(self, cells, forcing, obs_days):
+    def _make(self, cells, forcing, obs_days, staged):
         """The tables of cells (each with its forcing (records, times, z_cell)); the region's seed from all of them.
-        Returns the cells whose table changed."""
+        Staged (staged["tables"][key] = (table, states, z_cell, rows, made)): published on the event loop with the
+        renders' invalidation (publish), never here."""
         import snow as snowmod
         import snowcover
         ef = fast._ef
         now = self.clock()
         seed = [(int(z), int(r[0, 9]) if r.shape[0] and r[0, 9] != snowmod.MISSING else snowmod.MISSING)
                 for r, t, z in forcing if t]
-        changed = []
+        out = staged["tables"]
         for cell, (recs, times, z_cell) in zip(cells, forcing):
             if not times:
                 continue
             g = self._ground(cell)
             if not g:
-                if cell.table is not None:
-                    cell.table = None
-                    changed.append(cell.key)
+                out[cell.key] = (None, [], None, None, now)
                 continue
             zmin, zmax = g[7], g[8]
             k0, n = ef.snowfield_rows(zmin, zmax)
@@ -500,76 +543,100 @@ class SnowField:
             k_lo, rows, states, _runs = ef.snowfield_table(recs, upto, int(z_cell), lat_e2, zmin, zmax, seed,
                                                            today, k0, before, k0, cell.states, clear=clear,
                                                            k0_clear=k0)
-            cell.states, cell.z_cell, cell.rows, cell.made = states, int(z_cell), rows, now
             look = tuple(tuple(int(v) for v in (r[0], r[1], r[2], r[3], r[4], r[6])) for r in rows)
             new = snowcover.Table(look, snowcover.NO_ROAD, 0) if any(r[1] > 0 or r[3] > 0 for r in look) else None
-            if new != cell.table:
-                cell.table = new
-                changed.append(cell.key)
-        return changed
+            out[cell.key] = (new, states, int(z_cell), rows, now)
 
     def _ring_key(self, ring, lat, lon):
-        return (cell_of(lat, lon), int(self.clock() // (REFRESH_NEAR_S if ring == "near" else REFRESH_FAR_S)))
+        return (cell_of(lat, lon), self._slot(ring))
 
     def due(self, lat, lon):
-        """Is a ring's work due round (lat, lon) (a new anchor cell, a new hour or 3 h, a failed ring's retry time)?"""
+        """Is a ring's work due round (lat, lon) (a new anchor cell, a new refresh slot), and not held back (a failed
+        ring's retry time, a ring waiting for the day's weight)?"""
         now = self.clock()
         return any(self.refreshed.get(r) != self._ring_key(r, lat, lon) and now >= self.retry.get(r, (0.0, 0))[0]
                    for r in ("near", "far"))
 
     def update(self, lat, lon, ring="near"):
         """(executor) The anchor at (lat, lon): one ring's due work ("near": hourly, its own forcing a cell, asked for
-        as demand: the teleport's own place is never dropped; "far": every 3 h, a 1-degree block's forcing, background),
-        the IMS days once a day. Returns the cells whose table changed (the server re-renders what shows them)."""
+        as demand: the teleport's own place is never dropped; "far": every 6 h, a 1-degree block's forcing, background,
+        only with the near ring's weight for the day reserved), the IMS days once a day. Returns a staged result (the
+        cells' new tables, the cells gone) for publish on the event loop, or None (nothing due, held back, failed):
+        nothing drawn changes here."""
         now = self.clock()
         near, far = rings(lat, lon, NEAR_KM, FAR_KM)
+        far_cells = {c for v in far.values() for c in v}
+        staged = {"ring": ring, "key": self._ring_key(ring, lat, lon), "tables": {}, "gone": []}
         with self.lock:
-            # (S-6: a table older than a day, or out of the rings, goes: never another place's snow)
-            keep = set(near) | {c for v in far.values() for c in v}
-            out = [k for k, c in self.cells.items() if k not in keep or (c.made and now - c.made > TABLE_TTL_S)]
-            # (only the ones that had snow change what is drawn)
-            gone = [k for k in out if self.cells.pop(k).table is not None]
+            # (S-6: a table older than a day, or out of the rings, goes (at publish): never another place's snow)
+            keep = set(near) | far_cells
+            staged["gone"] = [k for k, c in self.cells.items()
+                              if k not in keep or (c.made and now - c.made > TABLE_TTL_S)]
             for k in keep:
                 if k not in self.cells:
-                    s, w, n, e = cell_box(*k)
-                    self.cells[k] = _Cell(k, (0.5 * (s + n), 0.5 * (w + e)))
-            for v in far.values():
-                for k in v:
-                    self.cells[k].far = True
-        changed = list(gone)
-        key = self._ring_key(ring, lat, lon)
+                    s_, w_, n_, e_ = cell_box(*k)
+                    self.cells[k] = _Cell(k, (0.5 * (s_ + n_), 0.5 * (w_ + e_)))
+                c = self.cells[k]
+                tier = k in far_cells
+                if c.far != tier:       # (both ways, every time: the ground from the tier's zoom, the clear day near)
+                    c.far, c.ground = tier, None
         self._prune_gibs(datetime.datetime.fromtimestamp(now, datetime.timezone.utc).date())
-        if self.refreshed.get(ring) == key or now < self.retry.get(ring, (0.0, 0))[0]:
-            return changed
+        if self.refreshed.get(ring) == staged["key"] or now < self.retry.get(ring, (0.0, 0))[0]:
+            return staged if staged["gone"] else None
+        pts = [self.cells[k].point for k in near] if ring == "near" else list(far)
+        if not self._admit(ring, len(self._missing(pts, ring)), len(near)):
+            self._defer(ring, f"{len(self._missing(pts, ring))} new locations")
+            return staged if staged["gone"] else None
         try:
             box = self._ims_box(lat, lon)
             obs = self._ims_newest(box) if box is not None else []
             if ring == "near":
                 cells = [self.cells[k] for k in near]
-                forcing = self._forcing([c.point for c in cells], "demand")
-                if forcing is not None:
-                    changed += self._make(cells, forcing, obs)
-            else:
-                pts = list(far)
-                forcing = self._forcing(pts, "background") if pts else []
-                if forcing is not None:
-                    for bc, f in zip(pts, forcing):
-                        cells = [self.cells[k] for k in far[bc]]
-                        changed += self._make(cells, [f] * len(cells), obs)
-        except Exception as e:      # (network, budget, a DEM tile: this ring again after the backoff)
+                forcing = self._forcing(pts, ring, "demand")
+                self._make(cells, forcing, obs, staged)
+            elif pts:
+                forcing = self._forcing(pts, ring, "background")
+                for bc, f in zip(pts, forcing):
+                    cells = [self.cells[k] for k in far[bc]]
+                    self._make(cells, [f] * len(cells), obs, staged)
+        except _Deferred as e:
+            self._defer(ring, str(e))
+            return staged if staged["gone"] else None
+        except Exception as e:      # (network, a DEM tile: this ring again after the backoff)
             fails = self.retry.get(ring, (0.0, 0))[1] + 1
             wait = min(RETRY_S[1], RETRY_S[0] * 2 ** (fails - 1))
             self.retry[ring] = (now + wait, fails)
             log.info("snow field: the %s ring round %.2f, %.2f failed: %s: %s (again in %.0f s)", ring, lat, lon,
                      type(e).__name__, e, wait)
-            return changed
+            return staged if staged["gone"] else None
         self.retry.pop(ring, None)
-        if forcing is not None:
-            self.refreshed[ring] = key
+        staged["done"] = True
+        return staged
+
+    def publish(self, staged):
+        """(event loop) A staged update in effect: the cells gone dropped, the new tables and bin states taken, the
+        ring's refresh noted. Returns the cells whose drawn table changed (the caller invalidates their renders in the
+        same step: Service._publish)."""
+        changed = []
+        with self.lock:
+            for k in staged.get("gone", ()):
+                c = self.cells.pop(k, None)
+                if c is not None and c.table is not None:
+                    changed.append(k)
+            for k, (table, states, z_cell, rows, made) in staged.get("tables", {}).items():
+                c = self.cells.get(k)
+                if c is None:
+                    continue
+                c.states, c.z_cell, c.rows, c.made = states, z_cell, rows, made
+                if table != c.table:
+                    c.table = table
+                    changed.append(k)
+            if staged.get("done"):
+                self.refreshed[staged["ring"]] = staged["key"]
         if changed:
             self.changes += 1
-            log.info("snow field: %s ring, %d cells changed round %.2f, %.2f (%d with snow)", ring, len(changed), lat,
-                     lon, sum(1 for c in self.cells.values() if c.table is not None))
+            log.info("snow field: %s ring, %d cells changed (%d with snow)", staged.get("ring"), len(changed),
+                     sum(1 for c in self.cells.values() if c.table is not None))
         return changed
 
     def _ims_box(self, lat, lon):
