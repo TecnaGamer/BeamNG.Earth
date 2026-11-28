@@ -23,7 +23,7 @@ import numpy as np
 
 import dnp
 
-VERSION = "bridge-railings-2"
+VERSION = "bridge-railings-3"
 COUNTRIES = {"DE"}          # ISO codes whose road bridges get this edge (each added with its own evidence)
 
 # Across the edge, in metres outward from the road's edge (the parapet run's "edge" lies SLAB_W_M past it), and up
@@ -50,12 +50,16 @@ BAR_M = 0.04                # their square section
 POST_M = 0.06               # the railing's posts' square section
 POST_EVERY_M = 2.5          # m between railing posts
 
-# In town (the user's photo of a village bridge, 2026-11-28: a narrow cap and the railing, no guard rail): the road the
-# bridge carries is urban (roads' spec.urban), read from its approaches (town_of: the nearest ground carriageway near
-# parallel to the run within TOWN_REACH_M of its middle).
+# In town (the user's photo of a village bridge, 2026-11-28: the Meiergasse over the Hohlenbach in St. Ilgen, Sulzburg-
+# Laufen, OSM way 268148236, 5.4 m: a narrow cap and the railing, no guard rail): the bridge's approach road (town_of)
+# is a street (TOWN_CLASSES), 50 km/h or less (spec.kmh), or built up (spec.urban). spec.urban alone is not enough:
+# it means built-up land on most of the road's sides, which a village's streets between gardens do not reach (all
+# of St. Ilgen's are urban=False; its streets residential at 30 km/h, the L 125's approaches 70-100 km/h).
+TOWN_CLASSES = {"residential", "living_street"}
+TOWN_KMH = 50.0             # km/h: an approach this fast or slower is in town (Germany's built-up limit)
 TOWN_CAP_W_M = 0.75         # the cap's width in town
 TOWN_RAILING_AT_M = 0.60    # the railing's centre line in town (0.15 m in from the cap's outer face)
-TOWN_REACH_M = 40.0         # m round a run's middle point its approaches are looked for
+TOWN_REACH_M = 25.0         # m round a run's ends and middle its approaches are looked for
 TOWN_PARALLEL = 0.8         # |cos| between a road segment and the run at least (not the street crossing under it)
 
 STEEL = "bne_bridge_railing_steel"      # (bridge_railing.materials.json in art/shapes/beamngEarth/bridge_railing)
@@ -102,37 +106,45 @@ def railing_decks(frame, parapets, mapped=(), country_fn=None, roads=()):
     return out
 
 
+def in_town(spec):
+    """Whether a road (roads.Spec) is a town's: a street class, TOWN_KMH or slower, or built up."""
+    kmh = getattr(spec, "kmh", None)
+    return bool(getattr(spec, "urban", False) or getattr(spec, "cls", None) in TOWN_CLASSES
+                or (kmh is not None and float(kmh) <= TOWN_KMH))
+
+
 def town_of(edge, roads):
-    """Whether the road a parapet run's deck carries is in town: the spec.urban of the nearest ground carriageway
-    segment (roads: (fid, spec, centreline (k, >= 2), ...)) within TOWN_REACH_M of the run's middle point and near
-    parallel to the run there (|cos| >= TOWN_PARALLEL: its approaches, not a street crossing under it). False when
-    none is (a rural rule: the guard rail stays)."""
+    """Whether the road a parapet run's deck carries is in town (in_town): that of the nearest ground carriageway
+    segment (roads: (fid, spec, centreline (k, >= 2), ...)) within TOWN_REACH_M of the run's two ends or middle and
+    near parallel to the run there (|cos| >= TOWN_PARALLEL: its approaches, not a street crossing under it). False
+    when none is (a rural rule: the guard rail stays)."""
     edge = np.asarray(edge, np.float64)
-    m = len(edge) // 2
-    mid = edge[m]
-    d = edge[min(m + 1, len(edge) - 1)] - edge[max(m - 1, 0)]
-    d = d / max(float(dnp.hypot(d[0], d[1])), 1e-9)
     best, town = TOWN_REACH_M, False
-    for item in roads or ():
-        spec, line = item[1], np.asarray(item[2], np.float64)
-        if spec is None or line.ndim != 2 or len(line) < 2:
-            continue
-        a, v = line[:-1, :2], np.diff(line[:, :2], axis=0)
-        ln = dnp.hypot(v[:, 0], v[:, 1])
-        ok = ln > 1e-6
-        if not ok.any():
-            continue
-        a, v, ln = a[ok], v[ok], ln[ok]
-        u = v / ln[:, None]
-        t = np.clip(((mid - a) * u).sum(axis=1), 0.0, ln)
-        q = a + u * t[:, None]
-        dist = dnp.hypot(q[:, 0] - mid[0], q[:, 1] - mid[1])
-        par = np.abs(u[:, 0] * d[0] + u[:, 1] * d[1]) >= TOWN_PARALLEL
-        if not par.any():
-            continue
-        k = int(np.argmin(np.where(par, dist, np.inf)))
-        if float(dist[k]) < best:
-            best, town = float(dist[k]), bool(getattr(spec, "urban", False))
+    k = len(edge)
+    for m in sorted({0, k // 2, k - 1}):
+        p = edge[m]
+        d = edge[min(m + 1, k - 1)] - edge[max(m - 1, 0)]
+        d = d / max(float(dnp.hypot(d[0], d[1])), 1e-9)
+        for item in roads or ():
+            spec, line = item[1], np.asarray(item[2], np.float64)
+            if spec is None or line.ndim != 2 or len(line) < 2:
+                continue
+            a, v = line[:-1, :2], np.diff(line[:, :2], axis=0)
+            ln = dnp.hypot(v[:, 0], v[:, 1])
+            ok = ln > 1e-6
+            if not ok.any():
+                continue
+            a, v, ln = a[ok], v[ok], ln[ok]
+            u = v / ln[:, None]
+            t = np.clip(((p - a) * u).sum(axis=1), 0.0, ln)
+            q = a + u * t[:, None]
+            dist = dnp.hypot(q[:, 0] - p[0], q[:, 1] - p[1])
+            par = np.abs(u[:, 0] * d[0] + u[:, 1] * d[1]) >= TOWN_PARALLEL
+            if not par.any():
+                continue
+            j = int(np.argmin(np.where(par, dist, np.inf)))
+            if float(dist[j]) < best:
+                best, town = float(dist[j]), in_town(spec)
     return town
 
 

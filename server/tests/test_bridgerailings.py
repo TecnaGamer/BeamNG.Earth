@@ -37,24 +37,36 @@ class Decks(unittest.TestCase):
 
 
 class _Spec:
-    def __init__(self, urban):
-        self.urban, self.width = urban, 6.0
+    def __init__(self, urban=False, cls="secondary", kmh=100.0):
+        self.urban, self.cls, self.kmh, self.width = urban, cls, kmh, 6.0
 
 
 class Town(unittest.TestCase):
+    def test_in_town(self):
+        self.assertTrue(br.in_town(_Spec(cls="residential", kmh=30.0)), "St. Ilgen's Meiergasse")
+        self.assertTrue(br.in_town(_Spec(cls="tertiary", kmh=50.0)))
+        self.assertTrue(br.in_town(_Spec(urban=True)))
+        self.assertFalse(br.in_town(_Spec(cls="secondary", kmh=100.0)), "the L 125")
+        self.assertFalse(br.in_town(_Spec(cls="tertiary", kmh=None)))
+
+    def test_long_bridge_reads_its_ends(self):
+        edge = np.column_stack((np.linspace(0.0, 400.0, 41), np.full(41, 5.0)))   # the middle 200 m from either end
+        approach = ("w1", _Spec(cls="residential", kmh=30.0), np.array([[-60.0, 0.0], [-2.0, 0.0]]))
+        self.assertTrue(br.town_of(edge, [approach]))
+
     def test_town_from_the_approach_not_the_street_under(self):
         edge = _run(0)["edge"]                  # along x at y 5, x 0..40
-        approach = ("w1", _Spec(True), np.array([[-60.0, 0.0], [-2.0, 0.0]]))       # the same road, in town
-        under = ("w2", _Spec(False), np.array([[20.0, -30.0], [20.0, 30.0]]))      # a rural road crossing under
+        approach = ("w1", _Spec(cls="residential", kmh=30.0), np.array([[-60.0, 0.0], [-2.0, 0.0]]))   # in town
+        under = ("w2", _Spec(), np.array([[20.0, -30.0], [20.0, 30.0]]))      # a rural road crossing under
         self.assertTrue(br.town_of(edge, [approach, under]))
         self.assertFalse(br.town_of(edge, [under]), "a crossing road is not the bridge's own")
         self.assertFalse(br.town_of(edge, []), "none near: rural, the guard rail stays")
-        far = ("w3", _Spec(True), np.array([[-200.0, 0.0], [-150.0, 0.0]]))
+        far = ("w3", _Spec(urban=True), np.array([[-200.0, 0.0], [-150.0, 0.0]]))
         self.assertFalse(br.town_of(edge, [far]))
 
     def test_railing_decks_carry_town(self):
         with unittest.mock.patch.dict(os.environ, {"BNE_BRIDGE_RAILINGS": "on"}):
-            approach = ("w1", _Spec(True), np.array([[-60.0, 0.0], [-2.0, 0.0]]))
+            approach = ("w1", _Spec(urban=True), np.array([[-60.0, 0.0], [-2.0, 0.0]]))
             self.assertEqual(br.railing_decks(None, [_run(0)], country_fn=_de, roads=[approach]), {0: True})
 
     def test_town_edge_has_no_guard_rail(self):
