@@ -172,7 +172,8 @@ class PackTest(unittest.TestCase):
         g.shared = plancache.for_grader(bake, g, None, None)
         za = g.apply(la, lo, np.zeros(50))
         files = []
-        for root, _d, names in os.walk(os.path.join(bake, "plans", "bake")):
+        for root, dirs, names in os.walk(os.path.join(bake, "plans", "bake")):
+            dirs[:] = [d for d in dirs if d != "g3d"]       # (the run's shared 3D blocks: not cells' plans, not baked)
             files += [os.path.join(root, n) for n in names if n.endswith(".npz")]
         self.assertTrue(files, "planned")
         cache = os.path.join(self.dir, "player")

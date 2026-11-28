@@ -3510,8 +3510,13 @@ class _Planner:
                 # (its line's id: its height is the railways' bed of that line, _track_bed)
                 key = ("rail", kind, fid) + tuple(int(round(v)) for v in (line[0][0], line[0][1], line[-1][0],
                                                                           line[-1][1]))
+                # (its map nodes, as a road's: a track's are the same connectors. Without them a track met a road
+                # wherever a point of each lay within 5 cm, and the 3D solve's lines are read every 2 m: Yokohama's
+                # rail deck ending by a street it bridges, two such points 4.6 cm apart, was joined to the street and
+                # held 5.83 m over it at once, its block left with no roads)
+                ids, at = nodes.get(str(fid), (None, None))
                 out.append(_gsh.Member(key, line, kind, "rail", None, float(lvs[n]) if lvs is not None else 0.0, 2.0,
-                                       None))
+                                       None, ids, node_xy=at))
         out += self._shape_tunnels(k)
         with self.lock:
             if len(memo) > 256:

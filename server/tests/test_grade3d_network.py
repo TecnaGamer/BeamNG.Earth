@@ -2,6 +2,7 @@
 the joins and crossings between paths, each once."""
 import numpy as np
 
+import gradeshapes as _gsh
 import linenet
 from gradeshapes import Member
 from grade3d import network
@@ -186,3 +187,92 @@ def test_a_decks_end_over_a_motorway_on_the_ground_joins_it_only_at_a_node_of_bo
     deck = mm("deck", _line(0, 0, 0, 150), "deck", 1.0, [("b", 200.0, 0.0), ("z", 0.0, 150.0)])
     net = network.build([road, deck])
     assert net.joins == []
+
+
+def test_a_rail_decks_end_by_a_street_joins_it_only_at_a_node_of_both():
+    # (Yokohama: a rail deck ending 2 m from the street it bridges, a point of each 4.6 cm apart there. Read as one map
+    # node, the deck was joined to the street and held 5.83 m over it at once: its block had no answer)
+    street = Member("street", np.array([[-50.0, 2.0], [0.03, 2.0], [50.0, 2.0]]), "ground", "tertiary", None, 0.0, 4.0,
+                    None, frozenset({"a", "b"}), node_xy=(("a", -50.0, 2.0), ("b", 50.0, 2.0)))
+    line = np.c_[np.zeros(51), np.arange(51) * 2.0]
+    deck = Member(("rail", "rail_deck", "t1", 0, 0, 0, 100), line, "rail_deck", "rail", None, 1.0, 2.0, None,
+                  frozenset({"s", "e"}), node_xy=(("s", 0.0, 0.0), ("e", 0.0, 100.0)))
+    net = network.build([street, deck])
+    assert net.joins == []
+
+
+def test_a_road_shorter_than_the_join_reach_joins_each_neighbour_at_its_own_end():
+    # (Suedtiroler Platz: a 2 m parking aisle from a building passage's end to the car park's ring, both its ends within
+    # reach of both: each end was joined to both, the passage's end held at the ring's height)
+    def mm(key, line, kind, level, at):
+        return Member(key, np.asarray(line, np.float64), kind, "service", None, level, 2.5, None,
+                      frozenset(c for c, _x, _y in at), node_xy=tuple(at))
+    passage = mm("passage", _line(0, 0, 0, -15), "tunnel", -1.0, [("a", 0.0, 0.0), ("z", 0.0, -15.0)])
+    aisle = mm("aisle", [[0.0, 0.0], [0.0, 2.0]], "ground", 0.0, [("a", 0.0, 0.0), ("b", 0.0, 2.0)])
+    ring = mm("ring", _line(-20, 2, 20, 2), "ground", 0.0, [("r0", -20.0, 2.0), ("b", 0.0, 2.0), ("r1", 20.0, 2.0)])
+    net = network.build([passage, aisle, ring])
+    got = {frozenset([(str(net.members[i].key), round(si, 1)), (str(net.members[j].key), round(sj, 1))])
+           for i, si, j, sj in net.joins}
+    assert got == {frozenset([("aisle", 0.0), ("passage", 0.0)]), frozenset([("aisle", 2.0), ("ring", 20.0)])}
+    # (and the passage's portal, opening onto the aisle 2 m from the ring, is not under the ring)
+    assert [_gsh._over(net.members[i], net.members[j]) for i, _si, j, _sj, _q in net.crossings
+            if _gsh._over(net.members[i], net.members[j]) is not None] == []
+
+
+def test_a_deck_landing_on_a_junction_is_not_over_the_road_leaving_the_next_one():
+    # (Kawazu: a deck landing on a junction, a 2.1 m stub from it to the next, where another road starts 2 m from the
+    # deck's end: that road was held 5.05 m under the deck's end, joined to it through the stub)
+    def mm(key, line, kind, level, at):
+        return Member(key, np.asarray(line, np.float64), kind, "residential", None, level, 3.0, None,
+                      frozenset(c for c, _x, _y in at), node_xy=tuple(at))
+    deck = mm("deck", _line(-14, -14, 0, 0), "deck", 1.0, [("d0", -14.0, -14.0), ("j1", 0.0, 0.0)])
+    street = mm("street", _line(-200, 50, 0, 0), "ground", 0.0, [("s0", -200.0, 50.0), ("j1", 0.0, 0.0)])
+    stub = mm("stub", [[0.0, 0.0], [1.5, 1.4]], "ground", 0.0, [("j1", 0.0, 0.0), ("j2", 1.5, 1.4)])
+    road = mm("road", _line(1.5, 1.4, 20, 100), "ground", 0.0, [("j2", 1.5, 1.4), ("r1", 20.0, 100.0)])
+    net = network.build([deck, street, stub, road])
+    assert [c for c in net.crossings if _gsh._over(net.members[c[0]], net.members[c[2]]) is not None] == []
+
+
+def test_a_deck_landing_on_a_roads_middle_is_not_over_a_road_leaving_it_beside():
+    # (Dallas: a service deck landing on a service road's middle, another road leaving that road 1 m on: held 6.35 m
+    # under the deck's end, both joined to the road it lands on)
+    def mm(key, line, kind, level, at):
+        return Member(key, np.asarray(line, np.float64), kind, "service", None, level, 3.0, None,
+                      frozenset(c for c, _x, _y in at), node_xy=tuple(at))
+    deck = mm("deck", _line(-60, 0, 0, 0), "deck", 1.0, [("d0", -60.0, 0.0), ("j1", 0.0, 0.0)])
+    road = mm("road", _line(0, -100, 0, 100, 201), "ground", 0.0,
+              [("r0", 0.0, -100.0), ("j1", 0.0, 0.0), ("j2", 0.0, 1.0), ("r1", 0.0, 100.0)])
+    other = mm("other", _line(0, 1, 38, 3.5), "ground", 0.0, [("j2", 0.0, 1.0), ("o1", 38.0, 3.5)])
+    net = network.build([deck, road, other])
+    assert [c for c in net.crossings if _gsh._over(net.members[c[0]], net.members[c[2]]) is not None] == []
+
+
+def _part(way, kind, line, level, nodes):
+    return Member((way, kind, 0, 0), np.asarray(line, np.float64), kind, "primary", None, level, 4.0, None,
+                  frozenset(c for c, _x, _y in nodes), node_xy=tuple(nodes))
+
+
+def test_two_portals_side_by_side_are_no_separation():
+    # (Porte Maillot: the primary leaves its tunnel straight onto a level-1 part, its portal 2.2 m from a service road's
+    # own portal beside it, the two lines never crossing. Each end by the other road was a separation: the primary's
+    # portal held 6.35 m over the service road and 5.15 m under it at once, its block with no answer)
+    ms = [_part("p", "tunnel", _line(0, -100, 0, 0), -1.0, [("p0", 0, -100), ("p1", 0, 0)]),
+          _part("p", "deck", _line(0, 0, 0, 100), 1.0, [("p1", 0, 0), ("p2", 0, 100)]),
+          _part("s", "tunnel", _line(40, -100, 2.2, 0), -1.0, [("s0", 40, -100), ("s1", 2.2, 0)]),
+          _part("s", "ground", _line(2.2, 0, 40, 100), 0.0, [("s1", 2.2, 0), ("s2", 40, 100)])]
+    net = network.build(ms)
+    # (the two tunnels' portals by each other, both level -1: a contact with no order, no clearance)
+    assert [_gsh._over(net.members[i], net.members[j]) for i, _si, j, _sj, _q in net.crossings] == [None]
+    assert net.joins == []
+    assert sorted(sorted(p) for p in _paths(net)) == [sorted([str(ms[0].key), str(ms[1].key)]),
+                                                     sorted([str(ms[2].key), str(ms[3].key)])]
+
+
+def test_a_portal_by_a_road_it_crosses_keeps_the_separation():
+    # (the service road crossing the primary's line a metre past the primary's portal: the map's own contradiction, kept)
+    ms = [_part("p", "tunnel", _line(0, -100, 0, 0), -1.0, [("p0", 0, -100), ("p1", 0, 0)]),
+          _part("p", "deck", _line(0, 0, 0, 100, 101), 1.0, [("p1", 0, 0), ("p2", 0, 100)]),
+          _part("s", "ground", _line(1.5, 1, 100, 1), 0.0, [("s1", 1.5, 1), ("s2", 100, 1)]),
+          _part("s", "ground", _line(-100, 1, 1.5, 1), 0.0, [("s0", -100, 1), ("s1", 1.5, 1)])]
+    net = network.build(ms)
+    assert net.crossings
