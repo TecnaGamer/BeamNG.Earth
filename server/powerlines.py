@@ -13,6 +13,7 @@ import os
 import numpy as np
 
 import fast
+import polishpoles
 import dnp
 
 log = logging.getLogger("earthd.powerlines")
@@ -243,6 +244,11 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
     built its decks, and an exception here lost the whole road tile (a viaduct never arrived). The rows are added
     only once the whole layout succeeded, never half a line's towers."""
     if md is None:
+        import roads
+        box = roads.tile_bbox(tx, ty)
+        extent = polishpoles.bounds(frame, box, 1.)
+        if extent:
+            _standalone(frame, box, elev, polishpoles.Supports(frame, extent, []), props, clearance)
         return
     got_props, got_wires = [], []
     try:
@@ -440,6 +446,8 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
     """tile_lines' layout, into props / wires (fresh lists: tile_lines adds them on success)."""
     import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
+    box = roads.tile_bbox(tx, ty)
+    extent = polishpoles.bounds(frame, box, polishpoles.LIVE_MARGIN)
     cells = roads.cells_of_tile(frame, tx, ty, margin=MAX_SPAN_M / 4)
     lines, poles, seen = [], [], set()
     plan, memo = {}, {}             # (BNE_POWER_YARDS: each line ring's runs to lay out; the classes' support cells)
@@ -491,14 +499,37 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
     else:
         subs = _substations(frame, cells, md)
     fast.require(496, "power_line_layout")
+    evidence = None
+    if extent:
+        extra = set(roads.cells_of_tile(frame, tx, ty, margin=NEAR_M + 10.)) - set(cells)
+        support_layers = layers.copy()
+        for key in sorted(extra, key=str):
+            layer = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+            if layer is not None and "class" in layer.attrs:
+                support_layers.append(layer)
+        evidence = polishpoles.Supports(frame, extent, support_layers)
     ends = np.zeros((0, 7))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
         got = _lay(frame, md, elev, subs, these, group, h, arms, clear_m, wire_r, (x0, y0, x1, y1), props, wires,
-                   clearance)
+                   clearance, evidence)
         if len(got):
             ends = np.vstack([ends, got])
+    if evidence is not None:
+        _standalone(frame, box, elev, evidence, props, clearance)
     _yards(frame, elev, subs, ends, (x0, y0, x1, y1), props)
+
+
+def _standalone(frame, box, elev, evidence, props, clearance):
+    from geotiles import box_owns
+    points = [evidence.points[key] for key in sorted(evidence.standalone - evidence.drawn)]
+    owned = [(x, y, tower) for x, y, tower in points if box_owns(box, x, y)]
+    if owned:
+        x, y, _ = np.asarray(owned).T
+        for (px, py, tower), z in zip(owned, ground_at(frame, elev)(x, y)):
+            row = tower_row(G_PYLON if tower else G_POLE, PYLON_H if tower else POLE_H, px, py, z, 0.)
+            if clearance is None or clearance.clear(row):
+                props.append(row)
 
 
 def _placed(frame, md, ll, clear_m, box):
@@ -543,7 +574,7 @@ def _cell_box(frame, key, margin):
     return (float(e.min()) - margin, float(n.min()) - margin, float(e.max()) + margin, float(n.max()) + margin)
 
 
-def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, props, wires, clearance):
+def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, props, wires, clearance, evidence=None):
     """The towers (group, h m tall; conductors at arms) and conductors of lines [(fid, lon/lat ring)] (tile_lines);
     returns their ends (n, 7: power_line_layout's, the last their yard: the index into subs) at the substations."""
     from polygon import Path
@@ -553,6 +584,10 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
         lines.sort(key=lambda q: q[0])          # (the same order in every tile: shared towers decided alike)
         ll = np.concatenate([r for _, r in lines])
         e, n = _placed(frame, md, ll, clear_m, box)
+        excluded = set()
+        confirmed = {}
+        if evidence is not None:
+            excluded, confirmed = evidence.align(ll, e, n)
         la2, lo2, _ = frame.enu_to_geodetic(e, n, np.zeros(len(e)))
         la2, lo2 = np.asarray(la2, np.float64), np.asarray(lo2, np.float64)
         _, _, z = frame.geodetic_to_enu(la2, lo2, np.asarray(elev(la2, lo2), np.float64))
@@ -574,9 +609,21 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
             [x0, y0, x1, y1], yard_pts, yard_off, yard_id, list(ANCHOR_AT), GANTRIES,
             ground_at(frame, elev) if YARDS_ON else None, ground_at(frame, elev), SPAN_CLEAR_M)
         for x, y, zz, yaw, s in towers:
+            if (x, y) in excluded:
+                continue
+            if (x, y) in confirmed:
+                evidence.drawn.add(confirmed[x, y])
             row = tower_row(group, round(h * s, 2), x, y, zz, yaw)
             if clearance is None or clearance.clear(row):
                 props.append(row)
+        if excluded:
+            # Native span ownership is by midpoint. Check both ends even across tile edges.
+            keep = [j for j, ends_of_span in enumerate(sup)
+                    if all(q[0] != 1 or tuple(q[1:3]) not in excluded for q in ends_of_span.reshape(2, 6))]
+            chunks = [wp[wo[j]:wo[j+1]] for j in keep]
+            wp = np.concatenate(chunks) if chunks else np.empty((0, 3))
+            wo = np.cumsum([0] + [len(chunk) for chunk in chunks])
+            sup = sup[keep]
         if YARDS_ON:
             wires.extend(span_wires(wp, wo, sup, group, h, wire_r))
         else:

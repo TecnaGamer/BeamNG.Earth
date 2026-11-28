@@ -2309,6 +2309,14 @@ def main():
         ensure_ca_certs()
         run_addon(sys.argv[2:])
         return
+    if sys.argv[1:] == ["--check-mapillary"]:
+        # An empty "point" MVT layer (version 2), exercised inside the frozen app.
+        import mapbox_vector_tile
+        layer = mapbox_vector_tile.decode(bytes.fromhex("1a090a05706f696e747802"))
+        if layer["point"]["features"] != []:
+            raise RuntimeError("Mapillary vector tile decoder smoke test failed")
+        print("ok: Mapillary vector tile decoder")
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--check-numpy":
         # (the release build's check: numpy imports with its AVX-512 targets held back, warnings as errors:
         # server/npyguard.py)

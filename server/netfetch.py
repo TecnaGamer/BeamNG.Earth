@@ -189,6 +189,8 @@ class HostPolicy:
 TILE_HOST = dict(redirect_limited=True, binary=True)
 # docs/research/2026-10-10-rate-limits.md §5.2, the hosts the server contacts today (rates per player).
 POLICIES = {
+    "tiles.mapillary.com": HostPolicy(rate=2., burst=2., max_conc=2, shared=True, optional=True,
+                                      max_attempts=2, daily_hard=5000, **TILE_HOST),
     # (2026-10-16, the user: raise them, lower again on trouble; a first visit's far field waited ~100 s on 15/s)
     # (2026-10-23, the user: raise it again: 24 at once; a PC already got ~26/s with 12 and the same far field with 24,
     # all answered, so it helps players far from USGS, whose every request waits longer)
@@ -502,6 +504,7 @@ ROLES = {
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
     "tiles.maps.eox.at": "worldwide satellite photos; new ground outside the detailed-photo regions may stay plain",
+    "tiles.mapillary.com": "additional mapped utility poles in Poland",
     "tiles.mapterhorn.com": "terrain heights; new places use the coarser backup meanwhile",
     "download.mapterhorn.com": "detailed terrain heights (second source) and the list of where they exist; new places "
                                "may load slower",

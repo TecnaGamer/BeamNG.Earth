@@ -163,6 +163,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'LICENSE')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'CREDITS.md')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'SOURCES.md')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'docs', 'RELAUNCH_TROUBLESHOOTING.md')}{SEP}docs",
            "--add-data", f"{os.path.join(ROOT, 'docs', 'STABILITY_VALIDATION.md')}{SEP}docs",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)

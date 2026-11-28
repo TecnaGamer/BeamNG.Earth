@@ -808,4 +808,8 @@ for name, detail in pairs({ low = 'low', medium = 'medium', high = 'normal', ult
     'presets preserve cliff category choices')
   T.check(settings.PRESETS[name].cliffTextures == nil, 'presets never opt into a texture download')
 end
+T.check(settings.uiMapillaryStatus() == 'default', 'no token initially')
+T.check(settings.uiMapillarySet('MLY|test|example').ok and settings.uiMapillaryStatus() == 'saved', 'save client token')
+T.check(not settings.uiMapillarySet('bad token').ok and settings.uiMapillaryStatus() == 'saved', 'reject invalid replacement')
+T.check(settings.uiMapillarySet('').ok and settings.uiMapillaryStatus() == 'rules', 'remove saved token')
 T.done('test_settings')
