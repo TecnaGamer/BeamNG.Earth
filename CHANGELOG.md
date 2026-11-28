@@ -13,9 +13,9 @@ What changed in each release of BeamNG.Earth, newest first.
   The AI road graph is no longer applied again when it has not changed, which should reduce the hitches and the
   reloads that mods listening for it went through.
 - **Mod compatibility: the ground and the moving origin**: mods that ask the game where the ground is
-  (`core_terrain.getTerrainHeight`) now get the land you see past the terrain block round you, instead of one height
-  for everywhere, which should stop things a mod places far away (a weather mod's storms) from sinking into hills
-  and hanging over valleys. The modding API 1.13 adds the ground's height at any point (`groundHeight`) and a way to
+  (`core_terrain.getTerrainHeight`, `be:getSurfaceHeightBelow`) now get the land you see past the terrain block round
+  you, instead of one height for everywhere, which should stop things a mod places far away (a weather mod's storms)
+  from sinking into the ground. The modding API 1.13 adds the ground's height at any point (`groundHeight`) and a way to
   carry positions a mod keeps across a rebase or a teleport (`fromOldFrame`); `onBeamNGEarthRebased` now says how far
   the origin moved (docs/ADDONS.md). Prop "vehicles" of other mods (debris, cones) are no longer treated as parked
   player cars, so they should no longer be taken out and spawned again far away, or get the collision building a

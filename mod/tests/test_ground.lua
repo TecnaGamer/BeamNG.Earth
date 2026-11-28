@@ -173,7 +173,55 @@ T.near(core_terrain.getTerrainHeight(vec3(10, 10, 0)), blockGround(10, 10), 1e-9
 g._reset()
 core_terrain.getTerrainHeight = stock
 
--- 13. the API's call
+-- 13. be:getSurfaceHeightBelow: the physics' flat surface at z = 0 past the block answered as the land (once known);
+-- the block, under the land, from below 0 and every other method as they were; another object sharing the metatable
+-- not touched; the stock binding back at the level's end
+do
+  local physics = function(self, p)
+    if p.z < 0 then return -1e20 end                     -- (from below the plane: its miss value)
+    if p.x >= x0 and p.x <= x1 and p.y >= y0 and p.y <= y1 then return blockGround(p.x, p.y) end
+    return 0                                             -- (past the block: the plane at 0)
+  end
+  local count = function() return 3 end
+  local idx = function(t, k)
+    if k == 'getSurfaceHeightBelow' then return physics end
+    if k == 'getObjectCount' then return count end
+  end
+  local mt = { __index = idx }
+  local oldBe = rawget(_G, 'be')
+  be = setmetatable({}, mt)
+  local other = setmetatable({}, mt)                      -- (another bound object, the same metatable)
+  g._reset()
+  g.setLevel(true)
+  T.check(g.surfaceWrapped() and mt.__index ~= idx, 'our level: getSurfaceHeightBelow wrapped')
+  T.near(be:getSurfaceHeightBelow(vec3(100, -50, 2000)), blockGround(100, -50), 1e-9, 'on the block: unchanged')
+  T.check(be:getSurfaceHeightBelow(vec3(2000, 300, 3000)) == 0, 'past the block, not known yet: the plane (asked)')
+  g.flush(); answer()
+  T.near(be:getSurfaceHeightBelow(vec3(2000, 300, 3000)), land(2000, 300), 1e-9, 'past the block: the land, not 0')
+  T.check(be:getSurfaceHeightBelow(vec3(2000, 300, 100)) == 0, 'a point under the land: the plane as it was')
+  T.check(be:getSurfaceHeightBelow(vec3(2000, 300, -50)) == -1e20, 'from below the plane: its miss as it was')
+  T.check(be:getObjectCount() == 3, 'every other method as it was')
+  T.check(other.getSurfaceHeightBelow == physics, 'another object with the same metatable: not wrapped')
+  g.setLevel(false)
+  T.check(mt.__index == idx and not g.surfaceWrapped(), 'the level\'s end: the stock binding back')
+  T.check(be:getSurfaceHeightBelow(vec3(2000, 300, 3000)) == 0, 'off our level: the plane')
+  -- AWS's groundZ (aws.lua:205-216): be:getSurfaceHeightBelow from 2000 m over its hint, else getTerrainHeight
+  g.setLevel(true)
+  local function awsGround(x, y, zHint)
+    local ok, h = pcall(be.getSurfaceHeightBelow, be, vec3(x, y, zHint + 2000))
+    if ok and type(h) == 'number' and h > -1e6 then return h end
+    ok, h = pcall(core_terrain.getTerrainHeight, vec3(x, y, 0))
+    if ok and type(h) == 'number' and h > -1e6 then return h end
+    return zHint
+  end
+  awsGround(6000, -3000, 1600); g.flush(); answer()
+  T.near(awsGround(6000, -3000, 1600), land(6000, -3000), 1e-9, 'AWS\'s groundZ 6 km away: the land')
+  T.near(awsGround(10, 10, 1600), blockGround(10, 10), 1e-9, 'AWS\'s groundZ on the block: the terrain')
+  g._reset()
+  be = oldBe
+end
+
+-- 14. the API's call
 package.loaded['beamngEarth/net'] = { isConnected = function() return true end, send = function() end }
 local api = require('beamngEarth/api')
 g.setLevel(true)

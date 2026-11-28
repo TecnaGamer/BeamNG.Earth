@@ -23,8 +23,9 @@
 -- could make a long frame; the app's answer costs the game nothing.
 -- Nothing here runs unless something asks: no per-frame work while nothing waits (core.lua checks one flag), no objects.
 --
--- Not covered: be:getSurfaceHeightBelow and castRayStatic (engine methods, physics only) still answer 0 past the block
--- and the colliders; mods should prefer api.groundHeight (docs/ADDONS.md "The ground").
+-- be:getSurfaceHeightBelow answers 0 there (the physics' flat surface at z = 0): on our level that 0 becomes the land's
+-- height too, once known (setSurface). castRayStatic (a physics ray: our own car's ground checks use it) is left as it
+-- is. Mods should prefer api.groundHeight (docs/ADDONS.md "The ground").
 local M = {}
 
 M.CELL = 16               -- m: the lattice of the land's heights past the block
@@ -225,10 +226,67 @@ local function makeWrapper(base)
   end
 end
 
--- Our level in play (core.lua onLevelStart): core_terrain.getTerrainHeight answers the land past the block; false
--- (another level, the level's end): the stock function back. A wrap another mod put over ours since is left alone
--- (ours under it falls back to the function it wrapped off our level).
+-- be:getSurfaceHeightBelow on our level (SURFACE_WRAP). Past the block and the colliders the physics has a flat
+-- surface at z = 0 (in game, 2026-11-27: getSurfaceHeightBelow answers 0 from above it, its miss value -1e20 from
+-- below it, castRayStatic hits it), so a mod standing something on "the surface below" put it there, 1.6 km under
+-- Boulder's land: the AWS mod's storms. Where it answers exactly 0 for a point over the land past the block, the land's
+-- height (M.height) is answered instead, once known; everywhere else (the block, the colliders, under the land, off
+-- our level) its own answer, unchanged. The method lives in the BeamEngine binding's metatable (__index is a C
+-- function there): the wrap is an __index in front of it that hands out this one method and passes every other key
+-- to the original at once. Off with SURFACE_WRAP = false.
+M.SURFACE_WRAP = true
+local beMt, beIndex, beWrapIndex = nil, nil, nil
+-- (per install, over the method it found: a wrap another mod put in front of ours keeps working after ours is off)
+local function makeSurface(base)
+  return function(self, p, ...)
+    local h = base(self, p, ...)
+    if h == 0 and type(p) ~= 'nil' then
+      local okP, x, y, z = pcall(function() return tonumber(p.x), tonumber(p.y), tonumber(p.z) end)
+      if okP and x and y and z then
+        local st = coreState()
+        if st and st.inOurLevel and not onBlock(st, x, y) then
+          local land = M.height(x, y)
+          if land and land <= z then return land end
+        end
+      end
+    end
+    return h
+  end
+end
+
+function M.setSurface(ours)
+  local b = rawget(_G, 'be')
+  if ours then
+    if beWrapIndex then return true end
+    if not (M.SURFACE_WRAP and b) then return false end
+    local okM, mt = pcall(getmetatable, b)
+    if not (okM and type(mt) == 'table' and type(mt.__index) == 'function') then return false end
+    local idx = mt.__index
+    local okF, f = pcall(idx, b, 'getSurfaceHeightBelow')
+    if not (okF and type(f) == 'function') then return false end
+    local surface = makeSurface(f)
+    -- (only this object's lookup of this one key: the metatable may be shared with other bound classes)
+    local wrap = function(t, k)
+      if k == 'getSurfaceHeightBelow' and rawequal(t, b) then return surface end
+      return idx(t, k)
+    end
+    local okS = pcall(function() mt.__index = wrap end)
+    if not okS then return false end
+    beMt, beIndex, beWrapIndex = mt, idx, wrap
+    return true
+  end
+  if beMt and beMt.__index == beWrapIndex then pcall(function() beMt.__index = beIndex end) end
+  beMt, beIndex, beWrapIndex = nil, nil, nil
+  return false
+end
+function M.surfaceWrapped() return beWrapIndex ~= nil and beMt ~= nil and beMt.__index == beWrapIndex end
+
+-- Our level in play (core.lua onLevelStart): core_terrain.getTerrainHeight answers the land past the block, and
+-- be:getSurfaceHeightBelow its plane's 0 there; false (another level, the level's end): the stock functions back. A
+-- wrap another mod put over ours since is left alone (ours under it falls back to the function it wrapped off our
+-- level).
 function M.setLevel(ours)
+  M.setSurface(ours)
   local ct = rawget(_G, 'core_terrain')
   if ours then
     if not (ct and type(ct.getTerrainHeight) == 'function') then return false end

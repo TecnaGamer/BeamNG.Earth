@@ -407,7 +407,8 @@ Boulder, Colorado, where the land is 1,550 to 2,950 m up within 24 km):
 
 | call | on the block (about 500 m round the player) | past it |
 |---|---|---|
-| `be:getSurfaceHeightBelow(p)`, `castRayStatic` | right (terrain, and the colliders of roads, sidewalks, decks and buildings near the car) | 0: the physics answers a flat ground at z = 0 everywhere, whatever the land's height |
+| `be:getSurfaceHeightBelow(p)`, `castRayStatic` (stock) | right (terrain, and the colliders of roads, sidewalks, decks and buildings near the car) | 0: the physics has a flat surface at z = 0 there, whatever the land's height (from below it, a miss: -1e20 / the full length) |
+| `be:getSurfaceHeightBelow(p)` on BeamNG.Earth's level, 1.13 | right (unchanged) | the land's height where the physics answered 0 for a point over the land (0 until it is known); `castRayStatic` unchanged |
 | `core_terrain.getTerrainHeight(p)` (stock) | right | the block's floor (its lowest ground) for every point |
 | `core_terrain.getTerrainHeight(p)` on BeamNG.Earth's level, 1.13 | right (unchanged) | the land's height, as `groundHeight` (the block's floor only until it is known) |
 | `api.groundHeight(x, y)` | right | the land's height |
@@ -430,11 +431,13 @@ that wants a whole map at once gets it over a few seconds. The game pays nothing
 app, not from rays through the drawn scene (those cost up to 50 ms the first time they cross a mesh). It costs
 nothing until something calls it.
 
-While BeamNG.Earth's level is loaded, the stock `core_terrain.getTerrainHeight` answers the same past the block, so
-mods written for stock maps find the ground without knowing about BeamNG.Earth. The engine's own
-`TerrainBlock:getHeight` (`core_terrain.getTerrain():getHeight(p)`) and the physics queries are unchanged. A mod
-that asks `be:getSurfaceHeightBelow` first and takes its 0 past the block should ask `groundHeight` (or
-`getTerrainHeight`) first there.
+While BeamNG.Earth's level is loaded, the stock `core_terrain.getTerrainHeight` and `be:getSurfaceHeightBelow` answer
+the same past the block, so mods written for stock maps find the ground without knowing about BeamNG.Earth.
+`getSurfaceHeightBelow` keeps its own answer everywhere it is not that plane's 0: on the block, on colliders, for a
+point under the land, from below z = 0. The land there is still not solid: something dropped on it falls to the
+plane, so a mod that spawns vehicles or props far from the car should check `kind == 'terrain'` or
+`collisionReady(x, y, r)` first. The engine's own `TerrainBlock:getHeight` (`core_terrain.getTerrain():getHeight(p)`)
+and `castRayStatic` are unchanged.
 
 ### Things in the world across a rebase or a teleport (1.13)
 
