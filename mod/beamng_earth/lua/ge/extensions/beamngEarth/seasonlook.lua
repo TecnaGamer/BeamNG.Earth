@@ -174,10 +174,15 @@ local function untintAll()
   end
 end
 
--- Every frame in our level (lat: the anchor's latitude, koppen: its climate class): the leaf materials tinted to the
--- season, checked every CHECK_S.
-function M.update(inOurLevel, lat, koppen)
+-- Every frame in our level (lat: the anchor's latitude, koppen: its climate class, leaf: its leaf calendar,
+-- anchor_ready.leaf with BNE_LEAF_CYCLE): the leaf materials tinted to the season, checked every CHECK_S.
+local bareLeaf = nil
+function M.update(inOurLevel, lat, koppen, leaf)
   if not inOurLevel or not scenetree then return end
+  if bare and leaf ~= bareLeaf then                         -- (a table compare: once per anchor message)
+    bare.setLeaf(leaf)
+    bareLeaf = leaf
+  end
   if bare and lat and lat ~= bareLat then                   -- (before the place's first tree)
     bare.setClimate(koppen)
     bare.setLat(lat)
@@ -227,7 +232,7 @@ function M.restore()
   orig, applied = {}, {}
   if package.loaded['beamngEarth/winterlook'] then require('beamngEarth/winterlook').restore() end
   if bare then bare.restore() end         -- (kept loaded: the next level of this server session resumes it)
-  bareLat, lastCheck = nil, -math.huge
+  bareLat, bareLeaf, lastCheck = nil, nil, -math.huge
 end
 
 return M

@@ -919,7 +919,8 @@
     "px": {"type": "num", "nullable": true, "optional": true},
     "py": {"type": "num", "nullable": true, "optional": true, "doc": "the prepare_anchor's spot, echoed"},
     "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"},
-    "koppen": {"type": "int", "optional": true, "doc": "2026-11-26: the anchor's Koppen-Geiger class (climate.koppen_at, Beck et al. 1-30, 0 the sea): the trees' leaf cycle (seasonlook.climateFactor); left out when it cannot be read"}
+    "koppen": {"type": "int", "optional": true, "doc": "2026-11-26: the anchor's Koppen-Geiger class (climate.koppen_at, Beck et al. 1-30, 0 the sea): the trees' leaf cycle (seasonlook.climateFactor); left out when it cannot be read"},
+    "leaf": {"type": "dict", "optional": true, "doc": "2026-11-27: the place's leaf calendar (leafcycle.anchor_leaf, earthfast phenology 648): baretrees.lua gives each deciduous tree its dates by it; sent only with BNE_LEAF_CYCLE on"}
    }
   },
   "anchor_progress": {

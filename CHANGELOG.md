@@ -20,6 +20,12 @@ What changed in each release of BeamNG.Earth, newest first.
   the origin moved (docs/ADDONS.md). Prop "vehicles" of other mods (debris, cones) are no longer treated as parked
   player cars, so they should no longer be taken out and spawned again far away, or get the collision building a
   player car gets.
+- **Live air traffic** (off by default; Settings, Air traffic): the real aircraft around you from live ADS-B data,
+  built in from devo343's Live Air Traffic add-on (no separate window or program to run). Aircraft models with airline
+  colours, lights, contrails that follow the real weather, engine sounds, labels, a follow camera and a seat view, and
+  the aircraft on the 2D and 3D maps (click one to set the GPS). Turning it on first says what is sent and to whom:
+  only your approximate area, about every 15 seconds while you are in the world. Keys: Ctrl+Alt+A on / off,
+  Ctrl+Alt+K labels, Ctrl+Alt+C contrails, Ctrl+Alt+I what is that plane, Ctrl+Alt+S sounds, Ctrl+Alt+F follow.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
@@ -36,7 +42,13 @@ What changed in each release of BeamNG.Earth, newest first.
   tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
   young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green. Each tree has one
   look at every distance (bare, autumn-coloured or green), and towns in hot deserts (such as Phoenix) and the tropics
-  keep most of their trees green through the winter.
+  keep most of their trees green through the winter. Reduced the bare trees' popping between their detail levels:
+  their twigs keep the same density from near to far, so a crown no longer thins out and then turns into a dark solid
+  mass at a distance.
+- **Leaf cycle (Experimental, with Winter).** Broadleaf trees follow the real date at the place: in autumn they colour
+  and lose their leaves over several weeks, one tree at a time, and in spring they leaf out the same way. The dates
+  follow the latitude, the height and the climate (maritime places keep their leaves longer, the far north loses them
+  sooner).
 - **BeamMP**: `G.WEATHER` takes the new presets and `real-host` (everyone gets the live weather where the
   longest-joined player is). `real` (each player's own weather) stays the default.
 - **Lightning and thunder** in thunderstorms (the real ones where the weather data has them, and the Thunderstorm and
