@@ -449,7 +449,9 @@ def base_ao_vfs(px):
 # takes the modules that call revisit.key / load / store, and this one calls them as revisitmod), so a change here to how
 # a block's photo is made (write_base, write_quick_base's overlap, _base_in's arguments, BASE_SHIFT_M) bumps it, or a
 # place visited before keeps the photo the older code made. blockworker.base_photo and genground.py are in the code key.
-BASE_PHOTO_VERSION = 2
+# 3 (2026-11-27, earthfast 650): the packed copy's mips in integers (bc7.mips: the far textures' chain, no longer the
+# float one; within one sRGB step, other bytes), so a kept photo of the float chain is never shown beside new ones
+BASE_PHOTO_VERSION = 3
 BASE_AO = 251                   # its flat value (tools/make_level_assets.py)
 GRAPHICS_SCALE = (0.5, 3.0)     # the 'graphics' message's scales are clamped to this (Connection.set_graphics)
 # Screen-space LOD (the mod's lodPx setting, the 'graphics' message; Connection.view): tau is clamped to LOD_PX_MAX; the
@@ -484,6 +486,13 @@ WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
 PLACES_FOLLOWUPS, PLACES_TRIES = 4, 24
 # the modding API's towns (Connection.towns): the radius and count when the request names none (placenames caps both)
 TOWNS_RADIUS_DEFAULT_M, TOWNS_LIMIT_DEFAULT = 20000.0, 50
+# The modding API's ground heights (api.groundHeight 1.13, the mod's ground.lua; the 2026-11-27 AWS Tornado study):
+# at most this many points a request; each read from the DEM at the zoom whose pixels are about its distance from the
+# origin / GROUND_FAR_PX_DIV (the far tiles' own scale), at least GROUND_FAR_PX_MIN m.
+GROUND_POINTS_MAX = 512
+GROUND_FAR_PX_DIV, GROUND_FAR_PX_MIN = 48.0, 16.0
+GROUND_COORD_MAX = 2.0e7        # m from the origin: past half the earth's circumference a coordinate is nonsense
+GROUND_TASKS = 4                # ground requests running at once per connection (the ui_pool is shared)
 
 HM_CACHE = 48               # heightmaps kept, the protected ones with them (6 before 2026-10-30: a fast player's
                             # prefetched chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again;
@@ -4981,20 +4990,35 @@ class Server:
         return snowcovermod.spec_for_square(anchor.frame, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M,
                                             size)
 
-    def snow_changed(self, fields=None):
+    def snow_changed(self, fields=None, cells=None):
         """(event loop) The snow state changed (W1's state, a preset set live: snow_mode): the far tiles with a texture
         whose snow look changed marked stale and re-rendered at the live retexture's pace, nearest a player first (each
         takes its new spec: far_snow), the blocks' photos whose look changed at their next base refresh (base_stale).
         A committed block's snow layer follows with its next build (its .ter is the engine's). Returns the far tiles
         marked.
         fields: (old, new) snowcover Fields of a W1 state change (snow.Service: the shared table before and after,
-        None for no snow); a texture changes only where its look does (_snow_tile_changed: the tables round its square;
-        the road shares only under texels fine enough for the roads, _snow_roads_of). None (a mode set live): every
-        texture. Only tiles some connection shows or holds are queued (the others are stale: rendered again when sent).
+        None for no snow; or the local weather snow field's before and after a ring's update); a texture changes only
+        where its look does (_snow_tile_changed: the tables round its square; the road shares only under texels fine
+        enough for the roads, _snow_roads_of). None (a mode set live): every texture. Only tiles some connection shows
+        or holds are queued (the others are stale: rendered again when sent).
+        cells: the snow field's cells (snowfield.py (ci, cj)) whose tables changed, a pre-filter: a texture farther than
+        a cell's pad from all of them (snowcover.FIELD_PAD_CELLS) cannot have changed, its look not compared (S-7: a
+        ring of ~1,000 cells' tables, one valley's change).
         Each change is a new snow generation (snow_gen, its fields kept in snow_hist): a render submitted before it,
         a first build too, is checked when it is in (_tile_done, _snow_since) and made again where its look changed.
         Stelvio, 2026-11-28: a road share moving in one plow class re-rendered all 1,403 far tiles, twice in two
         minutes."""
+        hint = None
+        if cells is not None and fields is not None:
+            import snowfield
+            pad = (snowcovermod.FIELD_PAD_CELLS + 1) * snowfield.CELL_DEG
+            boxes = [snowfield.cell_box(ci, cj) for ci, cj in cells]
+
+            def hint(box):          # (a texture's box within a pad of a changed cell)
+                s_, w_, n_, e_ = box
+                return any(s_ <= b[2] + pad and n_ >= b[0] - pad and w_ <= b[3] + pad and e_ >= b[1] - pad
+                           for b in boxes)
+
         uni = snowcovermod.uniform_changes(*fields) if fields is not None else None
         gen = self.snow_gen = getattr(self, "snow_gen", 0) + 1
         hist = getattr(self, "snow_hist", None)
@@ -5008,6 +5032,13 @@ class Server:
         for ck, info in list(self.tiles.items()):
             if getattr(info, "material", None) is None or getattr(info, "texture", None) is None:
                 continue
+            if hint is not None:
+                try:
+                    tile = info.tile if getattr(info, "tile", None) is not None else farfield.tile_of(ck[1])
+                    if not hint(Server._snow_tile_box(self, ck, tile)):
+                        continue
+                except Exception:       # (no box for it: compared as dev's change)
+                    pass
             if not Server._snow_tile_changed(self, fields, uni, ck, getattr(info, "tile", None), info):
                 continue
             info.stale = True
@@ -5022,6 +5053,7 @@ class Server:
         if self.near_visual == "detail":
             for k in self.hm:
                 if k[0] in self.anchors and k not in self.base_stale and \
+                        (hint is None or Server._snow_block_near(self, hint, k)) and \
                         Server._snow_block_changed(self, fields, uni, k):
                     self.base_stale.add(k)
                     blocks += 1
@@ -5044,6 +5076,13 @@ class Server:
             return snowcovermod.look_changes(fields[0], fields[1], Server._snow_tile_box(self, ck, tile), roads)
         except Exception as e:          # (no frame for it: as before, made again)
             log.debug("snow change: %s: %s", type(e).__name__, e)
+            return True
+
+    def _snow_block_near(self, hint, key):
+        """snow_changed's cells pre-filter for a block's photo (True when no box: compared as usual)."""
+        try:
+            return hint(Server._snow_block_box(self, key))
+        except Exception:
             return True
 
     def _snow_block_changed(self, fields, uni, key):
@@ -5311,7 +5350,8 @@ class Server:
                "season_mode": im.season_mode, "snow": Server.base_snow(self, anchor, cx, cy)}
         if fin:
             tex["fin"] = fin
-        Server._record_pack(self, name)        # (the block process writes its pack)
+        Server._record_pack(self, name)        # (the block process writes its pack, or this one: pack_here)
+        pack_here = bc7.gpu_ok()        # (this process's GPU, the server's one device: the block process has none)
         try:
             got = pool.submit(blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                               cy - size / 2 - BASE_SHIFT_M, size,
@@ -5319,7 +5359,7 @@ class Server:
                               os.path.join(self.out_dir, name),
                               (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), BASE_AO),
                               fuel_pads=self.block_fuel_pads(anchor, cx, cy, size), out_px=self.base_px,
-                              allow_none=Server._none_ok(self, key),
+                              allow_none=Server._none_ok(self, key), pack=not pack_here,
                               **({"trees": getattr(self, "veg", None) is not None, "canopy": canopy_out is not None}
                                  if genground.ON else {})).result()
         except Exception as e:
@@ -5331,6 +5371,8 @@ class Server:
         if got is None:
             return None
         rgb, _, pending = got[:3]
+        if pack_here:
+            Server._base_pack(self, name, rgb, got[3] if len(got) > 3 else None, size)
         if canopy_out is not None:      # (its canopy version: the revisit cache's, _base_keep)
             canopy_out.append(got[3] if len(got) > 3 else None)
         self._base_kept(anchor, cx, cy, pending)
@@ -5682,21 +5724,38 @@ class Server:
         tex = {"chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                "season_mode": im.season_mode}
         t0 = time.perf_counter()
-        Server._record_pack(self, name)        # (the block process writes its pack)
+        Server._record_pack(self, name)        # (the block process writes its pack, or this one: pack_here)
+        pack_here = bc7.gpu_ok()        # (this process's GPU, the server's one device: _base_in)
         try:
             got = (pool or self.block_pools[lane][0]).submit(
                 blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                 cy - size / 2 - BASE_SHIFT_M, size, QUICK_BASE_PX, tex, False, anchor.zooms[0],
                 os.path.join(self.out_dir, name), (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px),
-                                                   BASE_AO), out_px=self.base_px, quick=True).result()
+                                                   BASE_AO), out_px=self.base_px, quick=True,
+                pack=not pack_here).result()
         except Exception as e:
             log.info("quick base photo %s in the block process: %s", key, e)
             return None
         if got is None:
             log.info("quick base photo %s: not in the block process (an imagery tile not on disk)", key)
             return None
+        if pack_here:
+            Server._base_pack(self, name, got[0], None, size)
         log.info("quick base photo %s in the block process in %.2f s", key, time.perf_counter() - t0)
         return name
+
+    def _base_pack(self, name, rgb, canopy, size):
+        """The packed copy (terraincache.base_entry) of base photo `name`, which a block process rendered and wrote
+        without one (blockworker.base_photo pack=False): encoded here on this process's GPU, the server's one device
+        (fast.gpu_owner; on a Steam Deck driving, bc7.dds then encodes it on the CPU here). canopy: its canopy version
+        (the generated ground's mip fade) or None. Raises as base_entry does but for OSError (logged: as write_base)."""
+        args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
+        if canopy is not None:
+            args += ((canopy, size / np.shape(rgb)[0]),)
+        try:
+            terraincache.base_entry(*args)
+        except OSError as e:
+            log.info("terrain cache for %s: %s", name, e)
 
     def write_ground_base(self, anchor, cx, cy, info):
         """L0 ground: a block's stand-in photo from its own ground layers (l0roads.ground_photo: the materials' colours,
@@ -9001,6 +9060,67 @@ class Connection:
             return
         self.send({"type": "towns_result", "id": rid, "towns": rows, "complete": complete})
 
+    async def ground(self, msg):
+        """The modding API's ground heights {"id", "anchorId", "pts": [x, y, ...]} (game coordinates of that anchor's
+        frame) -> ground_result {"id", "anchorId", "z": [m or false, ...], "error"?}: the land's height there in the
+        same frame (false for a point with no elevation or a bad coordinate: not finite, or GROUND_COORD_MAX or more
+        from the origin), from the DEM at a zoom set by the point's distance from the origin alone, so a point's
+        height does not depend on which far tiles happen to be loaded. The mod's ground.lua asks for the 16 m lattice
+        corners a mod's getTerrainHeight / getSurfaceHeightBelow / api.groundHeight needs past the terrain block.
+        At most GROUND_TASKS of these run at once per connection (the rest wait here, not in the shared pool)."""
+        rid, aid = msg.get("id"), msg.get("anchorId")
+        pts = msg.get("pts")
+        if not isinstance(pts, list) or len(pts) % 2 or len(pts) > 2 * GROUND_POINTS_MAX:
+            self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": [],
+                       "error": "bad request" if not isinstance(pts, list) else "bad points"})
+            return
+        anchor = self.s.anchors.get(aid) if isinstance(aid, int) else None
+        if anchor is None or self.s.dem is None:
+            self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": [],
+                       "error": "no such anchor" if anchor is None else "no elevation data"})
+            return
+        vals = []
+        for v in pts:                   # (a bad coordinate spoils its own point only)
+            f = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else math.nan
+            vals.append(f if math.isfinite(f) and abs(f) < GROUND_COORD_MAX else math.nan)
+        sem = getattr(self, "_ground_sem", None)
+        if sem is None:
+            sem = self._ground_sem = asyncio.Semaphore(GROUND_TASKS)
+        async with sem:
+            try:
+                z = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self._ground_heights, anchor,
+                                                                     vals[0::2], vals[1::2])
+            except Exception as e:      # a damaged DEM tile, offline for an uncached one: none, and why
+                log.info("ground heights: %s: %s", type(e).__name__, e)
+                self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": [], "error": type(e).__name__})
+                return
+        self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": z})
+
+    def _ground_heights(self, anchor, xs, ys):
+        """(ground) z in anchor's frame at the plane points (xs, ys; NaN: a bad one): [m or False]. The DEM zoom is
+        the one whose pixels are about the point's distance from the origin / GROUND_FAR_PX_DIV (at least
+        GROUND_FAR_PX_MIN m, no finer than the anchor's terrain zoom): the far tiles' own scale. Blocking."""
+        xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+        good = np.isfinite(xs) & np.isfinite(ys)
+        out = [False] * len(xs)
+        if not good.any():
+            return out
+        gx, gy = xs[good], ys[good]
+        lat, lon, _ = anchor.frame.enu_to_geodetic(gx, gy, 0.0)
+        lat, lon = np.atleast_1d(np.asarray(lat, np.float64)), np.atleast_1d(np.asarray(lon, np.float64))
+        zooms = np.array([min(anchor.hm_zoom, demmod.zoom_for(
+            float(la), max(GROUND_FAR_PX_MIN, math.hypot(x, y) / GROUND_FAR_PX_DIV))) for la, x, y in zip(lat, gx, gy)],
+            np.int64)
+        h = np.full(len(gx), np.nan)
+        for zoom in sorted(set(zooms.tolist())):
+            m = zooms == zoom
+            h[m] = np.asarray(self.s.dem.sample(lat[m], lon[m], int(zoom)), np.float64)
+        _, _, z = anchor.frame.geodetic_to_enu(lat, lon, np.where(np.isfinite(h), h, 0.0))
+        z = np.atleast_1d(np.asarray(z, np.float64))
+        for k, idx in enumerate(np.flatnonzero(good)):      # (false, not null: JSON arrays keep it in place)
+            out[int(idx)] = round(float(z[k]), 2) if math.isfinite(h[k]) else False
+        return out
+
     async def _where_place_later(self, out, lat, lon, seq):
         """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
         never ahead of the world's own downloads), asked again every WHERE_PLACE_RETRY_S while Overture's hosts are
@@ -9761,6 +9881,8 @@ class Connection:
             self.spawn(self.places(msg))
         elif kind == "towns":                   # the modding API's towns round a point (placenames.py; api.towns)
             self.spawn(self.towns(msg))
+        elif kind == "ground":                  # the modding API's ground heights past the block (ground.lua)
+            self.spawn(self.ground(msg))
         elif kind == "map_focus":              # the 3D map flying: where the view will end (map3d.flyHint)
             self.on_map_focus(msg)
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)
@@ -12316,9 +12438,14 @@ async def main_async(args, restart=None):
     server.make_fast_pool = make_fast_pool
     if snowmod.ON:      # (BNE_WINTER / BNE_WET_ROADS: from the weather's source, or a winter preset, no network)
         # (the band table cut to each forcing cell's real relief in our DEM: snow.cell_relief)
+        field = None
+        if snowmod.WINTER and snowcovermod.ON:
+            import snowfield
+            if snowfield.ON:        # (local weather S1, the Experimental "Local snow": the photos' snow by cell)
+                field = snowfield.make(server.dem, net, args.cache_dir)
         server.snow = snowmod.Service(fetch=lambda lat, lon, past, ahead: weathermod.fetch_hourly(lat, lon, past, ahead,
                                                                                                  net=net),
-                                      relief=lambda lat, lon: snowmod.cell_relief(server.dem, lat, lon))
+                                      relief=lambda lat, lon: snowmod.cell_relief(server.dem, lat, lon), field=field)
         log.info("road surface state %s (winter %s, wet roads %s)", snowmod.MODE, snowmod.WINTER, snowmod.WET_ROADS)
     if late_pool is not None:
         server.start_late(late_pool)
@@ -12878,6 +13005,9 @@ def main():
     # 26.2-devel, 2026-11-07). Its implicit layer's own off switch; this process and its workers only, not the game)
     if sys.platform.startswith("linux"):
         os.environ.setdefault("DISABLE_GAMESCOPE_WSI", "1")
+    # (one GPU device in the server, this process's: the block, far-tile and road processes started from here inherit
+    # BNGE_GPU_OWNER and keep their CPU paths; this process encodes their photos' packed copies, _base_pack)
+    fast.gpu_owner()
     # (this run's id, inherited by its worker processes: roadz keeps one lidar decision per map cell and run in it)
     os.environ.setdefault("BNGE_ROADZ_SESSION", f"{os.getpid()}.{int(time.time())}")
     home = os.path.expanduser("~")

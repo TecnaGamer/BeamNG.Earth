@@ -87,6 +87,9 @@ FEATURES = (
     # the puddle plan (R1: the rain history in the weather message, weather.PUDDLES_V2; R2 on: the new puddle geometry)
     ("expPuddlesV2", {"BNE_PUDDLES": "v2"}, None),                        # weather.PUDDLES_V2, roadwear.PUDDLES
     ("expLeafCycle", {"BNE_LEAF_CYCLE": "on"}, "expWinter"),              # leafcycle.ON: the trees' leaf cycle (not a key)
+    # local weather S1 (snowfield.py): the snow on the ground per 0.25-degree cell by height and aspect, with the
+    # satellites' observed snow cover (not a key: the snow photos are keyed by their tables, snowcover.key_parts)
+    ("expLocalSnow", {"BNE_LOCAL_WEATHER": "snowfield"}, "expWinter"),
 )
 IDS = tuple(f[0] for f in FEATURES)
 # A setting that counts only in a file of this version or newer (settings.lua M.VERSION): the Road signs switch was on

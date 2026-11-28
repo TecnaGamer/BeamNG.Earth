@@ -610,11 +610,15 @@ end
 -- The modding API's rebased event (api.lua, 1.7): the world's origin moved from the anchor `old` (nil: the first one)
 -- to st.anchor, so an add-on's own game coordinates are stale and it converts them again (api.toGame). Said right
 -- after st.anchor changed, in the frame that moved the world.
+-- (1.13: the two frames kept for api.fromOldFrame, and the distance between the origins: the ECEF chord, m)
 function M._apiRebased(old, purpose)
   local api = rawget(_G, 'beamngEarth_api')
   if not (api and api._event and st.anchor) then return end
+  if api._setFrames then pcall(api._setFrames, old, st.anchor) end
+  local a, dist = st.anchor, nil
+  if old and old.ox and a.ox then dist = math.sqrt((old.ox - a.ox) ^ 2 + (old.oy - a.oy) ^ 2 + (old.oz - a.oz) ^ 2) end
   pcall(api._event, 'rebased', { lat = st.anchor.lat, lon = st.anchor.lon, oldLat = old and old.lat or nil,
-    oldLon = old and old.lon or nil, anchorId = st.anchorId, purpose = purpose })
+    oldLon = old and old.lon or nil, anchorId = st.anchorId, purpose = purpose, distance = dist })
 end
 
 local function commitTeleport(msg)
@@ -1763,6 +1767,9 @@ local function onMessage(msg)
   elseif t == 'towns_result' then            -- the modding API's towns (api.lua; server placenames.py)
     local api = rawget(_G, 'beamngEarth_api')
     if api and api._onTowns then api._onTowns(msg) end
+  elseif t == 'ground_result' then           -- the land's heights past the block (ground.lua; server earthd ground)
+    local gm = package.loaded['beamngEarth/ground']
+    if gm and gm.onResult then gm.onResult(msg) end
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
     pcall(places.syncLevel)
   elseif t == 'random_place_result' then
@@ -3075,6 +3082,13 @@ local function onUpdate(dtReal, dtSim)
     end
     return
   end
+  do    -- (the land's heights a mod asked for past the block: sent while any wait, ground.lua)
+    local gm = package.loaded['beamngEarth/ground']
+    if gm and gm.dirty then
+      local ok, err = pcall(gm.flush)
+      if not ok then gm.dirty = false; log('W', 'beamngEarth', 'ground heights: ' .. tostring(err)) end
+    end
+  end
   do
     local prof = require('beamngEarth/profiler')
     prof.update(frameMs0, marks, st.inOurLevel, net.isConnected(), net.send, prof.enabled and M.heldReason() or nil)
@@ -3451,6 +3465,8 @@ local function onLevelStart()
   farfield.forget()
   terrain.onLevelChanged()
   st.inOurLevel = getCurrentLevelIdentifier() == LEVEL_ID
+  -- (the stock terrain query answers the drawn ground past the block on our level, for other mods: ground.lua)
+  pcall(require('beamngEarth/ground').setLevel, st.inOurLevel)
   -- the window opens by itself only in our level; elsewhere use beamngEarth_core.toggleUI(). With
   -- the pause-menu settings page it is a compact HUD, hidden unless the settings show it.
   ui.visible = st.inOurLevel and not settings.hudHiddenAtStart()
@@ -3526,6 +3542,7 @@ end
 
 local function onClientEndMission()
   notePlayerPos(true)
+  pcall(require('beamngEarth/ground').setLevel, false)
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
   require('beamngEarth/minimaproads').unhook()
@@ -3590,6 +3607,7 @@ end
 M.onFilesChanged = onFilesChanged
 
 local function onExtensionUnloaded()
+  pcall(require('beamngEarth/ground').setLevel, false)     -- (the stock terrain query back)
   M._trafficvisuals.reset()
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()

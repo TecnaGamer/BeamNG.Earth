@@ -16,7 +16,8 @@
 --   onBeamNGEarthWaypointReached(info) a GPS waypoint passed (1.2, has('gpsRoute')): info.lat / lon / name / left
 --   onBeamNGEarthAddonOptions(info)   an add-on's options were saved on its Options tab: info.id, info.values
 --   onBeamNGEarthRebased(info)        the world's origin moved (1.7, has('rebase')): info.lat / lon the new origin,
---                                     oldLat / oldLon the one before (nil at the first), anchorId, purpose
+--                                     oldLat / oldLon the one before (nil at the first), anchorId, purpose, distance
+--                                     (1.13: m between the origins, the straight chord); api.fromOldFrame moves a kept point
 --   onBeamNGEarthContentChanged(info) the streamed world changed (1.12, has('contentChanged')): buildings, roads,
 --                                     colliders, the road graph or the town came or went since the last one; at
 --                                     most once every CONTENT_GAP_S (info: kinds, x0 / y0 / x1 / y1, below)
@@ -40,13 +41,19 @@
 -- (game coordinates, at once, no request), towns(lat, lon, opts, callback) the towns and villages round a point (the
 -- app's own copy of Overture's divisions), collisionReady(x, y, r) whether the colliders round a point are in.
 -- (1.9 to 1.11 are held for open pull requests: #1232 and #1249 both claim 1.9, one of them 1.10 then; #1566 1.11)
+-- The ground and the moving origin (1.13; the 2026-11-27 AWS Tornado study: a storm placed on the ground km away sank
+-- into hills and floated over valleys, and jumped with every teleport and rebase): groundHeight(x, y) is the ground
+-- anywhere the world is drawn (the terrain block's, past it the far field's drawn ground: ground.lua, which also makes
+-- the stock core_terrain.getTerrainHeight answer that past the block on our level), and fromOldFrame /
+-- fromOldFrameDir carry what an add-on kept in game coordinates across the last onBeamNGEarthRebased exactly.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 12
+M.MAJOR, M.MINOR = 1, 13
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
   routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true,
-  contentChanged = true, loadedBuildings = true, towns = true, collisionReady = true }
+  contentChanged = true, loadedBuildings = true, towns = true, collisionReady = true,
+  groundHeight = true, frameChange = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
   waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased',
@@ -317,6 +324,59 @@ function M.toGeo(x, y, z)
   local a = st and st.inOurLevel and st.anchor
   if not a or not a.worldToGeodetic then return nil end
   return a:worldToGeodetic(x, y, tonumber(z) or 0)
+end
+
+-- The frames of the last origin change (core.lua _apiRebased: the anchor before it and the one after), for
+-- fromOldFrame; nil before a second origin.
+local frames = nil
+function M._setFrames(old, new)
+  frames = (old and new and old.worldToGeodetic and new.geodeticToWorld) and { old = old, new = new } or nil
+end
+
+-- A point x, y, z given in the game coordinates of the frame before the last origin change (1.13, has('frameChange'))
+-- in today's: the same real place (latitude, longitude, height), exact at any distance, for a rebase while driving and
+-- a teleport alike (after a teleport across the world the place may be thousands of km away). Call it from
+-- onBeamNGEarthRebased (or later, until the next one) for everything an add-on keeps in game coordinates: something
+-- standing in the world (a storm, a marker, a parked prop of its own) stays where it really is. nil before a second
+-- origin (the level's first has no frame before it).
+function M.fromOldFrame(x, y, z)
+  x, y = tonumber(x), tonumber(y)
+  if not (frames and x and y) then return nil end
+  local lat, lon, h = frames.old:worldToGeodetic(x, y, tonumber(z) or 0)
+  return frames.new:geodeticToWorld(lat, lon, h)
+end
+
+-- A direction (a velocity, an axis) dx, dy, dz of the frame before the last origin change in today's (1.13): turned
+-- as the frame turned (about the distance over the earth's radius: 0.01 degree for a 1 km rebase), its length kept.
+function M.fromOldFrameDir(dx, dy, dz)
+  dx, dy = tonumber(dx), tonumber(dy)
+  if not (frames and dx and dy and frames.old.transformTo) then return nil end
+  return frames.old:transformTo(frames.new):rotate(dx, dy, tonumber(dz) or 0)
+end
+
+-- The ground's height at x, y (game coordinates) anywhere the world is drawn (1.13, has('groundHeight')): z and kind,
+-- 'terrain' on the terrain block round the player (what vehicles drive on: the same as core_terrain.getTerrainHeight
+-- there) or 'land' past it (the land's height as the far field draws it, from the app's elevation data; nothing
+-- collides there), or nil: off BeamNG.Earth's level, not known yet (asked for: ask again in a frame or a few), no
+-- elevation there, or too many new points at once (about 2000 lattice corners a second). Buildings, roads and trees are
+-- not the ground here (be:getSurfaceHeightBelow and castRayStatic hit those, and only where colliders are made). Costs
+-- the game nothing beyond a table lookup once known.
+function M.groundHeight(x, y)
+  local g = mod('ground')
+  if not (g and g.height) then return nil end
+  local ok, z, kind = pcall(g.height, x, y)
+  if not ok then return nil end
+  return z, kind
+end
+
+-- (probes) whether getTerrainHeight answers the drawn ground on our level now, and the ground module's counters
+function M._groundWrapped()
+  local g = mod('ground')
+  return g ~= nil and g.wrapped ~= nil and g.wrapped() == true
+end
+function M._groundStats()
+  local g = mod('ground')
+  return g and g.stats and g.stats() or nil
 end
 
 -- Is the world's origin being moved right now (1.7, has('rebase'))? True between a rebase's two frames: the vehicles
@@ -628,7 +688,7 @@ function M.onUpdate(dtReal)
 end
 
 function M._reset()
-  listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0
+  listeners, wasReady, teleporting, placeReqs, clock, frames = {}, false, false, {}, 0, nil
   content = { kinds = nil, box = nil, n = 0, lastAt = -math.huge, lost = false }
 end
 

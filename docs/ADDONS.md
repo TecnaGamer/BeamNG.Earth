@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 12) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8), `'contentChanged'`, `'loadedBuildings'`, `'towns'`, `'collisionReady'` (1.12) |
+| `version()` | `major, minor` (1, 13) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8), `'contentChanged'`, `'loadedBuildings'`, `'towns'`, `'collisionReady'` (1.12), `'groundHeight'`, `'frameChange'` (1.13) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -176,6 +176,8 @@ end
 | `loadedBuildings(x, y, radius, limit)` | 1.12: the buildings made round a point now, at once (see "The streamed world" below) |
 | `towns(lat, lon, opts, callback)` | 1.12: the towns, villages and cities round a point (see "The streamed world") |
 | `collisionReady(x, y, radius)` | 1.12: the colliders round a point (sidewalks, kerbs, decks, buildings) made and in effect |
+| `groundHeight(x, y)` | 1.13: the ground's height at a point anywhere the world is drawn, and whether it is the terrain block's or the far field's (see "The ground" below) |
+| `fromOldFrame(x, y, z)`, `fromOldFrameDir(dx, dy, dz)` | 1.13: a point (a direction) kept in the game coordinates of the frame before the last `onBeamNGEarthRebased`, in today's (see "Things in the world across a rebase or a teleport") |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 ### Route maneuvers (1.7)
@@ -222,7 +224,7 @@ Events, as game hooks (any extension defining the function gets it) and as `api.
 | `onBeamNGEarthRouteArrived` | `routeArrived` | `{lat, lon, name}`: the GPS destination reached |
 | `onBeamNGEarthWaypointReached` | `waypointReached` | `{lat, lon, name, left}`: a GPS waypoint passed (1.2), `left` still ahead |
 | `onBeamNGEarthContentChanged` | `contentChanged` | `{kinds, x0, y0, x1, y1, lat0, lon0, lat1, lon1, changes}` (1.12): the streamed world changed; at most once every 3 s (see "The streamed world") |
-| `onBeamNGEarthRebased` | `rebased` | `{lat, lon, oldLat, oldLon, anchorId, purpose}` (1.7): the world's origin moved to `lat, lon` from `oldLat, oldLon` (nil at the first one), in the frame that moved the world. `purpose` is `'rebase'` (driving on), `'teleport'`, or another of the mod's own moves. Every game coordinate an add-on kept is stale: convert again with `toGame` |
+| `onBeamNGEarthRebased` | `rebased` | `{lat, lon, oldLat, oldLon, anchorId, purpose, distance}` (1.7): the world's origin moved to `lat, lon` from `oldLat, oldLon` (nil at the first one), in the frame that moved the world. `purpose` is `'rebase'` (driving on), `'teleport'`, or another of the mod's own moves. `distance` (1.13) is the straight-line (chord) distance in metres between the two origins, through the earth for a long teleport, not the distance along the ground. Every game coordinate an add-on kept is stale: move it with `fromOldFrame` (1.13), or convert again with `toGame` |
 
 ### Places (1.4)
 
@@ -396,8 +398,100 @@ the ground with `castRayStatic` or `be:getSurfaceHeightBelow` (a raised sidewalk
 should not keep a miss where this is false, and should probe again after an `onBeamNGEarthContentChanged` with
 `kinds.collision`. The terrain's own ground is not part of it: it is always there under the road graph's nodes.
 
+### The ground (1.13)
+
+A stock level's TerrainBlock covers the whole map, so `core_terrain.getTerrainHeight` and `be:getSurfaceHeightBelow`
+answer the ground wherever a mod looks. BeamNG.Earth has one terrain block, about 1 km across, that follows the player;
+past it the land is drawn by far tiles with no collision. There the stock queries go wrong (measured in game at
+Boulder, Colorado, where the land is 1,550 to 2,950 m up within 24 km):
+
+| call | on the block (about 500 m round the player) | past it |
+|---|---|---|
+| `be:getSurfaceHeightBelow(p)`, `castRayStatic` (stock) | right (terrain, and the colliders of roads, sidewalks, decks and buildings near the car) | 0: the physics has a flat surface at z = 0 there, whatever the land's height (from below it, a miss: -1e20 / the full length) |
+| `be:getSurfaceHeightBelow(p)` on BeamNG.Earth's level, 1.13 | right (unchanged) | the land's height where the physics answered 0 for a point over the land (0 until it is known); `castRayStatic` unchanged |
+| `core_terrain.getTerrainHeight(p)` (stock) | right | the block's floor (its lowest ground) for every point |
+| `core_terrain.getTerrainHeight(p)` on BeamNG.Earth's level, 1.13 | right (unchanged) | the land's height, as `groundHeight` (the block's floor only until it is known) |
+| `api.groundHeight(x, y)` | right | the land's height |
+
+`groundHeight(x, y)` (`has('groundHeight')`) returns `z, kind`, in game coordinates of the current frame:
+
+- `kind` is `'terrain'` on the terrain block: what vehicles drive on, the same answer as `getTerrainHeight` there.
+- `'land'` past it: the land's height as the far field draws it (the app's elevation data at the resolution of the
+  distance from the origin, the far field's own scale; under water the ground under it). Nothing collides there.
+- `nil` off BeamNG.Earth's level, while it is not known yet, where there is no elevation data, or when a mod asks
+  for too many new points at once.
+
+It is the bare ground: buildings, bridges, roads and trees are not counted (`getSurfaceHeightBelow` stands on those
+where they collide). Past the block the app is asked for the corners of a 16 m lattice round the point, and the
+answer is blended between them, so a moving point gets a smooth height and the same point the same answer. A point
+asked for the first time answers nil (and `getTerrainHeight` the stock answer) until the app has answered, usually a
+frame or a few later; ask again then. Once known, a call costs a table lookup; the corners are kept until the origin
+moves. A corner with no height (no elevation data there, or the app could not read it) is not asked again for 30 s.
+About 2,000 new corners a second are asked at most, and 8,192 wait to be sent at most; past that a call answers nil
+without asking, so a mod that wants a whole map at once gets it over a few seconds.
+
+```lua
+-- a storm's ground: ask every frame until it is known, keep the last answer meanwhile
+local function updateGround(storm)
+  local api = rawget(_G, 'beamngEarth_api')
+  if not (api and api.has('groundHeight')) then return end
+  local z, kind = api.groundHeight(storm.x, storm.y)
+  if z then storm.z, storm.solid = z, kind == 'terrain' end   -- nil: not known yet, ask again next frame
+end
+```
+ The game pays nothing for the heights: they come from the
+app, not from rays through the drawn scene (those cost up to 50 ms the first time they cross a mesh). It costs
+nothing until something calls it.
+
+While BeamNG.Earth's level is loaded, the stock `core_terrain.getTerrainHeight` and `be:getSurfaceHeightBelow` answer
+the same past the block, so mods written for stock maps find the ground without knowing about BeamNG.Earth.
+`getSurfaceHeightBelow` keeps its own answer everywhere it is not that plane's 0: on the block, on colliders, for a
+point under the land, from below z = 0. The land there is still not solid: something dropped on it falls to the
+plane, so a mod that spawns vehicles or props far from the car should check `kind == 'terrain'` or
+`collisionReady(x, y, r)` first. The engine's own `TerrainBlock:getHeight` (`core_terrain.getTerrain():getHeight(p)`)
+and `castRayStatic` are unchanged.
+
+### Things in the world across a rebase or a teleport (1.13)
+
+Game coordinates are metres from the world's origin, and the origin moves: every few km while the player drives
+(`purpose` `'rebase'`) and at every teleport. BeamNG.Earth moves its own world and every vehicle with it, in the frame
+of `onBeamNGEarthRebased`. What an add-on keeps in game coordinates itself (a storm, a marker, a route, a spawn
+point) does not move: unless the add-on moves it, it ends up the rebase's distance away from where it was, and after a
+teleport it comes along with the player.
+
+```lua
+function M.onBeamNGEarthRebased(info)
+  local api = rawget(_G, 'beamngEarth_api')
+  if not (api and api.has('frameChange')) then return end
+  for _, thing in ipairs(myThings) do
+    thing.x, thing.y, thing.z = api.fromOldFrame(thing.x, thing.y, thing.z)
+    thing.vx, thing.vy = api.fromOldFrameDir(thing.vx, thing.vy, 0)
+  end
+end
+```
+
+- `fromOldFrame(x, y, z)` is the same real place (latitude, longitude, height) in the new frame. It is exact while
+  driving, and within a few tenths of a metre for a teleport of 500 km. It is nil before the level's second origin.
+- `fromOldFrameDir` turns a direction (a velocity, a heading's vector) the way the frame turned. That is about 0.01
+  degree for 1 km driven, so headings barely change while driving.
+- A teleport takes the player somewhere else, but the world stays where it is. Something that belongs to the world
+  (weather, a storm, a parked prop) keeps its real place. After a teleport farther than your range (`info.distance`
+  more than your mod's reach, or any `purpose == 'teleport'` of more than a few km), drop it rather than move it:
+  `fromOldFrame` would put it hundreds of km away in the new frame, where nothing is drawn and the game's float
+  coordinates lose precision. Never move it along with the player. Something that belongs to the player (a follow
+  camera, a trailer target) moves with the player instead.
+- Between a rebase's two frames (`rebasing()` true) the vehicles are already moved and the event has not come: leave
+  kept positions alone until it comes.
+- Vehicles are BeamNG.Earth's to move: never move one in `onBeamNGEarthRebased`.
+
+Prop "vehicles" (a model whose `info.json` says `"Type": "Prop"`: cones, barriers, a mod's debris) are moved as
+vehicles are, but since 1.13 they are not treated as player cars. A player car far away gets colliders made round it,
+and past 2.5 km it is saved and taken out until the player comes back. A prop gets neither: it stays where its mod
+left it, with collision only where the player's own car has it.
+
 Version numbers 1.9 to 1.11 are held for open pull requests: #1232 and #1249 both claim 1.9 (one of them will
-be 1.10), and #1566 claims 1.11. So these additions are 1.12. Check `has()` rather than the number.
+be 1.10), and #1566 claims 1.11. So those additions are 1.12, and the ground and frame calls 1.13. Check `has()` rather
+than the number.
 
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and

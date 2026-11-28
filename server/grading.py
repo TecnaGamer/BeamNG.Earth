@@ -8091,7 +8091,9 @@ class PlanStore:
         if len(rx) and (rx == rx[0]).all() and (ry == ry[0]).all():
             return [(self.planner((int(rx[0]), int(ry[0]))), None)]
         out = []
-        for a, b in sorted({(int(a), int(b)) for a, b in zip(rx, ry)}):
+        # (the regions in (rx, ry) order, as sorted tuples: np.unique's rows, not a Python set of a block's million
+        # points, ~0.3 s a block across a region edge)
+        for a, b in np.unique(np.stack([rx, ry], axis=1), axis=0).tolist():
             out.append((self.planner((a, b)), np.flatnonzero((rx == a) & (ry == b))))
         return out
 

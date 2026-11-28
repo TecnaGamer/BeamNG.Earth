@@ -145,6 +145,7 @@ EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises s
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
                        "places_result",                              # the modding API's places (test_places_api)
                        "towns_result",                               # the modding API's towns (test_places_api)
+                       "ground_result",                              # the modding API's ground heights (test_places_api)
                        "globe",                                      # the 3D map's globe: needs EOX tiles
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                                                                      # (test_randomplace)
@@ -232,7 +233,7 @@ def mod_sends():
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
                               "addons.lua", "api.lua", "terrainfiles.lua", "winterlook.lua"), r"net(?:'\))?\.send\(\{"),
-                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua", "liveaudio.lua"), r"\bsend\(\{"),
+                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua", "liveaudio.lua", "ground.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
@@ -248,7 +249,7 @@ def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
     for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "winter.lua", "credits.lua", "roads.lua", "mpsession.lua",
-                 "addons.lua", "api.lua", "reportsend.lua", "terrainfiles.lua", "liveaudio.lua"):
+                 "addons.lua", "api.lua", "reportsend.lua", "terrainfiles.lua", "liveaudio.lua", "ground.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}

@@ -12,12 +12,23 @@ What changed in each release of BeamNG.Earth, newest first.
   loaded round a point, the towns round a point and whether the collision round a point is in (docs/ADDONS.md).
   The AI road graph is no longer applied again when it has not changed, which should reduce the hitches and the
   reloads that mods listening for it went through.
+- **Mod compatibility: the ground and the moving origin**: mods that ask the game where the ground is
+  (`core_terrain.getTerrainHeight`, `be:getSurfaceHeightBelow`) now get the land you see past the terrain block round
+  you, instead of one height for everywhere, which should stop things a mod places far away (a weather mod's storms)
+  from sinking into the ground. The modding API 1.13 adds the ground's height at any point (`groundHeight`) and a way to
+  carry positions a mod keeps across a rebase or a teleport (`fromOldFrame`); `onBeamNGEarthRebased` now says how far
+  the origin moved (docs/ADDONS.md). Prop "vehicles" of other mods (debris, cones) are no longer treated as parked
+  player cars, so they should no longer be taken out and spawned again far away, or get the collision building a
+  player car gets.
 - **Live air traffic** (off by default; Settings, Air traffic): the real aircraft around you from live ADS-B data,
   built in from devo343's Live Air Traffic add-on (no separate window or program to run). Aircraft models with airline
   colours, lights, contrails that follow the real weather, engine sounds, labels, a follow camera and a seat view, and
   the aircraft on the 2D and 3D maps (click one to set the GPS). Turning it on first says what is sent and to whom:
-  only your approximate area, about every 15 seconds while you are in the world. Keys: Ctrl+Alt+A on / off,
-  Ctrl+Alt+K labels, Ctrl+Alt+C contrails, Ctrl+Alt+I what is that plane, Ctrl+Alt+S sounds, Ctrl+Alt+F follow.
+  only your approximate area, about every 15 seconds while you are in the world. Labels are off by default
+  (Ctrl+Alt+K turns them on: the nearest few aircraft and the one you look at, never parked ones). If devo343's own
+  Live Air Traffic add-on is still on, a notice offers to switch it off (otherwise every aircraft shows twice). Keys:
+  Ctrl+Alt+A on / off, Ctrl+Alt+K labels, Ctrl+Alt+C contrails, Ctrl+Alt+I what is that plane, Ctrl+Alt+S sounds,
+  Ctrl+Alt+F follow.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
@@ -30,6 +41,10 @@ What changed in each release of BeamNG.Earth, newest first.
   wheel tracks, road markings fading under the snow, snowbanks along plowed roads that grow with each storm and go
   grey with dirt over the days after (never across junctions, crossings or bridges), sidewalks shovelled on main
   streets and some residential frontages and trampled or covered elsewhere, and white bridge decks.
+- **Local snow (Experimental, needs Winter).** The snow on the ground is worked out for every area round you by
+  height and slope, from that area's own weather and NOAA's daily satellite snow map: mountains are white above
+  their real snowline (lower on slopes facing away from the sun once the snow starts melting), valleys and mild
+  places stay bare unless it really snowed there, and high peaks keep their old snow through dry spells.
 - **Winter (Experimental): bare trees.** With Winter on, oaks, beeches, birches, aspens and poplars lose their leaves
   tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
   young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green. Each tree has one
@@ -85,6 +100,9 @@ What changed in each release of BeamNG.Earth, newest first.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed
+- Wet look: reduced the chance of the game freezing for several seconds (over 10 s on the Steam Deck) when rain makes
+  the roads wetter or drier. The tyres' skid marks are no longer darkened, the wet look is now applied one material a
+  frame instead of a dozen, and the wetness no longer steps back and forth when a shower comes and goes.
 - Winter (Experimental): reduced lag and buildings briefly disappearing after a teleport or a weather update. A place
   with no snow on its roads no longer sends every road tile again, and a change of snow on the roads now sends only
   the road surfaces, not the buildings. A change in the snow state now re-renders only the distant ground it actually
@@ -121,10 +139,20 @@ What changed in each release of BeamNG.Earth, newest first.
   ground no longer whitens higher mountains in view.
 
 ### Changed
+- Painting roads, car parks and pads into the ground photos should take less time and memory (about half the time
+  per photo on a four-core server share; the pictures are the same).
 - Retired the Experimental "Road surface from aerial photos" setting (`BNE_PHOTO_SURFACE`). Roads should look the same as they do by default, and an old setting or variable is now ignored.
+- **Ground photos use less of the world server's CPU**: their texture levels are now made with whole-number maths
+  (about a third of the CPU they took before), and on machines with a graphics card the photo encoding should cost the
+  server less. The ground photos of places you visited before are made once more on your next visit, then kept again.
+  On a Steam Deck the server now uses the graphics chip only while you are parked or a teleport is loading, which
+  may reduce the frame drops while driving.
 - **BeamMP hosting:** the releases no longer carry the Windows and Linux host bundles with BeamMP's own server program
   inside. Get the server from BeamMP's own releases and add `BeamNG.Earth-BeamMP-Server-<version>.zip` (the mod and
   the server plugin). The Docker image is unchanged.
+- Terrain blocks should be built a little faster on machines with several cores: more of the ground's per-point work
+  (elevation, positions, water depth, land cover and the server's maths) is split over the world server's few threads,
+  with the same ground as before.
 
 ## 1.10.1 beta (2026-11-15)
 

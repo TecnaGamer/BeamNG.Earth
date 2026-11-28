@@ -13,6 +13,8 @@ check(W.classOf('bne_bld_roof_flat') == 'roof' and W.classOf('bne_bld_brick') ==
 check(W.classOf('bne_bld_skywin') == nil and W.classOf('bngEarthFar_v3') == nil and W.classOf(nil) == nil, 'not ours to wet')
 check(W.classOf('Sidewalk_Tiles_02') == 'concrete' and W.classOf('road_kerb_glass') == nil and W.classOf('bngEarthGroundAsphalt') == nil,
   'words: other sets\' sidewalks; not glass, not our terrain layers')
+check(W.classOf('AsphaltRoad_track_skidmarks') == nil and W.classOf('AsphaltRoad_variation_one_way') == 'asphalt',
+  'the skid-mark decals never wetted (a 12 s freeze on the Deck at their first new value)')
 check(W.levelOf(0) == 0 and W.levelOf(1) == W.LEVELS and W.levelOf(0.5) == 2, 'levels')
 -- the own model: rain wets within minutes, the dry spell dries over DRY_S
 local w = 0
@@ -308,6 +310,61 @@ do
   check(W.level() == W.levelOf(0.8), 'one place\'s next state: drying over minutes')
   WM.reset()
   package.loaded['beamngEarth/winter'] = nil
+  W.reset()
+end
+-- The 2026-11-28 lag hunt: a step rewrites every wet-capable material (~600 in a city, 2-3.5 ms each with its reload,
+-- L0): at most BATCH a frame, the streets first, a material already on the step's values not reloaded again, and no
+-- back and forth at a boundary in showers.
+do
+  check(W.BATCH == 1, 'one material a frame')
+  check(W.levelStep(0.40, 1) == 1 and W.levelStep(0.42, 1) == 2 and W.levelStep(0.34, 2) == 2
+    and W.levelStep(0.32, 2) == 1 and W.levelStep(0, 3) == 0 and W.levelStep(0.9, 1) == 4 and W.levelStep(0.5, nil) == 2,
+    'levelStep: LEVEL_HYST past a boundary; dry is dry')
+  W.reset()
+  local many = {}
+  for i = 1, 30 do
+    local nm = (i % 3 == 0) and string.format('bne_bld_brick_%02d', i) or string.format('sidewalk_x%02d', i)
+    local m = S.newObject('Material')
+    m:registerObject(nm)
+    m:setField('baseColorFactor', 0, '0.8 0.8 0.8 1')
+    m:setField('roughnessFactor', 0, '0.9')
+    many[nm] = m
+  end
+  W._setOwn(0.5)
+  local perFrame, firstWall, firstWalk, frame = 0, nil, nil, 0
+  W.update(W.CHECK_S, 0, true)
+  for _ = 1, 80 do
+    frame = frame + 1
+    local r0 = S.calls.reload_Material or 0
+    W._setOwn(0.5)
+    W.update(0.016, 0, true)
+    local d = (S.calls.reload_Material or 0) - r0
+    perFrame = math.max(perFrame, d)
+    for nm, m in pairs(many) do
+      if m.fields.baseColorFactor ~= '0.8 0.8 0.8 1' then
+        if nm:find('^bne_bld') then firstWall = firstWall or frame else firstWalk = firstWalk or frame end
+      end
+    end
+  end
+  check(W.level() == 2 and perFrame == W.BATCH, 'a step: at most BATCH reloads a frame (' .. perFrame .. ')')
+  check(firstWalk and firstWall and firstWalk < firstWall, 'the streets\' materials first')
+  for _, m in pairs(many) do check(m.fields.baseColorFactor ~= '0.8 0.8 0.8 1', 'every material wet in the end') break end
+  -- the same step again (a restarted queue): nothing reloaded
+  local r0 = S.calls.reload_Material or 0
+  W.update(W.CHECK_S, 0, true)
+  for _ = 1, 80 do W._setOwn(0.5); W.update(0.016, 0, true) end
+  check((S.calls.reload_Material or 0) == r0, 'on its step already: no reload')
+  -- showers: the wetness hovering at a boundary does not rewrite the materials back and forth
+  W._setOwn(0.61)
+  W.update(W.CHECK_S, 0, true)         -- (the puddles' step follows the wetness: its one write before counting)
+  local writes = W.writes
+  for i = 1, 40 do
+    W._setOwn((i % 2 == 0) and 0.61 or 0.64)
+    W.update(W.CHECK_S, 0, true)
+    for _ = 1, 3 do W.update(0.016, 0, true) end
+  end
+  check(W.writes == writes and W.level() == 2, 'at a boundary: no rewrite (' .. (W.writes - writes) .. ')')
+  for nm, m in pairs(many) do m:delete(); many[nm] = nil end
   W.reset()
 end
 check(W.puddleRefV2(0, 12) == 255 and W.puddleRefV2(1, 12) == W.V2_REF[1] and W.puddleRefV2(12, 12) == W.V2_REF[2],
