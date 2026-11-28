@@ -35,6 +35,7 @@ import urllib.parse
 
 import numpy as np
 
+import dmath
 import fast
 
 log = logging.getLogger("earthd.snowfield")
@@ -96,7 +97,7 @@ def cell_box(ci, cj):
 
 
 def _km(lat0, lon0, lat1, lon1):
-    k = math.cos(math.radians(0.5 * (lat0 + lat1)))
+    k = dmath.cos(math.radians(0.5 * (lat0 + lat1)))
     return math.hypot((lat1 - lat0) * 111.2, (((lon1 - lon0) + 180.0) % 360.0 - 180.0) * 111.2 * k)
 
 
@@ -105,7 +106,7 @@ def rings(lat, lon, near_km=NEAR_KM, far_km=FAR_KM):
     list nearest first (the anchor's own cell first: S-6's urgent table)."""
     near, far = [], {}
     span_lat = far_km / 111.2
-    span_lon = far_km / (111.2 * max(0.05, math.cos(math.radians(min(abs(lat), 89.0)))))
+    span_lon = far_km / (111.2 * max(0.05, dmath.cos(math.radians(min(abs(lat), 89.0)))))
     ci0, cj0 = cell_of(lat + span_lat, lon - span_lon)
     ci1, cj1 = cell_of(lat - span_lat, lon + span_lon)
     for cj in range(max(cj0, 0), min(cj1, int(180 / CELL_DEG) - 1) + 1):
@@ -683,7 +684,7 @@ class SnowField:
         s_, w_, n_, e_ = cell_box(*cell_of(lat, lon))
         lat, lon = 0.5 * (s_ + n_), 0.5 * (w_ + e_)
         span = FAR_KM / 111.2 + CELL_DEG
-        spl = span / max(0.05, math.cos(math.radians(min(abs(lat) + span, 89.0))))
+        spl = span / max(0.05, dmath.cos(math.radians(min(abs(lat) + span, 89.0))))
         la = np.clip(np.array([lat - span, lat - span, lat + span, lat + span, lat]), -89.9, 89.9)
         lo = np.array([lon - spl, lon + spl, lon - spl, lon + spl, lon])
         r, c = fast._ef.snowobs_ims_pixels(la.astype(np.float64), lo.astype(np.float64))
