@@ -21,14 +21,15 @@
 --     and the high cloud's humidity: predict.contrailFormation), lasting longer in humid air aloft, drifting with the
 --     real wind aloft, hidden behind the cloud deck; at most trailSegments prisms a frame
 --   * sounds of the aircraft near enough to hear (airtraffic/sound.lua), heard from where the aircraft was
---   * labels (Ctrl+Alt+K: full, flight number, type, off) and, on the aircraft the camera follows only, its painted
---     flight number and registration
+--   * labels, off by default (Ctrl+Alt+K: flight number, full, type, off), on the nearest few aircraft and the one
+--     looked at, never on parked ones; on the aircraft the camera follows, its painted flight number and registration
+--   * a notice offering to switch devo343's own add-on off while it is on beside this (every aircraft twice)
 --   * the aircraft on the 2D and 3D maps (mapItems: settings.uiAirTraffic)
 --
 -- Keys (Options > Controls > "BeamNG.Earth"; the add-on's bare F and Ctrl+Alt+P clash with the game's walking mode and
 -- photo mode, and Ctrl+Alt+L the editor's lock selection, so they moved):
 --   Ctrl+Alt+A  air traffic on / off (the first time: the settings page, for the consent)
---   Ctrl+Alt+K  labels: full -> flight number -> aircraft type -> off
+--   Ctrl+Alt+K  labels: off -> flight number -> full -> aircraft type -> off
 --   Ctrl+Alt+C  contrails on / off
 --   Ctrl+Alt+I  what is that plane? (the one nearest the middle of the screen)
 --   Ctrl+Alt+S  aircraft sounds on / off
@@ -68,7 +69,8 @@ M.cfg = {
   maxVoices = 6,           -- aircraft heard at once
   lightsKm = 150,          -- lights drawn out to here (the game's view distance clips anyway)
   labelKm = 60,
-  maxLabels = 30,
+  maxLabels = 5,           -- labels on the nearest this many (and the aircraft the camera looks at): no stacked column
+  labelAimDeg = 12,        -- the aircraft nearest the look direction within this angle gets a label too
   contrailSeconds = 90,    -- how long a contrail stays in still, dry air before it has faded (x contrailLife)
   -- Aircraft lights (all of them: beacons, strobes, navigation and landing lights) show only on aircraft passing
   -- overhead or close by, as in real life: a plane low on the horizon 30 km off shows no lights by day.
@@ -108,11 +110,11 @@ M.SNAP_M = 6000            -- a correction larger than this is a jump, not a gli
 M.CONTRAIL_SAMPLE_S = 1.5
 M.MODEL_TICK_S = 0.5       -- models chosen this often ...
 M.CREATE_PER_TICK = 3      -- ... at most this many new ones each time
-M.LABEL_MODES = { 'full', 'flight', 'type', 'off' }
+M.LABEL_MODES = { 'flight', 'full', 'type', 'off' }   -- (Ctrl+Alt+K from off: flight numbers first)
 
 -- The switches (settings.lua: airTraffic, airTrafficLabels, airTrafficContrails, airTrafficSounds)
 M.enabled = false
-M.labelMode = 'flight'
+M.labelMode = 'off'
 M.contrails = true
 M.sounds = true
 
@@ -199,10 +201,10 @@ end
 
 -- The other settings into cfg and the switches (settings.lua APPLY calls this on every change).
 function M.applySettings()
-  M.labelMode = setting('airTrafficLabels', 'flight')
+  M.labelMode = setting('airTrafficLabels', 'off')
   local okMode = false
   for _, m in ipairs(M.LABEL_MODES) do if m == M.labelMode then okMode = true end end
-  if not okMode then M.labelMode = 'flight' end
+  if not okMode then M.labelMode = 'off' end
   M.contrails = setting('airTrafficContrails', true) ~= false
   M.sounds = setting('airTrafficSounds', true) ~= false
   M.cfg.soundVolume = math.max(0, math.min(2, (tonumber(setting('airTrafficVolume', 100)) or 100) / 100))
@@ -1171,6 +1173,104 @@ local function drawLabel(pos, text, alpha)
   pcall(debugDrawer.drawText, debugDrawer, pos, String(text), col)
 end
 
+-- Parked: on the ground and not moving (taxiing ones keep their label: they are the traffic on the airfield).
+function M.parked(it)
+  return it.base and it.base.ground == true and (it.base.gs or 0) <= 4
+end
+
+-- Which labels to draw (pure): the nearest n of the candidates { dist, dot (cosine of the angle to the look
+-- direction) }, plus the one nearest the look direction within aimDeg (whatever its distance). Over a busy airport
+-- this is a handful of labels instead of a column of them stacked over the ramp.
+function M.pickLabels(cands, n, aimDeg)
+  table.sort(cands, function(a, b) return a.dist < b.dist end)
+  local out = {}
+  for i = 1, math.min(#cands, n) do out[i] = cands[i] end
+  local minDot, aimed = math.cos(math.rad(aimDeg or 12)), nil
+  for _, c in ipairs(cands) do
+    if (c.dot or -1) >= minDot and (not aimed or c.dot > aimed.dot) then aimed = c end
+  end
+  if aimed then
+    local have = false
+    for _, c in ipairs(out) do if c == aimed then have = true end end
+    if not have then out[#out + 1] = aimed end
+  end
+  return out
+end
+
+------------------------------------------------------------------------------------------ devo343's add-on
+-- The add-on this is built from (devo343's Live Air Traffic, a mod of its own) still on beside it draws every aircraft
+-- a second time. While ours is on and it is too, a small notice offers to switch it off; nothing changes without the
+-- player's click (the user, 2026-11-27). Its extension is unloaded first (its objects go with it), then the game's mod
+-- manager deactivates its mod, as the mod manager page would.
+M.OLD_ADDON_FILE = '/lua/ge/extensions/liveAirTraffic.lua'
+local oldAddon = { checkT = -1e9, active = false, name = nil, hidden = false, result = nil }
+
+-- Is it on (cached, checked every 10 s)? Its mod's name too (nil when the game cannot tell: not a zip mod).
+function M.oldAddonActive()
+  if clock - oldAddon.checkT < 10 then return oldAddon.active, oldAddon.name end
+  oldAddon.checkT = clock
+  local ext = rawget(_G, 'liveAirTraffic')
+  local fsOk = FS and FS.fileExists and FS:fileExists(M.OLD_ADDON_FILE)
+  oldAddon.active = (ext ~= nil) or fsOk == true
+  oldAddon.name = nil
+  if oldAddon.active then
+    local mm = rawget(_G, 'core_modmanager')
+    if mm and mm.getModForFilename then
+      local ok, name = pcall(mm.getModForFilename, M.OLD_ADDON_FILE)
+      -- (never BeamNG.Earth's own mod: should a copy of the old file ever sit inside it, the click must not take
+      -- the whole mod off)
+      local okOwn, own = pcall(mm.getModForFilename, '/lua/ge/extensions/beamngEarth/airtraffic.lua')
+      if ok and type(name) == 'string' and not (okOwn and own == name) then oldAddon.name = name end
+    end
+  end
+  return oldAddon.active, oldAddon.name
+end
+
+-- The click: off it goes. True, or false and why.
+function M.disableOldAddon()
+  local _, name = M.oldAddonActive()
+  local ext = rawget(_G, 'extensions')
+  if rawget(_G, 'liveAirTraffic') and ext and ext.unload then pcall(ext.unload, 'liveAirTraffic') end
+  local mm = rawget(_G, 'core_modmanager')
+  if not (name and mm and mm.deactivateMod) then
+    return false, 'switch it off in the game\'s Mods page (Live Air Traffic)'
+  end
+  local ok = pcall(mm.deactivateMod, name)
+  oldAddon.checkT = -1e9
+  if not ok then return false, 'the game\'s mod manager refused: switch it off in the Mods page' end
+  return true
+end
+
+function M.drawOldAddonNotice()
+  if oldAddon.hidden then return end
+  local active = M.oldAddonActive()
+  if not active and not oldAddon.result then return end
+  local im = rawget(_G, 'ui_imgui')
+  if not im then return end
+  local vp = im.GetMainViewport()
+  if vp then im.SetNextWindowPos(im.ImVec2(vp.Pos.x + 12, vp.Pos.y + 120), im.Cond_Always, im.ImVec2(0, 0)) end
+  local flags = im.WindowFlags_AlwaysAutoResize + im.WindowFlags_NoCollapse + im.WindowFlags_NoSavedSettings
+    + im.WindowFlags_NoTitleBar
+  if im.Begin('Live air traffic##beamngEarthOldAddon', nil, flags) then
+    if oldAddon.result then
+      im.TextWrapped(oldAddon.result)
+      if im.Button('OK') then oldAddon.result, oldAddon.hidden = nil, true end
+    else
+      im.Text("devo343's Live Air Traffic add-on is also on: every aircraft is drawn twice.")
+      im.Text('BeamNG.Earth has live air traffic built in now (based on that add-on).')
+      if im.Button('Switch the old add-on off') then
+        local ok, why = M.disableOldAddon()
+        oldAddon.result = ok and 'The old Live Air Traffic add-on is off (turn it on again in the Mods page).'
+          or ('Could not switch it off: ' .. tostring(why))
+      end
+      im.SameLine()
+      if im.Button('Not now') then oldAddon.hidden = true end
+    end
+  end
+  im.End()
+end
+function M._oldAddon() return oldAddon end
+
 ------------------------------------------------------------------------------------------ the frame
 local function sizeFor(it, dist)
   if not M.cfg.sizeBoost or it.base.ground then return 1 end
@@ -1329,8 +1429,9 @@ local function update(dtReal)
         end
         if it.visible and inFront and not inCabin then
           drawLights(it, pos, f, r, u, s, dist, tanHalf, camPos, M.overheadFactor(pos, camPos, dist) * cloudK * darkK)
-          if M.labelMode ~= 'off' and dist <= M.cfg.labelKm * 1000 then
-            labels[#labels + 1] = { it = it, dist = dist, pos = pos + u * ((d.finTop + 4) * s + dist * 0.004) }
+          if M.labelMode ~= 'off' and dist <= M.cfg.labelKm * 1000 and not M.parked(it) then
+            labels[#labels + 1] = { it = it, dist = dist, pos = pos + u * ((d.finTop + 4) * s + dist * 0.004),
+              dot = toA:dot(camFwd) / math.max(1, dist) }
           end
         end
         -- contrails: jets above the contrail altitude
@@ -1371,13 +1472,12 @@ local function update(dtReal)
   if not okS then logW('sound: ' .. tostring(errS)); M.sounds = false; sound.clear() end
 
   if #labels > 0 then
-    table.sort(labels, function(a, b) return a.dist < b.dist end)
-    for i = 1, math.min(#labels, M.cfg.maxLabels) do
-      local l = labels[i]
+    for _, l in ipairs(M.pickLabels(labels, M.cfg.maxLabels, M.cfg.labelAimDeg)) do
       local alpha = 0.95 - 0.55 * math.min(1, l.dist / (M.cfg.labelKm * 1000))
       drawLabel(l.pos, labelText(l.it, M.labelMode), alpha)
     end
   end
+  M.drawOldAddonNotice()
 end
 
 ------------------------------------------------------------------------------------------ keys

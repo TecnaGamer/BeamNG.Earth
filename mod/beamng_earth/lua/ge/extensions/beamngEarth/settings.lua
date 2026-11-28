@@ -171,7 +171,7 @@ M.SCHEMA = {
   airTrafficConsent = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Live air traffic consent (version)' },
   airTrafficRoutes = { kind = 'bool', default = false, label = 'Flight routes' },
   airTrafficRangeNm = { kind = 'number', default = 60, min = 10, max = 150, label = 'Air traffic search radius (NM)' },
-  airTrafficLabels = { kind = 'enum', default = 'flight', values = { 'full', 'flight', 'type', 'off' }, label = 'Aircraft labels' },
+  airTrafficLabels = { kind = 'enum', default = 'off', values = { 'full', 'flight', 'type', 'off' }, label = 'Aircraft labels' },
   airTrafficContrails = { kind = 'bool', default = true, label = 'Contrails' },
   airTrafficSounds = { kind = 'bool', default = true, label = 'Aircraft sounds' },
   airTrafficVolume = { kind = 'number', default = 100, min = 0, max = 200, label = 'Aircraft sound volume (%)' },
