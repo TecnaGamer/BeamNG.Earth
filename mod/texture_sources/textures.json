@@ -24,7 +24,8 @@
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_blocker_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_blocker_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:100"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_distant_b.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_distant_b.color.webp",
@@ -34,12 +35,14 @@
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_distant_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_distant_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:50:0.7"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:100"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_young_b.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_young_b.color.webp",
@@ -49,7 +52,8 @@
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_young_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_young_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:100"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_b.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_b.color.webp",
@@ -64,12 +68,14 @@
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_distant_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_distant_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:50:0.5"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:100"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_b.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_b.color.webp",
@@ -84,12 +90,14 @@
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_distant_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_distant_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:50:0.7"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:100"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_01_b.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_01_b.color.webp",
@@ -99,7 +107,8 @@
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_01_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_01_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:100"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_b.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_b.color.webp",
@@ -109,7 +118,8 @@
   "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_o.data.webp",
    "format": "BC4",
-   "role": "data"
+   "role": "data",
+   "derive": "coverage:100"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_b.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_b.color.webp",

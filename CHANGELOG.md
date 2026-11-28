@@ -5,6 +5,13 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased
 
 ### Added
+- **Mod compatibility**: other mods now get more of the map data a stock map gives them. The level's police
+  vehicles (`police.vehGroup.json`) and info.json's region and country follow the region you are in, so the game's
+  police and traffic pick cars of that region. Buildings sit in a `Buildings` group as on the stock maps. The
+  modding API 1.12 adds a notice when the streamed world changes (`onBeamNGEarthContentChanged`), the buildings
+  loaded round a point, the towns round a point and whether the collision round a point is in (docs/ADDONS.md).
+  The AI road graph is no longer applied again when it has not changed, which should reduce the hitches and the
+  reloads that mods listening for it went through.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
@@ -21,7 +28,13 @@ What changed in each release of BeamNG.Earth, newest first.
   tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
   young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green. Each tree has one
   look at every distance (bare, autumn-coloured or green), and towns in hot deserts (such as Phoenix) and the tropics
-  keep most of their trees green through the winter.
+  keep most of their trees green through the winter. Reduced the bare trees' popping between their detail levels:
+  their twigs keep the same density from near to far, so a crown no longer thins out and then turns into a dark solid
+  mass at a distance.
+- **Leaf cycle (Experimental, with Winter).** Broadleaf trees follow the real date at the place: in autumn they colour
+  and lose their leaves over several weeks, one tree at a time, and in spring they leaf out the same way. The dates
+  follow the latitude, the height and the climate (maritime places keep their leaves longer, the far north loses them
+  sooner).
 - **BeamMP**: `G.WEATHER` takes the new presets and `real-host` (everyone gets the live weather where the
   longest-joined player is). `real` (each player's own weather) stays the default.
 - **Lightning and thunder** in thunderstorms (the real ones where the weather data has them, and the Thunderstorm and

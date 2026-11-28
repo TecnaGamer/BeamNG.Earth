@@ -115,6 +115,7 @@ mod roadz;
 mod fartex;
 mod photojpeg;
 mod leafon;
+mod phenology;
 mod snowlook;
 mod snowroad; // winter W3 (BNE_WINTER): snowy roads by plow class, sidewalks, snowbanks (server/snowroad.py)
 mod photomesh;
@@ -6904,6 +6905,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(snowlook::snow_perm_possible, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::season_amounts, m)?)?;
+    m.add_function(wrap_pyfunction!(phenology::leaf_calendar, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_on, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_fields, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_blend, m)?)?;
@@ -7856,6 +7858,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(embank::embank_along, m)?)?;
     // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
     // tunnels' and the roads' branches)
+    // 648 (645-647 are taken by the snow S1, power plant and air traffic branches): phenology::leaf_calendar (the trees' leaf cycle at a place); texdds derive "coverage:REF[:SCALE]" (the winter
+    // twig cards' opacity mips keep their drawn share: no LOD pop)
     // 649: the M5 round 8 kernels above (roadsys_kept_ends / approach_run / ramp_dz, embank_lift / along), so that a
     // 644 module, which lacks them, fails fast.require
     m.add("VERSION", 649)?;

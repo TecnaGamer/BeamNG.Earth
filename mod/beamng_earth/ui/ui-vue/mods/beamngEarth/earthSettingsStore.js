@@ -192,6 +192,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expPuddlesV2", type: "bool", default: false, name: "New puddles (server)", desc: "Experimental. The world server sends the last day of real rain with the weather, so New puddle look (Weather page) starts with the puddles a wet morning left. Later versions add new puddle shapes and water along the kerbs. Places you visited are built again once with it.",
         note: RESTART_NOTE },
+      { id: "expLeafCycle", type: "bool", default: false, name: "Leaf cycle", desc: "Experimental. Broadleaf trees follow the real date at the place: in autumn they colour and lose their leaves over several weeks, one tree at a time, and in spring they leaf out the same way. The dates follow the latitude, the height and the climate. Needs Winter.",
+        note: RESTART_NOTE },
     ],
   },
   {

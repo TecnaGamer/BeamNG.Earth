@@ -435,7 +435,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   black lanes with slush at their edges, side streets packed white with grey wheel tracks, markings fading under the
   snow, snowbanks along plowed roads (never across junctions, crossings or bridges), sidewalks shovelled, trampled or
   left covered, white bridge decks. `BNE_WINTER=light`, `heavy` or `ice` forces a fixed light-snow, snowstorm or
-  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too); **New puddles (server)** (`BNE_PUDDLES=v2`: the weather comes with the last day of real rain, so the Weather page's New puddle look starts with the puddles a wet morning left; later versions add new puddle shapes and water along the kerbs). A switch set by hand in the
+  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too); **New puddles (server)** (`BNE_PUDDLES=v2`: the weather comes with the last day of real rain, so the Weather page's New puddle look starts with the puddles a wet morning left; later versions add new puddle shapes and water along the kerbs); **Leaf cycle** (`BNE_LEAF_CYCLE=on`, with Winter: broadleaf trees colour and lose their leaves over several weeks in autumn, one tree at a time, and leaf out the same way in spring, by the place's latitude, height and climate). A switch set by hand in the
   server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
@@ -459,8 +459,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
   own mod manager, after a notice naming the author (they are not made by BeamNG.Earth); each download comes from the
   author's own GitHub releases and is checked against GitHub's checksum. Not while a BeamMP server is joined. Other
-  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`), and programs beside the game can read your
-  position from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md).
+  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`, which also says when the streamed world
+  changes and lists the buildings and towns round a point), and programs beside the game can read your position
+  from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md). Like the stock
+  maps, the level has a police vehicle group of the region you are in and its buildings in a `Buildings` group.
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads
