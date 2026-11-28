@@ -632,6 +632,37 @@
     "groundType": "ASPHALT",
     "translucent": false
   },
+  "bne_deck_concrete": {
+    "name": "bne_deck_concrete",
+    "mapTo": "bne_deck_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7c1e2f4a-3b9d-5e6f-8a1b-2c3d4e5f6a7b",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/m_gm_concrete_plain/t_gm_concrete_plain_d.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/m_gm_concrete_plain/t_gm_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/m_gm_concrete_plain/t_gm_concrete_plain_r.data.png",
+        "detailMap": "/assets/materials/tileable/concrete/m_gm_concrete_plain/t_gm_concrete_plain_detail.data.png",
+        "detailScale": [
+          0.2,
+          0.2
+        ],
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.6,
+          0.6,
+          0.6,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ASPHALT",
+    "translucent": false
+  },
   "bne_wall_scree": {
     "name": "bne_wall_scree",
     "mapTo": "bne_wall_scree",

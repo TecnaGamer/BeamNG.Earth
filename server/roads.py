@@ -12636,7 +12636,7 @@ def _deck_look(spec):
     """A bridge deck's look: the concrete of a `surface=concrete` street (it stays concrete over the bridge) or of a
     motorway's or trunk road's (DECK_CONCRETE_CLASSES), else asphalt — and asphalt for rock/grass surfaces, whose ground mask cannot be painted on a deck at all."""
     if not terrain_surface(spec) and spec.kind == "paved" and spec.surf == "concrete":
-        return CONCRETE
+        return DECK_CONCRETE_STREET
     if DECK_CONCRETE_ON and spec.kind == "paved" and spec.cls in DECK_CONCRETE_CLASSES:
         return DECK_CONCRETE
     return DECK
@@ -13078,6 +13078,13 @@ DECK_CONCRETE_TILE_M = 7.3
 DECK_CONCRETE_ON = False        # (off: the user, 2026-10-31, "the concrete texture does not look very good ... imperfections
                                 # show up a lot more; switch back to asphalt for now")
 DECK_CONCRETE = {"m": "bne_highway_concrete", "tl": DECK_CONCRETE_TILE_M, "p": 20}
+# A deck of a `surface=concrete` street: the gridmap's plain concrete (CONCRETE's) as a road deck's own material
+# (tunnel.materials.json bne_deck_concrete): its colour brought down to a road's weathered concrete, its second layer
+# (a breakup over the mesh's second uv, which decks have none of) and vertex colours left out. As CONCRETE (white,
+# 0.78 mean, dark specks) the deck faces read as snow with footprints under a low sun: Russell Street's viaduct in
+# Baltimore, OSM surface=concrete (the user's report, 2026-11-28: "this bridge texture is ugly and ive never seen a
+# road look like this").
+DECK_CONCRETE_STREET = {"m": "bne_deck_concrete", "tl": 11.0, "p": 20}
 
 
 def _travel(spec):

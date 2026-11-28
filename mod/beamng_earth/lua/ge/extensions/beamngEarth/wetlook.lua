@@ -49,7 +49,7 @@ M.NAMES = {
   repair1_west_coast_usa = 'asphalt', road_crack = 'asphalt',
   sidewalk_concrete = 'concrete', sidewalk1 = 'concrete', curbs = 'concrete', gutter1 = 'concrete',
   m_gm_concrete_plain = 'concrete', italy_sidewalk_tiles = 'concrete', italy_cobblestone = 'concrete',
-  bne_highway_concrete = 'concrete', bne_bridge_concrete = 'concrete', bne_eu_curb = 'concrete',
+  bne_highway_concrete = 'concrete', bne_bridge_concrete = 'concrete', bne_deck_concrete = 'concrete', bne_eu_curb = 'concrete',
   tactile_indicator = 'marking', bne_eu_tactile = 'marking',
   line_white = 'marking', line_yellow = 'marking', line_dashed_long = 'marking', crossing_white = 'marking',
   roadmarkings1 = 'marking', bne_rail_xing_rubber = 'asphalt',

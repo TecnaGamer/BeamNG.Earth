@@ -340,7 +340,7 @@ M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone' }
 -- they drew none; made opaque (above) they joined the shadow pass: every road tile's mesh drawn into each shadow
 -- cascade every frame (the tiles are dynamic TSStatics, no cached shadow map), for a shadow that fell under the road
 -- itself. The decks' slabs, the curbs and the sidewalks keep theirs.
-M.NO_SHADOW = { 'road_asphalt_2lane', 'italy_cobblestone', 'm_gm_concrete_plain' }
+M.NO_SHADOW = { 'road_asphalt_2lane', 'italy_cobblestone', 'm_gm_concrete_plain', 'bne_deck_concrete' }
 
 function M.loadWalkMaterials(walk)
   if type(walk) == 'table' and walk.townBrick and not M.townBrickLoaded then
