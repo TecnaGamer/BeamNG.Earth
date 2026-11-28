@@ -27,6 +27,8 @@ class _Planner:
         self.frame = geodesy.EnuFrame(45.0, 7.0)
         self.lock = threading.RLock()
         self.members = members
+        self.shared = None          # (no plan cache shared with other processes)
+        self.region = (0, 0)
 
     def _shape_members(self, _k):
         return self.members
@@ -103,3 +105,29 @@ def test_a_block_is_solved_once():
     pl = _Planner(_city(-800, 800))
     a = region.block(pl, 0, 0)
     assert region.block(pl, 0, 0) is a and a.prof
+
+
+class _Cell:
+    """What a planner's _shape_members reads of a cell: its plan (one track, on the ground then on a deck) and its nodes."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+
+    def _cell_enu(self, _k):
+        return {"ground": [], "bridges": [], "rail_ground": [_line(0, 0, 100, 0)], "rail_ground_ids": ["t1"],
+                "rail_bridges": [_line(100, 0, 200, 0)], "rail_bridge_ids": ["t1"], "rail_bridge_levels": [1.0]}
+
+    def _cell_nodes(self, _k):
+        return {"t1": (frozenset({"n0", "n1", "n2"}), (("n0", 0.0, 0.0), ("n1", 100.0, 0.0), ("n2", 200.0, 0.0)))}
+
+    def _shape_tunnels(self, _k):
+        return []
+
+
+def test_a_cells_tracks_carry_their_map_nodes():
+    # (a track meets a road where the map joins them, as a road meets a road: without its nodes it was read as joined
+    # wherever a point of each lay within 5 cm, Yokohama's rail deck to the street under it)
+    ms = grading._Planner._shape_members(_Cell(), "k")
+    assert sorted(m.kind for m in ms) == ["rail", "rail_deck"]
+    for m in ms:
+        assert m.nodes == frozenset({"n0", "n1", "n2"}) and len(m.node_xy) == 3

@@ -77,12 +77,7 @@ OVERLAP_M = _gsh.JOIN_M      # m: a point this close to another copy of its way'
 DENSE_M = 2.0               # m: a copy's line is read every this many metres (a long straight segment has no points inside)
 
 
-def way_of(m):
-    """(family, OSM way) of member m: a track's key ("rail", kind, way, ...), a road's (way[~lanes...], ...)."""
-    k = m.key
-    if isinstance(k, tuple) and len(k) > 2 and k[0] == "rail":
-        return "rail", str(k[2])
-    return "road", str(k[0] if isinstance(k, tuple) else k).split("~lanes")[0]
+way_of = _gsh.way_of
 
 
 def _dense(line, step=DENSE_M):

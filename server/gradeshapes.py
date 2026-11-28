@@ -504,6 +504,14 @@ def _road_of(m):
     return str(m.key[0] if isinstance(m.key, tuple) else m.key).partition("~lanes")[0]
 
 
+def way_of(m):
+    """(family, OSM way) of member m: a track's key ("rail", kind, way, ...), a road's (way[~lanes...], ...)."""
+    k = m.key
+    if isinstance(k, tuple) and len(k) > 2 and k[0] == "rail":
+        return "rail", str(k[2])
+    return "road", str(k[0] if isinstance(k, tuple) else k).split("~lanes")[0]
+
+
 def one_road(members):
     """members without the unsplit copies of roads that are also there as lane sections. A road crossing cells is cut
     into lane sections in the cells with lane tags ("<road>~lanes<a>-<b>", lanesections.py) and stays whole in a neighbour
@@ -597,23 +605,102 @@ def _end_meets(net, e, se, o, so, crossed):
     return False
 
 
+def _own_node(m, p):
+    """Member m's map node nearest point p, within NODE_M; None."""
+    if not m.node_xy:
+        return None
+    d, c = min((math.hypot(x - p[0], y - p[1]), c) for c, x, y in m.node_xy)
+    return c if d <= NODE_M else None
+
+
+def _goes_on(net, a, p):
+    """The other members member a's road goes on into at point p: a part of its own way with an end within JOIN_M of
+    p, or a road the map joins it to there (a's own node there one of theirs, lying there: at its end or on its middle,
+    a T)."""
+    w = way_of(net.m[a])
+    node = _own_node(net.m[a], p)
+    out = []
+    for c in net.near(a, JOIN_M):
+        lc = net.lines[c]
+        if len(lc) < 2:
+            continue
+        if way_of(net.m[c]) == w:
+            if min(math.hypot(*(lc[0] - p)), math.hypot(*(lc[-1] - p))) <= JOIN_M:
+                out.append(c)
+        elif node is not None and any(n == node and math.hypot(x - p[0], y - p[1]) <= NODE_M
+                                      for n, x, y in (net.m[c].node_xy or ())):
+            out.append(c)
+    return out
+
+
+def _cross_through(a, b, tol=0.01):
+    """Plan crossings of polylines a and b through both, not where either only touches the other with an end of its
+    line: [q]."""
+    out = []
+    for _i, _j, _ta, _tb, h in _seg_hits(a, b):
+        h = np.asarray(h, np.float64)
+        if min(math.hypot(*(h - a[0])), math.hypot(*(h - a[-1])), math.hypot(*(h - b[0])),
+               math.hypot(*(h - b[-1]))) > tol:
+            out.append(h)
+    return out
+
+
+def _turns_beside(net, e, se, o, so):
+    """Whether member e's end (at arc length se) lying by member o's line (at so), not joined to it, is where one of
+    the two roads changes level beside the other: it goes on there (_goes_on: into a part of its own way, or a road the
+    map joins it to there) on the other side of the other's level or at it (a tunnel's portal where its road rises onto
+    a deck: under the other, then over it), and the two roads, each with what it goes on into, do not cross through each
+    other there (_cross_through: a line only ending on the other is no crossing). No height is clear of the other at such
+    a point: it is no separation. Porte Maillot's primary left its tunnel straight onto a level-1 part, its portal 2.2 m
+    from a service road's own portal beside it; each of its two ends by the service road was a separation of its own,
+    the one point held 6.35 m over the service road and 5.15 m under it: its block had no answer. Suedtiroler Platz's
+    building passage opened onto a 2 m aisle into a car park's ring 2 m from its portal, Kawazu's deck landed on a
+    junction 2 m from the next one along a stub: the passage held 5.15 m under the ring, the deck 5.05 m over the road
+    leaving the next junction, joined to both through 2 m of road. Where the roads cross, the contact is kept (the map's
+    contradiction, reported)."""
+    up = _over(net.m[e], net.m[o])
+    if up is None:
+        return False
+    flips = []
+    for a, sa, b, first in ((e, se, o, True), (o, so, e, False)):
+        if JOIN_M < sa < net.L[a] - JOIN_M:
+            continue
+        p = net.lines[a][0] if sa <= net.L[a] - sa else net.lines[a][-1]
+        for c in _goes_on(net, a, p):
+            u2 = _over(net.m[c], net.m[b]) if first else _over(net.m[b], net.m[c])
+            if u2 != up:
+                flips.append(p)
+                break
+    if not flips:
+        return False
+    q = flips[0]
+    road_e = [e] + _goes_on(net, e, net.lines[e][0] if se <= net.L[e] - se else net.lines[e][-1])
+    road_o = [o] + [c for c in _goes_on(net, o, q) if c != o]
+    for x in road_e:
+        for y in road_o:
+            if x != y and any(math.hypot(*(h - q)) <= NODE_M for h in _cross_through(net.lines[x], net.lines[y])):
+                return False
+    return True
+
+
 def _mapped_at(net, e, se, o):
     """Whether the map joins members e and o where e's end (at arc length se) lies: a map node of both there (within
     NODE_M), not one of both somewhere else. Suedtiroler Platz's primary ended on the middle of the Guertel's tunnel
     under it, 1.8 m off its line; the two share a node, the tunnel's portal 100 m away, and were taken for joined there:
-    the square held at the tube's height and 5.15 m over it at once. Where both members' nodes are placed (node_xy), a
-    node id of both lying there; where one's are not known (a busway the OpenStreetMap import adds has no node ids; a
-    track), a point of e's line there within NODE_EPS_M of a point of o's (one map node is one place)."""
+    the square held at the tube's height and 5.15 m over it at once. Where both members' nodes are placed (node_xy), e's
+    node there (the nearest to it, within NODE_M) a node of o's lying there; where one's are not known (a busway the
+    OpenStreetMap import adds has no node ids), a point of e's line there within NODE_EPS_M of a point of o's (one map
+    node is one place)."""
     me, mo = net.m[e], net.m[o]
     q = np.array([np.interp(se, net.s[e], net.lines[e][:, 0]), np.interp(se, net.s[e], net.lines[e][:, 1])])
     if me.node_xy and mo.node_xy:
-        at_e = {c: (x, y) for c, x, y in me.node_xy}
-        for c, x, y in mo.node_xy:
-            xe = at_e.get(c)
-            if xe is not None and math.hypot(xe[0] - q[0], xe[1] - q[1]) <= NODE_M \
-                    and math.hypot(x - q[0], y - q[1]) <= NODE_M:
-                return True
-        return False
+        # (e's own node there: the one of its nodes nearest the place, not any within NODE_M. Suedtiroler Platz's
+        # 2 m parking aisle between a building passage and the car park's ring had both its ends within NODE_M of both
+        # its nodes: each end was joined to both, the passage's end held at the ring's height and 5.15 m under it)
+        d, c = min((math.hypot(x - q[0], y - q[1]), c) for c, x, y in me.node_xy)
+        if d > NODE_M:
+            return False
+        return any(co == c and math.hypot(x - q[0], y - q[1]) <= NODE_M for co, x, y in mo.node_xy)
     le, lo = np.asarray(net.lines[e], np.float64)[:, :2], np.asarray(net.lines[o], np.float64)[:, :2]
     pe = le[np.hypot(*(le - q).T) <= NODE_M]
     po = lo[np.hypot(*(lo - q).T) <= NODE_M + NODE_EPS_M]
@@ -654,7 +741,12 @@ def _pair_from(net, i, j, hits, ends):
     out = []
     for swap, se, so, q in ends:
         e, o = (j, i) if swap else (i, j)
-        kind = "join" if _end_meets(net, e, se, o, so, bool(hits)) else "cross"
+        if _end_meets(net, e, se, o, so, bool(hits)):
+            kind = "join"
+        elif _turns_beside(net, e, se, o, so):
+            continue
+        else:
+            kind = "cross"
         out.append((j, kind, so if swap else se, se if swap else so, q))
     # (one joint found from both its parts' ends once)
     uniq = []
