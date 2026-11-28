@@ -4,6 +4,9 @@ What changed in each release of BeamNG.Earth, newest first.
 
 ## Unreleased
 
+### Fixed
+- **Rumble-strip timing at speed.** Wheel contact samples are now taken about every 20 ms, and the trigger interpolates line crossings between samples. Fast crossings are no longer missed or delayed by several metres between 10 Hz checks.
+
 ### Added
 - **Mod compatibility**: other mods now get more of the map data a stock map gives them. The level's police
   vehicles (`police.vehGroup.json`) and info.json's region and country follow the region you are in, so the game's
@@ -207,6 +210,7 @@ Works with BeamNG.drive 0.40.5.
   30 s to 2 s, tunnel sides 3.9 s to 0.75 s, stations 55.6 s to 44.4 s) (PR #1283, #1315 and #1314, crunchdomo).
 
 ### New
+- **Rumble-strip audio** now uses a recording supplied by ProxyFirewall202, fades in, loops while a tyre remains on the marking, and fades out after leaving it. Detection uses each tyre's road-contact point and positional audio comes from the touching tyre(s), improving line alignment and cabin audibility.
 - **Epic Games and no-Steam launch** (new; please tell us how it goes): on Windows the app now finds BeamNG.drive
   installed from the Epic Games Store, and it can start the game without Steam on Windows and Linux (`--launch direct`, kept for later
   starts; it uses the same user folder, so your mods and settings stay put). With several copies installed it asks
