@@ -73,7 +73,10 @@ M.PREFIXES = {
 M.WORDS = { { 'sidewalk', 'concrete' }, { 'curb', 'concrete' }, { 'kerb', 'concrete' }, { 'pavement', 'concrete' },
   { 'paver', 'concrete' }, { 'cobble', 'concrete' }, { 'concrete', 'concrete' }, { 'asphalt', 'asphalt' },
   { 'crossing', 'marking' }, { 'marking', 'marking' } }
-M.WORDS_NOT = { 'glass', 'light', 'lamp', 'sign', 'glow', 'decal_' }
+-- (skidmark: the tyres' skid-mark decals, AsphaltRoad_track_skidmarks. Its first write of new values froze the game for
+-- 12.4 s on the Steam Deck and 620 ms on Windows (one write, its call 0.3 ms: the engine's next frame; broker wl2,
+-- 2026-11-28), once per new wet step a session: the lag felt in changing rain. Not a road surface: never wetted.)
+M.WORDS_NOT = { 'glass', 'light', 'lamp', 'sign', 'glow', 'decal_', 'skidmark' }
 M.NOT = { bne_bld_sky = true, bne_bld_skywin = true, bne_bld_glasshouse = true, bne_bld_lobby = true }   -- (lit windows)
 M.WET_DARK = 0.85         -- a porosity-1 surface's colour at full wetness: x (1 - WET_DARK) (Lagarde's 0.2..0.5); at 0.6 the
                           -- Tokyo sidewalks hardly showed it in the broker shots (wb9), at 0.95 clearly (wb11); 0.7 with

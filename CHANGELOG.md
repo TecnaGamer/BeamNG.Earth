@@ -92,6 +92,9 @@ What changed in each release of BeamNG.Earth, newest first.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed
+- Wet look: reduced the chance of the game freezing for several seconds (over 10 s on the Steam Deck) when rain makes
+  the roads wetter or drier. The tyres' skid marks are no longer darkened, the wet look is now applied one material a
+  frame instead of a dozen, and the wetness no longer steps back and forth when a shower comes and goes.
 - Winter (Experimental): reduced lag and buildings briefly disappearing after a teleport or a weather update. A place
   with no snow on its roads no longer sends every road tile again, and a change of snow on the roads now sends only
   the road surfaces, not the buildings. A change in the snow state now re-renders only the distant ground it actually
