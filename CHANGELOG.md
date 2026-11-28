@@ -85,6 +85,13 @@ What changed in each release of BeamNG.Earth, newest first.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed
+- Winter (Experimental): reduced lag and buildings briefly disappearing after a teleport or a weather update. A place
+  with no snow on its roads no longer sends every road tile again, and a change of snow on the roads now sends only
+  the road surfaces, not the buildings. A change in the snow state now re-renders only the distant ground it actually
+  changes, instead of every distant tile.
+- Wet roads: the whole road should no longer switch between wet and dry when you turn onto another kind of street.
+  It now stays as wet as the wettest street nearby, and as the road dries over the hour the wet look fades over
+  minutes instead of switching at once.
 - Reduced the chance of the game's terrain texture cache (`temp/art/terrainmaterialcache` in BeamNG's user folder)
   filling up with old ground photos: they now go with their session, and a one-time clean-up at the next start removes
   the ones earlier versions left behind (several GB on long-time test machines).

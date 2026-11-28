@@ -15598,6 +15598,18 @@ class GeoTracker:
         self.redo = set()       # (gx, gy) sent, to be asked for again (redo_all): sent again only where they changed
         self.swap, self.swap_held, self.swap_staged = None, [], 0      # (swap_begin)
         self.skin_h = {}        # (gx, gy) -> the digest of the skin sent (blockworker._geo_skin's "h")
+        self.skin_gen = 0       # (reskin) bumped when every skin is due again: a skin started before is not counted
+        self.reskinning = set()     # (gx, gy) whose skin reskin asked for again: done for progress() meanwhile
+
+    def reskin(self):
+        """The skins' inputs changed, not the content (earthd Server.snow_roads_changed: the road skins' winter part):
+        every skin sent is built and sent again, nearest first as any tile; the content (buildings, bridges, props,
+        season-free) stays as the mod has it, and the mod swaps a skin in place, its old parts kept until the new ones
+        are made (roads.lua onSkin). Before (2026-11-28, Baltimore) a new tracker sent every tile's content again and
+        dropped the builds running. A skin building now (made with the old inputs) is sent but stays due."""
+        self.reskinning |= self.skins
+        self.skins = set()
+        self.skin_gen += 1
 
     def redo_all(self):
         """Every geotile sent is asked for again, content and skin (earthd Connection.stale_swap: they were an
@@ -15632,7 +15644,10 @@ class GeoTracker:
         retry. near_m: only those within it of the car (the catch-up boost: the ground under the car, not SEND_M's
         far edge, where a tile is always on its way while driving)."""
         fast.require(551, "tracker_progress")
-        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, self.skins,
+        # (a skin reskin asked for again counts as there: the mod shows the old one until it comes; no catch-up boost
+        # or loading line for a winter look change)
+        skins = self.skins | self.reskinning if self.reskinning else self.skins
+        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, skins,
                                          getattr(self, "car_m", None), near_m)
 
     def ready_tiles(self, frame, x, y, r):
@@ -15641,7 +15656,15 @@ class GeoTracker:
         Before (2026-10-29) the signs waited until every road geotile round the car was in, which while driving it
         seldom was: signs came only once the car slowed down or stopped, one tile at a time, right next to it."""
         fast.require(551, "road_ready")
-        return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        held = self.reskinning
+        if not held:
+            return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        skins = self.skins                  # (a skin reskin asked for again: the mod has its old one, still ready)
+        self.skins = skins | held
+        try:
+            return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        finally:
+            self.skins = skins
 
     def again(self, keys):
         """The sent geotiles among keys built again (content and this anchor's skin) at the next pose and sent again
@@ -15688,6 +15711,7 @@ class GeoTracker:
                 del self.frames[old]
             self.skins, self.retry, self.fails, self.started, self.stuck_said = set(), {}, {}, {}, set()
             self.need = {}
+            self.reskinning = set()
             self.stats["anchors"] += 1
         if self.pool is None:
             from runtimeprofiler import TileJobs
@@ -15704,8 +15728,8 @@ class GeoTracker:
             if hasattr(getattr(conn, "s", None), "matslots"):
                 job = functools.partial(staging.prepare_shapes, conn.s, "roads", True, aid, k, job)
             fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
-            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
-                                  self._built(conn, a, kk, f, c, sk, m))
+            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make, g=self.skin_gen:
+                                  self._built(conn, a, kk, f, c, sk, m, g))
 
         def stuck():
             for k in list(self.building):    # (a snapshot: a tile's done callback or a start can change it meanwhile)
@@ -15720,6 +15744,7 @@ class GeoTracker:
             self.sent.discard(k)
             self.skins.discard(k)
             self.skin_h.pop(k, None)
+            self.reskinning.discard(k)
             self.redo.discard(k)
             self.info.pop(k, None)
             self.shown.pop(k, None)
@@ -15734,7 +15759,7 @@ class GeoTracker:
         fast._ef.road_geo(self, conn, aid, frame, (x, y), velocity, tuple(view) if view else None, foci, tree,
                           ground_busy, now, start, stuck, drop_tile)
 
-    def _built(self, conn, aid, key, fut, content, skin, make):
+    def _built(self, conn, aid, key, fut, content, skin, make, gen=None):
         import geotiles
         if self.futs.get(key) is fut:
             self.building.discard(key)
@@ -15840,7 +15865,9 @@ class GeoTracker:
                     m["slots"] = slots
             return m
         if skin and sk is not None:
-            self.skins.add(key)
+            if gen is None or gen == getattr(self, "skin_gen", 0):
+                self.skins.add(key)         # (else started before a reskin: made with the old inputs, still due)
+                getattr(self, "reskinning", set()).discard(key)
             self.stats["skins"] += 1
             if self.swap is not None:
                 self.swap_staged += 1

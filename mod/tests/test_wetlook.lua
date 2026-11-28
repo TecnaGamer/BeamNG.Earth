@@ -82,6 +82,48 @@ check(W.source == 'rain' and W.level() == W.LEVELS, 'the real road dry, the stor
 check(select(1, W.wetOf(true, 0.8, 0.2)) == 0.8 and select(2, W.wetOf(true, 0.8, 0.2)) == 'road state'
   and select(1, W.wetOf(true, nil, 0.3)) == 0.3 and select(1, W.wetOf(false, 1, 1)) == 0, 'wetOf: the wetter one; off: dry')
 package.loaded['beamngEarth/winter'] = nil
+-- W1's road wetness is shown gradually (Baltimore, 2026-11-28: the whole road switched between wet and dry): the class
+-- under the car goes through winter.stableRow, one place's next state dries the look over DRY_S, a new place's is shown
+-- at once
+check(W.roadStep(0.8, 0, 60) == 0.8 - 60 / W.DRY_S and W.roadStep(0.1, 0, W.DRY_S) == 0
+  and W.roadStep(0, 0.8, 1e6) > 0.79 and W.roadStep(0, 0.8, 2) < 0.1 and W.roadStep(0.5, 0.5, 60) == 0.5, 'roadStep')
+do
+  local cond, cls, placeN, asked = 'wet', 0, 1, {}
+  package.loaded['beamngEarth/winter'] = {
+    _state = function() return { roads = { { cond }, { cond }, { cond }, { 'wet' }, { 'wet' } } }, cls end,
+    stableRow = function(list, c) asked[#asked + 1] = c; return list[5] end,
+    place = function() return placeN end }
+  local function settle()
+    for _ = 1, 50 do W.update(0.016, 0, true) end
+    W.update(W.CHECK_S, 0, true)
+    for _ = 1, 50 do W.update(0.016, 0, true) end
+  end
+  W.reset()
+  W.update(W.CHECK_S, 0, true)
+  check(W.level() == W.levelOf(0.8) and #asked > 0, 'a first state: wet at once, through winter.stableRow')
+  cls = 3
+  settle()
+  check(W.level() == W.levelOf(0.8), 'another street: the same wet road')
+  package.loaded['beamngEarth/winter']._state = function() return { roads = { { 'dry' }, { 'dry' }, { 'dry' },
+    { 'dry' }, { 'dry' } } }, cls end
+  package.loaded['beamngEarth/winter'].stableRow = nil
+  settle()
+  check(W.level() == W.levelOf(0.8) and W.roadWetness() > 0.79 and W.roadWetness() < 0.8,
+    'the next hour says dry: drying, not dry at once (' .. tostring(W.roadWetness()) .. ')')
+  for _ = 1, math.ceil(W.DRY_S / W.CHECK_S) + 2 do W.update(W.CHECK_S, 0, true); for _ = 1, 20 do W.update(0.016, 0, true) end end
+  check(W.level() == 0 and W.roadWetness() == 0, 'dry after DRY_S')
+  package.loaded['beamngEarth/winter']._state = function() return { roads = { {}, {}, { 'wet' } } }, 2 end
+  settle()
+  check(W.level() == 0 and W.roadWetness() > 0, 'wet again: not at once')
+  for _ = 1, 300 / W.CHECK_S do W.update(W.CHECK_S, 0, true); for _ = 1, 20 do W.update(0.016, 0, true) end end
+  check(W.level() >= 2, 'wet again within minutes (' .. tostring(W.roadWetness()) .. ')')
+  placeN = 2
+  package.loaded['beamngEarth/winter']._state = function() return { roads = { {}, {}, { 'dry' } } }, 2 end
+  settle()
+  check(W.level() == 0 and W.roadWetness() == 0, 'a new place\'s state: its own at once')
+  package.loaded['beamngEarth/winter'] = nil
+  W.reset()
+end
 
 -- puddles: none below PUDDLE_MIN, then deeper steps lower the material's alpha threshold (the deep pools first);
 -- shown and hidden through roads.setPuddles at step changes only, never per frame

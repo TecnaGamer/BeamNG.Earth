@@ -74,10 +74,27 @@ def skin_key(wear):
     return (("snowroad", VERSION, int(s["q"]), tuple(int(b) for b in s.get("banks", ())[:CLASSES])),)
 
 
+WALK_CLEAR = 3              # snowroad.rs W_CLEAR: a sidewalk with no snow on it
+
+
+def bare(look):
+    """Is a state's look one with no winter on the roads (snowroad.rs look under no ground cover: every class's paint
+    shown whole, no deck under snow, no bank, every sidewalk clear)? Its skins are then drawn as without winter: a
+    wet or dry road with no snow gives the same skins (and keys) as winter off. Missing parts count as bare."""
+    if any(int(b) > 0 for b in look.get("bank_bin") or ()):
+        return False
+    if any(int(m) < 1000 for m in look.get("marking") or ()):
+        return False
+    if any(int(d) > 0 for d in look.get("deck_cover") or ()):
+        return False
+    return all(int(w[1]) <= 0 and int(w[0]) == WALK_CLEAR for w in look.get("walks") or ())
+
+
 def wear_snow(look):
-    """The wear argument's winter part from a state's look (snow.py: snowroad_look), or None (no snow on the roads:
-    the skins as they were)."""
-    if not ON or not look:
+    """The wear argument's winter part from a state's look (snow.py: snowroad_look), or None (no snow on the roads,
+    bare: the skins as they were). Baltimore, 2026-11-28: a bare look's {"q": 1, banks 0} differed from None, so a
+    teleport and the place's first state (no snow before or after) each sent every road tile again."""
+    if not ON or not look or bare(look):
         return None
     return {"q": 1, "banks": [int(b) for b in look["bank_bin"]]}
 

@@ -312,14 +312,28 @@ class Service:
 
     def provider(self, south, west, north, east):
         """snowcover's provider: the last table as a uniform Field (None while there is none or no cover in it)."""
-        t = _drawn(self.table)
-        if t is None:
+        return self.field_of(self.table)
+
+    def field_of(self, t):
+        """A shared table (rows, road, ice) as the provider's uniform Field (None: none, or nothing white in it)."""
+        t = _drawn(t)
+        if t is None or self.cover is None:
             return None
         try:
             table = self.cover.Table(t[0], t[1], t[2])
         except TypeError:           # (a snowcover before Table.ice)
             table = self.cover.Table(t[0], t[1])
         return self.cover.Field(CELL_DEG, uniform=table)
+
+    def _changed(self, s, old, new):
+        """Server.snow_changed with the provider's Fields before and after: only the textures whose look changed are
+        made again (snowcover.look_changes)."""
+        try:
+            fields = (self.field_of(old), self.field_of(new))
+        except Exception as e:      # (a cover without Field: every texture, as before)
+            log.debug("snow: no fields for the change: %s: %s", type(e).__name__, e)
+            fields = None
+        return s.snow_changed(fields=fields)
 
     def backoff(self, fails):
         """Seconds before another try after `fails` failed fetches in a row: retry_fast_s doubling, at most retry_s."""
@@ -354,7 +368,7 @@ class Service:
                          table_change(old, self.table, old_view, view))
             s = conn.s
             if drawn and hasattr(s, "snow_changed"):     # (no snow before and after: nothing drawn changes)
-                s.snow_changed()
+                Service._changed(self, s, old, self.table)
             for c in list(getattr(s, "connections", ()) or ()):
                 c.send({"type": "snow", "snow": dict(view)})
         return changed
@@ -375,6 +389,7 @@ class Service:
             if site is not None and weather.distance_m(site[0], site[1], lat, lon) <= NEW_PLACE_M:
                 return False
             had = _drawn(self.table) is not None
+            old = self.table
             roads = self.road_snow is not None
             self.table, self.view, self.site = None, None, None
             self.bins, self.ice, self.bank_bins, self.road_snow = [-1] * 8, -1, [-1] * 5, None
@@ -384,7 +399,7 @@ class Service:
         s = conn.s
         if had:
             if hasattr(s, "snow_changed"):
-                s.snow_changed()
+                Service._changed(self, s, old, None)
             for c in list(getattr(s, "connections", ()) or ()):
                 c.send({"type": "snow", "snow": {"mode": "real", "cover": 0, "depth": 0}})
         if roads and hasattr(s, "snow_roads_changed"):

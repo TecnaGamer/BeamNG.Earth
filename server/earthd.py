@@ -1310,6 +1310,7 @@ class Server:
         self.retex_rate = retex_rate
         self.retex_inflight = RETEX_INFLIGHT
         self.retex_todo = set()
+        self.snow_redo = set()          # far tiles rendering through a snow change whose look it changed (snow_changed)
         self.retex_busy = 0
         self._retex_next = 0.0
         self._retex_timer = None
@@ -4977,38 +4978,112 @@ class Server:
         return snowcovermod.spec_for_square(anchor.frame, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M,
                                             size)
 
-    def snow_changed(self):
-        """(event loop) The snow state changed (W1's state, a preset set live: snow_mode): every far tile with a
-        texture re-rendered at the live retexture's pace, nearest a player first (each takes its new spec: far_snow),
-        every block's photo at its next base refresh (base_stale). A committed block's snow layer follows with its next
-        build (its .ter is the engine's). Returns the far tiles queued."""
-        n = 0
+    def snow_changed(self, fields=None):
+        """(event loop) The snow state changed (W1's state, a preset set live: snow_mode): the far tiles with a texture
+        whose snow look changed marked stale and re-rendered at the live retexture's pace, nearest a player first (each
+        takes its new spec: far_snow), the blocks' photos whose look changed at their next base refresh (base_stale).
+        A committed block's snow layer follows with its next build (its .ter is the engine's). Returns the far tiles
+        marked.
+        fields: (old, new) snowcover Fields of a W1 state change (snow.Service: the shared table before and after,
+        None for no snow); a texture changes only where its look does (snowcover.look_changes: the tables round its
+        square; the road shares only under texels fine enough for the roads, _snow_roads_of). None (a mode set live):
+        every texture. Only tiles some connection shows or holds are queued (the others are stale: rendered again when
+        sent); a tile rendering now is rendered again once it is in (snow_redo: it took the old state). Stelvio,
+        2026-11-28: a road share moving in one plow class re-rendered all 1,403 far tiles, twice in two minutes."""
+        uni = snowcovermod.uniform_changes(*fields) if fields is not None else None
+
+        def changed(box, roads):
+            if fields is None:
+                return True
+            if uni is not None:
+                return uni[0] if roads else uni[1]
+            try:
+                return snowcovermod.look_changes(fields[0], fields[1], box(), roads)
+            except Exception as e:      # (no frame for it: as before, made again)
+                log.debug("snow change: %s: %s", type(e).__name__, e)
+                return True
+
+        n = queued = 0
+        viewers = getattr(self, "_retex_viewers", None)
+        inflight = getattr(self, "tile_inflight", None) or {}
+        redo = getattr(self, "snow_redo", None)
+        if redo is None:
+            redo = self.snow_redo = set()
         for ck, info in list(self.tiles.items()):
             if getattr(info, "material", None) is None or getattr(info, "texture", None) is None:
                 continue
+            if fields is not None:
+                tile = getattr(info, "tile", None)
+                if tile is None:
+                    tile = farfield.tile_of(ck[1])
+                if not changed(lambda ck=ck, tile=tile: Server._snow_tile_box(self, ck, tile),
+                               Server._snow_roads_of(self, tile, info)):
+                    continue
             info.stale = True
-            self.retex_request(ck, pump=False)
             n += 1
-        if n:
+            if ck in inflight:
+                redo.add(ck)
+            if callable(viewers) and not viewers(ck):
+                continue                # (nobody shows it: re-rendered when sent again)
+            self.retex_request(ck, pump=False)
+            queued += 1
+        if queued:
             self._retex_pump()
+        blocks = 0
         if self.near_visual == "detail":
-            self.base_stale.update(k for k in self.hm if k[0] in self.anchors)
+            for k in self.hm:
+                if k[0] in self.anchors and k not in self.base_stale and \
+                        (fields is None or changed(lambda k=k: Server._snow_block_box(self, k), True)):
+                    self.base_stale.add(k)
+                    blocks += 1
         self.snow_changes = getattr(self, "snow_changes", 0) + 1
-        log.info("snow state changed (%s): %d far tiles to texture again, %d block photos", snowcovermod.MODE, n,
-                 len(self.base_stale))
+        log.info("snow state changed (%s): %d far tiles to texture again (%d shown), %d block photos",
+                 snowcovermod.MODE, n, queued, blocks)
         return n
 
+    def _snow_roads_of(self, tile, info):
+        """Can the road shares change a far tile's snow (snow_masks: its texels fine enough for the roads' plow classes,
+        at the size it has or may be rendered at)? Called as Server._snow_roads_of(self, ...)."""
+        try:
+            if isinstance(tile, farfield.GTile):
+                return False
+            node = tile.base if isinstance(tile, farfield.Piece) else tile
+            if callable(getattr(self, "map_on", None)) and self.map_on():
+                return True             # (the 3D map's textures as fine as the screen: any)
+            px = max(int(getattr(info, "tex_px", 0) or 0), int(self.tex_size(node.level)))
+            return bool(surfacemod.far_photo_roads(node.size, px))
+        except Exception:
+            return True
+
+    def _snow_tile_box(self, ck, tile):
+        """(south, west, north, east) of a far tile's texture square (tile_where), for snowcover.look_changes."""
+        anchor = self.anchors.get(ck[0])
+        if anchor is None:
+            anchor = next(iter(self.anchors.values()))
+        return snowcovermod.box_of(*self.tile_where(anchor, tile))
+
+    def _snow_block_box(self, key):
+        """(south, west, north, east) of block key's base photo square (base_snow's)."""
+        anchor = self.anchors[key[0]]
+        size = self.layout.block * heightmap.SQUARE
+        return snowcovermod.box_of(anchor.frame, key[1] - size / 2 - BASE_SHIFT_M, key[2] - size / 2 - BASE_SHIFT_M,
+                                   size)
+
     def snow_roads_changed(self):
-        """(event loop) Winter W3: the road skins' winter part changed (snow.Service._commit_roads: a first snowy state,
-        a bank bin moving): every connection's road tiles sent again (their skins rebuilt under the new key)."""
+        """(event loop) Winter W3: the road skins' winter part changed (snow.Service._commit_roads: snow on the roads
+        or none any more, a bank bin moving): every connection's road geotile SKINS built and sent again under the new
+        key (roads.GeoTracker.reskin; the mod swaps each in place, its old parts shown until the new ones are made).
+        The content (buildings, bridges, props) never reads the winter part (roadwear.wear_key): not sent again, and
+        the anchor road tiles (roads.Tracker) do not read it either. Before (Baltimore, 2026-11-28) every connection
+        got a new tracker: every tile's content again, the builds running dropped, eight times in 13 min."""
         n = 0
         for c in list(getattr(self, "connections", ()) or ()):
-            if getattr(c, "roads", None) is None:
+            reskin = getattr(getattr(c, "roads", None), "reskin", None)
+            if not callable(reskin):
                 continue
-            c.roads.close()
-            c.roads = road_tracker(c)
+            reskin()
             n += 1
-        log.info("snowy roads changed: road tiles again for %d connections", n)
+        log.info("snowy roads changed: road skins again for %d connections", n)
         return n
 
     def snow_masks(self, anchor, tile, px, snow):
@@ -7447,6 +7522,11 @@ class Server:
     def _tile_done(self, ck, fut):
         self.tile_inflight.pop(ck, None)
         if fut.cancelled() or fut.exception() is not None:
+            redo = getattr(self, "snow_redo", None)
+            if redo and ck in redo:         # (its last texture, marked stale by snow_changed: queued now)
+                redo.discard(ck)
+                if ck in self.tiles:
+                    self.retex_request(ck)
             return
         before = self.tiles.get(ck)
         info = self.tiles[ck] = fut.result()
@@ -7472,6 +7552,12 @@ class Server:
                 self._cm_settle(ck, rk, st, pump=False)
         if before is not None and info is not before:     # a re-render: stale at once again, or not
             info.retex_repeat = (0 if recovered else before.retex_repeat) + 1 if info.stale else 0
+        redo = getattr(self, "snow_redo", None)
+        if redo and ck in redo:             # (rendered with the snow state before the last change: snow_changed)
+            redo.discard(ck)
+            if info.material is not None and info.texture is not None:
+                info.stale, info.retex_repeat = True, 0
+                self.retex_request(ck, pump=False)
         if info.stale:
             self._retex_pump()
         if self.matslots.short():
