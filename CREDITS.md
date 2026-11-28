@@ -450,3 +450,30 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+## Nationwide highway shield library
+
+- State-specific numberless shield templates: 87 imported public-domain source
+  drawings plus Wyoming's existing public-domain adaptation. Individual source
+  files, authors, checksums and license records are in
+  `server/data/shields/artwork_sources.json` and `NOTICE.md`.
+- Wide Minnesota template: **MN-blank wide.svg**, **Taniya Wilburn**, adapted
+  under **CC BY-SA 4.0**. Source:
+  https://commons.wikimedia.org/wiki/File:MN-blank_wide.svg ; license:
+  https://creativecommons.org/licenses/by-sa/4.0/ . Changes include resizing,
+  layout and generated number compositing; Minnesota-wide derivative graphics
+  retain that license. Full attribution/change notice: `server/data/shields/NOTICE.md`.
+- Runtime road-route relation/way index: **© OpenStreetMap contributors**,
+  **ODbL-1.0**, downloaded from the BeamNG.Earth-data weekly build. Its public
+  `routes/manifest.json` records the dated planet source, database checksum,
+  membership counts and build provenance. The application ships no database
+  or pinned membership manifest.
+
+- Wyoming numberless shield artwork: adaptation of Wikimedia Commons
+  [WY-210.svg](https://commons.wikimedia.org/wiki/File:WY-210.svg) by Vishwin60,
+  identified there as public domain (PD MUTCD WY). Includes the bucking horse
+  and rider. Source, build and license notes: `server/data/shields/NOTICE.md`.
+- Wyoming route station test fixture (excluded from player packages): **© OpenStreetMap contributors**,
+  ODbL-1.0; the JSON header records its snapshot timestamp and source hash.
+- The generated number textures reuse Roadgeek 2014 Series EEM 3.1 (MIT);
+  the font notice is retained in `server/data/shields/Roadgeek-LICENSE.txt`.

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://web.resource.org/cc/"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   width="600"
+   height="600"
+   id="svg2"
+   sodipodi:version="0.32"
+   inkscape:version="0.44"
+   version="1.0"
+   sodipodi:docbase="C:\Documents and Settings\ltljltlj\Desktop\Signs\State Route Shields\Arkansas\Done"
+   sodipodi:docname="Arkansas blank.svg">
+  <defs
+     id="defs4" />
+  <sodipodi:namedview
+     id="base"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     gridtolerance="10000"
+     guidetolerance="10"
+     objecttolerance="10"
+     inkscape:pageopacity="0.0"
+     inkscape:pageshadow="2"
+     inkscape:zoom="1.2866667"
+     inkscape:cx="300.00001"
+     inkscape:cy="300.00001"
+     inkscape:document-units="px"
+     inkscape:current-layer="layer1"
+     width="750px"
+     height="600px"
+     inkscape:window-width="853"
+     inkscape:window-height="964"
+     inkscape:window-x="86"
+     inkscape:window-y="-9" />
+  <metadata
+     id="metadata7">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <path
+       style="color:black;fill:black;fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:0.8735441;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dashoffset:0;stroke-opacity:1;marker:none;marker-start:none;marker-mid:none;marker-end:none;visibility:visible;display:inline;overflow:visible"
+       d="M 37.5,0 L 562.5,0 C 583.275,0 600,16.725 600,37.5 L 600,562.5 C 600,583.275 583.275,600 562.5,600 L 37.5,600 C 16.725,600 0,583.275 0,562.5 L 0,37.5 C 0,16.725 16.725,0 37.5,0 z "
+       id="rect1872" />
+    <path
+       style="fill:white;fill-opacity:1"
+       d="M 91.759702,534.5492 L 91.759702,494.0985 L 63.492111,494.0985 L 35.22451,494.0985 L 35.22451,344.2866 L 35.22451,194.4747 L 24.23832,112.18397 C 18.19591,66.92406 13.082893,28.79226 12.876055,27.44662 L 12.5,25 L 270.4006,25 L 528.30122,25 L 531.61702,26.55127 C 536.90368,29.0246 539.31466,32.16381 540.8923,38.62831 C 542.06585,43.43702 542.14242,44.62473 541.52342,48.41478 C 541.13597,50.78725 540.44882,55.5175 539.99647,58.92645 C 539.34525,63.83417 538.54169,66.55078 536.13681,71.97509 C 533.25031,78.48555 533.08875,79.14949 532.88152,85.34994 L 532.66348,89.87426 L 535.15486,93.66844 L 537.64624,95.46263 L 562.51557,95.46263 L 587.3849,95.46263 L 587.3849,111.29898 L 587.3849,127.13533 L 587.5,128.21835 C 585.92286,132.4724 585.61549,134.23191 585.61549,139.00719 L 581.61629,150.71299 L 575.02512,167.26872 C 567.39362,183.75252 566.38252,186.33438 565.96968,190.39145 C 565.33869,196.59325 560.81392,217.06404 558.43185,224.49369 C 557.36546,227.81992 555.40062,234.8338 554.06557,240.0801 C 551.54668,249.9784 551.87665,251.2829 544.51395,262.2139 C 542.75432,264.8263 538.92248,270.5844 538.90828,273.5463 C 538.9042,274.4033 537.25477,280.3304 532.79898,289.162 C 528.33038,298.019 524.31857,306.8285 523.85247,308.8078 C 522.86191,313.0141 507.04324,342.0228 495.03466,361.6548 C 488.19415,372.8379 486.31888,376.5772 479.53585,392.5599 C 474.68827,403.9822 471.47154,412.4723 470.88408,415.395 C 470.3698,417.9538 469.52372,421.9558 469.00397,424.2883 C 468.2878,427.5023 468.05587,432.8379 468.04595,446.3258 L 468.03282,462.1225 L 470.20201,470.792 C 471.3951,474.4602 472.96878,479.9363 473.69909,482.9611 C 474.42947,485.9859 475.44483,491.2998 475.95547,492.3254 C 476.74458,493.9104 476.85608,496.8679 476.69853,523.3548 L 476.5131,552.5194 L 474.42457,558.7918 C 473.27577,561.1416 471.0851,564.5493 469.55619,566.3645 C 468.02736,568.1797 466.77648,569.8586 466.77648,570.0955 C 466.77648,570.6998 465.08797,572.3873 464.46576,572.4048 C 464.18196,572.4127 463.24304,572.9934 462.3793,573.6951 C 460.82904,574.9546 458.44502,574.9712 276.28428,574.9855 L 91.759702,575 L 91.759702,534.5492 z "
+       id="path3797"
+       sodipodi:nodetypes="ccccccccccccssssccccccccccccssssssssssscccsscccssssccc" />
+  </g>
+</svg>

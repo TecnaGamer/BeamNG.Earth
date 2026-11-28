@@ -534,7 +534,7 @@ def lettering():
 
 def _text(value):
     glyphs = lettering()['glyphs']
-    replacements = {'’': "'", '‘': "'", '–': '-', '—': '-', '…': '...'}
+    replacements = {'â€™': "'", 'â€˜': "'", 'â€“': '-', 'â€”': '-', 'â€¦': '...'}
     return ''.join(c if c in glyphs else replacements.get(c, ''.join(
         p for p in unicodedata.normalize('NFKD', c) if p in glyphs) or '?') for c in str(value))
 
@@ -560,6 +560,7 @@ def guide_width(value, height):
 
 def route_symbols(routes, state=''):
     """Only explicit I/US prefixes select those networks; never use the exit number."""
+    import highwayroutes
     out, seen = [], set()
     for value in routes:
         for raw in re.split(r'\s*[/;|]\s*', str(value)):
@@ -577,10 +578,21 @@ def route_symbols(routes, state=''):
                 kind, region, number = 'state', state, upper
             else:
                 kind, region, number = 'text', '', raw
-            key = kind, region, number, qualifier or ''
-            if number and key not in seen:
+            symbol = dict(kind=kind, state=region, number=number, qualifier=qualifier or '')
+            # Shared network rules also cover FM/RM, lettered and design variants.
+            compass = re.search(r'\s+(NORTH|SOUTH|EAST|WEST)$', upper)
+            reference = upper[:compass.start()] if compass else upper
+            recognized = highwayroutes.recognize({'ref': reference}, state=state)
+            # One qualifier cannot retain both a modifier and a compass direction.
+            # Preserve the current compact text fallback for those composite labels.
+            if recognized and not (kind == 'text' and compass and recognized[0].modifier):
+                shared = highwayroutes.panel(recognized[0])
+                symbol.update(shared)
+                symbol['qualifier'] = shared.get('modifier') or (compass[1] if compass else qualifier or '')
+            key = symbol['kind'], symbol['state'], symbol['number'], symbol['qualifier'], highwayroutes.identity(symbol)[0] if symbol['kind'] != 'text' else ''
+            if symbol['number'] and key not in seen:
                 seen.add(key)
-                out.append(dict(kind=kind, state=region, number=number, qualifier=qualifier or ''))
+                out.append(symbol)
     return out[:3]
 
 
@@ -689,7 +701,10 @@ def dimensions(label, kind, state=''):
 
 
 class Mesh:
-    def __init__(self, origin):
+    def __init__(self, origin, out_dir=None, vfs_dir=None, faces=None):
+        self.out_dir, self.vfs_dir = out_dir, vfs_dir
+        self.faces = faces if faces is not None else {}
+        self.materials = list(GUIDE_MATERIALS)
         self.origin = np.asarray(origin)
         self.p, self.t, self.uv, self.mi = [], [], [], []
         self.centre = self.face = self.right = None
@@ -812,11 +827,39 @@ class Mesh:
             self.guide_text(value,row['y'],bottom+row['baseline'],row['height'],row['max_width'])
 
     def route_shield(self, route, bottom_offset=0.):
+        import highwayroutes
         y,bottom,w,h = route['y'],route['bottom']+bottom_offset,route['width'],route['height']
         kind = route['kind']
         if kind=='text':
             self.guide_text(route['number'],y,bottom+.04,min(.40,h*.8),w)
             return
+        if self.out_dir is not None:
+            current = highwayroutes.current_panel(route)
+            template = highwayroutes.registry()['templates'].get(current.get('template'), {})
+            if kind == 'state' or template.get('image'):
+                import routefaces
+                name, texture = routefaces.face(current, self.out_dir, self.vfs_dir)
+                self.faces[name] = texture
+                if name not in self.materials:
+                    self.materials.append(name)
+                # Fit the artwork inside the existing inset without moving board text.
+                aspect = template.get('aspect', 1.)
+                sw, sh = min(w, h*aspect), min(h, w/aspect)
+                base = bottom+(h-sh)/2
+                profile = routefaces.contour(current.get('template')) if not current.get('modifier') or current['modifier'] in template.get('modifiers', ()) else None
+                if profile is None:
+                    points = np.array([[-.5,0.],[.5,0.],[.5,1.],[-.5,1.]])
+                    triangles = [(0,1,2),(0,2,3)]
+                else:
+                    points, triangles = profile
+                points = points*[sw,sh]+[y,base]
+                for tri in triangles:
+                    vertices = points[list(tri)]
+                    self.triangle([(.082,*p) for p in vertices],self.materials.index(name))
+                    self.uv[-3:] = [((float(p[0])-y)/sw+.5,(float(p[1])-base)/sh) for p in vertices]
+                if route.get('qualifier') and template.get('modifier_plaque', True):
+                    self.guide_text(route['qualifier'],y,bottom+h+.04,.16,w+.12)
+                return
         profile=routeshields.marker(route.get('state','')) if kind=='state' else None
         if profile is not None:
             # A single opaque white cutout. Concave outlines are triangulated
@@ -847,7 +890,7 @@ class Mesh:
                               [0.,1.],[-.22,.91],[-.37,.78],[-.46,.62],[-.50,.42],[-.50,.14],[-.46,.07],[-.32,.02]])
         else:
             angle=np.linspace(0.,2*math.pi,49)[:-1]
-            contour=np.c_[.49*dnp.cos(angle),.5+.49*dnp.sin(angle)]
+            contour=np.c_[.49*ddnp.cos(angle),.5+.49*dnp.sin(angle)]
         outer=contour*[w,h]+[y,bottom]
         inner=(contour-[0.,.5])*[w-.055,h-.055]+[y,bottom+h*.5]
         # Separate faces at one depth; no stacked white fill under a coloured face.
@@ -952,7 +995,7 @@ class Mesh:
 
     def result(self):
         if not self.t: return None
-        materials = GUIDE_MATERIALS if max(self.mi)>=len(MATERIALS) else MATERIALS
+        materials = self.materials if len(self.materials)>len(GUIDE_MATERIALS) else GUIDE_MATERIALS if max(self.mi)>=len(MATERIALS) else MATERIALS
         return np.asarray(self.p), np.asarray(self.t), np.asarray(self.uv), materials, np.asarray(self.mi)
 
 

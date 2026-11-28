@@ -12,6 +12,7 @@ import milemarkers
 import legacyshields
 import routemarkers
 import routerepeaters
+import streamedroutes
 import plazas
 import railtags
 import roads
@@ -32,6 +33,7 @@ class Source:
         self.shields = legacyshields.Source(getattr(md, 'cache_dir', None))
         self.repeaters = routerepeaters.Source(md.raw_dir, md.fetcher) if hasattr(md, 'raw_dir') else None
         self.boards = travelboards.Source(md) if hasattr(md,'raw_dir') and hasattr(md,'cell') else None
+        self.streamed = streamedroutes.Source(md) if hasattr(md,'cell') and hasattr(md,'raw_dir') else None
         self.contexts = {}
         self.lock = threading.Lock()
         self.warned = -float('inf')
@@ -44,6 +46,8 @@ class Source:
         legacy = self.shields.version()
         version = self.tags.version()
         result = (version, legacy) if legacy else version
+        if self.streamed is not None:
+            result=(result, self.streamed.relations.version())
         return (result,travelboards.version()) if self.boards is not None else result
 
     def context(self, urban, widths):
@@ -86,7 +90,22 @@ class Source:
                 if now-self.warned>=60.:
                     self.warned=now
                     log.warning('Welcome/recreation source unavailable; other signs continue: %s',error)
-        if self.repeaters is not None:
+        streamed_ready = False
+        if self.streamed is not None:
+            try:
+                found = self.streamed.query(float(np.min(lon)),float(np.min(lat)),
+                                           float(np.max(lon)),float(np.max(lat)), objects)
+                if found is not None:
+                    objects += found
+                    streamed_ready = True
+            except CancelledError:
+                raise
+            except Exception as error:
+                now = time.monotonic()
+                if now-self.warned>=60.:
+                    self.warned=now
+                    log.warning('Streamed route markers unavailable; using existing fallback: %s', error)
+        if self.repeaters is not None and not streamed_ready:
             try:
                 objects += self.repeaters.query(float(np.min(lon)), float(np.min(lat)),
                                                 float(np.max(lon)), float(np.max(lat)), objects)
@@ -99,6 +118,7 @@ class Source:
                     log.warning('OSM route repeaters unavailable; indexed signs remain: %s', error)
         objects += travelboards.park_exit_boards(objects)
         return objects
+
 
 
 def tile_objects(source, frame, tx, ty):
@@ -176,11 +196,18 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
             pavements = milemarkers.source_pavements(frame, obj, context, left_hand)
             miles.extend(milemarkers.place(frame, [obj], pavements, box, elev, chunks))
         shields = []
+        obstacles = {}
         for obj in objects:
             if obj.get('roadside', {}).get('type') != 'shield':
                 continue
             pavements = routemarkers.source_pavements(frame, obj, context, left_hand)
-            placed = routemarkers.place(frame, obj, pavements, box, elev, chunks, left_hand)
+            import signplacement
+            point=exitsigns._xy(frame,[[obj['lon'],obj['lat']]])[0]
+            key=tuple(np.floor(point/roads.TILE).astype(int))
+            if key not in obstacles:
+                # Source-owned neighbourhood, independent of the requesting tile.
+                obstacles[key]=signplacement.for_tile(frame,*key,md,())
+            placed = routemarkers.place(frame, obj, pavements, box, elev, chunks, left_hand,obstacles[key])
             if placed is not None:
                 shields.append(placed)
         origin = (box[0], box[1], 0.)
@@ -198,7 +225,7 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
             raise
         except Exception as error:
             log.warning('Welcome/recreation boards unavailable; other signs continue: %s',error)
-        return (plazas.merge(plazas.merge(throughsigns.build(exits, overheads, origin), routemarkers.build(shields, origin)),boards),
+        return (plazas.merge(plazas.merge(throughsigns.build(exits, overheads, origin, out_dir=out_dir, vfs_dir=vfs_dir, faces=faces), routemarkers.build(shields, origin, out_dir, vfs_dir, faces)),boards),
                 milemarkers.build(miles, origin))
     except CancelledError:
         raise
