@@ -375,6 +375,9 @@ VILLAGE_LANGS = {"LU": {"": ("lb",)},
                  "IE": {"": ("ga",)}}
 # An agglomeration grid: cell (i, j) covers lat0 + i * dlat .. + dlat, lon0 + j * dlon .. + dlon; mask (rows i, cols j)
 Agglo = namedtuple("Agglo", "lat0 lon0 dlat dlon mask")
+# A commune's agglomeration on several grids of one lattice (agglomeration_parts: its parts far apart), none
+# overlapping another: a point is on it when it is on one of them
+AggloParts = namedtuple("AggloParts", "grids")
 
 
 def _grow(m, r):
@@ -435,29 +438,85 @@ def _pieces(m):
     return lab, sizes
 
 
+def _lattice(lonlat_parts):
+    """(dlat, dlon, mlat, mlon) of a commune's agglomeration grid (its own longitude step, its mean latitude rounded:
+    the same grid whichever cell or frame asks) and the margin AGGLO_MARGIN_M in its steps; None without points."""
+    pts = [r for rings in lonlat_parts for r in rings[:1] if len(r)] if lonlat_parts else []
+    if not pts:
+        return None
+    lat_c = float(np.concatenate(pts)[:, 1].mean())
+    dlat = AGGLO_CELL_M / M_PER_DEG
+    dlon = AGGLO_CELL_M / (M_PER_DEG * max(dmath.cos(math.radians(round(lat_c, 1))), 0.01))
+    return dlat, dlon, AGGLO_MARGIN_M / AGGLO_CELL_M * dlat, AGGLO_MARGIN_M / AGGLO_CELL_M * dlon
+
+
+def _window(pts, lattice):
+    """(i0, i1, j0, j1): the grid's cells over the points' box (n, 2 lon/lat) and the margin. Pure."""
+    dlat, dlon, mlat, mlon = lattice
+    return (math.floor((float(pts[:, 1].min()) - mlat) / dlat), math.ceil((float(pts[:, 1].max()) + mlat) / dlat),
+            math.floor((float(pts[:, 0].min()) - mlon) / dlon), math.ceil((float(pts[:, 0].max()) + mlon) / dlon))
+
+
+def _cells(w):
+    return (w[1] - w[0]) * (w[3] - w[2])
+
+
 def agglomeration(lonlat_parts, urban_fn, box=None):
     """The Agglo of a commune (lonlat_parts: its parts in lon/lat, as inside's), or None when the land cover has no
     built-up land in or near it (the whole commune is then its agglomeration) or its grid would be larger than
     AGGLO_MAX_CELLS (urban_fn never called). urban_fn(lat, lon) -> bool array: the land cover's built-up class
     (roads.road_specs'), a function of each point alone (read AGGLO_CHUNK points at a time). box: (lon0, lat0, lon1,
     lat1) of the commune's part the grid covers (a village's, commune_agglomeration), the commune's own box when
-    None."""
-    pts = np.concatenate([r for rings in lonlat_parts for r in rings[:1] if len(r)]) if lonlat_parts else None
-    if pts is None or not len(pts):
+    None. A commune whose box is over AGGLO_MAX_CELLS has a grid of each group of its parts instead
+    (agglomeration_parts: an AggloParts)."""
+    lattice = _lattice(lonlat_parts)
+    if lattice is None:
         return None
-    lat_c = float(pts[:, 1].mean())
     if box is not None:
         pts = np.array([box[:2], box[2:]], np.float64)
-    dlat = AGGLO_CELL_M / M_PER_DEG
-    # (the commune's own longitude step, its latitude rounded: the same grid whichever cell or frame asks)
-    dlon = AGGLO_CELL_M / (M_PER_DEG * max(dmath.cos(math.radians(round(lat_c, 1))), 0.01))
-    mlat, mlon = AGGLO_MARGIN_M / AGGLO_CELL_M * dlat, AGGLO_MARGIN_M / AGGLO_CELL_M * dlon
-    i0 = math.floor((float(pts[:, 1].min()) - mlat) / dlat)
-    i1 = math.ceil((float(pts[:, 1].max()) + mlat) / dlat)
-    j0 = math.floor((float(pts[:, 0].min()) - mlon) / dlon)
-    j1 = math.ceil((float(pts[:, 0].max()) + mlon) / dlon)
-    if (i1 - i0) * (j1 - j0) > AGGLO_MAX_CELLS:
+    else:
+        pts = np.concatenate([r for rings in lonlat_parts for r in rings[:1] if len(r)])
+    w = _window(pts, lattice)
+    if _cells(w) <= AGGLO_MAX_CELLS:
+        return _agglo_grid(w, lattice, urban_fn)
+    return agglomeration_parts(lonlat_parts, urban_fn) if box is None else None
+
+
+def agglomeration_parts(lonlat_parts, urban_fn):
+    """The agglomeration of a commune whose parts lie far apart (the Bahamas' Bimini district: 14 islands of 26.6
+    km2 in a 126 x 255 km box over Miami's map cells, whose one grid asked the land cover for 81 M points and took a
+    16 GB Windows PC's server out of memory, 2026-11-27): an AggloParts of one grid per group of its parts (each
+    part's box and the margin, the groups whose grids overlap merged; agglomeration's lattice, so a cell is the same
+    cell in each), None when none has built-up land or their cells add up to more than AGGLO_MAX_CELLS. Only for a
+    box over AGGLO_MAX_CELLS (agglomeration): the grid's edge and its largest piece are a grid's own (the land a town
+    encloses, the piece a village too small keeps), so a commune's parts on grids of their own are not always its
+    one grid's. Pure given urban_fn."""
+    lattice = _lattice(lonlat_parts)
+    if lattice is None:
         return None
+    wins = sorted(_window(rings[0], lattice) for rings in lonlat_parts if len(rings) and len(rings[0]))
+    merged = True
+    while merged:                       # (the windows that overlap one: their box, until none does)
+        merged, out = False, []
+        for w in wins:
+            for k, o in enumerate(out):
+                if w[0] < o[1] and o[0] < w[1] and w[2] < o[3] and o[2] < w[3]:
+                    out[k] = (min(w[0], o[0]), max(w[1], o[1]), min(w[2], o[2]), max(w[3], o[3]))
+                    merged = True
+                    break
+            else:
+                out.append(w)
+        wins = sorted(out)
+    if sum(_cells(w) for w in wins) > AGGLO_MAX_CELLS:
+        return None
+    grids = tuple(g for g in (_agglo_grid(w, lattice, urban_fn) for w in wins) if g is not None)
+    return AggloParts(grids) if grids else None
+
+
+def _agglo_grid(w, lattice, urban_fn):
+    """The Agglo of the grid cells w (i0, i1, j0, j1) of lattice (_lattice's), or None without built-up land."""
+    i0, i1, j0, j1 = w
+    dlat, dlon = lattice[:2]
     lat = (np.arange(i0, i1) + 0.5) * dlat
     lon = (np.arange(j0, j1) + 0.5) * dlon
     built = np.empty((len(lat), len(lon)), bool)
@@ -493,7 +552,12 @@ def agglomeration(lonlat_parts, urban_fn, box=None):
 
 
 def on_agglo(agglo, lat, lon):
-    """Which points (lat, lon arrays) lie on the agglomeration grid's area."""
+    """Which points (lat, lon arrays) lie on the agglomeration grid's area (an AggloParts': on one of its grids)."""
+    if isinstance(agglo, AggloParts):
+        out = np.zeros(np.shape(lat), bool)
+        for g in agglo.grids:
+            out |= on_agglo(g, lat, lon)
+        return out
     i = np.floor((np.asarray(lat, np.float64) - agglo.lat0) / agglo.dlat).astype(np.int64)
     j = np.floor((np.asarray(lon, np.float64) - agglo.lon0) / agglo.dlon).astype(np.int64)
     h, w = agglo.mask.shape
@@ -1251,7 +1315,9 @@ def with_agglomerations(communes, agglo_of):
 
 def _touch(a, b):
     """Do the agglomerations a and b (of one commune's villages: one grid, agglomeration's steps and origin of the
-    same rings) share a cell? Pure."""
+    same rings; an AggloParts: any of its grids) share a cell? Pure."""
+    if isinstance(a, AggloParts) or isinstance(b, AggloParts):
+        return any(_touch(x, y) for x in getattr(a, "grids", (a,)) for y in getattr(b, "grids", (b,)))
     oi = int(round((b.lat0 - a.lat0) / a.dlat))
     oj = int(round((b.lon0 - a.lon0) / a.dlon))
     (ha, wa), (hb, wb) = a.mask.shape, b.mask.shape

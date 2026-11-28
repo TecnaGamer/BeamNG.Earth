@@ -417,26 +417,51 @@ class CommuneTest(unittest.TestCase):
         self.assertTrue(np.array_equal(a.mask, b.mask))
         self.assertAlmostEqual(a.lat0 / a.dlat, round(a.lat0 / a.dlat), places=6)
 
-    def test_scattered_islands_make_no_continent_sized_grid(self):
+    def test_scattered_islands_have_a_grid_each(self):
         """A commune of small islands far apart (the Bahamas' Bimini district: 14 islands of 26.6 km2 in a 126 x 255
         km box over Miami's map cells, 2026-11-27) is no grid of its whole box: it asked the land cover for 81 M points
         (619 MiB a float64 array; 14.8 GB in the process) and took a 16 GB Windows PC's server out of memory. Its
-        area passes the commune rules; the grid's own size is what is bounded."""
+        area passes the commune rules; the grid is laid over each island (and the margin) instead, and the islands'
+        towns are still there."""
         isle = np.array([(0.0, 0.0), (0.01, 0.0), (0.01, 0.01), (0.0, 0.01)])
-        ll = [[isle + (-79.3, 25.7)], [isle + (-80.5, 23.5)], [isle + (-79.27, 25.1)]]
+        ll = [[isle + (-79.3, 25.7)], [isle + (-80.5, 23.5)], [isle + (-79.27, 25.1)], [isle + (-79.295, 25.705)]]
         c = ts.Commune("Bimini", ll, ll, None, "bs", country="BS")
         self.assertLess(ts._km2(ll), ts.ALONE_MAX_KM2)
         asked = []
 
-        def urban(lat, lon):
+        def urban(lat, lon):            # (built-up: the islands' middles)
             asked.append(np.size(lat))
-            return np.ones(np.shape(lat), bool)
-        self.assertIsNone(ts.commune_agglomeration(c, urban))
-        self.assertEqual(asked, [])                 # (no point of it read: before, one call of ~81 M points)
+            lat, lon = np.asarray(lat), np.asarray(lon)
+            return np.any([(np.abs(lat - (y + 0.005)) < 0.003) & (np.abs(lon - (x + 0.005)) < 0.003)
+                           for x, y in ((-79.3, 25.7), (-80.5, 23.5), (-79.27, 25.1), (-79.295, 25.705))], axis=0)
+        a = ts.commune_agglomeration(c, urban)
+        self.assertIsInstance(a, ts.AggloParts)
+        self.assertEqual(len(a.grids), 3)           # (the two islands 500 m apart on one grid)
+        self.assertLess(sum(asked), 1_000_000)      # (before: one call of ~81 M points)
+        self.assertLessEqual(max(asked), ts.AGGLO_CHUNK)
+        on = ts.on_agglo(a, np.array([25.705, 23.505, 25.105, 24.5, 25.7]), np.array([-79.295, -80.495, -79.265,
+                                                                                      -79.9, -80.19]))
+        self.assertEqual(on.tolist(), [True, True, True, False, False])     # (Miami's land no part of it)
+        self.assertTrue(ts._touch(a, a))
+        # the backstop: the grids' cells added up over AGGLO_MAX_CELLS, none made
+        with mock.patch.object(ts, "AGGLO_MAX_CELLS", 1000):
+            del asked[:]
+            self.assertIsNone(ts.agglomeration(ll, urban))
+            self.assertEqual(asked, [])
         # (a whole commune of WHOLE_MAX_KM2, even three times as long as it is wide, is still one grid)
         side = np.sqrt(ts.WHOLE_MAX_KM2 * 1e6 / 3.0)
         cells = (3.0 * side + 2 * ts.AGGLO_MARGIN_M) * (side + 2 * ts.AGGLO_MARGIN_M) / ts.AGGLO_CELL_M ** 2
         self.assertLess(cells, ts.AGGLO_MAX_CELLS)
+
+    def test_parts_under_the_cap_share_one_grid(self):
+        """Under AGGLO_MAX_CELLS a commune's parts keep their one grid over its box (the land its town encloses and
+        the piece a small village keeps are the grid's: the same agglomeration as before the parts' grids)."""
+        isle = np.array([(0.0, 0.0), (0.01, 0.0), (0.01, 0.01), (0.0, 0.01)])
+        ll = [[isle], [isle + (0.05, 0.0)]]
+        a = ts.agglomeration(ll, lambda lat, lon: np.asarray(lon) < 0.03)
+        self.assertIsInstance(a, ts.Agglo)
+        self.assertEqual(a.mask.shape[1], ts._window(np.concatenate([isle, isle + (0.05, 0.0)]),
+                                                     ts._lattice(ll))[3] - ts._window(isle, ts._lattice(ll))[2])
 
     def test_the_grid_read_in_chunks_is_the_same(self):
         """The land cover is read AGGLO_CHUNK points at a time (each a function of its point alone): the same
