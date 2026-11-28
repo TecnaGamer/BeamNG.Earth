@@ -256,12 +256,22 @@ pub struct Fusion {
     pub two_day: bool,
     pub fresh_snow: i64,
     pub shift_rows: i32,
+    /// the clear-satellite rule: where the latest clear MODIS / VIIRS day (finer than IMS's 1 km) sees a row's snow
+    /// share at least this much (permille) below IMS's, its share stands for the maps' (above 1000: off); where IMS
+    /// has none (the southern hemisphere), the clear day's alone
+    pub clear_gap: i64,
 }
 
 impl Fusion {
     pub const DEFAULT: Fusion = Fusion { bare_max: BARE_MAX, snow_min: SNOW_MIN, two_day: false, fresh_snow: FRESH_SNOW,
-                                         shift_rows: OBS_SHIFT_ROWS };
+                                         shift_rows: OBS_SHIFT_ROWS, clear_gap: CLEAR_GAP };
 }
+
+/// The clear-satellite rule's gap (Fusion.clear_gap). P-A's second sweep (35 mountain place-days + 2026-11-26, the
+/// clear day the 1-3 days before at NDSI 0.35): against Sentinel-2 the line moved from 161 m low (67 % / 83 % within
+/// 150 / 300 m) to 6 m high (72 % / 90 %), false white against MODIS from 11.8 % to 4.8 % of the clear pixels; Pikes
+/// Peak 2026-11-26 from 3,525 m to 3,825 / 3,675 m (MODIS 3,675 m, VIIRS 3,675 / 3,975 m).
+pub const CLEAR_GAP: i64 = 250;
 
 /// One column's fused depth (0.1 mm), cover (0..8), bin state and flags from the kernel's depth and fresh snowfall
 /// and the maps' shares today and the day before (S-1), the bin settled from the previous evaluation's (S-7).
@@ -310,20 +320,22 @@ pub fn cell_table(f: &[i32], upto: usize, z_cell: i32, lat_e2: i32, zmin: i32, z
                   today: &[[u32; 4]], k0_today: i32, before: &[[u32; 4]], k0_before: i32,
                   prev: &[(i32, [BinState; 3])])
                   -> (i32, Vec<[i64; ROW_COLS]>, Vec<(i32, [BinState; 3])>, Vec<BandRun>) {
-    cell_table_with(f, upto, z_cell, lat_e2, zmin, zmax, seed, today, k0_today, before, k0_before, prev,
+    cell_table_with(f, upto, z_cell, lat_e2, zmin, zmax, seed, today, k0_today, before, k0_before, &[], 0, prev,
                     &Fusion::DEFAULT)
 }
 
-/// cell_table with the fusion's thresholds.
+/// cell_table with the fusion's thresholds and the latest clear MODIS / VIIRS day's counts (clear from its row
+/// k0_clear; empty: none; never shifted: its 500 m pixels resolve the line IMS's 1 km ones smear downhill).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn cell_table_with(f: &[i32], upto: usize, z_cell: i32, lat_e2: i32, zmin: i32, zmax: i32, seed: &SeedProfile,
                        today: &[[u32; 4]], k0_today: i32, before: &[[u32; 4]], k0_before: i32,
-                       prev: &[(i32, [BinState; 3])], fp: &Fusion)
+                       clear: &[[u32; 4]], k0_clear: i32, prev: &[(i32, [BinState; 3])], fp: &Fusion)
                        -> (i32, Vec<[i64; ROW_COLS]>, Vec<(i32, [BinState; 3])>, Vec<BandRun>) {
     let recs = snow::rows(f);
     let (k_lo, n) = band_rows(zmin, zmax);
     let (k0_today, k0_before) = (k0_today + fp.shift_rows, k0_before + fp.shift_rows);
     let (lt, lb) = (obs_lines(today, k0_today), obs_lines(before, k0_before));
+    let lc = obs_lines(clear, k0_clear);
     let mut rows = Vec::with_capacity(n);
     let mut runs = Vec::with_capacity(n);
     let mut states = Vec::with_capacity(n);
@@ -341,6 +353,12 @@ pub fn cell_table_with(f: &[i32], upto: usize, z_cell: i32, lat_e2: i32, zmin: i
         let mut any = false;
         for col in 0..2 {
             let t = obs_share(today, k0_today, k, col, lt[col]);
+            let c = obs_share(clear, k0_clear, k, col, lc[col]);
+            let t = match (t, c) {
+                (Some(ts), Some(cs)) if cs + fp.clear_gap <= ts => Some(cs),
+                (None, Some(cs)) => Some(cs),
+                (t, _) => t,
+            };
             let b = obs_share(before, k0_before, k, col, lb[col]);
             let (_d, cover, s, fl) = fuse_with(run.depth[col], run.fresh, t, b, pb[col], fp);
             row[1 + 2 * col] = cover;
@@ -471,22 +489,24 @@ pub mod py {
     /// forest floor]] (S-7). Returns (k_lo, rows [z, pole cover, pole bin, equator cover, equator bin, forest bin,
     /// age class, flags], the new bin states (as prev), runs [pole depth, equator depth, forest depth (0.1 mm), age h,
     /// fresh snowfall 0.01 mm]). fusion: (bare_max, snow_min permille, two_day, fresh_snow 0.01 mm, the observed rows'
-    /// shift) for the probe's tuning (None: the defaults, Fusion::DEFAULT).
+    /// shift, the clear-satellite gap) for the probe's tuning (None: the defaults, Fusion::DEFAULT); clear: the latest
+    /// clear MODIS / VIIRS day's band counts from its row k0_clear (None: none).
     #[pyfunction]
     #[pyo3(signature = (forcing, upto, z_cell, lat_e2, zmin, zmax, seed, today=None, k0_today=0, before=None,
-                        k0_before=0, prev=Vec::new(), fusion=None))]
+                        k0_before=0, prev=Vec::new(), fusion=None, clear=None, k0_clear=0))]
     #[allow(clippy::too_many_arguments)]
     pub fn snowfield_table(forcing: PyReadonlyArray2<'_, i32>, upto: usize, z_cell: i32, lat_e2: i32, zmin: i32,
                            zmax: i32, seed: Vec<(i32, i32)>, today: Option<PyReadonlyArray2<'_, i64>>, k0_today: i32,
                            before: Option<PyReadonlyArray2<'_, i64>>, k0_before: i32,
-                           prev: Vec<Vec<i64>>, fusion: Option<(i64, i64, bool, i64, i32)>) -> PyResult<TableOut> {
+                           prev: Vec<Vec<i64>>, fusion: Option<(i64, i64, bool, i64, i32, i64)>,
+                           clear: Option<PyReadonlyArray2<'_, i64>>, k0_clear: i32) -> PyResult<TableOut> {
         let a = forcing.as_array();
         if a.ncols() != NF {
             return Err(PyValueError::new_err(format!("snowfield_table: forcing needs {NF} columns, has {}",
                                                      a.ncols())));
         }
         let f: Vec<i32> = a.iter().copied().collect();
-        let (t, b) = (counts_of(today)?, counts_of(before)?);
+        let (t, b, cl) = (counts_of(today)?, counts_of(before)?, counts_of(clear)?);
         let mut pv = Vec::with_capacity(prev.len());
         for p in &prev {
             if p.len() != 10 {
@@ -496,12 +516,12 @@ pub mod py {
                                           runs: p[3 + 3 * i].clamp(0, 1000) };
             pv.push((p[0] as i32, [s(0), s(1), s(2)]));
         }
-        let fp = fusion.map_or(Fusion::DEFAULT, |(bare_max, snow_min, two_day, fresh_snow, shift)| Fusion {
+        let fp = fusion.map_or(Fusion::DEFAULT, |(bare_max, snow_min, two_day, fresh_snow, shift, gap)| Fusion {
             bare_max: bare_max.clamp(0, 1000), snow_min: snow_min.clamp(0, 1001), two_day, fresh_snow: fresh_snow.max(0),
-            shift_rows: shift.clamp(-4, 4),
+            shift_rows: shift.clamp(-4, 4), clear_gap: gap.clamp(0, 1_000_000),
         });
         let (k_lo, rows, states, runs) = cell_table_with(&f, upto, z_cell, lat_e2, zmin, zmax, &seed_profile(&seed),
-                                                         &t, k0_today, &b, k0_before, &pv, &fp);
+                                                         &t, k0_today, &b, k0_before, &cl, k0_clear, &pv, &fp);
         Ok((k_lo, rows.iter().map(|r| r.to_vec()).collect(),
             states.iter().map(|(k, s)| {
                 let mut v = vec![*k as i64];
@@ -648,7 +668,7 @@ mod tests {
         // without the shift: the maps' own heights
         let fp = Fusion { shift_rows: 0, ..Fusion::DEFAULT };
         let (k, rows, _, _) = cell_table_with(&f, 239, 1500, 4600, 1200, 4000, &seed_profile(&[(1500, 0)]), &counts,
-                                              k_lo, &counts, k_lo, &[], &fp);
+                                              k_lo, &counts, k_lo, &[], 0, &[], &fp);
         assert_eq!((table_line(k, &rows, 0).0, table_line(k, &rows, 1).0), (2625, 2925));
     }
 
@@ -680,7 +700,8 @@ mod tests {
         let (_, k1, _, _) = cell_table(&f, 245, 1000, 4600, 1000, 1800, &seed, &bare, k_lo, &[], 0, &[]);
         assert!(k1.iter().all(|r| r[1] == 0 && r[3] == 0), "{k1:?}");
         let two = Fusion { two_day: true, ..Fusion::DEFAULT };
-        let (_, k2, _, _) = cell_table_with(&f, 245, 1000, 4600, 1000, 1800, &seed, &bare, k_lo, &[], 0, &[], &two);
+        let (_, k2, _, _) = cell_table_with(&f, 245, 1000, 4600, 1000, 1800, &seed, &bare, k_lo, &[], 0, &[], 0, &[],
+                                            &two);
         assert_eq!(k2.last().unwrap()[2], base.last().unwrap()[2]);
         // fresh snow in the last day (8 h of snow at -3 degC): stands though the maps are a day late
         let g = window(&[(232, 150, 0, 0), (8, -300, 100, 1000), (6, -300, 0, 0)], 200);
@@ -720,6 +741,30 @@ mod tests {
         let (_, rows, _, _) = cell_table(&f, 245, 3000, 3900, 2500, 4200, &seed_profile(&[(3000, 0)]), &white, k_lo,
                                          &white, k_lo, &[]);
         assert!(rows.iter().all(|r| r[2] == 2), "{rows:?}");
+    }
+
+    #[test]
+    fn a_clear_satellite_day_overrules_a_whiter_ims() {
+        // dry and mild, no kernel snow; IMS white everywhere, the clear MODIS / VIIRS day white only from 3,600 m:
+        // white only there (Pikes Peak, 2026-11-26: IMS 16 % of the summit cell white, MODIS 3 %)
+        let f = window(&[(246, 300, 0, 0)], 0);
+        let (k_lo, n) = band_rows(2400, 4300);
+        let ims: Vec<[u32; 4]> = vec![[0, 6, 0, 6]; n];
+        let clear: Vec<[u32; 4]> = (0..n).map(|i| if (k_lo + i as i32) * BAND_M >= 3600 { [0, 9, 0, 9] }
+                                                 else { [9, 0, 9, 0] }).collect();
+        let fp = Fusion { shift_rows: 0, ..Fusion::DEFAULT };
+        let (k, rows, _, _) = cell_table_with(&f, 245, 3000, 3900, 2400, 4300, &seed_profile(&[(3000, 0)]), &ims, k_lo,
+                                              &ims, k_lo, &clear, k_lo, &[], &fp);
+        assert_eq!(table_line(k, &rows, 0).0, 3525);
+        // without it: IMS's white everywhere
+        let off = Fusion { clear_gap: 2000, ..fp };
+        let (k, rows, _, _) = cell_table_with(&f, 245, 3000, 3900, 2400, 4300, &seed_profile(&[(3000, 0)]), &ims, k_lo,
+                                              &ims, k_lo, &clear, k_lo, &[], &off);
+        assert!(table_line(k, &rows, 0).0 < 2400);
+        // no IMS (the southern hemisphere): the clear day alone
+        let (k, rows, _, _) = cell_table_with(&f, 245, 3000, 3900, 2400, 4300, &seed_profile(&[(3000, 0)]), &[], 0,
+                                              &[], 0, &clear, k_lo, &[], &fp);
+        assert_eq!(table_line(k, &rows, 0).0, 3525);
     }
 
     #[test]

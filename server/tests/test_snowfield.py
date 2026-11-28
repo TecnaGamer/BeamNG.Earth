@@ -69,7 +69,7 @@ class TableTest(unittest.TestCase):
         self.assertEqual(ef.snowfield_line(k, rows, 0)[0], 2775)
         self.assertTrue(all((r[2] > 0) == (r[0] >= 2850) for r in rows), rows)
         k, rows, _st, _ = ef.snowfield_table(f, 239, 1500, 4600, 1200, 4000, [(1500, 0)], obs, k0, obs, k0,
-                                             fusion=(499, 750, False, 500, 0))
+                                             fusion=(499, 750, False, 500, 0, 2000))
         self.assertEqual(ef.snowfield_line(k, rows, 0)[0], 2625)
 
     def test_bins_settle(self):
@@ -277,6 +277,28 @@ class FieldTest(unittest.TestCase):
         n = len(self.calls)
         self.assertEqual(f.update(39.9, -105.1), [])
         self.assertEqual(len(self.calls), n)
+
+    def test_a_clear_satellite_day_overrules_ims(self):
+        """IMS white everywhere, the clear VIIRS day before (GIBS) bare: no snow (the clear-satellite rule)."""
+        import io
+        from PIL import Image
+        sf, f = self.field(2.0, 0.0, 4)
+        cmap = (b'<ColorMaps><ColorMap><Entries><ColorMapEntry rgb="0,255,0" sourceValue="[0]"/>'
+                b'<ColorMapEntry rgb="0,191,255" sourceValue="[250]"/></Entries></ColorMap></ColorMaps>')
+        im = Image.new("P", (512, 512), 0)
+        im.putpalette([0, 255, 0, 0, 191, 255] + [0] * (254 * 3))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        tile = buf.getvalue()
+        f.fetch_bytes = lambda url: cmap if url.endswith(".xml") else tile if "VIIRS" in url else \
+            None if "MODIS" in url else b"ims"
+        f.update(39.9, -105.1, "near")
+        self.assertIsNone(f.provider(39.0, -106.0, 41.0, -104.0))
+        # the far ring reads IMS alone: white there
+        f.update(39.9, -105.1, "far")
+        fld = f.provider(39.0, -106.0, 41.0, -104.0)
+        self.assertIsNotNone(fld)
+        self.assertTrue(all(f.cells[k].far for k in fld.cells))
 
     def test_bare_two_days_vetoes_model_snow(self):
         sf, f = self.field(-3.0, 0.0, 2, depth_m=0.3)

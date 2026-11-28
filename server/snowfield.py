@@ -63,6 +63,18 @@ GROUND_VERSION = 1
 IMS_URL = "https://noaadata.apps.nsidc.org/NOAA/G02156/GIS/1km/{y}/ims{y}{doy:03d}_1km_GIS_v1.3.tif.gz"
 IMS_DAYS_BACK = 4               # the newest file is looked for this many days back
 IMS_KEEP = 3                    # day files kept on disk
+# The clear-satellite rule (snowfield.rs Fusion.clear_gap): the near ring's cells also read the latest clear day of
+# VIIRS NOAA-20 / MODIS Terra NDSI snow cover (NASA GIBS, EPSG:4326 500m level 7 tiles) of the CLEAR_DAYS before today
+# (VIIRS first: its 375 m pixels), a day counting where it saw at least CLEAR_SEEN of the cell's land clear
+GIBS_URL = "https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/{layer}/default/{date}/500m/7/{row}/{col}.png"
+GIBS_CMAP_URL = "https://gibs.earthdata.nasa.gov/colormaps/v1.3/MODIS_NDSI_Snow_Cover.xml"
+CLEAR_LAYERS = ("VIIRS_NOAA20_NDSI_Snow_Cover", "MODIS_Terra_NDSI_Snow_Cover")
+CLEAR_DAYS = 3
+CLEAR_SEEN = 0.7
+CLEAR_NDSI = 35                 # NDSI x 100 from which a clear pixel is snow (snowobs.rs NDSI_SNOW; P-A's sweep)
+GIBS_DEG = 2.25
+GIBS_PX = 512
+GIBS_KEEP_DAYS = 5              # tile days kept on disk
 
 
 def cell_of(lat, lon):
@@ -125,11 +137,12 @@ def ims_url(day):
 
 
 class _Cell:
-    __slots__ = ("key", "point", "ground", "table", "made", "states", "z_cell", "rows", "far")
+    __slots__ = ("key", "point", "ground", "table", "made", "states", "z_cell", "rows", "far", "gground")
 
     def __init__(self, key, point):
         self.key, self.point = key, point
         self.far = False            # (a far-ring cell: its ground from FAR_GROUND_ZOOM)
+        self.gground = None         # the ground under its GIBS pixels (z, aspect, lat, lon, n, global row, column)
         self.ground = None          # (z, aspect, lat_e5, lon_e5, n, r, c, zmin, zmax) or False (no ground: the sea)
         self.table = None           # snowcover.Table of S1 rows (or None: no snow)
         self.made = 0.0             # when the table was made (clock)
@@ -272,6 +285,149 @@ class SnowField:
         os.replace(tmp, path)
         return cell.ground
 
+    # -- the clear-satellite rule's maps (the near ring)
+    def _cmap(self):
+        """(rgb, value) lists of the NDSI layers' GIBS colour map (kept on disk once fetched)."""
+        cm = getattr(self, "_cmap_cache", None)
+        if cm is not None:
+            return cm
+        import xml.etree.ElementTree as ET
+        path = os.path.join(self.dir, "gibs", "MODIS_NDSI_Snow_Cover.xml")
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                body = f.read()
+        else:
+            body = self.fetch_bytes(GIBS_CMAP_URL)
+            if body is None:
+                raise IOError("snow field: no GIBS colour map")
+            self._keep(path, body)
+        rgb, val = [], []
+        for e in ET.fromstring(body).iter():
+            if e.tag.endswith("ColorMapEntry"):
+                sv = (e.get("sourceValue") or "").strip("[]")
+                r, g, b = (int(x) for x in e.get("rgb").split(","))
+                if sv.isdigit() and int(sv) <= 255:
+                    rgb.append(r << 16 | g << 8 | b)
+                    val.append(int(sv))
+        self._cmap_cache = (rgb, val)
+        return self._cmap_cache
+
+    def _keep(self, path, body):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.part"
+        with open(tmp, "wb") as f:
+            f.write(body)
+        os.replace(tmp, path)
+
+    def _gibs_tile(self, layer, day, row, col):
+        """A GIBS NDSI tile's data values (uint8 512 x 512), None when not published (kept on disk: a past day's
+        tiles never change)."""
+        cache = getattr(self, "_tiles", None)
+        if cache is None:
+            cache = self._tiles = {}
+        k = (layer, day, row, col)
+        if k in cache:
+            return cache[k]
+        path = os.path.join(self.dir, "gibs", layer, day.isoformat(), f"{row}_{col}.png")
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                body = f.read()
+        else:
+            body = self.fetch_bytes(GIBS_URL.format(layer=layer, date=day.isoformat(), row=row, col=col))
+            if body is None:
+                cache[k] = None
+                return None
+            self._keep(path, body)
+        rgb, val = self._cmap()
+        v = fast._ef.snowobs_gibs_values(body, rgb, val)
+        cache[k] = v
+        while len(cache) > 64:
+            cache.pop(next(iter(cache)))
+        return v
+
+    def _prune_gibs(self, today):
+        d = os.path.join(self.dir, "gibs")
+        if not os.path.isdir(d):
+            return
+        import shutil
+        for layer in CLEAR_LAYERS:
+            ld = os.path.join(d, layer)
+            if not os.path.isdir(ld):
+                continue
+            for day in os.listdir(ld):
+                try:
+                    old = (today - datetime.date.fromisoformat(day)).days > GIBS_KEEP_DAYS
+                except ValueError:
+                    continue
+                if old:
+                    shutil.rmtree(os.path.join(ld, day), ignore_errors=True)
+
+    def _gibs_ground(self, cell):
+        """The ground under the GIBS pixels of a cell (their global row / column on the level-7 grid), kept on disk."""
+        if cell.gground is not None:
+            return cell.gground
+        ci, cj = cell.key
+        path = os.path.join(self.dir, "ground", f"v{GROUND_VERSION}_{NATIVE}_gibs_z{GROUND_ZOOM}", f"{ci}_{cj}.npz")
+        if os.path.exists(path):
+            with np.load(path) as g:
+                cell.gground = tuple(g[k] for k in ("z", "aspect", "lat", "lon", "n", "r", "c"))
+            return cell.gground
+        s, w, n, e = cell_box(ci, cj)
+        res, m = GROUND_RES, 2 * GROUND_RES
+        rows, cols = int(round((n - s + 2 * m) / res)), int(round((e - w + 2 * m) / res))
+        la = (n + m) - (np.arange(rows) + 0.5) * res
+        lo = (w - m) + (np.arange(cols) + 0.5) * res
+        z = np.asarray(self.dem.sample(la[:, None], lo[None, :], GROUND_ZOOM), np.float32)
+        px = GIBS_DEG / GIBS_PX
+        r0, r1 = int(math.floor((90.0 - (n + m)) / px)), int(math.floor((90.0 - (s - m)) / px))
+        c0, c1 = int(math.floor((w - m + 180.0) / px)), int(math.floor((e + m + 180.0) / px))
+        gz, ga, gla, glo, gn = fast._ef.snowobs_ground_grid(z, n + m, w - m, res, 90.0 - r0 * px, -180.0 + c0 * px, px,
+                                                           r1 - r0 + 1, c1 - c0 + 1)
+        box = (int(round(s * 1e5)), int(round(w * 1e5)), int(round(n * 1e5)), int(round(e * 1e5)))
+        keep = (gn > 0) & (gla >= box[0]) & (gla < box[2]) & (glo >= box[1]) & (glo < box[3])
+        ix = np.arange(gz.size)[keep]
+        cell.gground = (gz[keep], ga[keep], gla[keep], glo[keep], gn[keep], r0 + ix // (c1 - c0 + 1),
+                        c0 + ix % (c1 - c0 + 1))
+        g = cell.gground
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp.npz"
+        np.savez(tmp, z=g[0], aspect=g[1], lat=g[2], lon=g[3], n=g[4], r=g[5], c=g[6])
+        os.replace(tmp, path)
+        return cell.gground
+
+    def _clear_counts(self, cell, k0, n):
+        """The band counts of the latest clear VIIRS / MODIS day of a cell (the CLEAR_DAYS before today, VIIRS first),
+        None when none saw CLEAR_SEEN of its land."""
+        g = self._gibs_ground(cell)
+        if g is None or g[0].size == 0:
+            return None
+        today = datetime.datetime.fromtimestamp(self.clock(), datetime.timezone.utc).date()
+        rr, cc = g[5], g[6]
+        trow, tcol = rr // GIBS_PX, cc // GIBS_PX
+        tiles = sorted(set(zip(trow.tolist(), tcol.tolist())))
+        s, w, nn, e = cell_box(*cell.key)
+        box = (int(round(s * 1e5)), int(round(w * 1e5)), int(round(nn * 1e5)), int(round(e * 1e5)))
+        for back in range(1, CLEAR_DAYS + 1):
+            day = today - datetime.timedelta(days=back)
+            for layer in CLEAR_LAYERS:
+                vals = np.full(g[0].size, 255, np.uint8)
+                ok = True
+                for tr, tc in tiles:
+                    v = self._gibs_tile(layer, day, tr, tc)
+                    if v is None:
+                        ok = False
+                        break
+                    m = (trow == tr) & (tcol == tc)
+                    vals[m] = v[rr[m] - tr * GIBS_PX, cc[m] - tc * GIBS_PX]
+                if not ok:
+                    continue
+                land = (vals != 237) & (vals != 239)
+                if (vals <= 100).sum() < CLEAR_SEEN * max(1, int(land.sum())):
+                    continue
+                obs = fast._ef.snowobs_classes(vals, "ndsi", CLEAR_NDSI)
+                return fast._ef.snowobs_cell_counts(g[0], g[1], g[2], g[3], g[4], obs, box, k0, n).astype(np.int64)
+        return None
+
     def _counts(self, cell, day_win, k0, n):
         """The cell's band counts from one IMS day's window (None: no map there)."""
         g = cell.ground
@@ -333,10 +489,17 @@ class SnowField:
             k0, n = ef.snowfield_rows(zmin, zmax)
             today = self._counts(cell, obs_days[0][1] if obs_days else None, k0, n)
             before = self._counts(cell, obs_days[1][1] if len(obs_days) > 1 else None, k0, n)
+            clear = None
+            if not cell.far:            # (the clear-satellite rule: the near ring's cells)
+                try:
+                    clear = self._clear_counts(cell, k0, n)
+                except Exception as e:      # (GIBS down: IMS alone this time)
+                    log.info("snow field: no clear day for %s: %s: %s", cell.key, type(e).__name__, e)
             upto = snowmod.hour_index(times, now)
             lat_e2 = int(round((cell_box(*cell.key)[0] + CELL_DEG / 2) * 100))
             k_lo, rows, states, _runs = ef.snowfield_table(recs, upto, int(z_cell), lat_e2, zmin, zmax, seed,
-                                                           today, k0, before, k0, cell.states)
+                                                           today, k0, before, k0, cell.states, clear=clear,
+                                                           k0_clear=k0)
             cell.states, cell.z_cell, cell.rows, cell.made = states, int(z_cell), rows, now
             look = tuple(tuple(int(v) for v in (r[0], r[1], r[2], r[3], r[4], r[6])) for r in rows)
             new = snowcover.Table(look, snowcover.NO_ROAD, 0) if any(r[1] > 0 or r[3] > 0 for r in look) else None
@@ -375,6 +538,7 @@ class SnowField:
                     self.cells[k].far = True
         changed = list(gone)
         key = self._ring_key(ring, lat, lon)
+        self._prune_gibs(datetime.datetime.fromtimestamp(now, datetime.timezone.utc).date())
         if self.refreshed.get(ring) == key or now < self.retry.get(ring, (0.0, 0))[0]:
             return changed
         try:

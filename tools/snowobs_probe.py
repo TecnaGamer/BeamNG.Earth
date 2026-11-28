@@ -488,8 +488,14 @@ def pick_dates(lines_json, places, per_place, mild_dates):
 # 0.01 mm): A the plan's (bare at most 25 % two days running, white from 50 %), B symmetric at 50 % two days, C symmetric
 # one day, D one day and white only from 75 %
 # (the observed rows' shift 0 here: the variants' "+150" shift them themselves; E with +150 is snowfield.rs's default)
-FUSIONS = {"A": (250, 500, True, 100, 0), "D": (499, 750, False, 100, 0), "E": (499, 750, False, 500, 0),
-           "F": (499, 750, False, 10 ** 9, 0), "G": (499, 750, True, 500, 0)}
+FUSIONS = {"A": (250, 500, True, 100, 0, 2000), "D": (499, 750, False, 100, 0, 2000),
+           "E": (499, 750, False, 500, 0, 2000), "F": (499, 750, False, 10 ** 9, 0, 2000),
+           "G": (499, 750, True, 500, 0, 2000)}
+# The clear-satellite rule's sweep (snowfield.rs Fusion.clear_gap): the latest clear MODIS / VIIRS day (the 1-3 days
+# before the reference day, MODIS's cloud mask: at least VALID_MIN of the cell seen) at an NDSI threshold, its share
+# standing for IMS's where it is at least the gap lower; the rest of the rule snowfield.rs's default
+CLEAR_RULES = {"clear35@400": (35, 400), "clear35@250": (35, 250), "clear20@400": (20, 400), "clear20@250": (20, 250),
+               "clear10@400": (10, 400)}
 
 
 def cmd_tables(a, places, _dates):
@@ -497,6 +503,12 @@ def cmd_tables(a, places, _dates):
     ef = fast._ef
     cmap = colour_map(a.cache)
     chosen = pick_dates(a.lines, places, a.per_place, a.mild_dates)
+    for p in places:
+        if p.kind == "mountain":
+            for x in a.extra_dates:
+                dx = datetime.date.fromisoformat(x)
+                if dx not in chosen[p.name]:
+                    chosen[p.name].append(dx)
     res = []
     for p in places:
         for d in chosen.get(p.name, []):
@@ -509,6 +521,9 @@ def cmd_tables(a, places, _dates):
             # VIIRS of the two days before (a live source: never the reference day itself)
             vo = {k: ef.snowobs_classes(p.gibs_values(a.cache, LAYERS["viirs"], d - datetime.timedelta(days=k),
                                                       cmap).ravel(), "ndsi") for k in (1, 2)}
+            # the clear days before (VIIRS then MODIS, newest first): raw values, for the clear-satellite rule
+            clear_days = [(k, lay, p.gibs_values(a.cache, LAYERS[lay], d - datetime.timedelta(days=k), cmap))
+                          for k in (1, 2, 3) for lay in ("viirs", "modis")]
             # the region's seed: every cell's model ground and its first hour's model snow depth (mm)
             parts = [snowmod.records(om) for om in oms]
             seed = [(int(z), int(rec[0, 9]) if rec.shape[0] and rec[0, 9] != snowmod.MISSING else snowmod.MISSING)
@@ -529,12 +544,19 @@ def cmd_tables(a, places, _dates):
                 vc = {k: p.counts(p.gibs_ground, vo[k], cell)[0].astype(np.int64) for k in (1, 2)}
                 # (k0 shifts: the observed bands read one or two rows higher, a bias correction of +150 / +300 m;
                 # fusions: FUSIONS' rules)
-                variants = {"kernel": (None, None, 0, None), "default": (obs.get(1), obs.get(2), 0, None)}
-                for fname, fus in FUSIONS.items():
-                    variants[f"ims@{fname}"] = (obs.get(1), obs.get(2), 0, fus)
-                    variants[f"ims+150@{fname}"] = (obs.get(1), obs.get(2), 1, fus)
-                    if fname in ("A", "E"):
-                        variants[f"viirs@{fname}"] = (vc[1], vc[2], 0, fus)
+                variants = {"kernel": (None, None, 0, None, None),
+                            "default": (obs.get(1), obs.get(2), 0, (499, 750, False, 500, 1, 2000), None)}
+                if a.rule_sweep:
+                    for fname, fus in FUSIONS.items():
+                        variants[f"ims@{fname}"] = (obs.get(1), obs.get(2), 0, fus, None)
+                        variants[f"ims+150@{fname}"] = (obs.get(1), obs.get(2), 1, fus, None)
+                pick = next(((k, lay, v) for k, lay, v in clear_days
+                             if seen_share(p.gibs_ground, v, cell) >= VALID_MIN), None)
+                for cname, (thr, gap) in CLEAR_RULES.items():
+                    if pick is None:
+                        continue
+                    cc = p.counts(p.gibs_ground, ef.snowobs_classes(pick[2].ravel(), "ndsi", thr), cell)[0]
+                    variants[cname] = (obs.get(1), obs.get(2), 0, (499, 750, False, 500, 1, gap), cc.astype(np.int64))
                 mc, mk0 = p.counts(p.gibs_ground, mo, cell)
                 seen = seen_share(p.gibs_ground, gv, cell)
                 ml = [line_of(mc, mk0, col) for col in (0, 1)]
@@ -548,11 +570,13 @@ def cmd_tables(a, places, _dates):
                 if s2 is not None:
                     sc_, sk0 = p.counts(s2[0], s2[1], cell)
                     rec["s2"] = [line_of(sc_, sk0, col) for col in (0, 1)]
-                for name, (t, b, sh, fus) in variants.items():
-                    if name != "kernel" and t is None:
+                rec["clear_day"] = None if pick is None else [pick[0], pick[1]]
+                for name, (t, b, sh, fus, cc) in variants.items():
+                    if name != "kernel" and t is None and cc is None:
                         continue
                     kl, rows, _states, runs = ef.snowfield_table(recs, upto, z_cell, lat_e2, zmin, zmax, seed,
-                                                                 t, k0 + sh, b, k0 + sh, fusion=fus)
+                                                                 t, k0 + sh, b, k0 + sh, fusion=fus, clear=cc,
+                                                                 k0_clear=k0)
                     lines = [ef.snowfield_line(kl, rows, col) for col in (0, 1)]
                     v = {"lines": [int(x[0]) for x in lines], "rows": rows}
                     if seen >= VALID_MIN:
@@ -564,6 +588,30 @@ def cmd_tables(a, places, _dates):
         with open(a.json, "w") as f:
             json.dump(res, f)
     summarise_tables(res)
+
+
+def per_place(res, names):
+    """Each place's line error (the table's line - the reference's) vs MODIS and vs Sentinel-2, per rule."""
+    for ref in ("modis", "s2"):
+        print(f"   per place vs {ref.upper()} (median |d| m / mean d m / within 150 m %, n)")
+        places = sorted({r["place"] for r in res if r["kind"] == "mountain"})
+        for pl in places:
+            cells = []
+            for n in names:
+                d = []
+                for r in res:
+                    if r["place"] != pl or ref not in r or (ref == "modis" and r["modis_seen"] < VALID_MIN):
+                        continue
+                    for col in (0, 1):
+                        m = r[ref][col]
+                        if usable(m) and n in r["v"]:
+                            d.append(r["v"][n]["lines"][col] - m["line"])
+                if d:
+                    d = np.array(d, float)
+                    cells.append(f"{n}: {np.median(np.abs(d)):4.0f}/{d.mean():+5.0f}/{100 * np.mean(np.abs(d) <= 150):3.0f}%"
+                                 f" n{len(d)}")
+            if cells:
+                print(f"     {pl:16s} " + " | ".join(cells))
 
 
 def summarise_tables(res):
@@ -603,6 +651,8 @@ def summarise_tables(res):
         print(f" {kind}:")
         for n in ("old",) + names:
             print(f"   line {n:12s} vs MODIS {_stats(line_d[n])}")
+        if kind == "mountain":
+            per_place(res, ("default",) + tuple(x for x in names if x.startswith("clear")))
         for n in ("old",) + names:
             if s2_d[n]:
                 print(f"   line {n:12s} vs S2    {_stats(s2_d[n])}")
@@ -716,6 +766,8 @@ def main():
     ap.add_argument("--lines", help="tables: the lines command's JSON (picks each mountain place's clearest dates)")
     ap.add_argument("--per-place", type=int, default=5)
     ap.add_argument("--mild-dates", nargs="*", default=["2026-01-08", "2026-01-20", "2026-02-05"])
+    ap.add_argument("--extra-dates", nargs="*", default=[], help="tables: more dates for every mountain place")
+    ap.add_argument("--rule-sweep", action="store_true", help="tables: the first sweep's fusion rules too")
     a = ap.parse_args()
     fast.require(NATIVE, "snowobs probe")
     dates = [datetime.date.fromisoformat(x) for x in a.dates] if a.dates else default_dates()
