@@ -189,6 +189,12 @@ _OWN = "coalesce(list_filter(sources, lambda s: coalesce(s.property, '') = '')[1
 _SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
+# the land layer's tags: only the keys natural.py reads (a Paris cell's mapped trees carry survey dates, cadastre refs,
+# names in French ...: 158 kB of its CIP section, most of it tags nothing reads)
+LAND_TAG_KEYS = ("natural", "genus", "species", "taxon", "genus:la", "species:la", "leaf_type", "leaf_cycle", "height",
+                 "circumference", "diameter_crown", "wetland", "surface")
+_LAND_TAGS = ("CAST(to_json(map_from_entries(list_filter(map_entries(source_tags), e -> e.key IN ("
+              + ", ".join(f"'{k}'" for k in LAND_TAG_KEYS) + ")))) AS VARCHAR) AS tags")
 DIVISION_LANGS = ("en", "de", "fr", "it")
 # the regional languages of France whose names a town sign may add under the French one (townsigns.REGIONAL: Catalan,
 # Occitan, Basque, Breton, Corsican, Alsatian, West Flemish), each a column name_<code> (names.common's, by its
@@ -258,6 +264,20 @@ LAYERS = {
                      cols=f"subtype, class, {_NAME}, {_SRC}, level, surface, elevation, {_TAGS}",
                      text=("subtype", "class", "name", "src_dataset", "src_record", "surface", "tags"),
                      float=("level", "elevation")),
+    # OpenStreetMap's natural=* features (natural.py, BNE_NATURAL_*; read only while one of those is on): mapped single
+    # trees and tree rows (their genus / species / leaf_type / height / crown in the tags), forests' leaf type, cliffs,
+    # rock, scree, sand, beaches, dunes, glaciers, wetlands. Not the global land polygons (class land, island ...):
+    # the classes the generator uses (natural.LAND_CLASSES)
+    "land": dict(theme="base", type="land", clip=True,
+                 cols=f"subtype, class, {_SRC}, level, surface, elevation, {_LAND_TAGS}",
+                 text=("subtype", "class", "src_dataset", "src_record", "surface", "tags"),
+                 float=("level", "elevation"),
+                 where="class IN ('tree', 'tree_row', 'forest', 'wood', 'cliff', 'rock', 'bare_rock', 'stone', "
+                       "'scree', 'shingle', 'sand', 'beach', 'dune', 'glacier', 'wetland')"),
+    # depth polygons below the water's surface (CC0: ETOPO / GLOBathy; natural.py, BNE_NATURAL_BATHY): lake and sea
+    # floors where NOAA's sea floor is missing and for the lakes, which have none
+    "bathymetry": dict(theme="base", type="bathymetry", clip=True, cols=f"{_SRC}, depth",
+                       text=("src_dataset", "src_record"), float=("depth",)),
     "infrastructure": dict(theme="base", type="infrastructure", clip=False,
                            cols=f"subtype, class, {_NAME}, {_SRC}, level, height, surface, {_TAGS}",
                            text=("subtype", "class", "name", "src_dataset", "src_record", "surface", "tags"),
@@ -703,6 +723,56 @@ def _q(path):
     return str(path).replace("'", "''")
 
 
+SIMPLIFIED_MB = 64             # simplified whole polygons kept per process (_simplified)
+_SIMPLIFIED = OrderedDict()
+_SIMPLIFIED_BYTES = [0]
+_SIMPLIFIED_LOCK = threading.Lock()
+
+
+def _simplified(wkb, parts):
+    """mg.simplify_polygon_parts(parts, SIMPLIFY_DEG) of the polygon parsed from wkb (unclipped: the parts are wkb's
+    alone), kept by wkb's hash: a territory's or a region's outline is the same in each of its thousands of cells, and
+    simplifying it again in every one was ~0.3 CPU-s a cell in the Yukon (77 of a z10 unit's 94 CPU-s in
+    tools/build_cip.py). Copies of the kept rings (the callers' arrays are their own). Pure, as the simplification."""
+    if wkb is None:
+        return mg.simplify_polygon_parts(parts, SIMPLIFY_DEG)
+    h = hashlib.blake2b(bytes(wkb), digest_size=20).digest()
+    with _SIMPLIFIED_LOCK:
+        kept = _SIMPLIFIED.get(h)
+        if kept is not None:
+            _SIMPLIFIED.move_to_end(h)
+    if kept is None:
+        got = mg.simplify_polygon_parts(parts, SIMPLIFY_DEG)
+        n = sum(np.asarray(r).nbytes for rings in got for r in rings) + 200
+        if n <= SIMPLIFIED_MB * 1e6 / 8:
+            with _SIMPLIFIED_LOCK:
+                if h not in _SIMPLIFIED:
+                    _SIMPLIFIED[h] = ([[np.array(r, copy=True) for r in rings] for rings in got], n)
+                    _SIMPLIFIED_BYTES[0] += n
+                while _SIMPLIFIED_BYTES[0] > SIMPLIFIED_MB * 1e6 and len(_SIMPLIFIED) > 1:
+                    _, (_, m) = _SIMPLIFIED.popitem(last=False)
+                    _SIMPLIFIED_BYTES[0] -= m
+        return got
+    return [[np.array(r, copy=True) for r in rings] for rings in kept[0]]
+
+
+class _LazyCon:
+    """A DuckDB connection made at its first statement (Reader._connect(lazy=True)); close() without one is a no-op."""
+
+    def __init__(self, make):
+        self._make, self._con = make, None
+
+    def execute(self, *a, **kw):
+        if self._con is None:
+            self._con = self._make()
+        return self._con.execute(*a, **kw)
+
+    def close(self):
+        if self._con is not None:
+            self._con.close()
+            self._con = None
+
+
 def _number_rows(con, dedup_if_repeated=None):
     """Temp table t from s (Reader._run): one row per id (its highest version), numbered fi in id order. The window
     dedup only where an id repeats (DEDUP_IF_REPEATED): none did in a fresh place's 60 road cells, and the window was
@@ -833,10 +903,12 @@ class Reader:
                 _, old = self._boxes.popitem(last=False)
                 self._box_rows -= len(old[0])
 
-    def _connect(self, files, kind):
+    def _connect(self, files, kind, lazy=False):
         """A DuckDB connection whose filesystem serves `files` ({path: RemoteFile}) with `kind`. (Not one database a
         process with DuckDB's parquet_metadata_cache: it saved ~0.3 CPU-s of a route shield query's 0.65-1.05 s, the
-        OSM tags footer parsed once, but held ~150 MB more in every process using it, 2026-11-11.)"""
+        OSM tags footer parsed once, but held ~150 MB more in every process using it, 2026-11-11.) lazy: connected at
+        its first statement (query(): a cell whose row groups' cached boxes rule it out runs none; the connection was
+        ~6 ms of each such cell's layer, most of an open-sea cell's build in tools/build_cip.py)."""
         duckdb = _duckdb()
         errors = []
 
@@ -859,12 +931,15 @@ class Reader:
             f._fetch_range = guarded
             return f
         fs._open = _open
-        con = duckdb.connect(config={"threads": self.threads, "autoinstall_known_extensions": False,
-                                     "autoload_known_extensions": False})
-        for k, v in PARQUET_CONFIG.items():
-            con.execute(f"SET {k} = {str(v).lower()}")
-        con.register_filesystem(fs)
-        return con, fs.protocol, errors
+
+        def make():
+            con = duckdb.connect(config={"threads": self.threads, "autoinstall_known_extensions": False,
+                                         "autoload_known_extensions": False})
+            for k, v in PARQUET_CONFIG.items():
+                con.execute(f"SET {k} = {str(v).lower()}")
+            con.register_filesystem(fs)
+            return con
+        return (_LazyCon(make) if lazy else make()), fs.protocol, errors
 
     def query(self, layer, cell, kind="demand"):
         """The layer's Features of one cell (lon/lat only; mapdata localises and marks `own`), and
@@ -878,7 +953,7 @@ class Reader:
             return empty(layer), {}
         files = {f"{spec['theme']}/{spec['type']}/{name}": self._remote(spec["theme"], spec["type"], name, urls, size)
                  for name, urls, size in hits}
-        con, proto, errors = self._connect(files, kind)
+        con, proto, errors = self._connect(files, kind, lazy=True)
         try:
             paths = sorted(files)
             rows = self._plan(con, proto, paths, files, spec, bounds, kind)
@@ -1193,7 +1268,8 @@ class Reader:
             whole = spec.get("whole", ())
             for i, r in enumerate(rows):
                 if r[at[col]] in values and geoms[i][0] == mg.POLYGON and r[at["country"]] not in whole:
-                    geoms[i] = (mg.POLYGON, mg.simplify_polygon_parts(geoms[i][1], SIMPLIFY_DEG))
+                    geoms[i] = (mg.POLYGON, _simplified(r[at["wkb"]], geoms[i][1]) if not spec["clip"] else
+                                mg.simplify_polygon_parts(geoms[i][1], SIMPLIFY_DEG))
         feats = mg.build(layer, ids[keep], [g for g, k in zip(geoms, keep) if k])
         feats.clipped = clipped[keep]
         fmap = np.cumsum(keep) - 1          # old feature index -> new (rows dropped by clipping: unused)

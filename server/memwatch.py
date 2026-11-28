@@ -5,15 +5,17 @@ Each process's caches have their own caps (budget.apply), but they add up: a 64 
 30-minute drive through three cities (game-less, 2026-11-11), a 16 GB PC's 14.6 GB, and the players' reports show the
 server's memory in the 8-24 GB bins for most of their hours while 4 in 10 of those hours had less than 2 GB of the
 machine free. Every CHECK_S, in a thread of the server's main process, this measures the whole server (Linux: each
-process's PSS + swapped PSS, the shared pages split fairly; Windows: private bytes) and hands the numbers to the native
+process's PSS and its swapped PSS at the RAM that holds (zram: compressed), the shared pages split fairly; Windows:
+private bytes) and hands the numbers to the native
 step (fast.ram_watch), which answers:
   - "shed": every process over its share of the limit drops its caches (budget.shed_ask: the workers between jobs or
     when idle, the main process in its tree_publisher thread);
   - "rotate": the pool holding the largest process gets fresh processes (pools.RespawningPool.rotate: its jobs finish
     in the old ones, which then exit and give everything back);
   - "ok" / "wait": nothing now.
-While the server is over the limit no far-tile burst processes start (budget.OVER, pools.ElasticPool), nor while
-the room left under it is less than the burst's processes need (budget.ROOM_MB, at the pool's biggest process). The
+No far-tile burst processes start while the room for them is less than they need (budget.ROOM_MB, at the pool's
+biggest process; budget.OVER: none at all): under the player's own Max RAM the room left under it, under Auto at least
+what the system has free past its reserve and the game's share (native ram_burst_room_mb). The
 limit can change while the server runs (set_setting, the settings page); the process counts and the caches' sizes
 follow it from the next start. Python here is the glue: reading the processes' memory and acting; the rules are native.
 """
@@ -29,6 +31,7 @@ import fast
 
 log = logging.getLogger("earthd.memwatch")
 
+MEMWATCH_KERNEL = 637       # earthfast ram_swap_weight / ram_counted_mb / ram_burst_room_mb
 CHECK_S = float(os.environ.get("BNGE_MEMWATCH_S", "") or 5.0)
 LOG_EVERY_S = float(os.environ.get("BNGE_MEMWATCH_LOG_S", "") or 300.0)   # a summary line in the log this often
 # A shed request goes to the processes holding more than this times an equal share of the limit: a shed costs a worker
@@ -72,7 +75,8 @@ def register(*pools):
 
 
 def process_mb(pid):
-    """A process's memory as the watchdog counts it (MB): Linux PSS + SwapPss, Windows private bytes; None."""
+    """A process's memory as the watchdog counts it (MB): Linux PSS and its SwapPss at the RAM it holds
+    (budget.swap_weight: a zram page as what it compresses to), Windows private bytes; None."""
     import perfstats
     if sys.platform == "win32":
         try:
@@ -80,7 +84,10 @@ def process_mb(pid):
         except Exception:
             r = None
         return r[1] if r else None
-    return perfstats._pss_mb(pid)
+    got = perfstats._pss_parts(pid)
+    if got is None:
+        return None
+    return budget.counted_mb(got[0], got[1])
 
 
 def measure():
@@ -141,6 +148,7 @@ def start(limit_mb=None):
         _state["tier"] = budget.TIER
     if not ON or not limit_mb or _thread is not None:
         return False
+    fast.require(MEMWATCH_KERNEL, "the memory watchdog (ram_counted_mb, ram_burst_room_mb)")
     _thread = threading.Thread(target=_loop, daemon=True, name="memwatch")
     _thread.start()
     log.info("memory: the server's limit %.1f GB (%s; settings page: Max RAM for BeamNG.Earth), tier %s",
@@ -162,7 +170,13 @@ def too_low():
         if not _state.get("tooLow"):
             return ""
         set_gb = _state["setting"]
+        limit, eff = floored(_state["limit"]), float(_state.get("eff") or 0.0)
     which = f"Max RAM ({set_gb:g} GB)" if set_gb else "Max RAM (Auto)"
+    if limit and eff and eff < 0.9 * limit:
+        # (the PC itself short of free memory: ram_effective_mb held the server under its setting, so raising Max RAM
+        # changes nothing; players at Auto and 32 GB were told to raise it, 2026-11-27)
+        return (f"memory: this PC is low on free memory, so the server is held to {eff / 1024:.1f} GB of its "
+                f"{which} and the world loads slowly (close other programs, or lower the game's graphics settings)")
     return f"memory: {which} is too low for this place, the world loads slowly (raise it in the settings)"
 
 
@@ -249,10 +263,15 @@ class _Watch:
         elif self.over_since is None and self.too_low_said:
             self.too_low_said = False
             log.info("memory: the server back under its limit (%.0f MB of %.0f)", total, eff)
-        budget.OVER = bool(limit) and total >= eff     # (over the limit itself: no far-tile burst processes)
-        # (and the room a burst needs, pools.ElasticPool: 7 far-tile processes of ~0.7 GB each started at 21-22 GB of a
-        # 24 GB limit took the server to 27.3 GB, sheds and replacements after it; Daytona session 2026-11-19)
-        budget.ROOM_MB = (eff - total) if limit else None
+        # The room a far-tile burst may take (pools.ElasticPool; native ram_burst_room_mb): under the player's own Max
+        # RAM what is left under it (7 far-tile processes of ~0.7 GB each started at 21-22 GB of a 24 GB limit took the
+        # server to 27.3 GB, sheds and replacements after it; Daytona session 2026-11-19); under Auto at least what the
+        # system has free past the reserve and the game's share (Auto's 24 GB cap kept a 64 GB PC with 16-26 GB
+        # available on 3 far-tile processes through two teleports, Baltimore 2026-11-26). None room: none
+        room = (float(fast._ef.ram_burst_room_mb(eff, total, avail if avail is not None else -1.0, reserve,
+                                                 not _state["setting"])) if limit else None)
+        budget.ROOM_MB = room
+        budget.OVER = room is not None and room <= 0.0     # (no far-tile burst processes at all)
         sizes = {}
         for p in pools:
             try:

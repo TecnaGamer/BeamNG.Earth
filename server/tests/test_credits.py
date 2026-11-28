@@ -11,6 +11,7 @@ import math
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -26,6 +27,7 @@ import earthd  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
 import imagery  # noqa: E402
+import standins  # noqa: E402
 import netfetch  # noqa: E402
 import polardem  # noqa: E402
 import test_server  # noqa: E402
@@ -57,9 +59,11 @@ class WordingTest(unittest.TestCase):
         for name, text in credits.IMAGERY.items():
             self.assertTrue(imagery.SOURCES[name].attribution.startswith(text), name)
         # EOX: their prescribed June 2026 wording, with the layer's data year
-        self.assertIn("Copernicus Sentinel data 2023)", credits.IMAGERY["eox2023"])
         self.assertIn("Copernicus Sentinel data 2016 & 2017)", credits.IMAGERY["eox2016"])
-        self.assertEqual(set(credits.IMAGERY), set(imagery.SOURCES))
+        self.assertNotIn("eox2023", credits.IMAGERY, "EOX 2023 (CC BY-NC-SA) is not a source")
+        # (a source sharing another's tiles, bngs2fine, is credited as that one: imagery.store_of)
+        self.assertEqual(set(credits.IMAGERY), {n for n, s in imagery.SOURCES.items()
+                                                if not s.store and n != standins.ALT})
 
     def test_elevation_and_weather(self):
         self.assertEqual(set(credits.ELEVATION), {demmod.MAPTERHORN["name"], demmod.AWS["name"], polardem.SOURCE,
@@ -77,12 +81,12 @@ class WordingTest(unittest.TestCase):
         self.assertIn("Mapterhorn", earthd.ELEVATION_CREDIT)
 
     def test_line(self):
-        ids = {"dem:aws-terrarium", "img:eox2023", "wx:open-meteo", "img:usgs", "dem:mapterhorn"}
-        self.assertEqual(credits.ordered(ids), ["img:usgs", "img:eox2023", "dem:mapterhorn", "dem:aws-terrarium",
+        ids = {"dem:aws-terrarium", "img:eox2016", "wx:open-meteo", "img:usgs", "dem:mapterhorn"}
+        self.assertEqual(credits.ordered(ids), ["img:usgs", "img:eox2016", "dem:mapterhorn", "dem:aws-terrarium",
                                                 "wx:open-meteo"])
         text = credits.line(ids)
         # short names (the user, 2026-10-18); the full wordings stay in the settings page and CREDITS.md
-        self.assertEqual(text, "Imagery: USGS, EOX Sentinel-2 cloudless 2023 (Copernicus)"
+        self.assertEqual(text, "Imagery: USGS, EOX Sentinel-2 cloudless 2016 (Copernicus)"
                          " | Elevation: Mapterhorn, AWS Terrain Tiles / Mapzen | Weather: Open-Meteo")
         self.assertEqual(credits.line({"img:eox2016"}, far=True),
                          "Far imagery: EOX Sentinel-2 cloudless 2016 (Copernicus)")
@@ -106,7 +110,7 @@ class WordingTest(unittest.TestCase):
         for i in ("img:usgs", "dem:mapterhorn"):
             kind = "Imagery: " if i.startswith("img:") else "Elevation: "
             self.assertIn(f'"{kind}{credits.full_label(i)}"', text, i)
-        self.assertIn(f'"{credits.IMAGERY["eox2023"]}"', text)
+        self.assertIn(f'"{credits.IMAGERY["eox2016"]}"', text)
         self.assertIn(f'"{credits.full_label("dem:aws-terrarium")}"', text)
         self.assertIn(f'"{weather.CREDIT}"', text)
         for name in (demmod.MAPTERHORN["name"], demmod.AWS["name"]):
@@ -213,8 +217,8 @@ class TileSourcesTest(unittest.TestCase):
         frame = geodesy.EnuFrame(LAT, LON)
         t = ff.tile_of("-1_3_-5")
         dem = ServedDem(split_lon=-1000)            # AWS everywhere
-        ids = credits.tile_sources(frame, t.bbox, dem, 15, {"usgs": 60000, "eox2023": 12, "none": 5, "deshadow": 9})
-        self.assertEqual(ids, {"img:usgs", "img:eox2023", "dem:aws-terrarium"})
+        ids = credits.tile_sources(frame, t.bbox, dem, 15, {"usgs": 60000, "eox2016": 12, "none": 5, "deshadow": 9})
+        self.assertEqual(ids, {"img:usgs", "img:eox2016", "dem:aws-terrarium"})
         self.assertEqual(credits.tile_sources(frame, t.bbox, dem, 15, None), {"dem:aws-terrarium"})
         self.assertEqual(credits.tile_sources(frame, t.bbox, test_server.FakeDem(), 15, {"eox2016": 1}),
                          {"img:eox2016"})                # a DEM without providers: imagery only
@@ -222,7 +226,7 @@ class TileSourcesTest(unittest.TestCase):
                          {"dem:aws-terrarium"})
         # --colormatch: texels the seam feather corrected name its S2 references (not a source itself)
         self.assertEqual(credits.tile_sources(frame, t.bbox, dem, 15, {"usgs": 65536, "colormatch": 65536}),
-                         {"img:usgs", "img:eox2023", "img:eox2016", "dem:aws-terrarium"})
+                         {"img:usgs", "img:bngs2", "img:eox2016", "dem:aws-terrarium"})
         self.assertEqual(credits.tile_sources(frame, t.bbox, dem, 15, {"usgs": 65536, "colormatch": 0}),
                          {"img:usgs", "dem:aws-terrarium"})
 
@@ -251,12 +255,12 @@ class ServerTileCreditsTest(unittest.TestCase):
         east = s.make_tile(a, ff.tile_of("-1_8_0"))
         far_east = s.make_tile(a, ff.tile_of("-1_20_0"))
         usgs = s.make_tile(a, ff.tile_of("-1_160_0"))           # 20 km east
-        self.assertEqual(west.credits, {"img:eox2023", "dem:mapterhorn"})
-        self.assertEqual(east.credits, {"img:eox2023", "dem:mapterhorn"})
-        self.assertEqual(far_east.credits, {"img:eox2023", "dem:aws-terrarium"})
+        self.assertEqual(west.credits, {"img:eox2016", "dem:mapterhorn"})
+        self.assertEqual(east.credits, {"img:eox2016", "dem:mapterhorn"})
+        self.assertEqual(far_east.credits, {"img:eox2016", "dem:aws-terrarium"})
         self.assertEqual(usgs.credits, {"img:usgs", "dem:aws-terrarium"})
         coarse = s.make_tile(a, ff.tile_of("9_0_0"))        # 256 m texels, z9: USGS starts at z10
-        self.assertIn("img:eox2023", coarse.credits)
+        self.assertIn("img:eox2016", coarse.credits)
         self.assertNotIn("img:usgs", coarse.credits)
 
     def test_palette_tile_has_no_imagery_credit(self):
@@ -292,7 +296,7 @@ class ServerTileCreditsTest(unittest.TestCase):
         self.addCleanup(s.imagery.close)
         info = s.retexture(a, t, prev)
         self.assertEqual(info.rev, 1)
-        self.assertEqual(info.credits, {"img:usgs", "img:eox2023", "img:eox2016", "dem:aws-terrarium"})
+        self.assertEqual(info.credits, {"img:usgs", "img:bngs2", "img:eox2016", "dem:aws-terrarium"})
 
     def test_off_by_default(self):
         import inspect
@@ -314,8 +318,8 @@ class MessageTest(unittest.TestCase):
 
     def test_near_far_split(self):
         tiles = {(1, "a"): self.info("img:usgs", "dem:mapterhorn"),
-                 (1, "b"): self.info("img:eox2023", "dem:mapterhorn"),
-                 (1, "c"): self.info("img:eox2023", "dem:aws-terrarium"),
+                 (1, "b"): self.info("img:bngs2", "dem:mapterhorn"),
+                 (1, "c"): self.info("img:eox2016", "dem:aws-terrarium"),
                  (0, "d"): self.info("img:eox2016"),             # a previous anchor's tile, still shown
                  (1, "e"): self.info()}                           # a palette tile on the synthetic DEM
         shown = {(1, "a"): (-64, -64, 64, 64), (1, "b"): (1900, 0, 2100, 100),   # 1.9 km: near
@@ -323,9 +327,9 @@ class MessageTest(unittest.TestCase):
                  (1, "e"): (0, 0, 10, 10), (1, "gone"): (0, 0, 1, 1)}           # evicted record: skipped
         c = conn_stub(shown, tiles)
         m = credits.Credits().message(c)
-        self.assertEqual(m["ids"], ["img:usgs", "img:eox2023", "dem:mapterhorn"])
+        self.assertEqual(m["ids"], ["img:usgs", "img:bngs2", "dem:mapterhorn"])
         self.assertEqual(m["farIds"], ["img:eox2016", "dem:aws-terrarium"])     # near sources not repeated
-        self.assertEqual(m["near"], "Imagery: USGS, EOX Sentinel-2 cloudless 2023 (Copernicus) | Elevation: Mapterhorn")
+        self.assertEqual(m["near"], "Imagery: USGS, ESA WorldCover Sentinel-2 2021 (Copernicus) | Elevation: Mapterhorn")
         self.assertEqual(m["far"], "Far imagery: EOX Sentinel-2 cloudless 2016 (Copernicus)"
                          " | Far elevation: AWS Terrain Tiles / Mapzen")
         self.assertEqual((m["type"], m["v"]), ("credits", credits.VERSION))
@@ -333,8 +337,8 @@ class MessageTest(unittest.TestCase):
         # the player moves east: b and c near, a still within 2 km
         c.focus = (2000.0, 0.0)
         m = credits.Credits().message(c)
-        self.assertEqual(m["ids"], ["img:usgs", "img:eox2023", "dem:mapterhorn", "dem:aws-terrarium"])
-        self.assertEqual(m["farIds"], ["img:eox2016"])
+        self.assertEqual(m["ids"], ["img:usgs", "img:eox2016", "img:bngs2", "dem:mapterhorn", "dem:aws-terrarium"])
+        self.assertEqual(m["farIds"], [])
         # a smaller radius: only the tile under the player
         c.focus = (0.0, 0.0)
         m = credits.Credits(near_m=100).message(c)
@@ -363,7 +367,7 @@ class MessageTest(unittest.TestCase):
         until its tiles are NEAR_HYST_M beyond the radius, instead of one message per check."""
         now = [100.0]
         cred = credits.Credits(clock=lambda: now[0])
-        tiles = {(1, "a"): self.info("img:usgs"), (1, "b"): self.info("img:eox2023")}
+        tiles = {(1, "a"): self.info("img:usgs"), (1, "b"): self.info("img:eox2016")}
         c = conn_stub({(1, "a"): (0, 0, 10, 10), (1, "b"): (2010.5, 0, 2100, 100)}, tiles, cred=cred)
         c.loop = FakeLoop()
         c.send = c.sent.append
@@ -373,13 +377,13 @@ class MessageTest(unittest.TestCase):
             now[0] += 1.0
             t.poke(c)
             c.loop.run()
-        self.assertEqual([m["farIds"] for m in c.sent], [["img:eox2023"], []])
+        self.assertEqual([m["farIds"] for m in c.sent], [["img:eox2016"], []])
         # well beyond the radius + the hysteresis: far again
         c.focus = (10.0 - credits.NEAR_HYST_M - 1, 0.0)
         now[0] += 1.0
         t.poke(c)
         c.loop.run()
-        self.assertEqual(c.sent[-1]["farIds"], ["img:eox2023"])
+        self.assertEqual(c.sent[-1]["farIds"], ["img:eox2016"])
         self.assertEqual(len(c.sent), 3)
 
 
@@ -432,14 +436,14 @@ class TrackerTest(unittest.TestCase):
         self.assertEqual(len(c.sent), 1)
         # a change: sent at the next check, never sooner than the interval after the last one
         c.shown[(1, "b")] = (5000, 0, 5100, 100)
-        self.tiles[(1, "b")] = types.SimpleNamespace(credits=frozenset({"img:eox2023"}))
+        self.tiles[(1, "b")] = types.SimpleNamespace(credits=frozenset({"img:eox2016"}))
         self.now += 0.1
         t.poke(c)
         self.assertAlmostEqual(loop.calls[0].delay, 0.9)
         self.now += 0.9
         loop.run()
         self.assertEqual(len(c.sent), 2)
-        self.assertEqual(c.sent[-1]["farIds"], ["img:eox2023"])
+        self.assertEqual(c.sent[-1]["farIds"], ["img:eox2016"])
         # a long pause: checked at once
         self.now += 10
         t.poke(c)
@@ -501,10 +505,10 @@ class SessionCreditsTest(test_server.ServerHarness):
         last = got[-1]
         # near the player: EOX 2023 (FakeImagery's USGS starts ~15 km east), Mapterhorn (AWS from
         # ~27 km east), the weather from the fake fetch
-        self.assertEqual(last["ids"], ["img:eox2023", "dem:mapterhorn", "wx:open-meteo"])
+        self.assertEqual(last["ids"], ["img:eox2016", "dem:mapterhorn", "wx:open-meteo"])
         # the far field (80 km): USGS and AWS east of their limits
         self.assertEqual(last["farIds"], ["img:usgs", "dem:aws-terrarium"])
-        self.assertEqual(last["near"], "Imagery: EOX Sentinel-2 cloudless 2023 (Copernicus) | Elevation: Mapterhorn"
+        self.assertEqual(last["near"], "Imagery: EOX Sentinel-2 cloudless 2016 (Copernicus) | Elevation: Mapterhorn"
                          " | Weather: Open-Meteo")
         self.assertEqual(last["far"], "Far imagery: USGS | Far elevation: AWS Terrain Tiles / Mapzen")
         # only on change: every message differs from the one before
@@ -533,30 +537,55 @@ class SessionCreditsTest(test_server.ServerHarness):
         later = self.credits_msgs(moving + c.drain(3 * self.INTERVAL))
         self.assertTrue(later)
         self.assertEqual(later[-1]["ids"], ["img:usgs", "dem:aws-terrarium", "wx:open-meteo"])
-        self.assertEqual(later[-1]["farIds"], ["img:eox2023", "dem:mapterhorn"])
+        self.assertEqual(later[-1]["farIds"], ["img:eox2016", "dem:mapterhorn"])
 
     def test_throttle_in_session(self):
-        """Many swaps and poses: messages at least one interval apart (server send times)."""
-        sent = []
-        conn_send = earthd.Connection.send
+        """Many swaps and poses: at most one credits check per interval (server clock), the pokes in between folded into
+        the scheduled check, and every message sent by a check: messages at least one interval apart."""
+        # (by the throttle's own decisions, not by how many messages a stretch of wall time saw: under the gates'
+        # SCHED_IDLE load the tiles of 3 s of poses were shown too late for a second message, gates 291 and 294)
+        clock = self.server.credits.clock
+        checks, pokes, sent, in_check = [], [], [], []
+        poke, check, conn_send = credits.Tracker.poke, credits.Tracker.check, earthd.Connection.send
+
+        def poke_w(tr, conn):
+            pokes.append(tr.timer is not None or clock() - tr.last_check < self.INTERVAL)   # early: to be folded
+            poke(tr, conn)
+
+        def check_w(tr, conn):
+            in_check.append(True)
+            try:
+                check(tr, conn)
+            finally:
+                in_check.pop()
+            checks.append(tr.last_check)
 
         def send(conn, msg):
             if msg.get("type") == "credits":
-                sent.append(self.server.credits.clock())
+                sent.append((clock(), bool(in_check)))
             conn_send(conn, msg)
-        earthd.Connection.send = send
+        credits.Tracker.poke, credits.Tracker.check, earthd.Connection.send = poke_w, check_w, send
+        self.addCleanup(setattr, credits.Tracker, "poke", poke)
+        self.addCleanup(setattr, credits.Tracker, "check", check)
         self.addCleanup(setattr, earthd.Connection, "send", conn_send)
         c = self.c
         self.hello()
         aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
         c.send({"type": "commit_anchor", "anchorId": aid})
-        for i in range(30):                         # 10 poses a second, the tiles swapping under the car
+        end = time.monotonic() + 120                # (a hang guard only)
+        i = 0
+        # 10 poses a second, the tiles swapping under the car, until the throttle has folded pokes into a few checks
+        while i < 30 or not (len(checks) >= 4 and sum(pokes) >= 8 and sent):
+            self.assertLess(time.monotonic(), end, (len(checks), sum(pokes), len(sent)))
             self.pose(aid, i * 60.0, 0, vx=600)
             c.drain(0.1)
+            i += 1
         c.drain(3 * self.INTERVAL)
-        self.assertGreaterEqual(len(sent), 2)
-        gaps = [b - a for a, b in zip(sent, sent[1:])]
+        self.assertTrue(all(by_check for _, by_check in sent), "credits sent outside a throttled check")
+        gaps = [b - a for a, b in zip(checks, checks[1:])]
         self.assertGreaterEqual(min(gaps), self.INTERVAL * 0.95, gaps)
+        gaps = [b - a for (a, _), (b, _) in zip(sent, sent[1:])]
+        self.assertGreaterEqual(min(gaps, default=self.INTERVAL), self.INTERVAL * 0.95, gaps)
 
 
 class DefaultServerTest(test_server.ServerHarness):

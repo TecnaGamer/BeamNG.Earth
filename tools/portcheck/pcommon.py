@@ -133,8 +133,11 @@ def work_copy(src, dst):
         shutil.rmtree(dst)
     os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
     # A reflink is an independent file. No derived output from an older run may seed this one.
-    subprocess.run(["cp", "-cR", src, dst] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto", src, dst],
-                   check=True)
+    if os.name == "nt":
+        shutil.copytree(src, dst)
+    else:
+        subprocess.run(["cp", "-cR", src, dst] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto", src, dst],
+                       check=True)
     for name in (*DERIVED, "bake"):
         path = os.path.join(dst, name)
         if os.path.isdir(path):

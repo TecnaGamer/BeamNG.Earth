@@ -232,7 +232,7 @@ static int env_off(void) {
 
 __attribute__((constructor)) static void bngearth_dtsmooth(void) {
     if (!bnge_is_main_game()) return;
-    if (env_off()) { bnge_report(TAG, STATUS_FILE, "off (BNGEARTH_DTSMOOTH_OFF / BNGEARTH_DTSMOOTH=0)"); return; }
+    if (env_off()) { bnge_report_sticky(TAG, STATUS_FILE, "off (BNGEARTH_DTSMOOTH_OFF / BNGEARTH_DTSMOOTH=0)"); return; }
     bnge_dtf_defaults(&g_dtf);
     g_dtf.repay = env_d("BNGEARTH_DTSMOOTH_REPAY", g_dtf.repay, 0.0, 1.0);
     g_dtf.hitch_abs = env_d("BNGEARTH_DTSMOOTH_HITCH", g_dtf.hitch_abs, 0.0005, 2.0);
@@ -243,7 +243,7 @@ __attribute__((constructor)) static void bngearth_dtsmooth(void) {
 
     struct bnge_main m;
     bnge_find_main(&m);
-    if (!m.seen) { bnge_report(TAG, STATUS_FILE, "not applied: the game's code was not found"); return; }
+    if (!m.seen) { bnge_report_sticky(TAG, STATUS_FILE, "not applied: the game's code was not found"); return; }
     unsigned char *region = NULL;
     int n = 0;
     for (int s = 0; s < m.nseg; s++) {
@@ -256,7 +256,7 @@ __attribute__((constructor)) static void bngearth_dtsmooth(void) {
     if (n != 1) {
         char msg[128];
         snprintf(msg, sizeof msg, "not applied: the frame-time filter was not found in this build (%d matches); stock", n);
-        bnge_report(TAG, STATUS_FILE, msg);
+        bnge_report_sticky(TAG, STATUS_FILE, msg);
         return;
     }
     uintptr_t dtreal = rip_target(region, 0x15, 0x19);
@@ -264,11 +264,11 @@ __attribute__((constructor)) static void bngearth_dtsmooth(void) {
     for (unsigned char *p = region + SIG_LEN; p < region + SIG_LEN + TAIL_SEARCH; p++)
         if (tail_match(p)) { if (tail) { tail = NULL; break; } tail = p; }
     if (!tail || rip_target(tail, 0x0f, 0x13) != dtreal || rip_target(tail, 0x27, 0x2b) != dtreal) {
-        bnge_report(TAG, STATUS_FILE, "not applied: the filter's end differs in this build; stock");
+        bnge_report_sticky(TAG, STATUS_FILE, "not applied: the filter's end differs in this build; stock");
         return;
     }
     if (!bnge_mapped(&m, dtreal - m.base, 8, PF_R | PF_W)) {
-        bnge_report(TAG, STATUS_FILE, "not applied: dtReal is not in the game's data; stock");
+        bnge_report_sticky(TAG, STATUS_FILE, "not applied: dtReal is not in the game's data; stock");
         return;
     }
     int32_t xr_off;
@@ -280,23 +280,23 @@ __attribute__((constructor)) static void bngearth_dtsmooth(void) {
     g_dtf.xr_off = xr_off;
 
     unsigned char *stub = near_page((uintptr_t)site);
-    if (!stub) { bnge_report(TAG, STATUS_FILE, "not applied: no memory near the game's code; stock"); return; }
+    if (!stub) { bnge_report_sticky(TAG, STATUS_FILE, "not applied: no memory near the game's code; stock"); return; }
     uintptr_t tramp = (uintptr_t)&bnge_dt_tramp;
     memcpy(stub, "\xff\x25\x00\x00\x00\x00", 6);             // jmp [rip+0]
     memcpy(stub + 6, &tramp, 8);
     long pagesz = sysconf(_SC_PAGESIZE);
     if (mprotect(stub, (size_t)pagesz, PROT_READ | PROT_EXEC) != 0) {
-        bnge_report(TAG, STATUS_FILE, "not applied: mprotect refused; stock");
+        bnge_report_sticky(TAG, STATUS_FILE, "not applied: mprotect refused; stock");
         return;
     }
     intptr_t rel = (intptr_t)stub - (intptr_t)(site + 5);
-    if (rel != (int32_t)rel) { bnge_report(TAG, STATUS_FILE, "not applied: the stub is out of reach; stock"); return; }
+    if (rel != (int32_t)rel) { bnge_report_sticky(TAG, STATUS_FILE, "not applied: the stub is out of reach; stock"); return; }
 
     // (the constructor: the game's own code has not started; enabled = 0 keeps the stock dtReal until the level flag)
     uintptr_t lo = (uintptr_t)site & ~(uintptr_t)(pagesz - 1);
     uintptr_t hi = ((uintptr_t)site + 5 + pagesz - 1) & ~(uintptr_t)(pagesz - 1);
     if (mprotect((void *)lo, hi - lo, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
-        bnge_report(TAG, STATUS_FILE, "not applied: mprotect refused; stock");
+        bnge_report_sticky(TAG, STATUS_FILE, "not applied: mprotect refused; stock");
         return;
     }
     int32_t r32 = (int32_t)rel;
@@ -306,7 +306,7 @@ __attribute__((constructor)) static void bngearth_dtsmooth(void) {
 
     pthread_t t;
     if (pthread_create(&t, NULL, watch, (void *)(g_ctl ? " (test control file on)" : "")) != 0) {
-        bnge_report(TAG, STATUS_FILE, "hooked but no thread for the level flag: stock");
+        bnge_report_sticky(TAG, STATUS_FILE, "hooked but no thread for the level flag: stock");
         return;
     }
     pthread_detach(t);

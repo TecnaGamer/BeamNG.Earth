@@ -10,7 +10,7 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct Point(f64, f64);
+pub(crate) struct Point(pub(crate) f64, pub(crate) f64);
 
 impl Add for Point {
     type Output = Self;
@@ -43,41 +43,41 @@ impl Neg for Point {
     }
 }
 impl Point {
-    fn norm(self) -> f64 {
+    pub(crate) fn norm(self) -> f64 {
         self.0.dhypot(self.1)
     }
-    fn dot(self, b: Self) -> f64 {
+    pub(crate) fn dot(self, b: Self) -> f64 {
         (self.0 * b.0) + (self.1 * b.1)
     }
-    fn left(self) -> Self {
+    pub(crate) fn left(self) -> Self {
         Self(-self.1, self.0)
     }
-    fn arr(self, py: Python<'_>) -> Bound<'_, PyArray1<f64>> {
+    pub(crate) fn arr(self, py: Python<'_>) -> Bound<'_, PyArray1<f64>> {
         vec![self.0, self.1].into_pyarray(py)
     }
-    fn pair(self) -> (f64, f64) {
+    pub(crate) fn pair(self) -> (f64, f64) {
         (self.0, self.1)
     }
 }
 type Ring = Vec<Point>;
 type Array<'py> = Bound<'py, PyArray2<f64>>;
 type XY<'py> = PyReadonlyArray2<'py, f64>;
-fn points(a: XY<'_>) -> PyResult<Ring> {
+pub(crate) fn points(a: XY<'_>) -> PyResult<Ring> {
     let a = a.as_array();
     if a.ncols() < 2 {
         return Err(PyValueError::new_err("expected x and y columns"));
     }
     Ok(a.rows().into_iter().map(|r| Point(r[0], r[1])).collect())
 }
-fn rows<T: Element, const N: usize>(py: Python<'_>, data: Vec<[T; N]>) -> Bound<'_, PyArray2<T>> {
+pub(crate) fn rows<T: Element, const N: usize>(py: Python<'_>, data: Vec<[T; N]>) -> Bound<'_, PyArray2<T>> {
     Array2::from_shape_vec((data.len(), N), data.into_flattened())
         .unwrap()
         .into_pyarray(py)
 }
-fn array<'p>(py: Python<'p>, pts: &[Point]) -> Array<'p> {
+pub(crate) fn array<'p>(py: Python<'p>, pts: &[Point]) -> Array<'p> {
     rows(py, pts.iter().map(|p| [p.0, p.1]).collect())
 }
-fn open(r: &[Point]) -> &[Point] {
+pub(crate) fn open(r: &[Point]) -> &[Point] {
     if r.len() >= 2 {
         let d = r[0] - r[r.len() - 1];
         if d.0.abs() < 1e-6 && d.1.abs() < 1e-6 {
@@ -100,7 +100,7 @@ fn signed(r: &[Point]) -> f64 {
     }
     (dot1(&x, &ny) - dot1(&nx, &y)) * 0.5
 }
-fn area(r: &[Point]) -> f64 {
+pub(crate) fn area(r: &[Point]) -> f64 {
     let r = open(r);
     if r.len() < 3 {
         0.0
@@ -108,7 +108,7 @@ fn area(r: &[Point]) -> f64 {
         signed(r).abs()
     }
 }
-fn ccw(r: &[Point]) -> Ring {
+pub(crate) fn ccw(r: &[Point]) -> Ring {
     let mut r = open(r).to_vec();
     if !(signed(&r) >= 0.0) {
         r.reverse();
@@ -122,7 +122,7 @@ fn centroid(r: &[Point]) -> Point {
     }
     r.iter().copied().fold(Point::default(), |a, b| a + b) / r.len() as f64
 }
-fn inside(r: &[Point], p: Point) -> bool {
+pub(crate) fn inside(r: &[Point], p: Point) -> bool {
     edges(open(r))
         .filter(|&(a, b)| (b.1 > p.1) != (a.1 > p.1) && p.0 < (a.0 - b.0) * (p.1 - b.1) / (a.1 - b.1 + 1e-12) + b.0)
         .count()
@@ -133,7 +133,7 @@ fn foot(a: Point, b: Point, p: Point) -> (f64, Point) {
     let (d, x, y) = crate::stationgeom::seg_foot(a.0, a.1, b.0 - a.0, b.1 - a.1, p.0, p.1);
     (d, Point(x, y))
 }
-fn distance(r: &[Point], p: Point, closed: bool) -> f64 {
+pub(crate) fn distance(r: &[Point], p: Point, closed: bool) -> f64 {
     let r = if closed { open(r) } else { r };
     if r.len() == 1 {
         return (r[0] - p).norm();

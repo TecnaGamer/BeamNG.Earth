@@ -96,7 +96,12 @@ function M.onResult(msg)
   if type(msg) ~= 'table' then return end
   if msg.street ~= nil then loc.street = tostring(msg.street) end
   if msg.place ~= nil or msg.country ~= nil then
+    local was = loc.place
     loc.place, loc.region, loc.country = msg.place or '', msg.region or '', msg.country or ''
+    if loc.place ~= was and loc.place ~= '' then         -- (add-ons: api contentChanged's 'town')
+      local api = rawget(_G, 'beamngEarth_api')
+      if api and api._contentChanged then pcall(api._contentChanged, 'town', nil) end
+    end
   end
 end
 
@@ -204,8 +209,14 @@ local function loadingPart(status, line)
 end
 
 -- The bar's location line now (the UI app's too: hudapps.lua), '' when there is nothing to say.
+M.extra = nil      -- a function giving one more part ('' for none): winter.lua's road condition, set when it loads
 function M.text(status, line)
-  return M.compose(loc, nil, M.SHOW_FPS and fps or nil)
+  local t = M.compose(loc, nil, M.SHOW_FPS and fps or nil)
+  if M.extra then
+    local x = M.extra()
+    if x and x ~= '' then t = t ~= '' and (t .. M.SEP .. x) or x end
+  end
+  return t
 end
 
 -- The loading line under it (the user, 2026-10-23: "make loading on a separate line"), '' when none.

@@ -920,11 +920,13 @@ type GradeInput<'py> = (PyReadonlyArray2<'py, f32>, PyReadonlyArray2<'py, f32>, 
 /// Shade a source composite. A photo that still needs road paint returns its RGB; otherwise
 /// the same detached call delivers the complete DDS, without exporting a pixel buffer to Python.
 #[pyfunction]
-#[pyo3(signature = (source, season, rock, dds, *, path=None, paint=None))]
+/// snow (625): the texture's snow (snowlook.rs, winter on), after its rock and road paint.
+#[pyo3(signature = (source, season, rock, dds, *, path=None, paint=None, snow=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn finish_far_photo<'py>(py: Python<'py>, source: Rendered<'py>,
                     season: Option<GradeInput<'py>>, rock: Option<(PyReadonlyArray2<'py, f64>, crate::RockArea)>,
                     dds: Option<(PyReadonlyArray1<'py, f32>, f32, bool)>, path: Option<std::path::PathBuf>,
-                    paint: Option<&crate::paintlist::PaintLayers>)
+                    paint: Option<&crate::paintlist::PaintLayers>, snow: Option<PyRef<'py, crate::snowlook::SnowLook>>)
                     -> PyResult<Bound<'py, PyAny>> {
     let img = match &source {
         Rendered::Canvas(c) if c.filled.is_empty() => c.image.view(),
@@ -941,6 +943,7 @@ pub fn finish_far_photo<'py>(py: Python<'py>, source: Rendered<'py>,
     }
     if let Some(layers) = paint { layers.validate(img.dim())?; }
     enum Finished { Dds(Vec<u8>), Written(usize), Rgb(Array3<u8>) }
+    let snow_ref = snow.as_deref();
     let output = py.detach(|| -> std::io::Result<Finished> {
         let graded = season.and_then(|(x,y,p,s)| grade_at(img, x, y, p, s));
         let a = graded.as_ref().map_or_else(|| img.view(), |v| v.view());
@@ -948,6 +951,12 @@ pub fn finish_far_photo<'py>(py: Python<'py>, source: Rendered<'py>,
         let mut owned = shaded.or(graded);
         if let Some(layers) = paint {
             owned = Some(layers.apply(owned.unwrap_or_else(|| img.to_owned())));
+        }
+        if let Some(sl) = snow_ref {
+            let snowy = sl.apply_core(owned.as_ref().map_or_else(|| img.view(), |v| v.view()), None);
+            if snowy.is_some() {
+                owned = snowy;
+            }
         }
         if let Some((lut, sharpen, srgb)) = dds {
             let a = owned.as_ref().map_or_else(|| img.view(), |v| v.view());

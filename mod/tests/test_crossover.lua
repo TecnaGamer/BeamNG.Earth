@@ -16,7 +16,8 @@ T.check(X.smootherstep(0.01) < 1e-4 and 1 - X.smootherstep(0.99) < 1e-4, 'smooth
 
 -- amplitude, durations
 T.near(X.delta(1.0, 0.5), 1.2 * 1.5 + 0.2, 1e-12, 'Delta = 1.2 (err_new + err_old) + 0.2')
-T.check(X.PHASE1_S == 0.25 and X.PHASE2_S == 0.25 and X.COVER_SINK_S == 0.3, 'durations 0.25 + 0.25 s, cover sink 0.3 s')
+T.check(X.PHASE1_S == 0.25 and X.PHASE2_S == 0.25, 'durations 0.25 + 0.25 s')
+T.check(X.CROSS == 0 and X.COVER_SINK_S == 0, 'off by default: instant swaps, no cover sink (never two LODs drawn together)')
 T.check(X.duration(true) == 0.5 and X.duration(false) == 0.25, 'crossover 0.5 s, rise-only 0.25 s')
 T.check(X.MAX_GROUPS == 24 and X.MARGIN_DEG == 10 and X.NEAR_POP_M == 5000, 'cap 24, 10 deg margin, near 5 km')
 T.check(X.FAR_INSTANT_M == nil, 'no distance beyond which in-view swaps are instant (v1.3 D)')

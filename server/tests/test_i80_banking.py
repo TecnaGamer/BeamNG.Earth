@@ -156,9 +156,12 @@ class WyomingBankingTest(unittest.TestCase):
             shape = cdae.read(path)
             m = next(m for m in shape["meshes"] if m["type"] == 0)
             actual = cdae.mesh_arrays(m)["verts"]  # exporter reorders vertices by triangles
-            actual = actual[np.lexsort(actual.T[::-1])]
-            expected = pos[np.lexsort(pos.T[::-1])]
-            np.testing.assert_allclose(actual, expected, atol=.0002)
+            # Colliders are moved off the axis-aligned lattice by at most cdae.COLLIDER_UNALIGN_M in x and y (Windows
+            # reloads a grid collider ~quadratically): match vertices on the lattice, heights exactly as before.
+            key = lambda a: np.lexsort(np.round(a[:, :2], 2).T[::-1])
+            actual, expected = actual[key(actual)], pos[key(pos)]
+            np.testing.assert_allclose(actual[:, :2], expected[:, :2], atol=cdae.COLLIDER_UNALIGN_M + .0002)
+            np.testing.assert_allclose(actual[:, 2], expected[:, 2], atol=.0002)
         normals = np.cross(pos[tris[:, 1]] - pos[tris[:, 0]], pos[tris[:, 2]] - pos[tris[:, 0]])
         self.assertTrue((normals[:, 2] > 0).all())
 

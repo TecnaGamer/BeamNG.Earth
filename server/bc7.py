@@ -69,32 +69,44 @@ def decode(data, w, h):
 
 
 def mips(img):
-    """The mip chain of a square power-of-two image down to 1x1 (imagery.mip_arrays: linear light, sharpened)."""
+    """The mip chain of a square power-of-two image down to 1x1, level 0 first: imagery.mip_arrays' linear-light,
+    sharpened chain in integers (earthfast 650 mip_levels_fast, bc1fast.rs, as the far textures': within one sRGB step
+    of the float chain, its alpha averaged as it is). Integers alone, so the same bytes on every machine, whichever
+    of the GPU and the CPU encodes the blocks after; the float chain was 506 CPU-ms of a 4096² photo, 5x its GPU
+    encode (research report 2.2). The packed copies' bytes changed with it: earthd.BASE_PHOTO_VERSION 3."""
     import imagery
-    return imagery.mip_arrays(np.asarray(img, np.uint8))
+    img = np.ascontiguousarray(img, np.uint8)
+    fast.require(650, "bc7.mips (RGBA integer mips)")
+    return [img] + list(fast._ef.mip_levels_fast(img, imagery._TO_LIN, float(imagery.MIP_SHARPEN)))
 
 
 _GPU_FAILED = False
 
 
 def gpu_ok():
-    """True when this process encodes on the GPU (fast.gpu(), not failed yet): then a photo's encode costs ~0.05
-    CPU-s here, and sending it to a busy block process only queued it behind that process's block (a stand-in's
-    "cache" stage 3-8 s of its 9, nyc_speed.py --cold 2026-11-02)."""
-    return not _GPU_FAILED and fast.gpu()
+    """True when this process encodes on the GPU now (fast.gpu_now: a device, not failed yet, and on a Steam Deck the
+    car parked or a teleport loading): then a photo's encode costs ~0.05 CPU-s here, and sending it to a busy block
+    process only queued it behind that process's block (a stand-in's "cache" stage 3-8 s of its 9, nyc_speed.py
+    --cold 2026-11-02)."""
+    return not _GPU_FAILED and fast.gpu_now("bc7", count=False)
 
 
 def _encode_gpu(chain):
     """The chain's BC7 blocks encoded on the GPU (earthfast.bc7_encode_gpu: a 4096² photo's ~0.7 CPU-s on 8 threads ->
-    ~0.05 CPU-s, the same quality), or None: no GPU (fast.gpu()), not RGBA, or it failed (then the
-    CPU from there on)."""
+    ~0.05 CPU-s, the same quality), or None: no GPU (fast.gpu()), the Deck driving (fast.gpu_now), not RGBA, or it
+    failed (then the CPU from there on)."""
     global _GPU_FAILED
-    if _GPU_FAILED or not fast.gpu() or any(np.ndim(m) != 3 or np.shape(m)[2] != 4 for m in chain):
+    if _GPU_FAILED or any(np.ndim(m) != 3 or np.shape(m)[2] != 4 for m in chain) or not fast.gpu_now("bc7"):
         return None
+    import time
+    t0, c0 = time.perf_counter(), time.thread_time()
     try:
-        return b"".join(bytes(b) for b in fast._ef.bc7_encode_gpu([np.ascontiguousarray(m, np.uint8) for m in chain]))
+        out = b"".join(bytes(b) for b in fast._ef.bc7_encode_gpu([np.ascontiguousarray(m, np.uint8) for m in chain]))
+        fast.gpu_note("bc7", time.perf_counter() - t0, time.thread_time() - c0)
+        return out
     except Exception as e:
         _GPU_FAILED = True
+        fast.gpu_fallback("bc7", "failed")
         import logging
         logging.getLogger("earthd").info("bc7: the GPU encoder failed (%s); the CPU's from now on", e)
         return None

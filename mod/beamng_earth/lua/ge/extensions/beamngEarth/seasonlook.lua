@@ -25,6 +25,19 @@ M.SPECIES = {
 M.SPRING = { 0.95, 1.1, 0.8 }   -- the fresh flush, every species
 M.EASE = 1.6            -- tint = amount ^ EASE: a tree holds its green early in the turn
 M.IMPOSTERS = false     -- tint the far trees' imposter materials too (see M.update)
+-- The climate scales the leaf cycle (the 2026-11-26 playtest near Phoenix): the generic town trees are East Coast oaks,
+-- beeches and aspens everywhere, and the temperate calendar of Phoenix's latitude turned (and with winter bared) them,
+-- where its real town trees (palo verde, mesquite, olive, ficus, palms, eucalyptus, pines) stay green through the
+-- winter. By the anchor's Koppen-Geiger class (the server's anchor_ready.koppen, Beck et al. 1-30): hot deserts and
+-- steppes (BWh 4, BSh 6) a quarter of the cycle; the tropics (1-3) none; every other class (and none known) all of it.
+M.CLIMATE_LEAF = { [1] = 0, [2] = 0, [3] = 0, [4] = 0.25, [6] = 0.25 }
+
+-- Pure: the share of the leaf cycle (0..1) a Koppen-Geiger class shows; nil / 0 (the sea, not sent): all of it.
+function M.climateFactor(k)
+  k = tonumber(k)
+  if not k or k <= 0 then return 1 end
+  return M.CLIMATE_LEAF[k] or 1
+end
 
 -- Pure: how far the leaves have turned (0..1) on day-of-year doy at latitude lat (server/season.py
 -- season_amounts: none in the tropics, the southern hemisphere half a year later).
@@ -71,6 +84,24 @@ local applied = {}      -- material name -> the amount applied
 local lastCheck = -math.huge
 
 function M.setMode(m) mode = m end
+
+-- Winter's snow (server BNE_WINTER: hello.snow, the 'snow' message; nil without): winterlook.lua and baretrees.lua (the
+-- bare deciduous trees), loaded only when the server has winter on (nothing otherwise, not even the modules).
+local bare = nil        -- baretrees.lua while winter is on
+local bareLat = nil     -- the anchor's latitude it was last given
+function M.setSnow(s)
+  if s == nil and not package.loaded['beamngEarth/winterlook'] then return end
+  require('beamngEarth/winterlook').set(s)
+  if s ~= nil then bare = require('beamngEarth/baretrees') end
+  if bare then
+    bare.set(s, mode)
+    if s == nil then bare, bareLat = nil, nil end
+  end
+end
+-- core.lua: winter W1's snowstate (the bare trees' latch reads its frost and snow depth).
+function M.setSnowState(msg)
+  if bare then bare.setState(msg) end
+end
 
 -- Pure: the tint of a species {tint, days, winter} on day doy at lat for mode: the strongest of its fall (its own
 -- timing, eased), winter and spring tints, as {r, g, b} multipliers and that amount.
@@ -128,15 +159,49 @@ local function imposters()
   return out
 end
 
--- Every frame in our level (lat: the anchor's latitude): the leaf materials tinted to the season, checked every CHECK_S.
-function M.update(inOurLevel, lat)
+-- The stock factors back on every material tinted (only the look: the tables kept for a later tint).
+local function untintAll()
+  for k, o in pairs(orig) do
+    local m = scenetree and scenetree.findObject(o[3] or k)
+    if m and applied[k] then
+      pcall(function()
+        m:setField(o[1], 0, string.format('%.3f %.3f %.3f %.3f', o[2][1], o[2][2], o[2][3], o[2][4]))
+        m:flush()
+        m:reload()
+      end)
+    end
+    applied[k] = nil
+  end
+end
+
+-- Every frame in our level (lat: the anchor's latitude, koppen: its climate class, leaf: its leaf calendar,
+-- anchor_ready.leaf with BNE_LEAF_CYCLE): the leaf materials tinted to the season, checked every CHECK_S.
+local bareLeaf = nil
+function M.update(inOurLevel, lat, koppen, leaf)
   if not inOurLevel or not scenetree then return end
+  if bare and leaf ~= bareLeaf then                         -- (a table compare: once per anchor message)
+    bare.setLeaf(leaf)
+    bareLeaf = leaf
+  end
+  if bare and lat and lat ~= bareLat then                   -- (before the place's first tree)
+    bare.setClimate(koppen)
+    bare.setLat(lat)
+    bareLat = lat
+  end
   local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
-  local doy = tonumber(os.date('*t').yday)
+  if bare then bare.resume(mode) end      -- (a level started again in the same server session)
+  -- winter's trees carry their season in their shapes, the same at every distance (baretrees.lua: bare, tinted
+  -- copies or stock): the stock leaf materials are not tinted meanwhile
+  if bare and bare.tinting and bare.tinting() then
+    if next(applied) ~= nil then untintAll() end
+    return
+  end
+  local doy, f = tonumber(os.date('*t').yday), M.climateFactor(koppen)
   for _, sp in ipairs(M.SPECIES) do
     local tint, t = M.speciesTint(sp, mode, doy, lat)
+    t = t * f
     for _, n in ipairs(sp.mats) do pcall(tintOne, n, 'baseColorFactor', tint, t) end
     for _, n in ipairs(sp.merged) do pcall(tintOne, n, 'diffuseColor', tint, t) end
   end
@@ -148,7 +213,7 @@ function M.update(inOurLevel, lat)
   if not M.IMPOSTERS then return end
   for _, e in ipairs(imposters()) do
     local tint, t = M.speciesTint(e[2], mode, doy, lat)
-    pcall(tintOne, e[1], 'baseColorFactor', tint, t)
+    pcall(tintOne, e[1], 'baseColorFactor', tint, t * f)
   end
 end
 
@@ -165,6 +230,9 @@ function M.restore()
     end
   end
   orig, applied = {}, {}
+  if package.loaded['beamngEarth/winterlook'] then require('beamngEarth/winterlook').restore() end
+  if bare then bare.restore() end         -- (kept loaded: the next level of this server session resumes it)
+  bareLat, bareLeaf, lastCheck = nil, nil, -math.huge
 end
 
 return M

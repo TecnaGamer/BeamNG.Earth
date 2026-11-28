@@ -7,13 +7,17 @@ dE 17.6). A smooth colour transfer cannot remove a sharp step, so the feather fi
 long, straight-ish steps of the ratio USGS / Sentinel-2 that S2 does not have (natural edges are in
 both images, survey seams only in USGS), measures each one's local step and moves each side half way,
 faded out with the distance to the seam (SIGMA_F_M). Away from seams the gain is exactly 1: nothing is
-pulled toward S2's palette (EOX S2 is far more saturated than NAIP; S2 is only the reference).
+pulled toward S2's palette (S2 is far more saturated than NAIP; S2 is only the reference).
+
+The reference (REFS, per z14 tile): the project's Sentinel-2 packs (bngs2, ESA WorldCover's 2021 composite) where the
+server's chain has them, enlarged from their finest zoom to the z14 grid, else EOX's 2016 cloudless mosaic (both CC BY
+4.0). Until 2026-11-23 it was EOX's 2023 mosaic, CC BY-NC-SA 4.0: VERSION 2 computes every seam and field again.
 
 All maths in linear light, per channel, on the z14 pixel grid ("cells", 4 x 4 z16 px, ~7.6 m at 37 N:
-EOX S2 cloudless at its native zoom, pixel-aligned with the USGS z14 tiles). Two stages per USGS z12
+Sentinel-2's native resolution, pixel-aligned with the USGS z14 tiles). Two stages per USGS z12
 tile ("region", 1024² cells, ~7.8 km at 37 N), each a pure function of source tiles, so a place comes
 out the same whatever order its regions were computed in, from whichever anchor:
-  1. seams (detect_region, <cache>/colormatch/v1/usgs/12/x/y.seams.npz): the region's z14 USGS and
+  1. seams (detect_region, <cache>/colormatch/v2/usgs/12/x/y.seams.npz): the region's z14 USGS and
      S2 tiles with a HALO-cell ring of neighbouring tiles (detection needs >= 1 km around the core).
      Reliability weights (deep shadow / water, snow or cloud in one source only, IRLS against a 30 m
      robust blur: cast shadows differ between NAIP and S2), an oriented step filter on a 15 m grid
@@ -24,7 +28,7 @@ out the same whatever order its regions were computed in, from whichever anchor:
      the local step (cut blur of the ratio at SIGMA_S_M, sampled 4 cells either side) and the
      sub-pixel line, fitted on the z16 USGS profile across the seam (z16 tiles fetched only along
      the seam). No seam: a ".seams.none" marker.
-  2. field (feather_field, <cache>/colormatch/v1/usgs/12/x/y.npz): from the seams of the region and
+  2. field (feather_field, <cache>/colormatch/v2/usgs/12/x/y.npz): from the seams of the region and
      its 8 neighbours (the fade reaches FADE_CUT <= one region), on a 30 m grid (COARSE cells, one z12
      pixel): the half-steps scattered on each side, extended along the sides with the cut blur (300 m;
      1500 m where the short one has no support), faded with a Gaussian of the distance to the seam
@@ -85,10 +89,10 @@ from deshadow import SRGB2LIN, down, lonlat_of_px, luma, to_srgb
 
 log = logging.getLogger("earthd.colormatch")
 
-VERSION = 1                         # bump: seams and fields are recomputed (the cache path holds it)
+VERSION = 2                         # bump: seams and fields are recomputed (the cache path holds it; 2: no EOX 2023)
 MODES = ("off", "s2")
 SOURCE = "usgs"
-REFS = ("eox2023", "eox2016")       # the reference, per z14 tile: S2 cloudless 2023, else 2016
+REFS = ("bngs2", "eox2016")         # the reference, per z14 tile: the S2 packs (when in the chain), else EOX 2016
 TILE = 256
 REGION_Z = 12                       # one seam set and field per z12 tile
 GRID_Z = 14                         # analysis grid = the z14 pixel grid (S2's native resolution)
@@ -236,14 +240,19 @@ def _seams_gpu(w, Lw, n_ang, half, depth, offs, nseg, gate):
     float32; the CPU path's sums are float64, so a few borderline cells differ), or None: no GPU (or BNGE_GPU=0),
     or it failed (logged once; the CPU path then)."""
     global _GPU_FAILED
-    if _GPU_FAILED or not fast.gpu():
+    if _GPU_FAILED or not fast.gpu_now("seam"):
         return None
+    import time
+    t0, c0 = time.perf_counter(), time.thread_time()
     try:
         src = np.ascontiguousarray(np.concatenate([w[None], np.moveaxis(Lw, -1, 0)]), np.float32)
-        return fast._ef.seam_detect_gpu(src, n_ang, half, depth, [int(o) for o in offs],
-                                        0.3 * depth * (2 * half + 1), gate, AGREE, max(2, nseg - 2))
+        out = fast._ef.seam_detect_gpu(src, n_ang, half, depth, [int(o) for o in offs],
+                                       0.3 * depth * (2 * half + 1), gate, AGREE, max(2, nseg - 2))
+        fast.gpu_note("seam", time.perf_counter() - t0, time.thread_time() - c0)
+        return out
     except Exception as e:
         _GPU_FAILED = True
+        fast.gpu_fallback("seam", "failed")
         log.warning("colormatch: GPU seam detection failed (%s); the CPU from now on", e)
         return None
 
@@ -851,6 +860,7 @@ class ColorMatch:
         self.rz = region_z
         self.n = TILE << (GRID_Z - region_z)            # cells per region side
         self.dir = os.path.join(cache_dir, "colormatch", f"v{VERSION}", SOURCE, str(region_z))
+        self.refs = REFS
         self.meta = dict(version=VERSION, source=SOURCE, refs=",".join(REFS), region_z=region_z, mode=mode)
         self.mem = mem_regions
         self.imagery = None
@@ -875,7 +885,14 @@ class ColorMatch:
         self._thread.start()
 
     def bind(self, imagery):
+        """Use imagery's sources; the references are REFS without bngs2 when its chain has no bngs2 (the CDN switch
+        has the packs off): the cache's meta names the ones used, so fields made with the other set are made again."""
         self.imagery = imagery
+        names = {getattr(s_, "name", None) for s_ in getattr(imagery, "chain", ())}
+        refs = tuple(n for n in REFS if n != "bngs2" or "bngs2" in names)
+        if refs != self.refs:
+            self.refs = refs
+            self.meta = dict(self.meta, refs=",".join(refs))
 
     def add_listener(self, fn):
         """fn(rk, changed) from the worker thread once a region's field is ready (changed: it is
@@ -1253,7 +1270,7 @@ class ColorMatch:
 
     def _detect(self, rk):
         """Fetch the region's window (z14 USGS and S2 with a HALO ring) and detect its seams."""
-        from imagery import SOURCES
+        from imagery import SOURCES, _overzoom, nodata_mask, zoom_caps
         im = self.imagery
         usgs = SOURCES[SOURCE]
         k = self.n // TILE                  # z14 tiles per region side
@@ -1269,13 +1286,21 @@ class ColorMatch:
         if not have & {(i, j) for i in range(h, h + k) for j in range(h, h + k)}:
             return _seams_empty()           # no USGS in the core (outside its coverage)
         ref, todo = {}, sorted(have)
-        for name in REFS:                   # S2 2023, per tile 2016 where 2023 has nothing
-            rkeys = {ij: (SOURCES[name], GRID_Z, keys[ij][2], keys[ij][3]) for ij in todo}
-            rgot = self._bg_tiles(im, rkeys.values())
+        clat = self._center_of(rk)[0]
+        for name in self.refs:              # the S2 packs, per tile EOX 2016 where they have nothing
+            src = SOURCES[name]
+            d = max(0, GRID_Z - zoom_caps(src, clat)[0])      # (the packs' z13: enlarged to the z14 grid)
+            rkeys = {ij: (src, GRID_Z - d, keys[ij][2] >> d, keys[ij][3] >> d) for ij in todo}
+            rgot = self._bg_tiles(im, list(dict.fromkeys(rkeys.values())))
             for ij in todo:
                 t = rgot[rkeys[ij]]
-                if t is not None and not t.uniform:
-                    ref[ij] = t.rgb
+                if t is None or t.uniform:
+                    continue
+                if d:
+                    t = _overzoom(t, (src, GRID_Z, keys[ij][2], keys[ij][3]), d)
+                if nodata_mask(t.rgb) is not None:      # (a pack tile at the coast: black sea; the next reference)
+                    continue
+                ref[ij] = t.rgb
             todo = [ij for ij in todo if ij not in ref]
         U = np.zeros((W, W, 3), np.float32)
         S = np.zeros((W, W, 3), np.float32)

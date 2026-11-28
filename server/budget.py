@@ -72,7 +72,6 @@ LEAN_IMAGERY_TILES = 128    # imagery.MEM_TILES (512: ~100 MB of decoded source 
 LEAN_PMTILES_MB = 32        # pmtiles.MEM_TILES_MB (96)
 LEAN_RANGEREAD_MB = 16      # rangeread.MEM_BYTES (64 MB)
 LEAN_SEA_CELLS = 6          # seacarve.MEM_CELLS (24 rasters of ~10 MB)
-LEAN_PHOTOSURFACE_TILES = 32    # photosurface.MEM_TILES (96)
 LEAN_FAR_K = 0.6            # (instead of SMALL_FAR_K)
 LEAN_FAR_TEX = 256
 EMERGENCY_DEM_TILES = 48
@@ -428,14 +427,12 @@ def apply(is_small=None):
             # (the per-process caches the small profile keeps at a desktop's size: a lean block process held 291 MB
             # of imagery arrays after two minutes of Baltimore, 2026-11-12)
             import pmtiles
-            import photosurface
             import rangeread
             import seacarve
             imagery.MEM_TILES = min(imagery.MEM_TILES, LEAN_IMAGERY_TILES)
             pmtiles.MEM_TILES_MB = min(pmtiles.MEM_TILES_MB, LEAN_PMTILES_MB)
             rangeread.MEM_BYTES = min(rangeread.MEM_BYTES, LEAN_RANGEREAD_MB * 2 ** 20)
             seacarve.MEM_CELLS = min(seacarve.MEM_CELLS, LEAN_SEA_CELLS)
-            photosurface.MEM_TILES = min(photosurface.MEM_TILES, LEAN_PHOTOSURFACE_TILES)
         far_k = EMERGENCY_FAR_K if emergency else LEAN_FAR_K if leanest else SMALL_FAR_K
         far_tex = EMERGENCY_FAR_TEX if emergency else LEAN_FAR_TEX if leanest else SMALL_FAR_TEX
         for cells, table in farfield.K_TABLE.items():       # (read when the server makes its Layout)
@@ -507,10 +504,58 @@ def register_shed(fn):
     _shedders.append(fn)
 
 
+SWAP_WEIGHT_S = 10.0         # s a swap weight read is used again (swap_weight)
+_swap_w = [None, -1e9]
+
+
+def swap_weight():
+    """The RAM one MB of swapped pages holds on this machine now (native ram_swap_weight: zram's compression ratio
+    for its share of the swap in use, a disk's pages whole), read every SWAP_WEIGHT_S at most; 1.0 off Linux or
+    when unknown."""
+    import time
+    now = time.monotonic()
+    if _swap_w[0] is not None and now - _swap_w[1] < SWAP_WEIGHT_S:
+        return _swap_w[0]
+    w = 1.0
+    try:
+        used_kb = 0
+        with open("/proc/swaps") as f:
+            for line in f.readlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 4:
+                    used_kb += int(parts[3])
+        orig = ram = 0
+        if used_kb > 0:
+            import glob
+            for path in glob.glob("/sys/block/zram*/mm_stat"):
+                with open(path) as f:
+                    v = f.read().split()
+                if len(v) >= 3:
+                    orig += int(v[0])
+                    ram += int(v[2])
+        import fast
+        w = float(fast._ef.ram_swap_weight(used_kb / 1024.0, orig / 2 ** 20, ram / 2 ** 20))
+    except (OSError, ValueError, AttributeError):
+        w = 1.0
+    _swap_w[0], _swap_w[1] = w, now
+    return w
+
+
+def counted_mb(resident_mb, swapped_mb):
+    """MB of a process's memory as the ceilings count it: resident, and swapped at swap_weight (native ram_counted_mb).
+    A module older than earthfast 637 (no ram_counted_mb: the server refuses to start below fast.MIN_VERSION, but a
+    tool or a test may load one): swapped whole, as before."""
+    try:
+        import fast
+        return float(fast._ef.ram_counted_mb(resident_mb, swapped_mb, swap_weight()))
+    except AttributeError:
+        return resident_mb + swapped_mb
+
+
 def memory_mb(private=False):
-    """This process's resident + swapped memory in MB (Linux /proc; Windows: private bytes), or None. private: its
-    own resident pages only (Linux RssAnon: not the shared libraries' pages every process maps; the whole server's
-    table, tree_publish)."""
+    """This process's memory in MB (Linux /proc: resident, and swapped at the RAM it holds, swap_weight; Windows:
+    private bytes), or None. private: its own resident pages only (Linux RssAnon: not the shared libraries' pages
+    every process maps; the whole server's table, tree_publish)."""
     try:
         rss = swap = 0
         key = "RssAnon:" if private else "VmRSS:"
@@ -520,7 +565,7 @@ def memory_mb(private=False):
                     rss = int(line.split()[1])
                 elif line.startswith("VmSwap:"):
                     swap = int(line.split()[1])
-        return (rss + swap) / 1024.0
+        return counted_mb(rss / 1024.0, swap / 1024.0)
     except (OSError, ValueError):
         pass
     win = _win_memory()

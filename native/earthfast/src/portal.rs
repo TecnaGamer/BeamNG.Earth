@@ -306,6 +306,15 @@ pub fn portal(f: &Frame, prm: &Prm, sec: &[[f64; 2]], face_x: &[f64], face_g: &[
 #[allow(clippy::too_many_arguments)]
 pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw: f64, th: f64, over: f64,
              need: f64, foot: f64, caps: (bool, bool), uv_m: f64, soil_uv_m: f64, opening: &[[f64; 2]]) -> Mesh {
+    cover_follow(mid, left, z, ground, hw, th, over, need, foot, caps, uv_m, soil_uv_m, opening, false)
+}
+
+/// cover() whose soil top, with `follow` (629, the tunnel record's portals: tunnel plan T1), rises to the ground over
+/// each row where that stands higher than the crown + over: the box's top meets the kept terrain at the holes' edges
+/// (the seam rule), not a step under it.
+#[allow(clippy::too_many_arguments)]
+pub fn cover_follow(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw: f64, th: f64, over: f64,
+                    need: f64, foot: f64, caps: (bool, bool), uv_m: f64, soil_uv_m: f64, opening: &[[f64; 2]], follow: bool) -> Mesh {
     let mut m = Mesh::default();
     let k = mid.len();
     if k < 2 || left.len() != k || z.len() != k || ground.len() != k { return m; }
@@ -321,7 +330,8 @@ pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw:
     let mut s = vec![0.0; k];
     for i in 1..k { s[i] = s[i - 1] + (mid[i][0] - mid[i - 1][0]).dhypot(mid[i][1] - mid[i - 1][1]); }
     let pt = |i: usize, x: f64, h: f64| -> [f64; 3] { [mid[i][0] + left[i][0] * x, mid[i][1] + left[i][1] * x, z[i] + h] };
-    let top = th + over;
+    let top0 = th + over;
+    let topi = |i: usize| -> f64 { if follow && ground[i].is_finite() && ground[i] - z[i] > top0 { ground[i] - z[i] } else { top0 } };
     let mut i = 0;
     while i < k {
         if !open[i] { i += 1; continue; }
@@ -331,13 +341,14 @@ pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw:
             for a in i..j {
                 let b = a + 1;
                 let axis = [(mid[a][0] + mid[b][0]) / 2.0, (mid[a][1] + mid[b][1]) / 2.0, (z[a] + z[b]) / 2.0 + th / 2.0];
+                let (ta, tb) = (topi(a), topi(b));
                 for side in [1.0, -1.0] {
-                    m.quad([(pt(a, side * hw, -foot), [s[a], -foot]), (pt(a, side * hw, top), [s[a], top]),
-                            (pt(b, side * hw, top), [s[b], top]), (pt(b, side * hw, -foot), [s[b], -foot])],
+                    m.quad([(pt(a, side * hw, -foot), [s[a], -foot]), (pt(a, side * hw, ta), [s[a], ta]),
+                            (pt(b, side * hw, tb), [s[b], tb]), (pt(b, side * hw, -foot), [s[b], -foot])],
                            Look::Away(axis), M_FACE, uv_m);
                 }
-                m.quad([(pt(a, hw, top), [hw, s[a]]), (pt(a, -hw, top), [-hw, s[a]]), (pt(b, -hw, top), [-hw, s[b]]),
-                        (pt(b, hw, top), [hw, s[b]])], Look::Dir([0.0, 0.0, 1.0]), M_SOIL, soil_uv_m);
+                m.quad([(pt(a, hw, ta), [hw, s[a]]), (pt(a, -hw, ta), [-hw, s[a]]), (pt(b, -hw, tb), [-hw, s[b]]),
+                        (pt(b, hw, tb), [hw, s[b]])], Look::Dir([0.0, 0.0, 1.0]), M_SOIL, soil_uv_m);
             }
             // its ends inside the hill: the box's section less the tube's opening (a full rectangle stood across the
             // tunnel's inside, a wall in the way, until 2026-11-12's review of the handed-over kernel)
@@ -350,8 +361,8 @@ pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw:
                 for q in opening { poly.push((q[0], q[1])); }
                 poly.push((opening[n - 1][0], -foot));
                 poly.push((-hw, -foot));
-                poly.push((-hw, top));
-                poly.push((hw, top));
+                poly.push((-hw, topi(at)));
+                poly.push((hw, topi(at)));
                 poly.push((hw, -foot));
                 let ring: Vec<(f64, f64)> = poly.iter().rev().cloned().collect();
                 let tris: Vec<[usize; 3]> = crate::ear_clip(&ring).iter()
@@ -413,13 +424,15 @@ pub fn portal_mesh<'py>(py: Python<'py>, p: [f64; 3], left: [f64; 2], out: [f64;
     Ok(mesh_out(py, m))
 }
 
-/// roadmesh.tunnel's cover over a tube's bare rows: `cover`. mid / left (k, 2), z / ground (k,).
+/// roadmesh.tunnel's cover over a tube's bare rows: `cover`. mid / left (k, 2), z / ground (k,). follow (629): its top
+/// rises to the ground over each row (cover_follow).
 #[pyfunction]
+#[pyo3(signature = (mid, left, z, ground, hw, th, over, need, foot, cap0, cap1, uv_m, soil_uv_m, opening, follow = false))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tunnel_cover_mesh<'py>(py: Python<'py>, mid: PyReadonlyArray2<'py, f64>, left: PyReadonlyArray2<'py, f64>,
                               z: PyReadonlyArray1<'py, f64>, ground: PyReadonlyArray1<'py, f64>, hw: f64, th: f64,
                               over: f64, need: f64, foot: f64, cap0: bool, cap1: bool, uv_m: f64, soil_uv_m: f64,
-                              opening: PyReadonlyArray2<'py, f64>)
+                              opening: PyReadonlyArray2<'py, f64>, follow: bool)
                               -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>,
                                            Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>)> {
     let (mv, lv) = (mid.as_array(), left.as_array());
@@ -430,8 +443,8 @@ pub fn tunnel_cover_mesh<'py>(py: Python<'py>, mid: PyReadonlyArray2<'py, f64>, 
     let ov = opening.as_array();
     let op: Vec<[f64; 2]> = (0..ov.shape()[0]).map(|i| [ov[[i, 0]], ov[[i, 1]]]).collect();
     let (o, _) = if op.len() >= 5 { outline(&op, th) } else { (Vec::new(), Vec::new()) };
-    let m = cover(&m2, &l2, z.as_slice()?, ground.as_slice()?, hw, th, over, need, foot, (cap0, cap1), uv_m, soil_uv_m,
-                  &o);
+    let m = cover_follow(&m2, &l2, z.as_slice()?, ground.as_slice()?, hw, th, over, need, foot, (cap0, cap1), uv_m, soil_uv_m,
+                         &o, follow);
     Ok(mesh_out(py, m))
 }
 

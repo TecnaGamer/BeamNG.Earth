@@ -22,8 +22,8 @@ hosts get DEFAULT_POLICY):
     Retry-After), then requests raise HostUnavailable without touching the network; after the open
     time one probe goes through (half-open): its success closes it (open time back to breaker_open;
     a late success of a request sent before it opened does not), failure re-opens it for twice as
-    long (up to breaker_max). Callers fail over along their own chains (imagery usgs -> eox2023 ->
-    eox2016 -> palette; DEM Mapterhorn -> AWS);
+    long (up to breaker_max). Callers fail over along their own chains (imagery bngs2 -> usgs ->
+    bngs2fine -> eox2016 -> palette; DEM Mapterhorn -> AWS);
   * daily budgets (soft: at 80 % prefetch / background stop with one warning, at 100 % demand runs
     at half rate with a warning per hour; hard: BudgetExceeded), counted per UTC day and persisted
     in <stats_dir>/<YYYY-MM-DD>.json (every STATS_FLUSH_S and at close), so a restart keeps them;
@@ -256,6 +256,27 @@ POLICIES = {
     "api.open-meteo.com": HostPolicy(rate=0.1, burst=2.0, max_conc=1, daily_budget=500, daily_hard=500,
                                      cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True,
                                      gzip=True),
+    # live air traffic (airtraffic.py; off by default, the player's own switch): one ask per ~15 s while it is on and
+    # the player is in the world, about a 28 km cell's point (never the exact position); 4-5 a minute for a whole day
+    # is ~6,000, so the hard cap leaves a margin and stops a runaway. adsb.lol first; airplanes.live and adsb.fi
+    # only while it is slow or refusing (the user, 2026-11-27), each with a smaller day. burst 1: a demand request
+    # takes a token with none left over (admission floor), one every 12 s. Answers are not kept (cache_ttl 0)
+    "api.adsb.lol": HostPolicy(rate=1 / 12, burst=1.0, max_conc=1, daily_budget=6000, daily_hard=8000, cache_ttl=0,
+                               miss_ttl=None, max_wait=3.0, timeout=8.0, connect_timeout=4.0, max_attempts=1,
+                               breaker_threshold=3, breaker_window=120.0, breaker_open=120.0, optional=True,
+                               gzip=True),
+    "api.airplanes.live": HostPolicy(rate=1 / 12, burst=1.0, max_conc=1, daily_budget=1500, daily_hard=2000,
+                                     cache_ttl=0, miss_ttl=None, max_wait=3.0, timeout=8.0, connect_timeout=4.0,
+                                     max_attempts=1, breaker_threshold=3, breaker_window=120.0, breaker_open=300.0,
+                                     optional=True, gzip=True),
+    "opendata.adsb.fi": HostPolicy(rate=1 / 12, burst=1.0, max_conc=1, daily_budget=1500, daily_hard=2000,
+                                   cache_ttl=0, miss_ttl=None, max_wait=3.0, timeout=8.0, connect_timeout=4.0,
+                                   max_attempts=1, breaker_threshold=3, breaker_window=120.0, breaker_open=300.0,
+                                   optional=True, gzip=True),
+    # ... and flight routes by airline callsign (its own switch, memory-only: adsbdb's terms forbid copying them into
+    # another database); one lookup every 2 s at most
+    "api.adsbdb.com": HostPolicy(rate=0.5, burst=1.0, max_conc=1, daily_budget=1500, daily_hard=2500, cache_ttl=0,
+                                 miss_ttl=None, max_wait=3.0, timeout=10.0, max_attempts=1, optional=True, gzip=True),
     # the EGM2008 coefficients (74 MB once; gravity.py resumes and checks the SHA-256 itself)
     "downloads.sourceforge.net": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=None,
                                             offline_ok=True, miss_ttl=None, max_attempts=1, timeout=30.0, optional=True),
@@ -438,6 +459,12 @@ if _BNWT_HOST:
     # a host that does not answer is given up quickly: 2 s to connect, 2 tries)
     POLICIES[_BNWT_HOST + "#bnwt"] = replace(POLICIES.get(_BNWT_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
                                              timeout=10.0, max_attempts=2, base_delay=0.25)
+# Architecture v2's compact per-cell inputs (cip.py, BNE_V2_CIP=on: the CDN's cip<N>/, or BNE_V2_CIP_URL): a lane of
+# their own like the BNWT archives' (the sources are the fallback), the CDN's rate (a cold place reads its ring at once)
+_CIP_URL = (os.environ.get("BNE_V2_CIP_URL") or "").strip()
+_CIP_HOST = (urlsplit(_CIP_URL).hostname or "") if _CIP_URL.startswith(("http://", "https://")) else _CDN_HOST
+POLICIES[_CIP_HOST + "#cip"] = replace(POLICIES.get(_CIP_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
+                                       timeout=15.0, max_attempts=2, base_delay=0.25)
 # The shared decision archives (decisions.py: the CDN's dec/, or BNGE_DECISIONS_URL): a lane of their own, given up
 # quickly like the BNWT archives' (the server plans the cell itself when they do not answer)
 _DEC_URL = (os.environ.get("BNGE_DECISIONS_URL") or "").strip()
@@ -511,6 +538,10 @@ ROLES = {
                             "building setbacks; estimated meanwhile",
     "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
+    "api.adsb.lol": "live air traffic; the other aircraft sources stand in",
+    "api.airplanes.live": "live air traffic (a stand-in source)",
+    "opendata.adsb.fi": "live air traffic (a stand-in source)",
+    "api.adsbdb.com": "flight routes of the live air traffic",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",
@@ -598,6 +629,65 @@ class BadResponse(FetchFailed):
 
 class TooLarge(BadResponse):
     """A body past the caller's max_bytes (Fetcher.get), on the wire or decoded: not read further, not asked again."""
+
+
+# --- stale-if-error refreshes ------------------------------------------------------------------
+# A cached input past its time to live (a dataset's manifest, Mapterhorn's file list, the switch file...) is asked
+# again while its older copy stays usable. That ask failing (offline, a host down, an HTTP error, a malformed answer)
+# keeps the older copy: the build read a whole input, not a short one, so the refresh's error must not fault it
+# (revisit.fault: FetchError does at its construction; a background thread's fault is every running build's). 2026-11-24:
+# a frozen test cache, offline players and a GitHub Pages outage had every plan made "short" by the daily manifest
+# refreshes of the rail and lane datasets, and by the weekly one of Mapterhorn's file list.
+
+@contextmanager
+def stale_ok(on=True):
+    """with stale_ok(have_copy): the requests this thread makes inside fault no build when they fail (on: an older copy
+    is in hand and is used then: stale-if-error). on False: as without it (no copy at all: a failure is a genuinely
+    missing input, the build is short)."""
+    if not on:
+        yield
+        return
+    prev = getattr(_quiet, "on", False)
+    _quiet.on = True
+    try:
+        yield
+    finally:
+        _quiet.on = prev
+
+
+class Backoff:
+    """When a cached input's failed refresh is tried again: base_s after the first failure, twice as long after each
+    further one in a row, at most max_s; ok() (an answer) starts over. Not locked: under the owner's lock.
+    failed() is True for the first failure in a row (log it at info, the others at debug: no log line per try)."""
+
+    def __init__(self, base_s, max_s=None):
+        self.base_s = float(base_s)
+        self.max_s = float(max(base_s, max_s if max_s is not None else 8 * base_s))
+        self.failures = 0
+        self.at = None              # when the last failure was (the clock the caller passes)
+        self.until = None           # no try before this (None: due)
+
+    def due(self, now):
+        return self.until is None or now >= self.until
+
+    def failed(self, now):
+        self.failures += 1
+        self.at = now
+        self.until = now + min(self.max_s, self.base_s * 2 ** min(self.failures - 1, 30))
+        return self.failures == 1
+
+    def ok(self):
+        self.failures = 0
+        self.at = self.until = None
+
+
+def refresh_failed(logger, backoff, now, what, e):
+    """Note a failed refresh of a cached input (what) whose older copy stays in use: backoff.failed(now), logged at
+    info the first time in a row, then at debug."""
+    first = backoff.failed(now)
+    logger.log(logging.INFO if first else logging.DEBUG,
+               "%s: refresh failed (%s: %s); the older copy stays in use, asked again in %.0f s",
+               what, type(e).__name__, e, backoff.until - now)
 
 
 @dataclass

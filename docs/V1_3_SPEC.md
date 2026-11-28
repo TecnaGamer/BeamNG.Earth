@@ -83,7 +83,8 @@ here stays as in v1.2. Written 2026-10-10 by the lead from user feedback and in-
   material) so `--imagery off` still works.
 
 ### F. Flags (server)
-`--imagery usgs,eox2023,eox2016|off` (default the full chain), `--near-visual mesh|terrain` (default mesh),
+`--imagery usgs,eox2023,eox2016|off` (default the full chain; 2026-11-23: eox2023 removed, CC BY-NC-SA 4.0, see
+server/README.md "Imagery"), `--near-visual mesh|terrain` (default mesh),
 `--tex-near 512 --tex-far 256`, `--tone 1.0`.
 
 ## Acceptance (offline tests + lead in-game)

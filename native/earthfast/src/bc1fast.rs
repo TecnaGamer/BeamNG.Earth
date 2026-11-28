@@ -7,6 +7,8 @@
 //!   texel beside bright ones came out up to 7 sRGB steps off), the sRGB byte by srgb_thresholds (the float path's
 //!   bytes). Within one sRGB step of mip_levels_core (the float path) on every texel (2 in 10,000 differ, Washington
 //!   DC's aerial, 2026-11-13); the textures are never shared or hashed, so the integer path's own bits are fine.
+//!   RGB or RGBA (650: the terrain photo's BC7 packed copy, bc7.mips, whose float chain was 5x its GPU encode's CPU,
+//!   506 ms a 4096² photo); an alpha (its ambient occlusion) averaged as it is, never sharpened.
 //! - bc1_blocks: BC1 (4-colour, opaque) blocks of an RGB level by ISPC's CompressBlocksBC1 (the intel_tex_2 crate's
 //!   prebuilt kernels: SSE2 to AVX-512 picked at run time; 10x our bc1_block at the same PSNR, measured 2026-11-13);
 //!   bc1_encode_core where the kernels are not linked (any target but x86_64 Linux / Windows).
@@ -81,10 +83,28 @@ impl ToSrgb {
 /// Values per thread at least (a 256-512 px far texture's levels on the calling thread).
 const MIP_VALUES_PER_THREAD: usize = 1 << 18;
 
-/// mip_levels_core's levels 1.. of an RGB image (h, w, 3) in fixed point (see the module doc).
+/// An alpha byte in fixed point: a << ALPHA_SHIFT (alpha is linear: averaged as it is, never sharpened; the byte back
+/// rounded, as mip_levels_core's (c * 255 + 0.5))
+const ALPHA_SHIFT: u32 = 12;
+
+/// mip_levels_core's levels 1.. of an RGB image (h, w, 3), or an RGBA one (h, w, 4: the terrain photo's packed copy,
+/// its alpha the ambient occlusion), in fixed point (see the module doc). The integer maths alone: the same bytes on
+/// every platform and number of threads.
 pub fn mip_levels_int(img: ArrayView3<u8>, lut: ArrayView1<f32>, sharpen: f32) -> Vec<Array3<u8>> {
-    const NC: usize = 3;
-    assert_eq!(img.shape()[2], NC, "mip_levels_int: RGB");
+    match img.shape()[2] {
+        3 => mip_levels_nc::<3>(img, lut, sharpen),
+        4 => mip_levels_nc::<4>(img, lut, sharpen),
+        n => panic!("mip_levels_int: RGB or RGBA, not {n} channels"),
+    }
+}
+
+/// The fixed-point value of byte v in channel c (colour: linear light by the LUT; alpha: as it is)
+#[inline(always)]
+fn to_fixed(ll: &[u32; 256], c: usize, v: u8) -> u32 {
+    if c < 3 { ll[v as usize] } else { (v as u32) << ALPHA_SHIFT }
+}
+
+fn mip_levels_nc<const NC: usize>(img: ArrayView3<u8>, lut: ArrayView1<f32>, sharpen: f32) -> Vec<Array3<u8>> {
     let (mut h, mut w) = (img.shape()[0], img.shape()[1]);
     let owned;
     let src: &[u8] = match img.as_slice() {
@@ -108,7 +128,8 @@ pub fn mip_levels_int(img: ArrayView3<u8>, lut: ArrayView1<f32>, sharpen: f32) -
             for x in 0..nw {
                 for c in 0..NC {
                     let a = 2 * x * NC + c;
-                    let s = ll[ra[a] as usize] + ll[ra[a + NC] as usize] + ll[rb[a] as usize] + ll[rb[a + NC] as usize];
+                    let s = to_fixed(&ll, c, ra[a]) + to_fixed(&ll, c, ra[a + NC]) + to_fixed(&ll, c, rb[a])
+                        + to_fixed(&ll, c, rb[a + NC]);
                     r[x * NC + c] = (s + 2) >> 2;
                 }
             }
@@ -116,31 +137,30 @@ pub fn mip_levels_int(img: ArrayView3<u8>, lut: ArrayView1<f32>, sharpen: f32) -
         h = nh;
         w = nw;
     } else {
-        lin = src.iter().map(|&v| ll[v as usize]).collect();
+        lin = src.iter().enumerate().map(|(i, &v)| to_fixed(&ll, i % NC, v)).collect();
         if h.max(w) <= 1 {
             return out;
         }
         // (a 1 x n or n x 1 image: halved along its long side below)
         let (nh, nw) = (if h > 1 { h / 2 } else { 1 }, if w > 1 { w / 2 } else { 1 });
-        lin = halve(&lin, h, w, nh, nw);
+        lin = halve::<NC>(&lin, h, w, nh, nw);
         h = nh;
         w = nw;
     }
-    out.push(finish(&lin, h, w, sq));
+    out.push(finish::<NC>(&lin, h, w, sq));
     while h.max(w) > 1 {
         let (nh, nw) = (if h > 1 { h / 2 } else { 1 }, if w > 1 { w / 2 } else { 1 });
-        lin = halve(&lin, h, w, nh, nw);
+        lin = halve::<NC>(&lin, h, w, nh, nw);
         h = nh;
         w = nw;
-        out.push(finish(&lin, h, w, sq));
+        out.push(finish::<NC>(&lin, h, w, sq));
     }
     out
 }
 
-/// The next level's linear values (nh x nw of h x w, each side halved where it is over 1): the mean of its 2 x 2 (or
-/// 2 x 1) texels, rounded once.
-fn halve(lin: &[u32], h: usize, w: usize, nh: usize, nw: usize) -> Vec<u32> {
-    const NC: usize = 3;
+/// The next level's fixed-point values (nh x nw of h x w, each side halved where it is over 1): the mean of its 2 x 2
+/// (or 2 x 1) texels, rounded once.
+fn halve<const NC: usize>(lin: &[u32], h: usize, w: usize, nh: usize, nw: usize) -> Vec<u32> {
     let mut nl = vec![0u32; nh * nw * NC];
     let row = w * NC;
     par::rows(&mut nl, nw * NC, par::threads_for(nh * nw * NC, MIP_VALUES_PER_THREAD), |y, r| {
@@ -170,10 +190,14 @@ fn halve(lin: &[u32], h: usize, w: usize, nh: usize, nw: usize) -> Vec<u32> {
     nl
 }
 
-/// A level's sRGB bytes from its (unsharpened) linear values: sharpened by sq / SHARPEN_ONE (3 x 3 box, edge-padded) where
-/// both sides are >= 4.
-fn finish(lin: &[u32], h: usize, w: usize, sq: i64) -> Array3<u8> {
-    const NC: usize = 3;
+#[inline(always)]
+fn alpha_byte(l: u32) -> u8 {
+    ((l + (1 << (ALPHA_SHIFT - 1))) >> ALPHA_SHIFT).min(255) as u8
+}
+
+/// A level's bytes from its (unsharpened) fixed-point values: the colour sharpened by sq / SHARPEN_ONE (3 x 3 box,
+/// edge-padded) where both sides are >= 4, back to sRGB; the alpha as averaged.
+fn finish<const NC: usize>(lin: &[u32], h: usize, w: usize, sq: i64) -> Array3<u8> {
     let to = ToSrgb::get();
     let mut bytes = vec![0u8; h * w * NC];
     let sharp = h.min(w) >= 4 && sq > 0;
@@ -181,7 +205,8 @@ fn finish(lin: &[u32], h: usize, w: usize, sq: i64) -> Array3<u8> {
     par::rows(&mut bytes, row, par::threads_for(h * row, MIP_VALUES_PER_THREAD), |y, r| {
         if !sharp {
             for (k, b) in r.iter_mut().enumerate() {
-                *b = to.byte(lin[y * row + k] as i64);
+                let l = lin[y * row + k];
+                *b = if k % NC < 3 { to.byte(l as i64) } else { alpha_byte(l) };
             }
             return;
         }
@@ -189,7 +214,7 @@ fn finish(lin: &[u32], h: usize, w: usize, sq: i64) -> Array3<u8> {
         let (ra, rm, rb) = (&lin[ya * row..(ya + 1) * row], &lin[y * row..(y + 1) * row], &lin[yb * row..(yb + 1) * row]);
         for x in 0..w {
             let (xa, xb) = (x.saturating_sub(1), (x + 1).min(w - 1));
-            for c in 0..NC {
+            for c in 0..NC.min(3) {
                 let (i0, i1, i2) = (xa * NC + c, x * NC + c, xb * NC + c);
                 let sum = ra[i0] as i64 + ra[i1] as i64 + ra[i2] as i64 + rm[i0] as i64 + rm[i1] as i64
                     + rm[i2] as i64 + rb[i0] as i64 + rb[i1] as i64 + rb[i2] as i64;
@@ -198,6 +223,9 @@ fn finish(lin: &[u32], h: usize, w: usize, sq: i64) -> Array3<u8> {
                 let num = sq * (9 * v - sum);
                 let l = v + (num + 9 * SHARPEN_ONE / 2).div_euclid(9 * SHARPEN_ONE);
                 r[i1] = to.byte(l);
+            }
+            if NC == 4 {
+                r[x * NC + 3] = alpha_byte(rm[x * NC + 3]);
             }
         }
     });
@@ -285,15 +313,16 @@ pub fn bc1_encode_fast<'py>(py: pyo3::Python<'py>, img: numpy::PyReadonlyArray3<
     Ok(pyo3::types::PyBytes::new(py, &out))
 }
 
-/// mip_levels_int's levels 1.. of an (h, w, 3) uint8 image (tests and benchmarks: against mip_levels').
+/// mip_levels_int's levels 1.. of an (h, w, 3) or (h, w, 4) uint8 image: the far textures' chain, and since 650 the
+/// terrain photo's packed copy's (bc7.mips; RGBA from 650).
 #[pyo3::pyfunction]
 pub fn mip_levels_fast<'py>(py: pyo3::Python<'py>, rgb: numpy::PyReadonlyArray3<'py, u8>,
                             lut: numpy::PyReadonlyArray1<'py, f32>, sharpen: f32)
                             -> pyo3::PyResult<Vec<pyo3::Bound<'py, numpy::PyArray3<u8>>>> {
     use numpy::IntoPyArray;
     let (img, lut) = (rgb.as_array(), lut.as_array());
-    if img.shape()[2] != 3 || lut.len() != 256 || img.shape()[0] == 0 || img.shape()[1] == 0 {
-        return Err(pyo3::exceptions::PyValueError::new_err("mip_levels_fast: rgb (h, w, 3), lut of 256"));
+    if !matches!(img.shape()[2], 3 | 4) || lut.len() != 256 || img.shape()[0] == 0 || img.shape()[1] == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err("mip_levels_fast: (h, w, 3 | 4) uint8, lut of 256"));
     }
     let levels = py.detach(|| mip_levels_int(img, lut, sharpen));
     Ok(levels.into_iter().map(|a| a.into_pyarray(py)).collect())
@@ -419,4 +448,116 @@ pub fn register_photo(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(photo_mix, m)?)?;
     m.add_function(wrap_pyfunction!(photo_keep_painted, m)?)?;
     m.add_function(wrap_pyfunction!(encode_photo_dds, m)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dm::Dm;
+    use numpy::ndarray::Array1;
+
+    fn lut() -> Array1<f32> {
+        Array1::from_iter((0..256).map(|k| (k as f64 / 255.0).dpowf(2.2) as f32))
+    }
+
+    fn noise(h: usize, w: usize, nc: usize, seed: u64) -> Array3<u8> {
+        let mut s = seed;
+        Array3::from_shape_fn((h, w, nc), |_| {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (s >> 56) as u8
+        })
+    }
+
+    /// The chain written out plainly (one thread, no tables but the sRGB thresholds): what mip_levels_int must give,
+    /// bit for bit (650's RGBA chain, bc7.mips).
+    fn reference(img: &Array3<u8>, lut: &Array1<f32>, sharpen: f32) -> Vec<Array3<u8>> {
+        let (mut h, mut w, nc) = (img.shape()[0], img.shape()[1], img.shape()[2]);
+        let ll = lin_lut(&lut.view());
+        let th = crate::srgb_thresholds();
+        let to_srgb = |l: i64| -> u8 {
+            let l = l.clamp(0, LIN_ONE);
+            th.iter().filter(|&&t| ((t as f64) * LIN_ONE as f64).ceil() as i64 <= l).count() as u8
+        };
+        let sq = (sharpen as f64 * SHARPEN_ONE as f64).round() as i64;
+        let mut lin: Vec<i64> = img.iter().enumerate()
+            .map(|(i, &v)| if i % nc < 3 { ll[v as usize] as i64 } else { (v as i64) << ALPHA_SHIFT }).collect();
+        let mut out = Vec::new();
+        while h.max(w) > 1 {
+            let (nh, nw) = ((h / 2).max(1), (w / 2).max(1));
+            let mut nl = vec![0i64; nh * nw * nc];
+            for y in 0..nh {
+                for x in 0..nw {
+                    for c in 0..nc {
+                        let ys: Vec<usize> = if nh < h { vec![2 * y, 2 * y + 1] } else { vec![y] };
+                        let xs: Vec<usize> = if nw < w { vec![2 * x, 2 * x + 1] } else { vec![x] };
+                        let s: i64 = ys.iter().flat_map(|&yy| xs.iter().map(move |&xx| (yy, xx)))
+                            .map(|(yy, xx)| lin[(yy * w + xx) * nc + c]).sum();
+                        let n = (ys.len() * xs.len()) as i64;
+                        nl[(y * nw + x) * nc + c] = (s + n / 2) / n;
+                    }
+                }
+            }
+            lin = nl;
+            h = nh;
+            w = nw;
+            let mut b = Array3::<u8>::zeros((h, w, nc));
+            for y in 0..h {
+                for x in 0..w {
+                    for c in 0..nc {
+                        let v = lin[(y * w + x) * nc + c];
+                        b[[y, x, c]] = if c == 3 {
+                            ((v + (1 << (ALPHA_SHIFT - 1))) >> ALPHA_SHIFT).min(255) as u8
+                        } else if h.min(w) >= 4 && sq > 0 {
+                            let mut sum = 0i64;
+                            for dy in [-1i64, 0, 1] {
+                                for dx in [-1i64, 0, 1] {
+                                    let yy = (y as i64 + dy).clamp(0, h as i64 - 1) as usize;
+                                    let xx = (x as i64 + dx).clamp(0, w as i64 - 1) as usize;
+                                    sum += lin[(yy * w + xx) * nc + c];
+                                }
+                            }
+                            to_srgb(v + (sq * (9 * v - sum) + 9 * SHARPEN_ONE / 2).div_euclid(9 * SHARPEN_ONE))
+                        } else {
+                            to_srgb(v)
+                        };
+                    }
+                }
+            }
+            out.push(b);
+        }
+        out
+    }
+
+    #[test]
+    fn rgba_chain_matches_the_reference() {
+        let lut = lut();
+        for (h, w, seed) in [(64usize, 64usize, 1u64), (32, 8, 2), (16, 1, 3), (1, 4, 4)] {
+            for nc in [3usize, 4] {
+                let img = noise(h, w, nc, seed);
+                let got = mip_levels_int(img.view(), lut.view(), 0.35);
+                let want = reference(&img, &lut, 0.35);
+                assert_eq!(got.len(), want.len(), "{h}x{w}x{nc}");
+                for (k, (a, b)) in got.iter().zip(&want).enumerate() {
+                    assert_eq!(a, b, "{h}x{w}x{nc} level {}", k + 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rgba_colour_is_the_rgb_chain_and_alpha_is_averaged() {
+        let lut = lut();
+        let rgba = noise(128, 128, 4, 9);
+        let rgb = rgba.slice(numpy::ndarray::s![.., .., 0..3]).to_owned();
+        let a = mip_levels_int(rgba.view(), lut.view(), 0.35);
+        let b = mip_levels_int(rgb.view(), lut.view(), 0.35);
+        for (x, y) in a.iter().zip(&b) {
+            assert_eq!(x.slice(numpy::ndarray::s![.., .., 0..3]), y.view(), "the colour as the RGB chain's");
+        }
+        let mut flat = rgba.clone();
+        flat.slice_mut(numpy::ndarray::s![.., .., 3]).fill(251);
+        for l in mip_levels_int(flat.view(), lut.view(), 0.35) {
+            assert!(l.slice(numpy::ndarray::s![.., .., 3]).iter().all(|&v| v == 251), "a flat AO stays flat");
+        }
+    }
 }

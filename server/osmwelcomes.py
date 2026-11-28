@@ -12,6 +12,7 @@ import tempfile
 import time
 from concurrent.futures import CancelledError
 
+import netfetch
 import osmfuel
 import rangeread
 import xproc
@@ -101,14 +102,16 @@ class Source:
         if cached is not None:
             return cached
         try:
-            ids = self.info.cell(key.bounds())
+            with netfetch.stale_ok(read() is not None):     # (last week's copy in hand: stale-if-error)
+                ids = self.info.cell(key.bounds())
             if len(ids) > 256:
                 raise ValueError('Too many information nodes in one welcome-sign cell')
             nodes = []
             for start in range(0, len(ids), BATCH):
                 batch = ids[start:start + BATCH]
-                response = self.fetcher.get('https://api.openstreetmap.org/api/0.6/nodes.json?nodes=' +
-                                            ','.join(map(str, batch)), kind='demand', lane='welcome-signs')
+                with netfetch.stale_ok(read() is not None):
+                    response = self.fetcher.get('https://api.openstreetmap.org/api/0.6/nodes.json?nodes=' +
+                                                ','.join(map(str, batch)), kind='demand', lane='welcome-signs')
                 elements = json.loads(response.body)['elements']
                 if {e['id'] for e in elements if e.get('type') == 'node'} != set(batch):
                     raise ValueError('Incomplete welcome-node response')

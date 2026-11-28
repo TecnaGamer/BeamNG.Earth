@@ -85,7 +85,6 @@ Mapped give-way and stop nodes add to the rank guess, for props and the AI: 47 m
 - Not tested in game.
 - Which side of a crossing the cycle crossing lies on is not in the tags, so it follows the road's own direction.
 - Stop lines at mid-block signal crossings are not drawn, because no signal prop stands there.
-- B3 signs are not placed yet.
 - If the tags cannot be read, the tile falls back to the old guess.
 
 ## Trams
@@ -101,6 +100,18 @@ Results, central Göteborg, about 150 km of track:
 - Strict overlap after the change: 0.32 km on sidewalks, about 0.01 km on medians.
 
 Limits: paved track still lies in a sidewalk's outer band for 3.3 km, because only the curb line is tested. Not tested in game.
+
+## Bus stop signs (E22)
+
+`server/sebusstops.py`, country SE only, built in the sign tile next to the bus stations' name signs. At every mapped bus stop a pole stands at the kerb with a flag read from both directions: E22 Busshållplats (TSFS 2019:74, the small 0.45 m size) and under it a white plate with the stop's name, and its letter ("Läge") where one is mapped.
+
+- **Data:** 58,504 stops are mapped in Sweden; 97.7% have a name and 3.0% a `local_ref` (Overpass, 2026-11-16). A `ref` of one or two characters counts as the letter too; a longer one is the stop's number.
+- **Which stops:** the stops the shelters stand at (`shelters.py`), including `shelter=no`, plus `public_transport=stop_position` nodes on the carriageway. Most town stops are mapped that way: 686 of 714 in Göteborg (Overture, 2026-10-21). A stop mapped twice gets one pole.
+- **Side of the road:** a node on the carriageway does not say which kerb it is on. The pole goes on the side of the nearest mapped platform within 20 m (39 of 42 in central Göteborg), else on the right of a one-way road, else on a side picked by the stop's id.
+- **Placement:** 0.9 m past the carriageway's edge, 2.3 m past the stop's point in the direction the bus travels (the head of the stop, clear of the shelter), the plate's bottom 2.1 m up (TSFS 1 kap. 13 §: at least 2.0 m over a pavement).
+- **Left out:** stops on a bridge's deck or on a bus station's ground. A tile makes at most 30 name plates; stops past that keep only E22.
+- **Shelters:** unchanged. `shelter=no` already gets no shelter; untagged stops still get one everywhere.
+- **Checked in game** (2026-11-17). Spots in central Göteborg: Brunnsparken E1 and E2 (57.7068, 11.9670), Domkyrkan A and B (57.7043, 11.9637).
 
 ## Lane ends on 2+1 roads and signs from the road's shape
 
@@ -122,14 +133,14 @@ Sources: VGU 2024 (remiss version 0.9) and TSFS 2019:74, requirement numbers in 
 |---|---|---|
 | F17, F17 + T2 400/300/200 m | Just before the first merge arrow (20 m), the plate 400/300/200 m before the arrows, both sides (the median one halfway to the oncoming carriageway where the two are drawn close); VGU's 50 m before the 2.5 m point came too late in the game. On two-lane stretches of 300 m or more, or shorter ones the map tags `merge_to_*` (not an on-ramp's acceleration lane); two lanes are measured back through a wider carriageway beside an exit lane | 16, 18 |
 | F18 | Where a plain road becomes a section, or forks into a pair of carriageways | 4 |
-| F2 | 350 m before a spansk sväng, outside towns | 3 |
+| F2 | 350 m before a spansk sväng on a 2+1 road, outside towns | 3 (counted before the 2+1 requirement) |
 | C1 | Both sides of the end of an exit ramp from a fast road, and of a spansk sväng's link | 10 |
 | E1, E2 | Where a motorway begins and ends, and on its ramps | 16, 9 |
 | B3 | Both sides of a painted crossing without signals, at 60 km/h or less | 181 in about 3 km² of Borås |
 
-**Spansk sväng.** The data has no turn bans, so it is told by shape: a one-way link leaving a main road of 70 km/h or more on the right, 20-300 m long, that crosses back or ends beside it. Scored against OpenStreetMap's `no_left_turn` relations across Sweden: 148 hits, 92% with a ban, against 42% for plain right slip roads. Service roads are left out.
+**Spansk sväng.** F2 goes only on a confirmed 2+1 road. That is a two-way road in `motesfri.sections` (with the 1+1 connectors between overtaking sections); or a one-way carriageway with a mapped lane count of 2 or 1, next to an opposing one with the other count; or a one-lane one-way piece within 400 m of a section, because OpenStreetMap splits the road into short one-way pieces with no lane tags around the junction's island (Rv 27 south of Borås, 57.6600, 12.9184: a section 236 m north, another 1.1 km south). Ordinary 1+1 and 2+2 roads, unknown lane splits away from a section and short turn pockets do not get one. The data has no turn bans, so the turning link itself is told by shape: a one-way link leaving a main road of 70 km/h or more on the right, 20-300 m long, that crosses back or ends beside it. Service roads are left out. Before the 2+1 requirement the shape rule found 148 links across Sweden, 92% of them on a road with OpenStreetMap's `no_left_turn`, against 42% of plain right slip roads. In a 6 km square around the test spot below the requirement keeps 2 of the 3 links; the one it drops is on a plain 1+1 road.
 
-**How to test in game.** Not yet checked in game. Stop the running server, then start this branch's: `cd ~/.cache/bngearth-dev && ./run_server.sh` (no leading `!` in fish).
+**How to test in game.** Only F17 has been checked in game. Stop the running server, then run `./run_server.sh` from this branch's checkout.
 
 | Check | Coordinates |
 |---|---|
@@ -154,6 +165,44 @@ Not built:
 - **Warning line before a solid line (M3, K237689):** the dash pattern is chosen per way, so changing the last 100 m needs a change in the line builder.
 - **Rest areas:** not attempted.
 
+## Road signs (Settings > Experimental > Road signs)
+
+The shared road-sign system (server/roadsigns.py, `sign_systems.json` row `SE`) puts up the warning, mandatory and
+information signs its rules find, in Sweden only those whose Swedish design its atlas draws. Each was compared with
+Transportstyrelsen's own picture of the sign (transportstyrelsen.se, Vägmärken, fetched 2026-11-17):
+
+| Rule | Swedish sign | Atlas |
+|---|---|---|
+| sharp bend, double bend | A1, A2 | yellow field (`vienna_y`, as Poland's) |
+| road narrows | A5 | yellow field |
+| signals | A22 | yellow field |
+| roundabout ahead / roundabout | A30 / D3 | yellow field / blue disc |
+| cycle path | D4 | blue disc |
+| dead end, parking | E17, E19 | blue square |
+
+Left out, as the Swedish sign differs from the atlas's or a Swedish module already places it: B1 (yellow inside) and B2
+(furniture.py), C1, E1, E2 and B3 (sesigns.py), E9, E16, E22 (sesigns.py, PRs #1417, #1434), E7 (white figures on
+blue), E26 (a portal, with the distance), the chevrons (not checked), and the side-road warning, which Sweden does not
+have (A29 is a crossing).
+
+Placement and size (TSFS 2019:74):
+- **Beside the road / over a footway** (1 kap. 13 §): 0.3-4.0 m out and 1.0-2.0 m up / 0.5-4.0 m out and at least
+  2.1 m up. Used: 1.0 m out and 1.5 m up outside towns, 0.5 m out and 2.1 m up in towns.
+- **Sizes**: the normal size wherever the road is not a motorway (2 kap. 3 §, 5 kap. 1 §): triangles 0.90 m, discs
+  0.60 m; on the major roads the large, 1.20 and 0.90 m. E17 and E19 0.40 m (6 kap.).
+- **Warning distance**: the shared 150 m. It lies in TSFS 2019:74 2 kap. 2 §'s ranges for 60-70 km/h (50-200 m) and
+  80-90 km/h (150-250 m); the rules warn only outside towns.
+- **Poles**: at most three signs (1 kap., allmänna råd); no rule read on which group goes above which, so each sign has
+  its own pole.
+
+## Direction signs (Settings > World > Direction signs)
+
+The shared advance boards (server/dirsigns.py, `dirsigns_styles.json` row `SE`, verified): blue, white text and edge,
+as Transportstyrelsen's picture of F1; a European route's number on F14's green plate above the national (riksväg)
+and county road (länsväg) numbers in a white frame on the board's blue (TSFS 2019:74 7 kap. 1 §, 24 §). The colours
+are the agency's pictures' own: blue 0 85 150, green 0 128 101. Not told apart: the green board TSFS asks for at the
+last junction before a motorway or motortrafikled.
+
 ## Moose signs (A19)
 
 `sesigns.moose_signs` puts the moose warning sign A19-1 on rural roads, sparingly: the user wanted the typical Swedish sign but not overdone.
@@ -162,6 +211,51 @@ Not built:
 - **Rule:** rural two-lane trunk, primary, secondary and tertiary roads at 70-100 km/h, not one-way. A piece of road (a map segment, junction to junction) of at least 1 km and L m long gets a pair with chance L / 15 km, decided by a hash of its id, so every tile and every run agree. Each sign stands 150 m into the piece facing the traffic entering it, 1.5 m past the edge.
 - **Measured:** one sign per 12-25 km of such road per direction (Borås 312 km of road, 30 signs; Härnösand 125 km, 10; Jämtland 152 km, 26).
 - **Left out:** motorways, 2+1 and divided roads, which have game fences (viltstängsel) for long stretches; where fences end has no data.
+
+## One-way signs (C1 and E16)
+
+`sesigns.oneway_signs` signs town one-way streets at their junctions. OpenStreetMap's `oneway` tag says which roads are one-way (`Spec.oneway`, its direction `Spec.dir`).
+
+- **C1** (no entry), both sides of the end where the street's traffic leaves it, facing whoever would turn in against it. TSFS 2019:74 4 kap. 3 §: it stands where "en väg eller en körbana" meets roads with traffic that could turn in, so a divided road's carriageway gets one too.
+- **E16** (one-way traffic), on both corners of the end where the street's traffic enters, facing the crossing road's traffic, its arrow along the street (two models: `se_e16_r` and the mirrored `se_e16_l`). Only where a crossing road is two-way (6 kap. 17 §), and only on a one-way street: a divided road's carriageway is not one (6 kap. 16 §: all traffic the other way must be banned).
+- **Size and height.** E16-1 normal size, 0.75 x 0.30 m (6 kap. 1 §). Town signs stand over the sidewalk, so their lower edge is 2.1 m (1 kap. 13 §: at least 2.1 m over a footway). The town C1 is its own model, `se_c1_t`; the ramps' `se_c1` keeps 1.5 m.
+- **Where.** Each sign stands 1.5-8 m past the crossing road's edge (the first spot clear of every road), 0.7 m off its own carriageway.
+- **Left out:**
+  - roads out of town;
+  - motorways, trunk roads and ramps, which have their own signs;
+  - service roads (drive-throughs, car parks) and junctions where only one joins;
+  - roundabouts;
+  - one-way pieces under 12 m, which are a junction's own links;
+  - one-way roads merging, where no traffic could turn in.
+  - a divided road's carriageways: the road is two-way, so neither sign stands on it. A carriageway is one when the map
+    pairs it with its other half, or a one-way road runs alongside it within 25 m the other way (the user, 2026-11-17).
+  
+  Two signs of a kind closer than 4 m that face the same way are one.
+- **Measured** (4 x 4 tiles, about 1 km², 2026-11-17): Göteborg 171 C1 and 105 E16; Stockholm 176 C1 and 67 E16.
+- **Artwork.** The E16-1 picture is Transportstyrelsen's, the same source as the other signs, in `bne_se_signs2` cell (384, 896).
+
+## Gångfartsområde signs (E9 and E10)
+
+`sesigns.living_signs` signs where a gångfartsområde begins and ends. OpenStreetMap maps one as `highway=living_street`.
+
+- **E9** (gångfartsområde) stands on the right of the traffic turning in, facing them, where a living street meets a street that is not one. **E10** (gångfartsområde upphör) stands on the right of the traffic leaving, facing out. A one-way living street gets only the sign its traffic passes.
+- **Left out:** junctions where only service roads (car parks, drives) or other living streets join, since the area goes on there.
+- **Size and height.** Normal size, 0.75 m wide x 0.60 m high (TSFS 2019:74 6 kap. 1 §; the figure shows S1 as the width). The agency's web picture is 399 x 286 px, a little flatter than that, so it is drawn to the official shape. Lower edge 2.1 m, over the sidewalk (1 kap. 13 §).
+- **Artwork.** Transportstyrelsen's E9-1 and E10-1, in the empty bottom row of `bne_se_signs` (the C31 sheet).
+- **Measured** (4 x 4 tiles, about 1 km², 2026-11-17): Göteborg 39 entries, Borås 8, Stockholm 2 (one E9 and one E10 each).
+- **Not done:** E7 and E8 (gågata). Pedestrian streets are not in the road tiles, so there is no road for their entrance signs to stand on.
+
+## Bus lanes (M6)
+
+Where OpenStreetMap maps a bus lane beside a general lane (`bus:lanes` / `psv:lanes`, `designated` or `yes`), the line between them is M6, not a solid line.
+
+- **Pattern:** 3.0 m dashes (TSFS 2010:171 2 kap. 11 §), 3.0 m gaps (VGU 2024 figure 12.2.1.3.6-1).
+- **Width:** 0.20 m. TSFS allows 0.20, 0.30 or 0.40 m, at least the width of the stretch's M1, so it is never narrower than the lane lines.
+- **Not done:**
+  - VGU's "1+1" start and end (6 m at 60 km/h or less, 12 m above), because the map does not say where a bus lane begins.
+  - M28, the painted word BUSS. The agency's PNG is 64 x 74 px, too small for a decal, and its vector file was not converted.
+  - Bus lanes with time limits get M6 too, though TSFS allows it only on lanes without them (12 §). The map's lane tags do not carry the times.
+- **Mapped:** 38 bus-lane ways and 53 psv-lane ways in the sampled centres of Göteborg, Stockholm, Borås and Malmö (16 map cells).
 
 ## Road type detection
 
@@ -188,6 +282,12 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 | Road surface tag | OpenStreetMap tags, as delivered through Overture | Surface statistics under Road type detection |
 | C31 and B1 artwork | Transportstyrelsen's own artwork (`bne_se_signs.png`) | Sign textures for fix 2. No reuse terms stated on its pages |
 | Sign sizes and lower edge | TSFS 2019:74 (4 kap. 1 §, 3 kap. 1 §, 1 kap. 13 §) | Sign sizes for fix 2 |
+| One-way roads | OpenStreetMap `oneway` tag | Where C1 and E16 go |
+| C1 and E16 rules and sizes | TSFS 2019:74 (4 kap. 3 §; 6 kap. 1, 16, 17 §§; 1 kap. 13 §) | One-way signs |
+| Bus lanes | OpenStreetMap `bus:lanes`, `psv:lanes` | M6 between a bus lane and the others |
+| M6 pattern and width | TSFS 2010:171 2 kap. 11, 12 §§; VGU 2024 figure 12.2.1.3.6-1 | Bus lanes |
+| Gångfartsområde streets | OpenStreetMap `highway=living_street` | Where E9 and E10 go |
+| E9 and E10 sizes | TSFS 2019:74 (6 kap. 1 §; 1 kap. 13 §) | Gångfartsområde signs |
 | Minimum lane width | VGU 2024 K233046 | `markings.MIN_LANE_M` (2.75 m) |
 | Road meshes loaded by the game | `rs_*_road.cdae` files | Height-step checks on loaded tiles |
 | Crossing, stop-line and give-way nodes | OpenStreetMap nodes via Overture's infrastructure layer | `server/secrossings.py`: paint, lowered kerbs, stop lines, priority signs |
@@ -204,5 +304,5 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 - **Widths of gravel and private roads.** No official width was found for gravel or private roads, so the repo's existing STYLE values stay.
 - **Lane ends with no barrier move.** Where a section meets a short way with no lane split tagged, the barrier cannot tell where to go, so it keeps its offset and the lane line stops at the joint. 2 of 13 lane ends in the two sampled areas.
 - **Wide single lanes.** Past a two-way lane end the road keeps its width, so a connector between sections can have a single lane near 6 m wide.
-- **Spansk sväng.** About 8% of what the shape detector finds has no mapped ban, measured on a sample of Sweden.
+- **Spansk sväng.** About 8% of what the shape rule found had no mapped ban, measured across Sweden before the 2+1 requirement, which should leave fewer. A real spansk sväng on a 2+1 road whose lanes are not mapped, away from any section, gets no F2.
 - **Dashes at joins.** The dashes of two ways do not meet at a join. A fit was tried and reverted, because it moved TSFS's 9.0 m dash to 8.8 m, off the official figure.

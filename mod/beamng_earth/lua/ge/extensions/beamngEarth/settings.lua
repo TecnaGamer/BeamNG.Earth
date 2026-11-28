@@ -71,6 +71,11 @@ M.SCHEMA = {
   -- the drawn terrain block's aerial photo (px over the 1 km block; terrain.setPhotoSize, the server's photoPx):
   -- from the next level load
   groundPhoto = { kind = 'enum', default = '2048', values = { '1024', '2048', '4096' }, label = 'Ground photo resolution' },
+  -- Cliff-only startup controls; available only after the server opts in with BNE_CLIFFS.
+  naturalCliffs = { kind = 'bool', default = true, label = 'Natural cliffs' },
+  cliffRoadCuts = { kind = 'bool', default = true, label = 'Road-cut cliffs' },
+  cliffTextures = { kind = 'enum', default = 'bundled', values = { 'bundled', '4k' }, label = 'Cliff textures' },
+  cliffDetail = { kind = 'enum', default = 'normal', values = { 'low', 'medium', 'normal', 'high', 'extreme' }, label = 'Cliff detail' },
   -- the physics ground's grid (m between the terrain block's samples; GitHub #943): '2' the lighter ground of the Low and
   -- Medium presets (512² samples a km, a quarter of the data at each block swap), '1' the stock maps' resolution. The
   -- server reads it when it starts (launcher.start_server: BNGE_GROUND_SQUARE), so it holds from the next start
@@ -94,7 +99,47 @@ M.SCHEMA = {
   hazeStrength = { kind = 'number', default = 0, min = 0, max = 1, label = 'Distance haze (placeholder)' },
   skyMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Sky' },
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
-  weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
+  -- the Weather page (weather.lua; the weather plan 2026-11-24, phase A): Real, a preset or Off ('manual': the game's
+  -- own controls, as before), the preset, its intensity, the change speed, the drops on screen, the rain visibility, the
+  -- parts of the real weather kept and the fog cap
+  weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'preset', 'manual' }, label = 'Weather' },
+  weatherPreset = { kind = 'enum', default = 'rain', values = { 'clear', 'fewclouds', 'cloudy', 'overcast', 'drizzle',
+    'rain', 'heavyrain', 'storm', 'fog', 'lightsnow', 'snow', 'blizzard', 'sleet', 'freezingrain', 'hail' },
+    label = 'Weather preset' },
+  weatherIntensity = { kind = 'number', default = 1, min = 0, max = 1.5, label = 'Weather intensity' },
+  weatherChange = { kind = 'enum', default = '60', values = { '0', '30', '60', '120' }, label = 'Weather changes take (s)' },
+  weatherPrecip = { kind = 'bool', default = true, label = 'Show rain and snow' },
+  rainVisibility = { kind = 'number', default = 1.3, min = 0.5, max = 2.5, label = 'Rain visibility' },
+  -- weather phase B: the storm light (darker under a storm deck), lightning and thunder, the rain streaks, the wet look
+  weatherStormLight = { kind = 'bool', default = true, label = 'Storm light' },
+  weatherLightning = { kind = 'bool', default = true, label = 'Lightning and thunder' },
+  weatherStreaks = { kind = 'bool', default = false, label = 'Rain streaks' },
+  weatherWetLook = { kind = 'bool', default = true, label = 'Wet look' },
+  -- the grip follows the weather shown (wet, damp roads) and aquaplaning in its puddles and heavy rain (the user,
+  -- 2026-11-26: "yes, plus deep-water aquaplaning")
+  weatherWetGrip = { kind = 'bool', default = true, label = 'Wet roads' },
+  -- the puddle plan R1 (~/bnge-tests/puddles/PLAN_FINAL.md, D10: off until the in-game review): puddles that look like
+  -- water (the sky mirrored) and fill by how much it rained (wetstate.lua's one wet state, also the wet look's and the
+  -- grip's), no rain film under cover
+  weatherPuddleLook = { kind = 'bool', default = false, label = 'New puddle look' },
+  -- the weather sounds: the mod's pre-recorded files, or played live by the world server (native/weathersynth;
+  -- liveaudio.lua), which falls back to the files by itself when the live sound fails (the user, 2026-11-25)
+  weatherSoundSource = { kind = 'enum', default = 'prerecorded', values = { 'prerecorded', 'live' }, label = 'Weather sounds' },
+  -- the thunder: generated (the physical model, method B; the user's pick, 2026-11-25) or recorded (CC0 field
+  -- recordings layered, the grain bank; the user: "also keep and update the recording mix method and add a setting
+  -- switch between the 2"), for the files and for the live sound
+  weatherThunderSound = { kind = 'enum', default = 'generated', values = { 'generated', 'recorded' }, label = 'Thunder sound' },
+  -- the rain: generated (the physical model's loops) or recorded (CC0 field recordings mixed by weathersynth's texture
+  -- renderer; the user, 2026-11-26: "use a similar method ... for the other weather sound effects"), files and live
+  weatherRainSound = { kind = 'enum', default = 'generated', values = { 'generated', 'recorded' }, label = 'Rain sound' },
+  -- the wind: generated (windsynth.rs) or recorded (CC0 field recordings; the user, 2026-11-26: "Let people switch
+  -- between recorded and generated"), thunder's default
+  weatherWindSound = { kind = 'enum', default = 'generated', values = { 'generated', 'recorded' }, label = 'Wind sound' },
+  realClouds = { kind = 'bool', default = true, label = 'Real clouds' },
+  realFog = { kind = 'bool', default = true, label = 'Real fog' },
+  realWind = { kind = 'bool', default = true, label = 'Real wind' },
+  realPrecip = { kind = 'bool', default = true, label = 'Real rain and snow' },
+  fogLimit = { kind = 'enum', default = '0', values = { '0', '200', '500', '1600' }, label = 'Thickest fog (m, 0: real)' },
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
   -- the station finder's prompt when the fuel or charge runs low (finder.lua; the user, 2026-11-09)
   lowFuelPrompt = { kind = 'bool', default = true, label = 'Low fuel prompt' },
@@ -118,6 +163,22 @@ M.SCHEMA = {
   -- the traffic's amount by the place (navgraph.lua M.ADAPTIVE, server traffic.py; PR #728 / #773, ProxyFirewall202):
   -- more cars in cities, fewer in the country, never more than the player's own amount
   adaptiveTraffic = { kind = 'bool', default = false, label = 'Adaptive traffic amount' },
+  stationBuses = { kind = 'bool', default = true, label = 'Buses at bus stations' },
+  -- the live air traffic (airtraffic.lua, server airtraffic.py; devo343's Live Air Traffic add-on, built in): OFF by
+  -- default, and on only once its consent text was accepted (airTrafficConsent >= airtraffic.CONSENT_VERSION: the
+  -- page asks first). Routes (adsbdb.com) have their own switch, also off.
+  airTraffic = { kind = 'bool', default = false, label = 'Live air traffic' },
+  airTrafficConsent = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Live air traffic consent (version)' },
+  airTrafficRoutes = { kind = 'bool', default = false, label = 'Flight routes' },
+  airTrafficRangeNm = { kind = 'number', default = 60, min = 10, max = 150, label = 'Air traffic search radius (NM)' },
+  airTrafficLabels = { kind = 'enum', default = 'off', values = { 'full', 'flight', 'type', 'off' }, label = 'Aircraft labels' },
+  airTrafficContrails = { kind = 'bool', default = true, label = 'Contrails' },
+  airTrafficSounds = { kind = 'bool', default = true, label = 'Aircraft sounds' },
+  airTrafficVolume = { kind = 'number', default = 100, min = 0, max = 200, label = 'Aircraft sound volume (%)' },
+  airTrafficGround = { kind = 'bool', default = true, label = 'Aircraft on the ground' },
+  airTrafficSizeBoost = { kind = 'bool', default = true, label = 'Enlarge distant aircraft' },
+  airTrafficMaxModels = { kind = 'number', default = 0, min = 0, max = 100, label = 'Most aircraft models (0: by the quality preset)' },
+  airTrafficMap = { kind = 'bool', default = true, label = 'Aircraft on the maps' },
   -- anonymous usage statistics (server telemetry.py: players online, data-source load; the server reads this file
   -- before every report, cpupin.player_settings, so the switch holds from the next report on, even at its start)
   telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
@@ -144,8 +205,8 @@ M.SCHEMA = {
   expRoughDirt = { kind = 'bool', default = false, label = 'Rough dirt roads' },
   expWearStrips = { kind = 'bool', default = false, label = 'Tyre polish, crack networks and manholes' },
   expGradeGuard = { kind = 'bool', default = false, label = 'Road steepness limit' },
-  expPhotoSurface = { kind = 'bool', default = false, label = 'Road surface from aerial photos' },
   expTerrainBumps = { kind = 'bool', default = false, label = 'Rougher land off the roads' },
+  expRoadFollow = { kind = 'bool', default = false, label = 'Roads follow the land' },
   expCliffWalls = { kind = 'bool', default = false, label = 'Rock faces in deep road cuts' },
   expTunnelLids = { kind = 'bool', default = false, label = 'Ground over shallow tunnels' },
   expSubseaTunnels = { kind = 'bool', default = false, label = 'More undersea tunnels' },
@@ -162,6 +223,10 @@ M.SCHEMA = {
   expCanadaLidar = { kind = 'bool', default = false, label = 'Detailed Canadian lidar' },
   expGenGround = { kind = 'bool', default = false, label = 'Generated ground' },
   expStaleRevisit = { kind = 'bool', default = false, label = 'Show the older world while rebuilding' },
+  expWinter = { kind = 'bool', default = false, label = 'Winter' },
+  expWetRoads = { kind = 'bool', default = false, label = 'Wet roads' },
+  expPuddlesV2 = { kind = 'bool', default = false, label = 'New puddles (server)' },
+  expLeafCycle = { kind = 'bool', default = false, label = 'Leaf cycle' },
   -- in Germany: the German right-of-way signs and markings at junctions, 30-zone signs and traffic that gives way
   -- accordingly (server designs.py; the message german_junctions)
   germanJunctionSigns = { kind = 'bool', default = false, label = 'German junction signs' },
@@ -220,10 +285,12 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTextures', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
+  'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'weatherStormLight',
+  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherWetGrip', 'weatherPuddleLook', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'weatherWindSound', 'realClouds',
+  'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'airTraffic', 'airTrafficRoutes', 'airTrafficRangeNm', 'airTrafficLabels', 'airTrafficContrails', 'airTrafficSounds', 'airTrafficVolume', 'airTrafficGround', 'airTrafficSizeBoost', 'airTrafficMaxModels', 'airTrafficMap', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -231,12 +298,14 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
   'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
-  'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
+  'expWearStrips', 'expGradeGuard', 'expTerrainBumps', 'expRoadFollow', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
-  'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
+  'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads', 'expPuddlesV2',
+  'expLeafCycle' }
 
 -- Stored but not on the settings page
-M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true }
+M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true,
+  airTrafficConsent = true }
 
 -- The quality presets: each sets these knobs at once ('high' = the defaults before presets existed, 2026-10-28). A
 -- Steam Deck on Handheld in a forest (Patapsco, 2026-10-28): low 37.0 fps, high 31.5, ultra 30.9; 'medium' (its first-run
@@ -245,25 +314,25 @@ M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, q
 -- the first run (M.detectQuality).
 M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights', 'distantTrafficQuality',
   'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail', 'roadDetail',
-  'groundGrid', 'terrainShadows' }
+  'groundGrid', 'terrainShadows', 'cliffDetail' }
 M.PRESETS = {
-  low = { trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
+  low = { cliffDetail = 'low', trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
     rocks = true, nightLights = 'few', viewDistanceMode = 'fixed', viewDistanceKm = 40, terrainDetail = 'low',
     buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game', distantTrafficQuality = 'low', roadDetail = 'off',
     groundGrid = '2', terrainShadows = false },
-  medium = { trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
+  medium = { cliffDetail = 'medium', trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
     grassDistance = 'normal', rocks = true, nightLights = 'few', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'medium',
     roadDetail = 'basic', groundGrid = '2', terrainShadows = false },
-  high = { trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
+  high = { cliffDetail = 'normal', trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
     grassDistance = 'normal', rocks = true, nightLights = 'normal', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high',
     roadDetail = 'full', groundGrid = '1', terrainShadows = true },
-  ultra = { trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
+  ultra = { cliffDetail = 'high', trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
     rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100, terrainDetail = 'high',
     buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high', roadDetail = 'full',
     groundGrid = '1', terrainShadows = true },
-  extreme = { trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
+  extreme = { cliffDetail = 'extreme', trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
     grassDistance = 'far', rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme', distantTrafficQuality = 'high',
     roadDetail = 'full', groundGrid = '1', terrainShadows = true },
@@ -446,6 +515,8 @@ function M.setQuality(p)
   values.quality = p
   M.save()
   for _, k in ipairs(M.PRESET_KEYS) do M.apply(k) end
+  local at = rawget(_G, 'beamngEarth_airtraffic')
+  if at and at.applyBudgets then pcall(at.applyBudgets, p) end       -- (its model and contrail budgets by preset)
   return { ok = true, settings = M.getAll() }
 end
 
@@ -585,7 +656,24 @@ local function inOurLevel()
   return st and st.inOurLevel or false
 end
 
+local function airTrafficApply()
+  local at = rawget(_G, 'beamngEarth_airtraffic')
+  if at and at.applySettings and at.enabled then at.applySettings() end
+end
+
 M.APPLY = {
+  -- the live air traffic: on only with the consent given (airtraffic.setEnabled checks it again)
+  airTraffic = function(v)
+    local at = rawget(_G, 'beamngEarth_airtraffic')
+    if at and at.setEnabled then at.setEnabled(v == true) end
+  end,
+  quality = function()
+    local at = rawget(_G, 'beamngEarth_airtraffic')
+    if at and at.applyBudgets then at.applyBudgets() end
+  end,
+  airTrafficRoutes = airTrafficApply, airTrafficRangeNm = airTrafficApply, airTrafficLabels = airTrafficApply,
+  airTrafficContrails = airTrafficApply, airTrafficSounds = airTrafficApply, airTrafficVolume = airTrafficApply,
+  airTrafficGround = airTrafficApply, airTrafficSizeBoost = airTrafficApply, airTrafficMaxModels = airTrafficApply,
   autodriveOncomingPass = function(v)
     if be and be.queueAllObjectLua then
       be:queueAllObjectLua("if beamngEarth_oncomingPass and beamngEarth_oncomingPass.setEnabled then beamngEarth_oncomingPass.setEnabled(" .. tostring(v) .. ') end')
@@ -618,6 +706,36 @@ M.APPLY = {
     local w = ext('beamngEarth_weather')
     if w and w.setMode and not (v == 'manual' and w.getMode and w.getMode() == v) then w.setMode(v) end
   end,
+  weatherPreset = function(v) local w = ext('beamngEarth_weather') if w and w.setPresetChoice then w.setPresetChoice(v) end end,
+  weatherIntensity = function(v) local w = ext('beamngEarth_weather') if w and w.setIntensity then w.setIntensity(v) end end,
+  weatherChange = function(v) local w = ext('beamngEarth_weather') if w and w.setChangeSpeed then w.setChangeSpeed(tonumber(v)) end end,
+  weatherPrecip = function(v) local w = ext('beamngEarth_weather') if w and w.setShowPrecip then w.setShowPrecip(v) end end,
+  rainVisibility = function(v) local w = ext('beamngEarth_weather') if w and w.setRainVisibility then w.setRainVisibility(v) end end,
+  weatherStormLight = function(v) local w = ext('beamngEarth_weather') if w and w.setStormLight then w.setStormLight(v) end end,
+  weatherLightning = function(v) local w = ext('beamngEarth_weather') if w and w.setLightning then w.setLightning(v) end end,
+  weatherStreaks = function(v) local w = ext('beamngEarth_weather') if w and w.setStreaks then w.setStreaks(v) end end,
+  weatherWetLook = function(v) local w = ext('beamngEarth_weather') if w and w.setWetLook then w.setWetLook(v) end end,
+  weatherWetGrip = function(v) local w = ext('beamngEarth_weather') if w and w.setWetGrip then w.setWetGrip(v) end end,
+  weatherPuddleLook = function(v) local w = ext('beamngEarth_weather') if w and w.setPuddleLook then w.setPuddleLook(v) end end,
+  weatherSoundSource = function(v) require('beamngEarth/liveaudio').setMode(v) end,
+  weatherThunderSound = function(v)
+    require('beamngEarth/liveaudio').setThunderSet(v)
+    local ok, storm = pcall(require, 'beamngEarth/storm')
+    if ok and storm and storm.setThunderSet then storm.setThunderSet(v) end
+  end,
+  weatherWindSound = function(v)
+    local ok, amb = pcall(require, 'beamngEarth/ambience')
+    if ok and amb and amb.setWindSet then amb.setWindSet(v) end
+  end,
+  weatherRainSound = function(v)
+    local ok, amb = pcall(require, 'beamngEarth/ambience')
+    if ok and amb and amb.setRainSet then amb.setRainSet(v) end
+  end,
+  realClouds = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('clouds', v) end end,
+  realFog = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('fog', v) end end,
+  realWind = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('wind', v) end end,
+  realPrecip = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('precip', v) end end,
+  fogLimit = function(v) local w = ext('beamngEarth_weather') if w and w.setFogLimit then w.setFogLimit(tonumber(v)) end end,
   realGravity = function(v)
     local w = ext('beamngEarth_weather')
     if w and w.setGravityEnabled and w.GRAVITY_ENABLED ~= v then w.setGravityEnabled(v) end
@@ -795,6 +913,17 @@ function M.uiState()
   local w = ext('beamngEarth_weather')
   status.weather = w and w.statusLine and w.statusLine() or nil
   status.gravity = w and w.gravityLine and w.gravityLine() or nil
+  local la = package.loaded['beamngEarth/liveaudio']
+  status.weatherSound = la and la.status().text or 'Pre-recorded'
+  -- the live air traffic: its line and the consent version its box asks for
+  local at = ext('beamngEarth_airtraffic')
+  if at and at.status then
+    local a = at.status()
+    status.airTrafficConsent = at.CONSENT_VERSION
+    if not a.on then status.airTraffic = 'Off'
+    elseif a.connected then status.airTraffic = string.format('%d aircraft (%s)', a.count or 0, a.credit or a.source or '')
+    else status.airTraffic = 'Waiting for data' .. (a.error and (': ' .. a.error) or '') end
+  end
   -- the download cache: the server's last numbers, fresh ones asked every CACHE_POLL-th call (the page
   -- polls every 2 s while it is open)
   cachePolls = cachePolls + 1
@@ -810,6 +939,7 @@ function M.uiState()
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
   -- the settings waiting for a world server restart, and a restart under way (core.restartState, srvrestart.lua)
+  status.cliffsAvailable = core and core.cliffsAvailable and core.cliffsAvailable() or false
   status.restart = core and core.restartState and core.restartState(values, M.ORDER) or nil
   local schema = {}
   for _, k in ipairs(M.ORDER) do
@@ -1128,6 +1258,23 @@ function M.uiStationsResult(id)
   local f = ext('beamngEarth_finder')
   return f and f.take(tonumber(id)) or nil
 end
+-- The live air traffic for the settings page and the maps: { status = {on, consented, connected, count, error,
+-- source, credit}, items = airtraffic.mapItems() (only with withItems and the map layer on) }.
+function M.uiAirTraffic(withItems)
+  local at = ext('beamngEarth_airtraffic')
+  if not at then return { status = { on = false } } end
+  local out = { status = at.status(), consentVersion = at.CONSENT_VERSION }
+  if withItems and values.airTrafficMap ~= false then out.items = at.mapItems() end
+  return out
+end
+-- The consent box's Turn on: the consent version recorded, then the switch on.
+function M.uiAirTrafficConsent(version)
+  local at = ext('beamngEarth_airtraffic')
+  local v = tonumber(version) or 0
+  if not at or v < at.CONSENT_VERSION then return { ok = false, error = 'old consent text' } end
+  M.set('airTrafficConsent', v)
+  return M.set('airTraffic', true)
+end
 function M.uiNearest()
   local f = ext('beamngEarth_finder')
   if not f then return { error = 'BeamNG.Earth is not loaded' } end
@@ -1157,6 +1304,27 @@ end
 -- The map's cache view (server covermap.py): ask (z, x0, y0, x1, y1, mode -> { id } or { error }) and poll (id -> nil
 -- while waiting, else { z, x0, y0, w, h, cells (base64 levels), gen, ready, error }).
 local cacheMapId = 0
+-- Regional placement overlays: read-only geographic providers, requested only by the debug map UI (shown only when
+-- the server has cliffs available or BNE_CLIFFS_DEBUG: uiCliffDebugAvailable).
+function M.uiCliffDebugAvailable()
+  local core = ext('beamngEarth_core')
+  return core and core.cliffDebugAvailable and core.cliffDebugAvailable() or false
+end
+function M.uiDebugMap(layer, s, w, n, e)
+  local core = ext('beamngEarth_core')
+  if not core or not core.requestDebugMap then return { error = 'BeamNG.Earth is not loaded' } end
+  M._debugMapId = (M._debugMapId or 0) + 1
+  if not core.requestDebugMap(M._debugMapId, tostring(layer), tonumber(s), tonumber(w), tonumber(n), tonumber(e)) then
+    return { error = 'Companion server not connected' }
+  end
+  return { id = M._debugMapId }
+end
+function M.uiDebugMapResult(id)
+  local core = ext('beamngEarth_core')
+  return core and core.takeDebugMap and core.takeDebugMap(tonumber(id)) or nil
+end
+
+
 function M.uiCacheMap(z, x0, y0, x1, y1, mode)
   local core = ext('beamngEarth_core')
   if not core or not core.requestCacheMap then return { error = 'BeamNG.Earth is not loaded' } end

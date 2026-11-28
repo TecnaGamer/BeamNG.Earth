@@ -21,9 +21,11 @@ PASSES = 3                  # planning passes: cells short of something in one a
 SERVER = os.path.join(os.path.dirname(HERE), "server")
 sys.path.insert(0, SERVER)
 import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
-# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
+# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell, nor
+# Switzerland's cut cells, roadz.tlm_tags)
 os.environ["BNE_ROADZ_HK"] = "off"
 os.environ["BNE_HKDTM"] = "off"
+os.environ["BNE_ROADZ_TLM"] = "off"
 
 
 def _worker(args):
@@ -37,6 +39,10 @@ def _worker(args):
     import roads
     earthd.raise_open_files()
     bw.init(cache, False, True, True, True, True, None, logging.WARNING, True, True, 0, None, False)
+    import roadz
+    if roadz.ON and roadz.DE_ON:            # (Germany's measured decks' build: in versions(), decided before planning,
+        import dedom                        # the same in every worker through the run's session)
+        dedom.identity()
     rec = open(out_jsonl, "a")
     orig_store = plancache.PlanCache.store
     orig_facts = roads._facts_store
@@ -111,6 +117,8 @@ def main():
     print(f"{len(cells)} cells, {a.procs} processes", flush=True)
     os.makedirs(a.cache, exist_ok=True)
     plancache.start_run(a.cache)            # (one run: the workers share plans, lock files)
+    import pagesdata                        # (one build of each weekly dataset in every worker: pagesdata's session)
+    pagesdata.ensure_session(a.cache)
     os.environ.setdefault("BNE_LIDAR_GAPS_WAIT", "120")
     work = os.path.join(a.cache, "bake_work")
     os.makedirs(work, exist_ok=True)

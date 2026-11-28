@@ -280,9 +280,10 @@ class PolygonsTest(unittest.TestCase):
 class ChainTest(unittest.TestCase):
     def test_only_sentinel2(self):
         kept = gg.chain(imagery.DEFAULT_CHAIN)
-        self.assertEqual(kept, ("eox2023", "eox2016"))
-        self.assertEqual(gg.chain(("bngaer", "md6in", "penn", "bngs2", "naip", "usgs", "eox2023", "eox2016")),
-                         ("bngs2", "eox2023", "eox2016"), "no 1 m source left (the CDN's aerial packs neither)")
+        self.assertEqual(kept, ("eox2016",))
+        self.assertEqual(gg.chain(("bngaer", "md6in", "penn", "bngs2", "naip", "usgs", "bngs2fine", "eox2016")),
+                         ("bngs2", "bngs2fine", "eox2016"), "no 1 m source left (the CDN's aerial packs neither)")
+        self.assertNotIn("eox2023", gg.SOURCES, "EOX 2023 is CC BY-NC-SA")
         for name in gg.SOURCES:
             self.assertEqual(imagery.SOURCES[name].min_zoom, 0)
             self.assertLessEqual(imagery.SOURCES[name].max_zoom, 14, "10 m sources only")
@@ -325,7 +326,7 @@ class KeysTest(unittest.TestCase):
 
 class _Im:
     def render(self, frame, x0, y0, size, px, pending=None):
-        return np.full((px, px, 3), 100, np.uint8), {"eox2023": px * px}
+        return np.full((px, px, 3), 100, np.uint8), {"eox2016": px * px}
 
 
 class _MD:

@@ -23,7 +23,7 @@ and dashes average out). In that profile:
 - material: the band's median brightness, saturation and excess green (and their spread). Each road's verdict is the
   nearest of this photo's own references by those numbers (the roads the map says are paved, motorway to tertiary
   or a paved surface tag; the ones tagged unpaved / gravel), so a photo's colour cast does not decide; with too few
-  references photosurface's fixed rules (tuned on Czechia) decide, or nothing.
+  references nothing decides.
 
 Outputs in DIR (default ~/bnge-tests/roads/score/<lat>_<lon>/): photo.jpg, overlay.jpg (our edges cyan, the photo's
 edges found magenta, roads whose material verdict disagrees red), roads.json (per road), summary.json, and the summary
@@ -393,7 +393,6 @@ def material_feats(rgb_windows, inner):
 
 def material_verdicts(rows):
     """Each row's photo verdict ("paved" / "unpaved" / None) and how ("refs" / "rules")."""
-    import photosurface
     paved = [r["mat"] for r in rows if r["mat"] and r["ref"] == "paved"]
     unp = [r["mat"] for r in rows if r["mat"] and r["ref"] == "unpaved"]
     keys = ("lum", "sat", "exg", "spread")
@@ -412,15 +411,11 @@ def material_verdicts(rows):
             r["photo"] = None if abs(dp - du) < 0.25 * sep else ("paved" if dp < du else "unpaved")
             r["photo_by"] = "refs"
         return {"paved_ref": cp, "unpaved_ref": cu, "n_paved_ref": len(paved), "n_unpaved_ref": len(unp)}
-    # too few references of one kind: photosurface's fixed rules (tuned on one Czech photo) only with RS_RULES=1; they
-    # called Amsterdam's brick streets and Münster's shaded asphalt unpaved (2026-11-12), so by default no verdict
+    # too few references of one kind: no verdict (the fixed rules of the retired photosurface called Amsterdam's brick
+    # streets and Muenster's shaded asphalt unpaved, 2026-11-12)
     for r in rows:
-        m = r["mat"]
-        c = None
-        if m and os.environ.get("RS_RULES") == "1":
-            c = photosurface.classify({**m, "n": max(m["n"], photosurface.MIN_SAMPLES), "vexg": None})
-        r["photo"] = {"paved": "paved", "gravel": "unpaved", "grass": "unpaved"}.get(c)
-        r["photo_by"] = "rules" if c else None
+        r["photo"] = None
+        r["photo_by"] = None
     return {"n_paved_ref": len(paved), "n_unpaved_ref": len(unp)}
 
 

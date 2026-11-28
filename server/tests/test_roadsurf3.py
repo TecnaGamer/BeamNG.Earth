@@ -230,7 +230,7 @@ class BuildFaults(unittest.TestCase):
     def test_surface_cache_generation(self):
         import revisit
         self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "off"), "BNE_ROADSURF_V3=off")
-        self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v7")
+        self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v8")
 
     def test_old_generations_cannot_supply_closed_slabs(self):
         from unittest.mock import patch

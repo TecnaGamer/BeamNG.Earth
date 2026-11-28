@@ -149,7 +149,9 @@ Physics geometry always comes from open data:
 - **Elevation:** Mapterhorn (open, Terrarium WebP, z12 global, up to z18 where
   national lidar exists), with AWS Terrain Tiles as fallback. Above ±85° use
   Copernicus GLO-30, because the Mercator sources stop there.
-- **Imagery:** EOX Sentinel-2 cloudless 2016 (CC BY, 10 m) far away, NAIP or
+- **Imagery:** Sentinel-2 far away (the project's packs of ESA WorldCover's 2021
+  composite, CC BY 4.0; EOX Sentinel-2 cloudless 2016, CC BY, at sea and as the
+  fallback; EOX's 2018+ mosaics are CC BY-NC-SA and not used), NAIP or
   national orthophotos near the player. Esri World Imagery is optional, using
   the user's own key.
 - **Buildings and roads:** Overture and OpenStreetMap, from extracts the server
@@ -495,8 +497,8 @@ their chunk arrived.
   same whatever order its regions were computed in and from whichever anchor (tested: fields and
   rendered bytes equal for two region orders; fields are stored float16 and used as stored, so a
   field read from disk gives the bytes of a freshly computed one):
-  1. seams (`<cache>/colormatch/v1/usgs/12/x/y.seams.npz`, `.seams.none`): z14 USGS and EOX S2 2023
-     (2016 per tile) over the region plus a 1-tile halo, reliability weights, IRLS, the oriented
+  1. seams (`<cache>/colormatch/v2/usgs/12/x/y.seams.npz`, `.seams.none`): z14 USGS and Sentinel-2 (the
+     bngs2 packs enlarged to z14, EOX 2016 per tile; EOX 2023 until 2026-11-23) over the region plus a 1-tile halo, reliability weights, IRLS, the oriented
      step filter (15 m grid, 36 angles, 5 x 240 m segments, the S2 gate), NMS, hysteresis and the
      component filter (>= 1.5 km, consistent step vector, and USGS carries the step: the median
      USGS step on the 300 m cut blurs over the component's median ratio step >= 0.5); per seam cell
@@ -681,6 +683,97 @@ in 2026-10-10-weather-probe-results.md.
   offset, the same switch matrix for the time), `test_settings.lua` (the 'auto' migration),
   `test_core_stubbed.lua` (forwarding). Still to check in-game: the temperature-curve setter form,
   `setPercentage` drops visible, coverage calibration above 0.95 (overcast), fog k = 1/H, wind push.
+- **Weather phase A** (the weather plan 2026-11-24, `~/bnge-tests/weatherplan/PLAN.md`, approved): modes
+  real / preset / manual ("Off"); 15 presets (`M.PRESETS`, synthetic messages; deterministic, BeamMP's too);
+  `scaleMsg` (intensity), `filterReal` (the real clouds / fog / wind / precipitation each left out), change speed
+  (`M.step` with T = 0..120 s), the fog cap. A Weather page (settings.lua `weather*`, `real*`, `rainVisibility`,
+  `fogLimit`) and a radial ring (`/root/sandbox/bngEarthWeather/`). The rain and snow objects have one owner
+  (`ownPrecip` / `precipBlock`, 4 Hz while they fall, nothing when Off): Off, the setting, the 3D map, the big map,
+  missions, above the cloud base; a shelter fade (`ambience.shelterAt`: the road tiles' tunnel / arch / parking /
+  under-bridge boxes, else 3 upward `castRayStatic` rays). Shares from log-rate curves (`RAIN_CURVE`, `SNOW_CURVE`)
+  times a pool scaled by the rain visibility; rain and snow add extinction (`rainSigma`, `snowSigma`); flakes by
+  temperature (`FLAKES`); snow uses the level's own `bngEarthSnowflake` datablock (Snow_menu drew centimetre
+  specks) with collision on; the rain box fades out inside itself, without splashes or turbulence. Grey fog:
+  `FOG_TINT` levers on the ScatterSky by `fogGrey`, restored exactly. Traffic: `trafficLights` / `trafficCap` /
+  `duskDark` (wxtraffic.lua wraps the stock traffic class's checkTimeOfDay inside its onTrafficTick only;
+  speeding.lua; nightlights.lua). BeamMP: `G.WEATHER = 'real-host'` relays the longest-joined player's real
+  weather (`bngeWeather`, checked on both sides: `G.weatherMsg`, `sanitizeMsg`).
+- **Weather phase B** (same plan, items 6 / 8 / 9 / 10 and the rain sound): `weather.lua`'s targets gain `thunder`
+  (`thunderOf` -> `storm.thunderClass`: ICON-D2 lightning potential `lpi`, WMO code 95 / 96 / 99, CAPE with rain; the
+  server's message carries `capeJkg` and `lpi`), `gloom` and `rainMmH`. Storm light: `gloomFor` -> `stormEV` written to
+  the stock HDR's `PostEffectLocalExposureObject.exposureBiasEV` over the player's `GraphicEVCompensation` (the auto
+  exposure keeps a biased target; the engine's EV is higher = darker, so the bias goes UP for a storm: measured in the
+  broker shots, a -1.6 bias brightened the picture), the sun's brightness times `1 - GLOOM_SUN * gloom`; put back like
+  the sun. `phaseB` (every frame, each part only while active): `rainstreaks.lua` (off by default; one TSStatic, one
+  open cylinder `bne_rain_shell1.cdae` or three `bne_rain_shell.cdae`, scrolling streak opacity, instance opacity =
+  rain share x shelter, leaning by wind minus camera speed; Deck cost ~1.5 / ~4.3 ms), `storm.lua` (strikes =
+  hash(cell 0.1 deg, slot 10 s UTC) so all players agree with no messages; flash = a PointLight near the camera with the
+  strike's illuminance there (far lights are culled), a lit veil of air (`bne_flashveil.cdae`), an emissive glow quad and
+  a bolt quad drawn at a stand-in distance inside the fog (`proxyDistance`: storm fog hid them at their real distance);
+  thunder by `Engine.Audio.playOnce` after d / 343 m/s; objects never named like a material), `wetlook.lua` (material
+  classes by name and words; wetness from W1's `beamngEarth/winter` road row or its own wet/dry model; batches of
+  setField + flush + reload only on a level change). Phase C: the city carriageways (terrain layers) wet at
+  the block swap: `terrain.applyWet` sets the paved layers' fields from `WET_FIELDS` just before the swap's own rebind
+  (no updateMaterial): the level's own maps read as other values (roughness 0.5 wet / 0.69 damp; never aoBaseTex, the
+  game's cache key of each block's photo pack) and the zero
+  heightmap PNG as a black macro colour map at 0.3 / 0.2 (the shader adds (2t-1) x strength: the photo darkened, as
+  wet asphalt is), the asphalt's AO detail off (it clamped the AO to 1 near). Probe P4 on the Deck: swap medians 76-78
+  dry / 68-70 ms wet. wetlook's level -> `terrain.setWet` 0/1/2; a step change while the car stands (under 2 m/s)
+  swaps the block in use in again from a copy of its .ter (`core._rewetBlock`, `terrain.reswap`: one swap's cost).
+  Wetness = the wetter of W1's road row and the own rain model (`wetlook.wetOf`). Puddles: `earthfast.puddle_plan`
+  (roadwear.rs: sags of the centre line's profile, kerb gutters, worn wheel paths; seeded per road) -> chunks marked
+  `puddle` that `roadmesh.build` leaves out of the road mesh; the geotile skin draws them as its own `puddle` part
+  (`bne_puddle`: alpha-tested depth atlas `bne_puddle_o`, roughness 0.06, sky-grey), hidden while dry (`roads.setPuddles`), its
+  alphaRef stepped by wetness (`wetlook.puddleStep`). The new puddle look (puddle plan R1, setting `weatherPuddleLook`,
+  default off, `wetlook.v2`): `wetstate.lua` owns one integer wet state (film w per mille, lagged flow i um/h, standing
+  water h in 1/120 um) stepped on 30 s ticks of the UTC clock (`os.time`), adds and floor divisions only (the same on
+  every CPU, any frame rate); inputs the weather SHOWN (weather.lua `wetInputs`, at wetlook's 2 s checks): liquid rain
+  (none at or below 0 C), ET0 (`et0Umh` from the server, else by code). Seeds: real weather from the server's 24 h
+  `hist` (weather.py with `BNE_PUDDLES=v2`: hourly rain + showers and ET0 as integer um, the same Open-Meteo request
+  with past_hours), again only after a 25 km move; presets their steady state (soaked; a steady state stays, so
+  late joiners of a server preset agree); BeamMP `real-host` clients the host's snapshot `wet` {t, w, i, h} on the
+  relayed message (mpsession.sendHostWeather; sanitized by weather.sanitizeMsg and the plugin's G.weatherMsg), caught
+  up with that message's rain. The wet look's level and the grip come from w; the puddles' 12 fill steps from h
+  (`H_STEPS_UM`, 0.3 to 9 mm), at most one step a check, none under W1's packed snow or ice; the puddle material becomes a smooth lit
+  sky-grey (a dark base read as black holes: the engine's reflections do not reach that alpha-tested material, R1
+  broker shots) and the level's environment map a normalized sky cubemap while wet (`wetsky.materials.json`, `bne_wetsky_<overcast|clear>_<city|open>`,
+  tools/make_wet_cubemaps.py; the horizon by 8 level rays round the camera every 10 s); its own values back when off.
+  With it on, `aquaplane.coverCheck`: no rain film under `ambience.shelterAt` cover. Grip (setting `weatherWetGrip`, weather.lua `WET_GRIP`):
+  `wetlook.gripCond` (the own rain model as dry / damp / wet, with hysteresis) -> `winter.setShown` at changes only:
+  winter.lua (loaded by it when no snowstate came; core's once-a-second `update` runs whichever loaded it) retunes the
+  same ground models with its slots, the road row the wetter of the snowstate's and the shown one (`winter.mergeShown`;
+  snow and ice keep priority), AI margins as in winter (the planning-horizon patch and its fallback cap only below
+  `AI_PATCH_GRIP` 0.5: not on a wet road). Aquaplaning: the skin's `puddle` part carries `spots` (8 numbers a quad:
+  centre, along axis, half sizes relative to the part's origin, atlas cell; the height the draped puddle mesh's mean
+  inside it: `roadwear.puddle_spots`, native `earthfast.puddle_spots` 641); `aquaplane.lua` (GE, from weather.lua
+  while it rains or puddles show) sends the player's own car (BeamMP: `MPVehicleGE.isOwn`) the spots within
+  30 m + 1.5 s of travel, the puddles' alphaRef and the rain's water film (Gallaway's film depth from the rain shown,
+  smoothed over 60 s), only when the list changes (or every 3 s); the vehicle extension `beamngEarth_aquaplane`
+  looks each tyre's contact point up (the atlas's pool: depth = DMAX per row x (alpha - ref)), takes the Horne /
+  Gallaway hydroplaning speed (6.35 sqrt(kPa) km/h, x (20 mm / depth)^0.06) and scales its tread nodes' friction
+  (`obj:setNodeFrictionSlidingCoefs`, the stock deflation's call) by 1 - w(depth) (1 - max(0.1, 1 - (v / vp)^2)),
+  quantised to 0.05 and written at changes only; a deflated tyre is left alone. Drops never collide (doCollision off); `shelterCheck` fades
+  them under cover. Winter's trees: one look per tree at every distance (`baretrees.lua`: bare copies, tinted copies
+  at the season's tint in 4 steps, or stock; seasonlook's live tint off meanwhile), the leaf cycle scaled by the
+  anchor's Koppen class (`anchor_ready.koppen`, `seasonlook.climateFactor`). Storms: the fog tint's Mie extinction
+  x120 over scattering x20 (an absorbing, darker haze). `ambience.lua`: rain layers (`rainWeights`, `rainMix`) on SFXEmitters with
+  our own files. `NEAR_FADE` (on, with 0.14 m drops): a ShaderData of our own (`shaders/beamngEarth/precipNearV.hlsl`) named in the
+  precipitation datablocks. Assets: `tools/make_weather_assets.py`; sounds: generated by `native/weathersynth` (`art/sound/weather/SOURCES.md`).
+- **Live weather sounds** (setting `weatherSoundSource`: `prerecorded` by default, or `live`):
+  - `liveaudio.lua` sends `weather_audio` (protocol_table.json) every 0.25 s while Live, building its context only
+    then. The context is the rain rate, wind, shelter / tunnel / cabin, the game's master x Environment volume
+    (the rain layers and the thunder play on the Environment slider: 'AudioEnvironment' / AudioChannelEnvironment),
+    pause and unfocused mute, the duck, and storm.lua's thunders: a look-ahead hint (up to 30 s ahead, again when the listener moved the
+    strike's distance by 15 %) and the final one at the strike. Generated (method B) strikes and closes are rendered
+    ahead by the synth on its fast path; the synth lists what it has ready (`readyThunders`), and a final plays
+    through the synth only when it was listed (else the mod plays its file and sends `play = false`: the synth only
+    ducks its rain at the file's crack). Mid and far always play from the files.
+  - `server/liveaudio.py` feeds those lines to a `weathersynth live-serve` child through a bounded queue drained by a
+    writer thread (the event loop never blocks), and forwards its state lines as `audio_state`.
+  - The child plays through cpal (output streams only) with a small device buffer that grows on xruns.
+  - The mod's own rain layers and thunder files fade out only while the last `audio_state` live is under 1.5 s old.
+    A missing binary, a failed start (retried after 5 s and 30 s), a lost device or connection bring the files back.
+    Details: `native/weathersynth/README.md`.
 ## Dev tools and the pause-menu settings page (docs/DEVTOOLS.md; built offline 2026-10-10)
 - `dev.lua` (extension `beamngEarth_dev`): in-world overlays (per-tile LOD tint, tile outlines by
   state, loading heat with the next imports numbered, physics block squares, rings, under-car
@@ -709,7 +802,7 @@ over to AWS, a 400 wrote a permanent `.404` marker, and the User-Agent lived in 
   failed probe up to 15 min), daily soft/hard budgets in `<cache>/netstats/<UTC date>.json`, one
   summary log line a minute. Injectable clock, sleep, rng, transport and wall clock (tests).
 - **Failover**: `HostUnavailable` / `RateLimited` cost no network and the chains move on: imagery
-  usgs → eox2023 → eox2016 (one host, one breaker: both skipped together) → palette; DEM Mapterhorn →
+  bngs2 → usgs → bngs2fine (one host, one breaker) → eox2016 → palette; DEM Mapterhorn →
   AWS for the same key (also on Mapterhorn errors now) → `DemUnavailable` (where a coarse offline DEM
   will go). A prefetch future the limiter dropped is re-fetched as demand by the render that needs it
   (one fetch for every render waiting on it); prefetch skips a source whose circuit is open, so it
@@ -840,7 +933,7 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   `imagery/usgs-ds1-<mode>/`): after a generator update the old directory is never read again and
   ages out through the LRU, so only what changed is recomputed.
 - **Lifetimes** (ROADMAP 3, the cheap part): `cache.LIFETIMES` (path prefix -> max age after the
-  download), enforced by the start-up walk. Empty: USGS (public domain), EOX (CC BY / CC BY-NC-SA),
+  download), enforced by the start-up walk. Empty: USGS (public domain), EOX 2016 and the Sentinel-2 packs (CC BY),
   Mapterhorn and AWS Terrain Tiles set no caching-time limit; 404 markers expire through netfetch's
   `miss_ttl` (90 days). Background refresh of stale tiles is not built.
 - **Protocol** (additive, no bump; server/README.md): mod -> server `cache` {`capGb`, `clear`} (both
@@ -856,6 +949,20 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   requests only with a session). Still to check in-game: the page section (select, the confirmation
   row, "Clearing..." / "Freed"), a clear while driving (nothing around the player re-downloads), the
   start-up walk's time on the real cache, and the log line of the first eviction with a small cap.
+
+### The game's terrain texture cache (`server/terraincache.py`, `server/terrainpacks.py` over `native/earthfast/src/terrainpacks.rs`; 2026-11-25)
+- The server writes a BC7 pack of every block photo into `<user>/temp/art/terrainmaterialcache/<key>.dds` (key: xxh64
+  of the photo's and the AO map's paths), so the game does not pack it on its main thread.
+- Every pack is recorded first in `terrainpacks.log` in the server's cache (key, session, time). A session's recorded
+  packs go with it. At a start with no game running, the recorded packs of sessions that are gone are deleted, photo or
+  not, then the recorded packs over 2 GB, oldest first.
+- Deletes list the packs before their photo, and a clean exit does the queued pack deletes.
+- A one-time wipe (`terrainpacks_wiped_v2`) removes packs earlier versions leaked. It matches only our writer's packs:
+  exact size and header, every sampled block BC7 mode 6 with the flat AO 251. It never touches the game's own packs,
+  and it leaves alone a folder holding anything that is not a pack.
+- Nothing in the pack folder is followed through a link: a link (or a folder) at a pack's name is not measured, read
+  or deleted, and a link among the packs makes the folder unfamiliar to the wipe. The clean-up runs only with no game
+  running (earthd's start).
 
 ## Robustness: no server, lost server (docs/ROADMAP.md "Robustness" 1-3; built offline 2026-10-11, feature/robustness)
 - **Banner** (`banner.lua`, docs/DEVTOOLS.md "Connection banner"): a pure state machine fed once per
@@ -1813,3 +1920,56 @@ distances), ours (60+ miles) showed it as soft distance. In our level the far bl
 player's preset resets it); the near blur and the player's settings stay theirs; the stock parameters return when
 the level ends. LOD research: docs/research/2026-10-14-lod-research.md (also: linear-light sharpened mip chains,
 `imagery.mip_arrays`; gentler far-tree rings, the engine billboards far trees itself).
+
+## Road surface + bridge rewrite: BNE_ROADSYS (M0 harness, M1 shadow; 2026-11-22)
+
+The approved rewrite (bridgerewrite/DESIGN.md: one road sheet, one profile per carriageway, one owner per drivable
+point) lives in `native/roadsys`, a crate of its own linked into earthfast (`roadsys_*` functions, `src/roadsysbind.rs`)
+and built as a CLI for the harnesses. `BNE_ROADSYS` = off (default: nothing runs, the server is byte-identical) |
+shadow (M1). It is a developer switch, not on the settings page, and in `revisit.NOT_SWITCHES` while shadow changes
+nothing the player sees; each later stage that changes output leaves that list in the commit that does.
+
+- **M0, the audit** (`audit.rs`, `tools/widecorpus/checks.py`): double owners, envelope intrusions, blocked openings,
+  piers in faces, parapets in the carriageway, hand-over lips, clearance against the floors, T-cracks and folds, on
+  any built road scene (today's output in the wide corpus; the shadow product later), with hold thresholds in
+  `compare.py`. `run.py --extra FILE` adds places kept outside Git (the bridge study's sites).
+- **M1, the shadow product** (`server/roadsys.py`, `product.rs`): each built road geotile is built again in one
+  background thread. Its read list is the product's own (the strokes reaching the tile, their junction clusters' arms,
+  snap trunks, capping neighbours and vertical components, each whole, with the lane graph's 920 m reach), asked
+  again until no map cell is missing, so it depends on the map data alone, never on visit order. Built in the ENU frame
+  of the tile's z8 region. Strokes are cut at plain joints past a 4 km grid (net.rs `Opts`). Profiles: Tier A per
+  stroke, Tier B sections reaching 2 x L_vc past each structure, crossing, deck node, nose and joint, components
+  capped at 40 km; every solve keyed by its whole assembled problem and reused only for that problem. Per tile: a log
+  line and `<cache>/roadsys/shadow-1/<frame>/<tile>.json` (timings, read list, network / profile / surface stats,
+  checks, seam hashes, the pieces' keys). `tools/roadsys_shadow.py` runs it over a box (orders, cold, dumps for
+  `roadsys tile` under Wine).
+
+## Mapped driving features (`server/drivefeat.py`; 2026-11-23, every switch off by default)
+
+OpenStreetMap / Overture data points the generator did not read, each behind its own BNE_* build switch (keyed like
+every BNE_* variable; with one that reads the "drive" shards on, their build is MapData.versions()' "drive"):
+
+- **Data.** Overture's infrastructure points (barriers, gates, bollards, cattle grids, height restrictors, stop /
+  give-way / crossing nodes with crossing:markings, street lamps' light:* tags) are read as they come. What Overture
+  drops comes from a new weekly planet build, `tools/build_drive_tags.py` (dataset "drive", z7 gzip JSON shards like the
+  rail and lane ones, `server/drivetags.py`): traffic_calming, turning circles / loops, mini roundabouts, passing
+  places, fords, railway signals / points / buffer stops (nodes), and the tracktype / ford / traffic_calming of highway
+  ways (delta-coded id lists, `railtags.Rules`). `BNE_DRIVETAGS_DIR` reads a local build (tests). The way tags are
+  joined to the decoded roads layer after it is kept (`MapData._drive`), so `roadlayercache` keeps nothing new.
+- **BNE_CALMING.** Bumps / humps / tables / cushions / dips as profiles in the road plans (`calming.py`, earthfast
+  `drivefeat.rs calming_apply`: half-cosine ramps, a flat top, the plan densified every 0.25 m round each), after every
+  grading pass that moves heights, so the physics lattice, meshes and decals take them. Triangle markings on humps /
+  tables in the TSRGD / MUTCD countries; islands, chokers and chicanes as kerbed islands.
+- **BNE_UNPAVED.** tracktype fills a missing surface (grade1 compacted .. grade5 grass); smoothness, else tracktype,
+  else the surface, else the class sets an unpaved road's roughness (grading.dirt_bumps' gain); mapped fords dip the
+  road 0.3 m and get a short River piece of water over the dip (`drivefeat.ford_rivers`, the sea message).
+- **BNE_ROAD_BARRIERS.** Gates, lift gates, height restrictors, bollards and cattle grids on roads
+  (`tools/build_drive_props.py`'s bne_dp_* models; the cattle grid a draped stock grate). Never closed on a road the AI
+  graph drives (navgraph's own rule); closed only with access=private / no on one it leaves out.
+- **BNE_ROAD_ENDS.** Turning circles as paved bulbs at dead ends, passing places as lay-bys (pseudo-corners of
+  `roadcorners`: painted, masked, cleared of trees, graded), mini roundabouts as white discs.
+- **BNE_NODE_MARKINGS.** Mapped zebras, stop lines and give-way paint (TSRGD 1003's double broken line in the UK and
+  Ireland) where the map has them, every country but Sweden and Germany (their own readings).
+- **BNE_RAIL_PROPS.** Railway signals (main / dwarf) and point machines beside the track where mapped.
+- **BNE_LAMP_TAGS.** A mapped street lamp's light:count (double arm), lamp_mount (none on walls / wires) and
+  light:colour / lamp_type (its night light's colour, nightlights.lua).

@@ -258,6 +258,9 @@ def search_ids(lat, lon, range_m, cache_dir, iface=None, timeout=30.0):
 # central Paris), so a region's list is short. Kept REGION_TTL_S, then asked again (a failed refresh keeps the old).
 REGION_DEG = 0.5
 REGION_TTL_S = 14 * 86400.0
+REGION_RETRY_S = 600.0          # a stale region list's failed refresh: asked again after this, doubling to a day
+_region_backoff = {}            # (i, j) -> netfetch.Backoff (under _region_lock)
+_region_lock = threading.Lock()
 REGION_PAGES = 20               # (the search is paged: /<page>, from 1, until an empty page)
 
 
@@ -284,6 +287,12 @@ def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
             return [int(v) for v in old]
     except (OSError, ValueError, TypeError):
         old = None
+    with _region_lock:      # (a stale list: the search asked again only after the backoff, not on every tile)
+        backoff = _region_backoff.get((i, j))
+        if backoff is None:
+            backoff = _region_backoff[(i, j)] = netfetch.Backoff(REGION_RETRY_S, 86400.0)
+        if old is not None and not backoff.due(time.monotonic()):
+            return [int(v) for v in old]
     ids = []
     try:
         for page in range(1, REGION_PAGES + 1):
@@ -296,8 +305,9 @@ def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
             ids += [int(v) for v in got]
         ids = sorted(set(ids))
     except (ValueError, OSError, TypeError) as e:
-        if old is not None:
-            log.warning("3dmr search %s,%s: %s (the cached list kept)", i, j, e)
+        if old is not None:     # (stale-if-error: logged once in a row, asked again after the backoff)
+            with _region_lock:
+                netfetch.refresh_failed(log, backoff, time.monotonic(), f"3dmr search {i},{j}", e)
             return [int(v) for v in old]
         log.warning("3dmr search %s,%s: %s", i, j, e)
         revisit.fault()
@@ -307,6 +317,8 @@ def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
     with open(tmp, "w") as f:
         json.dump(ids, f)
     staging.replace(tmp, path)
+    with _region_lock:
+        backoff.ok()
     log.info("3dmr search %s,%s: %d models", i, j, len(ids))
     return ids
 

@@ -24,13 +24,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Copernicus 30 m elsewhere with buildings and small tree stands filtered out of it.
 - Aerial and satellite imagery on the ground: open state and national orthophotos (Maryland's 15 cm photos,
   a dozen more US states, NAIP across the US, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states,
-  Austria, Poland, Czechia, Japan, parts of Australia and Canada, and more), Sentinel-2 cloudless everywhere else; shadows and
+  Austria, Poland, Czechia, Japan, parts of Australia and Canada, and more), Sentinel-2 everywhere else; shadows and
   colour seams taken out of the photos, the season's colours graded in, cliffs drawn as rock.
 - A real view distance out to the horizon, with the Earth's curvature.
 - Both poles: Antarctica's ice sheet up to the South Pole (2,835 m) from the Copernicus DEM, the Arctic's sea ice
   at the North Pole, the polar day and night of the real sky, and a minimap compass that points to true north.
-- Opt-in (Settings > Experimental > Road surface from aerial photos, or `BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
-  colour of the regional photo under it (a lane as green as its verges is a grass lane, a pale neutral one gravel).
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes. Squares and pedestrian areas are painted into the ground with their own textures by
   their mapped surface and paving tags (grey stone slabs, red herringbone brick, cobbles; in the US red brick only
@@ -169,7 +167,29 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - **Real weather** at the player from Open-Meteo, updated as you travel: cloud cover and high cirrus, clouds
   drifting with the wind aloft, fog from the real visibility, ground wind with gusts that pushes the cars,
   rain and snow, the air temperature, and the sun dimming under overcast. It goes through the game's own
-  weather system, so the Time & Weather menu shows the real values; a manual mode leaves it to you.
+  weather system, so the Time & Weather menu shows the real values.
+- **Live air traffic** (off by default; Settings, Air traffic): the real aircraft around you from live ADS-B data
+  (adsb.lol, with airplanes.live and adsb.fi as stand-ins), based on devo343's Live Air Traffic add-on: 25 airframe
+  models with airline colours, spinning propellers and rotors, gear on the ground and on final, lights at dusk and
+  overhead, contrails from the real weather (where it is cold enough aloft, longer-lived in humid air), engine sounds
+  heard from where the aircraft was, labels, a follow camera and a seat view (Ctrl+Alt+F), and the aircraft on the 2D
+  and 3D maps (click one to set the GPS). Turning it on says first what is sent: only your approximate area (a point
+  on a ~17 mile grid), about every 15 seconds while you are in the world. Flight routes (adsbdb.com) have their own
+  switch. The graphics preset sets how many models and contrails are drawn.
+- **Weather page and radial menu**: Real weather, one of 15 presets (clear to thunderstorm, fog, snow, blizzard,
+  sleet, freezing rain, hail) or Off (the game's own controls); intensity, how fast it changes, rain and snow on or
+  off, rain visibility, the real clouds, fog, wind and rain each on or off, and a limit on how thick fog gets. Rain
+  and snow stop in tunnels, parking structures and under bridges, rain thickens the air and turns the fog grey, and
+  traffic turns its headlights on and slows down in rain, snow and fog.
+- **Storms**: lightning flashes and bolts with thunder delayed by the distance (the same strikes for everyone with the
+  same weather in multiplayer), darker light under storm clouds, optional lit rain streaks around you, a wet look on streets,
+  sidewalks, markings, bridges and buildings, puddles that fill in the low spots, along kerbs and in worn wheel ruts and
+  dry up after the rain, wet roads that lose grip in the rain you see (and aquaplaning in deep puddles and heavy rain
+  at speed), and rain sounds that follow the rain's strength and go muffled under cover. An experimental "New puddle
+  look" (Weather page) makes the puddles still water mirroring the grey sky and the wet streets reflect an overcast sky, the puddles filled by how much it has
+  rained (the same for everyone in multiplayer with the host's weather), with no water film in tunnels.
+  An experimental "Weather sounds: Live" setting has the app make the thunder live (the rain stays the pre-recorded
+  loops for now), through your default audio device at the game's volume, with the pre-recorded sounds as the fallback.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
   trees in winter where the photos were taken leaf-off).
 - **Real gravity**: the WGS84 gravity for your latitude and altitude plus the EGM2008 local anomalies, so
@@ -279,7 +299,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 
 **Map and navigation**
 - A level select with famous places and a **Random location** button (it starts you on a road).
-- World map (**M**): pan and zoom the globe, satellite or street map (EOX) with a roads & labels overlay,
+- World map (**M**): pan and zoom the globe, satellite (Sentinel-2, aerial photos) or street map (EOX) with a roads & labels overlay,
   borders and place names (the **Layers** button), search for landmarks and places as you type and streets and
   addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Kinds of places
   work too: "race track", "rally", "off-road", "peak", "forest", "beach" ... (plurals, typos, "near <place>") list
@@ -414,8 +434,17 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   orchards and vineyards in rows, paths, tracks, hedges, streams, piers, tree heights, roads and buildings, graded to
   the season, instead of 1 m aerial photos, which are then not downloaded at all, for roof colours neither; less real
   detail where the map has none);
-  **Show the older world while rebuilding** (after an update). A switch set by hand in the server's environment wins
-  over the page.
+  **Show the older world while rebuilding** (after an update); **Winter grip** (`BNE_WINTER=on`: roads get slippery
+  when the real weather brings snow, slush, frost or ice, from an hourly snow model of the last 10 days' weather; main
+  roads are cleared and salted first and bridges freeze first; the road's condition shows in the status bar; broadleaf
+  trees go bare tree by tree in their winter, near and far, a few oaks and young beeches keeping their dead leaves; snow
+  lies on the ground near and far where the real weather put it (only where it really snowed, never from the climate
+  alone; a teleport shows the new place's own snow); snowy streets look the part by road class: main roads plowed and salted to wet
+  black lanes with slush at their edges, side streets packed white with grey wheel tracks, markings fading under the
+  snow, snowbanks along plowed roads (never across junctions, crossings or bridges), sidewalks shovelled, trampled or
+  left covered, white bridge decks. `BNE_WINTER=light`, `heavy` or `ice` forces a fixed light-snow, snowstorm or
+  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too); **New puddles (server)** (`BNE_PUDDLES=v2`: the weather comes with the last day of real rain, so the Weather page's New puddle look starts with the puddles a wet morning left; later versions add new puddle shapes and water along the kerbs); **Leaf cycle** (`BNE_LEAF_CYCLE=on`, with Winter: broadleaf trees colour and lose their leaves over several weeks in autumn, one tree at a time, and leaf out the same way in spring, by the place's latitude, height and climate). A switch set by hand in the
+  server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
   memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
@@ -438,8 +467,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
   own mod manager, after a notice naming the author (they are not made by BeamNG.Earth); each download comes from the
   author's own GitHub releases and is checked against GitHub's checksum. Not while a BeamMP server is joined. Other
-  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`), and programs beside the game can read your
-  position from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md).
+  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`, which also says when the streamed world
+  changes and lists the buildings and towns round a point), and programs beside the game can read your position
+  from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md). Like the stock
+  maps, the level has a police vehicle group of the region you are in and its buildings in a `Buildings` group.
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads
@@ -468,7 +499,10 @@ connection (the map is downloaded while you play).
    - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
      steady game speed (dtsmooth: no catch-up burst after a hitch), shorter ground block swaps (terfast), lighter
      frames after a swap (texkeep: unchanged ground textures kept)) already applied, no Steam launch options needed.
-     On Windows the launcher applies dtsmooth and terfast to the running game.
+     On Windows the launcher applies dtsmooth and terfast to the running game. The patches find the engine's code by
+     its instructions, so a game update that leaves those functions as they were keeps them; a patch that does not
+     apply (a game update changed its code) is named in the launcher's window and in a warning in the game, and the
+     game runs without it.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).
@@ -623,13 +657,13 @@ over the internet, and start it (its log shows `[BeamNG.Earth] plugin loaded`). 
 BeamMP's own public list, so players without BeamNG.Earth never see it; `Private = true`, or no AuthKey: on no list,
 players use Direct Connect. The plugin lists the server once a minute with `curl` (Linux, and Windows 10 and later).
 Update the server zip with every release: it carries the mod the server sends to players. The server's time and weather for everyone
-(`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real or clear, cloudy, rain, storm, snow,
-fog) are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
-little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. Releases may also carry
-ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
-`tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
-checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` with an empty AuthKey for your own.
-With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
+(`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real, real-host (everyone gets the weather
+where the longest-joined player is) or a preset such as clear, overcast, rain, heavyrain, storm, fog, snow, blizzard)
+are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
+little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. The releases carry only that
+zip: get the BeamMP server program itself from [BeamMP's own releases](https://github.com/BeamMP/BeamMP-Server/releases).
+With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, BeamMP's server with the plugin in a container
+(`tools/build_host.py` builds it), set up through
 its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
 [beammp/README.md](beammp/README.md#docker)).
 
@@ -689,9 +723,11 @@ issue page** still opens a ready-to-post public issue if you prefer that. Detail
 The repository contains only code; all map data is downloaded at runtime and cached locally.
 - Imagery: state and national orthophoto services where they are open (Maryland, a dozen more US
   states, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states, Poland (GUGiK), Japan, parts of Australia and
-  Canada, and more), USDA NAIP and USGS The National Map (public domain; "Map services and data available from U.S. Geological Survey, National Geospatial Program") in the US, and Sentinel-2
-  cloudless by EOX IT Services GmbH everywhere (https://s2maps.eu, contains modified Copernicus Sentinel
-  data; 2016 release CC BY 4.0, 2023 release CC BY-NC-SA 4.0, non-commercial).
+  Canada, and more), USDA NAIP and USGS The National Map (public domain; "Map services and data available from U.S. Geological Survey, National Geospatial Program") in the US, and
+  Sentinel-2 everywhere: BeamNG.Earth's own tiles of ESA WorldCover's 2021 Sentinel-2 composite ("Contains modified
+  Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)") and, at sea and as the fallback,
+  Sentinel-2 cloudless 2016 by EOX IT Services GmbH (https://cloudless.eox.at, contains modified Copernicus Sentinel
+  data 2016 & 2017, CC BY 4.0). EOX's 2023 release (CC BY-NC-SA 4.0, non-commercial) is no longer used.
 - Elevation: Mapterhorn (https://mapterhorn.com/attribution; zooms 0-12 served from BeamNG.Earth's own tile host,
   repacked from Mapterhorn's archive as Mapterhorn allows), AWS Terrain Tiles / Mapzen; the polar caps from
   85 deg on: Copernicus DEM GLO-30 (produced using Copernicus WorldDEM-30 (c) DLR e.V. 2010-2014 and (c) Airbus
@@ -716,6 +752,9 @@ The repository contains only code; all map data is downloaded at runtime and cac
   contributors (ODbL, rebuilt weekly), its Städte and Märkte from the Statistisches Bundesamt (Destatis,
   Gemeindeverzeichnis); German lettering: D-DIN (SIL OFL 1.1).
 - Railways: OpenStreetMap contributors (ODbL; railway tags, rebuilt weekly from the planet by the [BeamNG.Earth-data](https://github.com/TecnaGamer/BeamNG.Earth-data) repo's GitHub Action); US level crossings: the Federal Railroad Administration's Highway-Rail Crossing Inventory (public domain).
+- Live air traffic (off by default): aircraft data © adsb.lol contributors (ODbL), airplanes.live, adsb.fi
+  (https://adsb.fi); flight routes from adsbdb.com (memory only); models, sounds and code from devo343's Live Air
+  Traffic add-on (with permission); close-up jet sound from Pixabay.
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).
 Each source's terms apply to the downloaded data; the in-game window shows the attribution line.

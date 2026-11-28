@@ -1,0 +1,1364 @@
+//! The recorded weather textures' bank ("recording mix" for rain, wind, drips and hail, after the thunder grain bank):
+//! clean stretches ("blocks") of CC0 field recordings, found, checked, levelled and packed for texmix.rs.
+//!
+//!   weathersynth texbank-build --gb DIR --sources SOURCES.json --out BANKDIR [--threads N] [--max-s S]
+//!
+//! - **Inputs:** SOURCES.json `{"sources": [{id, cls, title, author, page, license, checked}]}`; the originals are
+//!   DIR/originals/fs<ID>.* and every one must match DIR/originals.sha256 before ffmpeg decodes it (as the thunder
+//!   builder). Classes: rain_light, rain_moderate, rain_heavy, rain_car, rain_under, drips, gutter, wind_light,
+//!   wind_moderate, wind_strong, hail.
+//! - **Screening:** 5 s windows through grainbuild::screen_window with the class's rules (the rain-only checks for
+//!   outdoor rain: traffic swell, unsteady, <120 Hz rumble, knocks; the hiss-floor rule only for windows under
+//!   -40 dBFS, since dense steady rain fits it too), plus: thunder (rain classes: the 20-200 Hz band's 400 ms level
+//!   12 dB over its median for >= 1 s blanks [start - 1 s, end + 8 s]); microphone buffeting (wind classes:
+//!   the <100 Hz 10 ms level jumping > 12 dB over its 1 s median, more than 0.5 times a second); still raining (drips:
+//!   1-8 kHz 20 ms levels p99 - p50 under 4 dB means a steady wash, not drips); a transient outlier (the window's
+//!   sample peak more than 24 dB over its RMS; light rain 30, drips 34, hail 30).
+//! - **Blocks:** runs of >= 2 clean windows, 0.25 s trimmed at each end, at most MAX_BLOCK_S each (longer runs split).
+//! - **Selection:** per class a budget, at most a cap per source, round-robin over the sources (longest first) so
+//!   every recording is used before any is used twice.
+//! - **Processing:** DC out, a 30 Hz (40 Hz for wind) 2nd-order Butterworth high-pass, then a gain to -30 LUFS
+//!   (integrated, K-weighted) per block, lowered if the peak would pass 0.9. No denoising (rain and wind are noise).
+//! - **Density check:** a light-rain block must be sparse (2.5-6 kHz envelope kurtosis >= 8), a heavy-rain block dense
+//!   (<= 40); others are dropped (BANKDIR/blocks_fit.tsv lists every block).
+//! - **The car takes:** a source declared roof_light / roof / roof_heavy (its title says how hard it rains) keeps that;
+//!   rain_car takes ("variations") are split into the three by their 2.5-6 kHz envelope kurtosis terciles.
+//! - **Screening cache:** the window verdicts per (original sha256, class, SCREEN_VERSION) in --cache DIR (default
+//!   BANKDIR/screen_cache), so re-cutting with other selection rules skips the slow part.
+//! - **Output:** BANKDIR/tex_bank.bin ("WSTEX1", i16), BANKDIR/manifest.json, BANKDIR/screening.tsv (every window and
+//!   why it was rejected), BANKDIR/CREDITS.md. Deterministic: sources in file order, libm maths, fixed-order sums;
+//!   threads only split sources.
+
+use crate::dsp::Biquad;
+use crate::grainbuild::{self as gb, Out};
+use crate::loudness;
+use crate::m;
+use crate::proto::{self, Json};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+pub const SR: f64 = 44100.0;
+const WIN_S: f64 = 5.0;
+const TRIM_S: f64 = 0.25;
+pub const MAX_BLOCK_S: f64 = 30.0;
+const BLOCK_LUFS: f64 = -30.0;
+const MAGIC: &[u8; 8] = b"WSTEX1\0\0";
+const THUNDER_DB: f64 = 12.0;
+const HISS_QUIET_DBFS: f64 = -40.0;
+/// drips: the 1-8 kHz 20 ms levels' p99 - p50 under this is a steady wash (rain still falling), not drips. (The
+/// after-rain takes measure 4-12 dB: dense soft drips in a reverberant yard; a downpour measures 1-3 dB.)
+const DRIP_SPREAD_DB: f64 = 4.0;
+
+pub const CLASSES: [&str; 15] = [
+    "rain_light",
+    "rain_moderate",
+    "rain_heavy",
+    "roof_light",
+    "roof",
+    "roof_heavy",
+    "rain_under",
+    "drips",
+    "gutter",
+    "wind_light",
+    "wind_moderate",
+    "wind_strong",
+    "hail",
+    // single drops cut from the after-rain takes (the drips loops are scheduled from these, texmix::drips)
+    "drip",
+    // single hail hits cut from the hail takes, cleaned (the hail loop's impact layer)
+    "hail_hit",
+];
+
+/// The bank's file name; live-serve reads it from next to the program, or from the source tree's assets folder.
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+pub const BANK_FILE: &str = "tex_bank.bin";
+
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+pub fn default_bank() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let mut c = vec![dir.join(BANK_FILE)];
+    for up in dir.ancestors().take(4) {
+        c.push(up.join("assets").join(BANK_FILE));
+    }
+    c.into_iter().find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
+}
+
+pub fn class_index(c: &str) -> Option<usize> {
+    CLASSES.iter().position(|k| *k == c)
+}
+
+/// (budget s, cap per source s) of a class
+fn budget(c: &str) -> (f64, f64) {
+    match c {
+        "drip" => (90.0, 45.0),
+        "hail_hit" => (60.0, 20.0),
+        "wind_light" | "wind_moderate" | "wind_strong" => (300.0, 120.0),
+        "rain_car" => (360.0, 120.0),
+        _ => (240.0, 90.0),
+    }
+}
+
+/// the highest sample-peak-to-RMS (dB) of a clean 5 s window: rain is many small impacts (about 12-20 dB), drips and
+/// hail are sparse hits
+fn crest_max(c: &str) -> f64 {
+    match c {
+        // light rain is sparse distinct drops, close ones far above the window's level
+        // (the user, 2026-11-26, picked light B: the sparse close-drop takes in, crest up to 40 dB)
+        "rain_light" => *LIGHT_CREST.get().unwrap_or(&40.0),
+        "roof_light" => 30.0,
+        "drips" => 34.0,
+        "hail" => 30.0,
+        _ => 24.0,
+    }
+}
+
+/// windows over this crest are noted in the verdicts ("transient outlier (crest N dB)"); crest_max decides
+const CREST_RECORD_DB: f64 = 24.0;
+/// --light-crest DB: light rain's crest limit (default 40: light B, the user's pick; 30 left the sparse takes out)
+static LIGHT_CREST: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+
+fn crest_of(reason: &str) -> Option<f64> {
+    reason.strip_prefix("transient outlier (crest ")?.strip_suffix(" dB)")?.parse().ok()
+}
+
+/// the screening kind grainbuild::screen_window uses for a source class
+fn screen_kind(c: &str) -> &'static str {
+    match c {
+        "rain_light" => "rain_light",
+        "rain_moderate" => "rain_moderate",
+        "rain_heavy" => "rain_heavy",
+        "rain_car" | "roof_light" | "roof" | "roof_heavy" => "rain_car",
+        c if c.starts_with("wind") => "wind",
+        _ => "rain_cover",
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Source {
+    pub id: String,
+    pub cls: String,
+    pub title: String,
+    pub author: String,
+    pub page: String,
+    pub license: String,
+    pub checked: String,
+}
+
+fn read_sources(p: &Path) -> Result<Vec<Source>, String> {
+    let t = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let j = proto::parse_limit(&t, 1 << 24).map_err(|e| format!("{}: {e}", p.display()))?;
+    let Some(Json::Arr(list)) = j.get("sources") else { return Err("sources: no list".into()) };
+    let s = |r: &Json, k: &str| r.str(k).unwrap_or("").to_string();
+    let mut out = Vec::new();
+    for r in list {
+        let src = Source {
+            id: s(r, "id"),
+            cls: s(r, "cls"),
+            title: s(r, "title"),
+            author: s(r, "author"),
+            page: s(r, "page"),
+            license: s(r, "license"),
+            checked: s(r, "checked"),
+        };
+        if !src.license.contains("publicdomain/zero") {
+            return Err(format!("{}: not CC0 ({})", src.id, src.license));
+        }
+        if src.cls != "rain_car" && class_index(&src.cls).is_none() {
+            return Err(format!("{}: unknown class {}", src.id, src.cls));
+        }
+        out.push(src);
+    }
+    Ok(out)
+}
+
+/// A clean run in an original.
+#[derive(Clone, Debug)]
+pub struct Run {
+    pub src: usize,
+    pub t0: f64,
+    pub t1: f64,
+}
+
+fn fr_db(x: &[f64], win: usize) -> Vec<f64> {
+    gb::frame_rms_db(x, win, win)
+}
+
+fn median(v: &[f64]) -> f64 {
+    crate::npx::median(v)
+}
+
+/// The windows' verdicts: (start s, reasons), and the thunder spans blanked.
+fn screen_source(x: &[f64], cls: &str) -> Vec<(f64, Vec<String>)> {
+    let n = (WIN_S * SR) as usize;
+    let nw = x.len() / n;
+    let mut blank: Vec<(f64, f64)> = Vec::new();
+    if cls.starts_with("rain") || cls == "drips" || cls == "gutter" {
+        // thunder: the 20-200 Hz band's 400 ms level (100 ms hop) more than THUNDER_DB over its median for at least
+        // 1 s (a rumble; footsteps, knocks and drops on the mic are far shorter), blanked from 1 s before to 8 s after
+        let lf = gb::bandpass_fft(x, 20.0, 200.0);
+        let (w, hop) = ((0.4 * SR) as usize, (0.1 * SR) as usize);
+        let e = gb::frame_rms_db(&lf, w, hop);
+        let md = median(&e);
+        let mut i = 0;
+        while i < e.len() {
+            if e[i] > md + THUNDER_DB {
+                let mut j = i;
+                while j < e.len() && e[j] > md + THUNDER_DB - 3.0 {
+                    j += 1;
+                }
+                if (j - i) as f64 * 0.1 >= 1.0 {
+                    blank.push((i as f64 * 0.1 - 1.0, j as f64 * 0.1 + 0.4 + 8.0));
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let kind = screen_kind(cls);
+    let mut out = Vec::with_capacity(nw);
+    for i in 0..nw {
+        let t = i as f64 * WIN_S;
+        let w = &x[i * n..(i + 1) * n];
+        let mut reasons: Vec<String> = Vec::new();
+        if blank.iter().any(|(a, b)| t + WIN_S > *a && t < *b) {
+            reasons.push("thunder".into());
+        }
+        let (_, r) = gb::screen_window(w, kind);
+        // the hiss-floor rule (a steady, bright 6-12 kHz band) also fits dense steady rain itself; it rejects only a
+        // quiet window here, where recorder hiss would be heard
+        let loud = gb::db10(gb::mean_sq(w)) > HISS_QUIET_DBFS;
+        reasons.extend(r.into_iter().filter(|s| !(loud && s == "broadband hiss floor" && !cls.starts_with("wind"))));
+        if cls.starts_with("wind") {
+            let l10 = fr_db(&gb::bandpass_fft(w, 20.0, 100.0), (0.01 * SR) as usize);
+            let k = 50usize;
+            let mut jumps = 0usize;
+            let mut last = -1000i64;
+            for j in 3..l10.len() {
+                let a = j.saturating_sub(k);
+                let b = (j + k + 1).min(l10.len());
+                let md = median(&l10[a..b]);
+                if l10[j] - md > 12.0 && l10[j] - l10[j - 3] > 9.0 && (j as i64 - last) > 10 {
+                    jumps += 1;
+                    last = j as i64;
+                }
+            }
+            if jumps as f64 / WIN_S > 0.5 {
+                reasons.push("microphone buffeting".into());
+            }
+        }
+        if cls == "drips" {
+            let h = fr_db(&gb::bandpass_fft(w, 1000.0, 8000.0), (0.02 * SR) as usize);
+            if gb::percentile(&h, 99.0) - gb::percentile(&h, 50.0) < DRIP_SPREAD_DB {
+                reasons.push("steady wash (still raining)".into());
+            }
+        }
+        // one hit far above the window's level: a knock, a thunder crack, a drop on the microphone
+        let pk = w.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+        let crest = 20.0 * m::log10(pk.max(1e-9)) - gb::db10(gb::mean_sq(w));
+        if crest > CREST_RECORD_DB {
+            reasons.push(format!("transient outlier (crest {crest:.0} dB)"));
+        }
+        out.push((t, reasons));
+    }
+    out
+}
+
+/// Bump when screen_source's rules change: the cached verdicts (keyed by the original's sha256, its class and this) are
+/// then made again.
+const SCREEN_VERSION: u32 = 3;
+
+fn read_cache(p: &Path) -> Option<Vec<(f64, Vec<String>)>> {
+    let t = std::fs::read_to_string(p).ok()?;
+    let mut v = Vec::new();
+    for l in t.lines() {
+        let (a, b) = l.split_once('\t')?;
+        let r: Vec<String> = if b.is_empty() { vec![] } else { b.split("; ").map(|x| x.to_string()).collect() };
+        v.push((a.parse().ok()?, r));
+    }
+    Some(v)
+}
+
+fn write_cache(p: &Path, v: &[(f64, Vec<String>)]) {
+    let t: String = v.iter().map(|(a, r)| format!("{a}\t{}\n", r.join("; "))).collect();
+    let tmp = p.with_extension("tmp");
+    if std::fs::write(&tmp, t).is_ok() {
+        let _ = std::fs::rename(&tmp, p);
+    }
+}
+
+/// Whether a block fits its class by its density: light rain is sparse distinct drops (a peaky 2.5-6 kHz envelope,
+/// kurtosis >= LIGHT_KURT_MIN), heavy rain a dense roar (kurtosis <= HEAVY_KURT_MAX). Other classes: always.
+fn fits_class(cls: &str, kurt: f64) -> bool {
+    match cls {
+        "rain_light" => kurt >= LIGHT_KURT_MIN,
+        "rain_heavy" => kurt <= HEAVY_KURT_MAX,
+        _ => true,
+    }
+}
+const LIGHT_KURT_MIN: f64 = 8.0;
+const HEAVY_KURT_MAX: f64 = 40.0;
+
+fn runs_of(verdicts: &[(f64, Vec<String>)], src: usize) -> Vec<Run> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < verdicts.len() {
+        if !verdicts[i].1.is_empty() {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < verdicts.len() && verdicts[j].1.is_empty() {
+            j += 1;
+        }
+        if j - i >= 2 {
+            let (a, b) = (verdicts[i].0 + TRIM_S, verdicts[j - 1].0 + WIN_S - TRIM_S);
+            let k = ((b - a) / MAX_BLOCK_S).ceil().max(1.0) as usize;
+            let len = (b - a) / k as f64;
+            for q in 0..k {
+                out.push(Run { src, t0: a + q as f64 * len, t1: a + (q + 1) as f64 * len });
+            }
+        }
+        i = j;
+    }
+    out
+}
+
+/// The wind patter measures of a window: (onsets per second: rising edges of the 2-8 kHz 5 ms envelope 6 dB over its
+/// 1 s running median; the 2-8 kHz share of the 50 Hz-16 kHz power, dB).
+pub fn patter(x: &[f64]) -> (f64, f64) {
+    let b = gb::bandpass_fft(x, 2000.0, 8000.0);
+    let w = (0.005 * SR) as usize;
+    let e: Vec<f64> = (0..b.len() / w).map(|i| gb::db10(gb::mean_sq(&b[i * w..(i + 1) * w]))).collect();
+    let mut on = 0usize;
+    let mut up = false;
+    for j in 0..e.len() {
+        let a = j.saturating_sub(100);
+        let c = (j + 101).min(e.len());
+        let hi = e[j] - crate::npx::median(&e[a..c]) > 6.0;
+        if hi && !up {
+            on += 1;
+        }
+        up = hi;
+    }
+    let (f, p) = gb::psd(x, 4096);
+    let hf = gb::db10(gb::band_power(&f, &p, 2000.0, 8000.0) / gb::band_power(&f, &p, 50.0, 16000.0).max(1e-30));
+    (on as f64 / (x.len() as f64 / SR), hf)
+}
+/// Background noise in a wind window: (the share of 1024-point frames in tonal tracks 2-8 kHz, birds and insects; the largest narrow peak 30-500 Hz
+/// over its 41-bin running median in the long-term spectrum, dB, hum and engines; the 3-8 Hz share of the 300 Hz-3
+/// kHz band's 10 ms envelope modulation 0.3-20 Hz, voices). Wind is smooth noise with slow gusts.
+pub fn wind_noise(x: &[f64]) -> (f64, f64, f64) {
+    let nf = 1024usize;
+    let hop = 512usize;
+    let win = crate::npx::hanning(nf);
+    let ff = crate::npx::rfftfreq(nf);
+    let nfr = if x.len() >= nf { (x.len() - nf) / hop + 1 } else { 0 };
+    // per frame its most prominent 2-8 kHz bin (prominence over the 31-bin running median, within 40 dB of the
+    // frame's top); a bird or an insect is a track: 3 or more frames running, each 10 dB prominent, the peak moving by
+    // 3 bins or less from frame to frame (a chance noise peak does not line up)
+    let mut peaks: Vec<Option<usize>> = Vec::with_capacity(nfr);
+    for i in 0..nfr {
+        let fr: Vec<f64> = (0..nf).map(|j| x[i * hop + j] * win[j]).collect();
+        let sp: Vec<f64> = crate::npx::rfft(&fr, nf).iter().map(|c| gb::db10(c.re * c.re + c.im * c.im)).collect();
+        let top = (0..sp.len()).filter(|&k| ff[k] >= 100.0 && ff[k] <= 10000.0).map(|k| sp[k]).fold(f64::NEG_INFINITY, f64::max);
+        // (the running median over the whole spectrum, then the band: a median cut at the band's edge reads a steep
+        // spectral slope there as a peak, the same bin every frame, a false "track")
+        let band: Vec<usize> = (0..sp.len()).filter(|&k| ff[k] >= 2000.0 && ff[k] <= 8000.0).collect();
+        let full_md = gb::running_median(&sp, 31);
+        let bs: Vec<f64> = band.iter().map(|&k| sp[k]).collect();
+        let md: Vec<f64> = band.iter().map(|&k| full_md[k]).collect();
+        let mut best: Option<(usize, f64)> = None;
+        for (q, (v, m0)) in bs.iter().zip(&md).enumerate() {
+            let pr = v - m0;
+            if pr > 10.0 && *v > top - 40.0 && best.map(|b| pr > b.1).unwrap_or(true) {
+                best = Some((q, pr));
+            }
+        }
+        peaks.push(best.map(|b| b.0));
+    }
+    let mut tonal = 0usize;
+    let mut run = 0usize;
+    for i in 0..peaks.len() {
+        let cont = match (peaks[i], if i > 0 { peaks[i - 1] } else { None }) {
+            (Some(a), Some(b)) => (a as i64 - b as i64).abs() <= 3,
+            _ => false,
+        };
+        if peaks[i].is_some() && (cont || run == 0) {
+            run = if cont { run + 1 } else { 1 };
+        } else {
+            if run >= 3 {
+                tonal += run;
+            }
+            run = if peaks[i].is_some() { 1 } else { 0 };
+        }
+    }
+    if run >= 3 {
+        tonal += run;
+    }
+    let (f, p) = gb::psd(x, 16384);
+    let lp: Vec<f64> = p.iter().map(|v| gb::db10(*v)).collect();
+    let base = gb::running_median(&lp, 41);
+    let hum = (0..lp.len()).filter(|&k| f[k] >= 30.0 && f[k] <= 500.0).map(|k| lp[k] - base[k]).fold(f64::NEG_INFINITY, f64::max);
+    let b = gb::bandpass_fft(x, 300.0, 3000.0);
+    let w = (0.01 * SR) as usize;
+    let e: Vec<f64> = (0..b.len() / w).map(|i| gb::db10(gb::mean_sq(&b[i * w..(i + 1) * w]))).collect();
+    let mu = e.iter().sum::<f64>() / e.len().max(1) as f64;
+    let ed: Vec<f64> = e.iter().map(|v| v - mu).collect();
+    let n = 1024usize;
+    let spec = crate::npx::rfft(&ed, n);
+    let (mut sp_band, mut sp_all) = (0.0, 0.0);
+    for (k, c) in spec.iter().enumerate() {
+        let fr = k as f64 * 100.0 / n as f64; // (the envelope's rate is 100 Hz)
+        let pw = c.re * c.re + c.im * c.im;
+        if (0.3..=20.0).contains(&fr) {
+            sp_all += pw;
+            if (3.0..=8.0).contains(&fr) {
+                sp_band += pw;
+            }
+        }
+    }
+    (tonal as f64 / nfr.max(1) as f64, hum, if sp_all > 0.0 { sp_band / sp_all } else { 0.0 })
+}
+const WIND_BIRD_MAX: f64 = 0.01;
+const WIND_HUM_MAX_DB: f64 = 9.0;
+const WIND_TAKE_NOISY: f64 = 0.1;
+const WIND_SPEECH_MAX: f64 = 0.35;
+
+/// wind windows over these are patter or hiss, not wind (set from patter.tsv: see the README)
+const WIND_ONSETS_MAX: f64 = 3.0;
+const WIND_HF_MAX_DB: f64 = -12.0;
+
+/// a recording whose 1/3-octave shape deviates more than this (dB RMS over the bands) from its class's median is left
+/// out of that class (while more than two recordings remain)
+const SPEC_DEV_MAX: f64 = 7.5;
+/// classes the spectral check leaves alone: light rain is the user's pick B, its sparse close-drop takes by design
+/// and hail: its loop is the hit grains, whose takes (on a car, on tin) differ from each other by design
+const SPEC_EXEMPT: [&str; 2] = ["rain_light", "hail"];
+/// wind's own limit: whistle, rumble and tree roar differ more than rain takes do (the user wants all three)
+const SPEC_DEV_MAX_WIND: f64 = 10.0;
+
+/// The 1/3-octave power shape of x, 50 Hz-16 kHz, normalised to sum 1.
+pub fn third_oct_shape(x: &[f64]) -> Vec<f64> {
+    let (f, p) = gb::psd(x, 8192);
+    let mut out = Vec::new();
+    let mut fc = 50.0f64;
+    while fc <= 16000.0 {
+        let (lo, hi) = (fc / m::pow(2.0, 1.0 / 6.0), fc * m::pow(2.0, 1.0 / 6.0));
+        out.push(gb::band_power(&f, &p, lo, hi));
+        fc *= m::pow(2.0, 1.0 / 3.0);
+    }
+    let t: f64 = out.iter().sum::<f64>().max(1e-30);
+    out.iter().map(|v| v / t).collect()
+}
+
+/// Single drops in a block: 5 ms envelope peaks of the 1-8 kHz band DRIP_RISE_DB over its 1 s running median, with
+/// no other such peak from 100 ms before to 250 ms after, back within 4 dB of the bed in the grain's last 100 ms (the
+/// bed itself 18 dB or more under the drop, so the grains carry no audible rain between drops).
+/// Each grain: 5 ms before the onset to 295 ms after, faded in over 3 ms and out over the last 150 ms (cos), its sample
+/// peak set to DRIP_PEAK_DBFS. Returns (start s in the block, samples).
+/// What an impact grain is (drips, hail hits): the band its onsets are found in, how far its 5 ms envelope must rise
+/// over the 1 s running median, the quiet asked before and after it (ms), and its length (s).
+#[derive(Clone, Copy)]
+pub struct GrainKind {
+    pub lo: f64,
+    pub hi: f64,
+    pub rise_db: f64,
+    pub before_ms: f64,
+    pub after_ms: f64,
+    pub len_s: f64,
+    /// subtract the noise measured before the hit (the recorded drips' A/B; the user found it "super processed")
+    pub clean: bool,
+    /// the grain ends where it falls this far under its peak, faded over fade_ms
+    pub gate_db: f64,
+    pub fade_ms: f64,
+    /// uncleaned grains: the hit's peak 2 ms frame at least this far over the noise in the gap before it (dB): only hits
+    /// clean as recorded are kept
+    pub min_snr_db: f64,
+}
+pub const DRIP_GRAIN: GrainKind = GrainKind {
+    lo: 1000.0,
+    hi: 8000.0,
+    rise_db: 18.0,
+    before_ms: 100.0,
+    after_ms: 250.0,
+    len_s: 0.3,
+    clean: true,
+    gate_db: 40.0,
+    fade_ms: 10.0,
+    min_snr_db: 0.0,
+};
+/// hail: bright hard hits, closer together than drops, short; as recorded (no subtraction), only the naturally clean
+/// ones, a gentle 25 ms fade where the hit has fallen 30 dB
+pub const HAIL_GRAIN: GrainKind = GrainKind {
+    lo: 2000.0,
+    hi: 10000.0,
+    rise_db: 14.0,
+    before_ms: 40.0,
+    after_ms: 80.0,
+    len_s: 0.12,
+    clean: false,
+    gate_db: 30.0,
+    fade_ms: 25.0,
+    min_snr_db: 15.0,
+};
+
+/// Impact grains in a block, cleaned to true silence (the user, 2026-11-26, of the round-4 drips: "every time a drip
+/// sound is played I can hear its background noise with it"):
+/// - found: 5 ms envelope peaks of the kind's band rise_db over its 1 s running median, alone from before_ms ahead to
+///   after_ms behind;
+/// - the take's noise there measured in the gap just before the hit (150 to 20 ms ahead of its onset) and subtracted
+///   (grainbuild::denoise: Wiener-style gain, over-subtraction 2, floor 0), so no bed rides along;
+/// - (hail: no subtraction; only hits whose bed is min_snr_db under them, as recorded)
+/// - then gated to the hit: its 2 ms envelope from the peak on, the grain ends where it falls gate_db under the peak
+///   (a fade_ms cos fade to exact zeros), and starts 3 ms before the onset (a 3 ms fade in);
+/// - peak set to DRIP_PEAK_DBFS. Returns (start s in the block, samples).
+pub fn impact_grains(x: &[f64], k: &GrainKind) -> Vec<(f64, Vec<f64>)> {
+    let b = gb::bandpass_fft(x, k.lo, k.hi);
+    let w = (0.005 * SR) as usize;
+    let env: Vec<f64> = (0..b.len() / w).map(|i| gb::db10(gb::mean_sq(&b[i * w..(i + 1) * w]))).collect();
+    let n = env.len();
+    let mut floor = vec![0.0; n];
+    for j in 0..n {
+        let a = j.saturating_sub(100);
+        let c = (j + 101).min(n);
+        floor[j] = crate::npx::median(&env[a..c]);
+    }
+    let mut cand = Vec::new();
+    for j in 6..n.saturating_sub(6) {
+        let local_max = (j.saturating_sub(4)..=(j + 4).min(n - 1)).all(|q| env[q] <= env[j]);
+        if local_max && env[j] - floor[j] > k.rise_db {
+            cand.push(j);
+        }
+    }
+    let (fb, fa) = ((k.before_ms / 5.0) as usize, (k.after_ms / 5.0) as usize);
+    let len = (k.len_s * SR) as usize;
+    let pad = 2048usize;
+    let mut out = Vec::new();
+    for (ci, &j) in cand.iter().enumerate() {
+        if cand.iter().enumerate().any(|(q, &o)| q != ci && o + fb > j && o < j + fa) {
+            continue;
+        }
+        let mut on = j;
+        while on > 0 && j - on < 4 && env[on - 1] > env[j] - 20.0 {
+            on -= 1;
+        }
+        let onset = on * w;
+        let s0 = onset.saturating_sub((0.003 * SR) as usize);
+        let (b0, b1) = (onset.saturating_sub((0.15 * SR) as usize), onset.saturating_sub((0.02 * SR) as usize));
+        if b1 <= b0 + (0.08 * SR) as usize || s0 < pad || s0 + len + pad > x.len() {
+            continue;
+        }
+        let bed = &x[b0..b1];
+        let mut g: Vec<f64> = if k.clean {
+            let clean = gb::denoise(&x[s0 - pad..s0 + len + pad], bed, 2.0, 0.0);
+            clean[pad..pad + len].to_vec()
+        } else {
+            x[s0..s0 + len].to_vec()
+        };
+        // the gate: from the peak on, the first 2 ms frame GRAIN_GATE_DB under the peak frame ends the grain
+        let w2 = (0.002 * SR) as usize;
+        let e2: Vec<f64> = (0..len / w2).map(|i| gb::db10(gb::mean_sq(&g[i * w2..(i + 1) * w2]))).collect();
+        let pk_i = e2.iter().enumerate().fold(0, |a, (i, v)| if *v > e2[a] { i } else { a });
+        if !k.clean && e2[pk_i] - gb::db10(gb::mean_sq(bed)) < k.min_snr_db {
+            continue;
+        }
+        let stop = (pk_i..e2.len()).find(|&i| e2[i] < e2[pk_i] - k.gate_db).map(|i| (i + 1) * w2).unwrap_or(len);
+        let fo = ((k.fade_ms * 1e-3 * SR) as usize).min(stop);
+        let fi = (0.003 * SR) as usize;
+        for (i, v) in g.iter_mut().enumerate() {
+            if i < fi {
+                *v *= m::sin(0.5 * m::PI * i as f64 / fi as f64);
+            }
+            if i >= stop {
+                *v = 0.0;
+            } else if i >= stop - fo {
+                *v *= m::cos(0.5 * m::PI * (i - (stop - fo)) as f64 / fo as f64);
+            }
+        }
+        g.truncate(stop.max(fi + 1));
+        let pk = g.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+        if pk <= 0.0 {
+            continue;
+        }
+        let kk = m::undb(DRIP_PEAK_DBFS) / pk;
+        for v in g.iter_mut() {
+            *v *= kk;
+        }
+        out.push((s0 as f64 / SR, g));
+    }
+    out
+}
+const DRIP_PEAK_DBFS: f64 = -6.0;
+
+/// Envelope statistics of a block: (kurtosis of the 2.5-6 kHz 5 ms envelope, onsets per s >= 6 dB over the 1 s
+/// running median of that envelope, spectral centroid Hz 40 Hz-16 kHz).
+pub fn block_stats(x: &[f64]) -> (f64, f64, f64) {
+    let b = gb::bandpass_fft(x, 2500.0, 6000.0);
+    let w = (0.005 * SR) as usize;
+    let env: Vec<f64> = (0..b.len() / w).map(|i| m::sqrt(gb::mean_sq(&b[i * w..(i + 1) * w]))).collect();
+    let n = env.len().max(1) as f64;
+    let mu = env.iter().sum::<f64>() / n;
+    let var = env.iter().map(|v| (v - mu) * (v - mu)).sum::<f64>() / n;
+    let k4 = env.iter().map(|v| m::pow(v - mu, 4.0)).sum::<f64>() / n;
+    let kurt = if var > 0.0 { k4 / (var * var) } else { 0.0 };
+    let edb: Vec<f64> = env.iter().map(|v| 20.0 * m::log10(v.max(1e-9))).collect();
+    let half = 100usize;
+    let mut on = 0usize;
+    let mut above = false;
+    let mut j = 0;
+    while j < edb.len() {
+        let a = j.saturating_sub(half);
+        let c = (j + half + 1).min(edb.len());
+        let md = median(&edb[a..c]);
+        let up = edb[j] - md > 6.0;
+        if up && !above {
+            on += 1;
+        }
+        above = up;
+        j += 1;
+    }
+    let (f, p) = gb::psd(x, 4096);
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (fk, pk) in f.iter().zip(&p) {
+        if *fk >= 40.0 && *fk < 16000.0 {
+            num += fk * pk;
+            den += pk;
+        }
+    }
+    (kurt, on as f64 / (x.len() as f64 / SR), if den > 0.0 { num / den } else { 0.0 })
+}
+
+pub struct Block {
+    pub cls: usize,
+    pub src: usize,
+    pub t0: f64,
+    pub t1: f64,
+    pub gain_db: f64,
+    pub kurt: f64,
+    pub onsets: f64,
+    pub centroid: f64,
+    pub samples: Vec<f64>,
+}
+
+fn process(x: &[f64], cls: &str) -> (Vec<f64>, f64) {
+    let mu = x.iter().sum::<f64>() / x.len().max(1) as f64;
+    let mut y: Vec<f64> = x.iter().map(|v| v - mu).collect();
+    let fc = if cls.starts_with("wind") { 40.0 } else { 30.0 };
+    Biquad::highpass(SR, fc, std::f64::consts::FRAC_1_SQRT_2).run(&mut y);
+    let l = loudness::integrated(&y, SR, false);
+    let mut g = m::undb(BLOCK_LUFS - l);
+    let pk = y.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+    if pk * g > 0.9 {
+        g = 0.9 / pk;
+    }
+    for v in y.iter_mut() {
+        *v *= g;
+    }
+    (y, m::db(g))
+}
+
+pub struct Bank {
+    pub blocks: Vec<TexBlock>,
+}
+
+pub struct TexBlock {
+    pub cls: u8,
+    pub src_id: u32,
+    pub samples: Vec<f32>,
+}
+
+impl Bank {
+    pub fn load(path: &str) -> Result<Bank, String> {
+        let b = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        Bank::parse(&b)
+    }
+    pub fn parse(b: &[u8]) -> Result<Bank, String> {
+        if b.len() < 20 || &b[..8] != MAGIC {
+            return Err("not a WSTEX1 bank".into());
+        }
+        let rd32 = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+        let count = rd32(8) as usize;
+        if count > 100_000 {
+            return Err("bank: bad count".into());
+        }
+        let mut o = 12;
+        let mut heads = Vec::with_capacity(count);
+        for _ in 0..count {
+            if o + 9 > b.len() {
+                return Err("bank: truncated header".into());
+            }
+            let cls = b[o];
+            let src = rd32(o + 1);
+            let n = rd32(o + 5) as usize;
+            o += 9;
+            if cls as usize >= CLASSES.len() {
+                return Err("bank: bad class".into());
+            }
+            heads.push((cls, src, n));
+        }
+        let total: usize = heads.iter().map(|h| h.2).sum();
+        if o + total * 2 + 8 != b.len() {
+            return Err("bank: size mismatch".into());
+        }
+        let data = &b[o..o + total * 2];
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &v in data {
+            h ^= v as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        let want = u64::from_le_bytes(b[o + total * 2..].try_into().unwrap());
+        if h != want {
+            return Err("bank: checksum".into());
+        }
+        let mut blocks = Vec::with_capacity(count);
+        let mut p = 0;
+        for (cls, src, n) in heads {
+            let s: Vec<f32> = (0..n)
+                .map(|i| i16::from_le_bytes([data[(p + i) * 2], data[(p + i) * 2 + 1]]) as f32 / 32767.0)
+                .collect();
+            p += n;
+            blocks.push(TexBlock { cls, src_id: src, samples: s });
+        }
+        Ok(Bank { blocks })
+    }
+}
+
+fn to_bytes(blocks: &[Block], srcs: &[Source]) -> Vec<u8> {
+    let mut o = Vec::new();
+    o.extend_from_slice(MAGIC);
+    o.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+    for b in blocks {
+        o.push(b.cls as u8);
+        o.extend_from_slice(&srcs[b.src].id.parse::<u32>().unwrap_or(0).to_le_bytes());
+        o.extend_from_slice(&(b.samples.len() as u32).to_le_bytes());
+    }
+    let mut data = Vec::new();
+    for b in blocks {
+        for v in &b.samples {
+            data.extend_from_slice(&crate::grainbank::to_i16(*v as f32).to_le_bytes());
+        }
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &v in &data {
+        h ^= v as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    o.extend_from_slice(&data);
+    o.extend_from_slice(&h.to_le_bytes());
+    o
+}
+
+fn arg(args: &[String], key: &str) -> Option<String> {
+    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1).cloned())
+}
+
+pub fn run(args: &[String]) -> Result<(), String> {
+    let gbdir = PathBuf::from(arg(args, "--gb").ok_or("--gb DIR")?);
+    let sp = PathBuf::from(arg(args, "--sources").ok_or("--sources SOURCES.json")?);
+    let out = PathBuf::from(arg(args, "--out").ok_or("--out BANKDIR")?);
+    let cache = PathBuf::from(arg(args, "--cache").unwrap_or_else(|| out.join("screen_cache").to_string_lossy().into_owned()));
+    std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    let threads: usize = arg(args, "--threads").and_then(|v| v.parse().ok()).unwrap_or(1);
+    let max_s: f64 = arg(args, "--max-s").and_then(|v| v.parse().ok()).unwrap_or(900.0);
+    if let Some(c) = arg(args, "--light-crest").and_then(|v| v.parse().ok()) {
+        let _ = LIGHT_CREST.set(c);
+    }
+    let t0 = std::time::Instant::now();
+    let srcs = read_sources(&sp)?;
+    let shas = gb::read_sha_list(&gbdir)?;
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    // per source: decode (checked), screen, runs, and the run samples cut
+    #[allow(clippy::type_complexity)]
+    let per: Vec<Result<(Vec<(f64, Vec<String>)>, Vec<(Run, Vec<f64>)>, String, String, Vec<(f64, f64, f64)>, Vec<(f64, f64, f64, f64)>), String>> =
+        gb::par_map(srcs.len(), threads, |i| {
+            let s = &srcs[i];
+            let p = gb::original_of(&gbdir, &s.id).ok_or(format!("fs{}: no original", s.id))?;
+            let (mut x, name, sha) = gb::load_original(&p, &shas)?;
+            x.truncate((max_s * SR) as usize);
+            let key = format!("{sha}_{}_{SCREEN_VERSION}_{}", s.cls, max_s as u64);
+            let cp = cache.join(format!("{key}.tsv"));
+            let v = match read_cache(&cp) {
+                Some(v) => v,
+                None => {
+                    let v = screen_source(&x, &s.cls);
+                    write_cache(&cp, &v);
+                    v
+                }
+            };
+            // the class's own crest limit on the recorded outliers (the verdicts keep every window over
+            // CREST_RECORD_DB with its crest, so a limit change needs no new screening)
+            let v: Vec<(f64, Vec<String>)> = v
+                .into_iter()
+                .map(|(t, r)| (t, r.into_iter().filter(|w| crest_of(w).map(|c| c > crest_max(&s.cls)).unwrap_or(true)).collect()))
+                .collect();
+            // the wind patter check (the user, 2026-11-26: "wind sounds like rain"): rain patter, leaf ticks and hiss
+            // show as dense 2-8 kHz transients and a bright spectrum, wind as smooth low-mid noise (per window: onsets
+            // per s and the 2-8 kHz share; every class's windows measured for the comparison, wind ones judged)
+            let n5 = (WIN_S * SR) as usize;
+            let mut metrics = Vec::new();
+            let mut noise = Vec::new();
+            let v: Vec<(f64, Vec<String>)> = v
+                .into_iter()
+                .enumerate()
+                .map(|(wi, (t, mut r))| {
+                    if (wi + 1) * n5 <= x.len() {
+                        let (on, hf) = patter(&x[wi * n5..(wi + 1) * n5]);
+                        metrics.push((t, on, hf));
+                        if s.cls.starts_with("wind") && (on > WIND_ONSETS_MAX || hf > WIND_HF_MAX_DB) {
+                            r.push(format!("patter or hiss (onsets {on:.1}/s, 2-8 kHz {hf:.1} dB)"));
+                        }
+                        if s.cls.starts_with("wind") {
+                            let (bird, hum, speech) = wind_noise(&x[wi * n5..(wi + 1) * n5]);
+                            noise.push((t, bird, hum, speech));
+                            if bird > WIND_BIRD_MAX {
+                                r.push(format!("tonal 2-8 kHz (birds / insects: {:.0} % of frames)", bird * 100.0));
+                            }
+                            if hum > WIND_HUM_MAX_DB {
+                                r.push(format!("low narrow peak (hum / engine: {hum:.1} dB)"));
+                            }
+                            if speech > WIND_SPEECH_MAX {
+                                r.push(format!("3-8 Hz modulation of 300 Hz-3 kHz (voices: {speech:.2})"));
+                            }
+                        }
+                    }
+                    (t, r)
+                })
+                .collect();
+            // a wind take whose background shows in more than WIND_TAKE_NOISY of its windows is left out whole: the
+            // same birds, traffic or voices are there under the threshold in its other windows too
+            let v: Vec<(f64, Vec<String>)> = if s.cls.starts_with("wind") && !noise.is_empty() {
+                let flagged = noise.iter().filter(|(_, b, h, sp)| *b > WIND_BIRD_MAX || *h > WIND_HUM_MAX_DB || *sp > WIND_SPEECH_MAX).count();
+                if flagged as f64 > WIND_TAKE_NOISY * noise.len() as f64 {
+                    v.into_iter()
+                        .map(|(t, mut r)| {
+                            r.push(format!("noisy take ({flagged} of {} windows with birds, hum or voices)", noise.len()));
+                            (t, r)
+                        })
+                        .collect()
+                } else {
+                    v
+                }
+            } else {
+                v
+            };
+            let runs = runs_of(&v, i);
+            let cut: Vec<(Run, Vec<f64>)> = runs
+                .into_iter()
+                .map(|r| {
+                    let a = (r.t0 * SR) as usize;
+                    let b = ((r.t1 * SR) as usize).min(x.len());
+                    let y = x[a..b].to_vec();
+                    (r, y)
+                })
+                .collect();
+            Ok((v, cut, name, sha, metrics, noise))
+        });
+    let mut screening = String::from("source\tclass\tstart_s\tok\treasons\n");
+    let mut runs: Vec<(Run, Vec<f64>)> = Vec::new();
+    let mut names: BTreeMap<usize, (String, String)> = BTreeMap::new();
+    let mut noise_log = String::from("source\tclass\tstart_s\tbird_frac\thum_db\tspeech_ratio\n");
+    let mut patter_log = String::from("source\tclass\tstart_s\tonsets_per_s\thf_2_8k_db\n");
+    for (i, r) in per.into_iter().enumerate() {
+        let (v, cut, name, sha, metrics, noise) = r?;
+        for (t, b, h, sp) in &noise {
+            noise_log.push_str(&format!("{}\t{}\t{t:.1}\t{b:.3}\t{h:.2}\t{sp:.3}\n", srcs[i].id, srcs[i].cls));
+        }
+        for (t, on, hf) in &metrics {
+            patter_log.push_str(&format!("{}\t{}\t{t:.1}\t{on:.2}\t{hf:.2}\n", srcs[i].id, srcs[i].cls));
+        }
+        for (t, why) in &v {
+            screening.push_str(&format!("{}\t{}\t{:.1}\t{}\t{}\n", srcs[i].id, srcs[i].cls, t, why.is_empty(), why.join("; ")));
+        }
+        names.insert(i, (name, sha));
+        runs.extend(cut);
+    }
+    std::fs::write(out.join("screening.tsv"), &screening).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("patter.tsv"), &patter_log).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("wind_noise.tsv"), &noise_log).map_err(|e| e.to_string())?;
+    // processing and stats per run
+    let blocks_all: Vec<Block> = gb::par_map(runs.len(), threads, |k| {
+        let (r, x) = &runs[k];
+        let cls = &srcs[r.src].cls;
+        let (y, g) = process(x, cls);
+        let (kurt, onsets, centroid) = block_stats(&y);
+        let ci = class_index(if cls == "rain_car" { "roof" } else { cls }).unwrap();
+        Block { cls: ci, src: r.src, t0: r.t0, t1: r.t1, gain_db: g, kurt, onsets, centroid, samples: y }
+    });
+    let mut fit_log = String::from("source\tclass\tt0\tt1\tkurtosis\tonsets_per_s\tcentroid\tkept\n");
+    for b in &blocks_all {
+        let c = &srcs[b.src].cls;
+        fit_log.push_str(&format!("{}\t{c}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.0}\t{}\n", srcs[b.src].id, b.t0, b.t1, b.kurt, b.onsets, b.centroid, fits_class(c, b.kurt)));
+    }
+    std::fs::write(out.join("blocks_fit.tsv"), fit_log).map_err(|e| e.to_string())?;
+    let blocks_all: Vec<Block> = blocks_all.into_iter().filter(|b| fits_class(&srcs[b.src].cls, b.kurt)).collect();
+    // one gain per recording (the median of its blocks' own): a take keeps its level from block to block, so a stream
+    // that moves within it has no level steps; a block whose peak would then pass 0.95 is left out
+    let mut by_src_g: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
+    for b in &blocks_all {
+        by_src_g.entry(b.src).or_default().push(b.gain_db);
+    }
+    let src_gain: BTreeMap<usize, f64> = by_src_g.iter().map(|(s, v)| (*s, crate::npx::median(v))).collect();
+    let mut gain_log = String::new();
+    let mut blocks_all: Vec<Block> = blocks_all
+        .into_iter()
+        .filter_map(|mut b| {
+            let g = src_gain[&b.src];
+            let k = m::undb(g - b.gain_db);
+            let pk = b.samples.iter().fold(0.0f64, |a, v| a.max(v.abs())) * k;
+            if pk > 0.95 {
+                gain_log.push_str(&format!("{}\t{:.2}\t{:.2}\tpeak {:.2} at the recording's gain: left out\n", srcs[b.src].id, b.t0, b.t1, pk));
+                return None;
+            }
+            for v in b.samples.iter_mut() {
+                *v *= k;
+            }
+            b.gain_db = g;
+            Some(b)
+        })
+        .collect();
+    // the car takes split by kurtosis (terciles over the seconds)
+    let car: Vec<usize> = (0..blocks_all.len()).filter(|&k| srcs[blocks_all[k].src].cls == "rain_car").collect();
+    if !car.is_empty() {
+        let mut ord = car.clone();
+        ord.sort_by(|a, b| blocks_all[*b].kurt.total_cmp(&blocks_all[*a].kurt));
+        let total: f64 = ord.iter().map(|&k| blocks_all[k].t1 - blocks_all[k].t0).sum();
+        let mut acc = 0.0;
+        for &k in &ord {
+            let d = blocks_all[k].t1 - blocks_all[k].t0;
+            let mid = (acc + d / 2.0) / total;
+            acc += d;
+            let c = if mid < 1.0 / 3.0 { "roof_light" } else if mid < 2.0 / 3.0 { "roof" } else { "roof_heavy" };
+            blocks_all[k].cls = class_index(c).unwrap();
+        }
+    }
+    // spectral consistency per class: a recording whose mean 1/3-octave shape is far from the class's median shape (an
+    // odd microphone or surface, a one-off) makes the mix's timbre jump when the streams switch to it; the worst such
+    // recordings go while more than two remain (BANKDIR/spec_dev.tsv lists every deviation)
+    let spec_max: f64 = arg(args, "--spec-dev").and_then(|v| v.parse().ok()).unwrap_or(SPEC_DEV_MAX);
+    let mut spec_log = String::from("class\tsource\tdeviation_db\tkept\n");
+    let mut drop_pair: Vec<(usize, usize)> = Vec::new();
+    for ci in 0..CLASSES.len() {
+        let mut by: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
+        let mut cnt: BTreeMap<usize, f64> = BTreeMap::new();
+        for b in blocks_all.iter().filter(|b| b.cls == ci) {
+            let sp = third_oct_shape(&b.samples);
+            let e = by.entry(b.src).or_insert_with(|| vec![0.0; sp.len()]);
+            for (a, v) in e.iter_mut().zip(&sp) {
+                *a += v;
+            }
+            *cnt.entry(b.src).or_insert(0.0) += 1.0;
+        }
+        if by.len() < 3 || SPEC_EXEMPT.contains(&CLASSES[ci]) {
+            continue;
+        }
+        let shapes: BTreeMap<usize, Vec<f64>> = by
+            .iter()
+            .map(|(s, v)| (*s, v.iter().map(|p| 10.0 * m::log10((p / cnt[s]).max(1e-20))).collect()))
+            .collect();
+        let nb = shapes.values().next().unwrap().len();
+        let mut alive: Vec<usize> = shapes.keys().cloned().collect();
+        loop {
+            let med: Vec<f64> = (0..nb).map(|k| crate::npx::median(&alive.iter().map(|s| shapes[s][k]).collect::<Vec<_>>())).collect();
+            let dev = |s: usize| m::sqrt(shapes[&s].iter().zip(&med).map(|(a, b)| (a - b) * (a - b)).sum::<f64>() / nb as f64);
+            let worst = *alive.iter().max_by(|a, b| dev(**a).total_cmp(&dev(**b))).unwrap();
+            let lim = if CLASSES[ci].starts_with("wind") { spec_max.max(SPEC_DEV_MAX_WIND) } else { spec_max };
+            if alive.len() <= 2 || dev(worst) <= lim {
+                for s in &alive {
+                    spec_log.push_str(&format!("{}\t{}\t{:.2}\ttrue\n", CLASSES[ci], srcs[*s].id, dev(*s)));
+                }
+                break;
+            }
+            spec_log.push_str(&format!("{}\t{}\t{:.2}\tfalse\n", CLASSES[ci], srcs[worst].id, dev(worst)));
+            drop_pair.push((ci, worst));
+            alive.retain(|s| *s != worst);
+        }
+    }
+    std::fs::write(out.join("spec_dev.tsv"), spec_log).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("gain_log.tsv"), gain_log).map_err(|e| e.to_string())?;
+    blocks_all.retain(|b| !drop_pair.contains(&(b.cls, b.src)));
+    // single drops from the after-rain takes
+    let drip_ci = class_index("drip").unwrap();
+    let hit_ci = class_index("hail_hit").unwrap();
+    let mut grains: Vec<Block> = Vec::new();
+    // drops: the after-rain takes, and the light-rain and gutter takes with distinct drops (the same water on leaves,
+    // ground and eaves); hail hits: the hail takes
+    for b in blocks_all.iter() {
+        let (ci, kind) = match srcs[b.src].cls.as_str() {
+            "drips" | "rain_light" | "gutter" => (drip_ci, DRIP_GRAIN),
+            "hail" => (hit_ci, HAIL_GRAIN),
+            _ => continue,
+        };
+        for (t, g) in impact_grains(&b.samples, &kind) {
+            grains.push(Block {
+                cls: ci,
+                src: b.src,
+                t0: b.t0 + t,
+                t1: b.t0 + t + g.len() as f64 / SR,
+                gain_db: b.gain_db,
+                kurt: 0.0,
+                onsets: 0.0,
+                centroid: 0.0,
+                samples: g,
+            });
+        }
+    }
+    blocks_all.extend(grains);
+    // selection: per class, round-robin over sources (their longest runs first), within budget and caps
+    let mut chosen: Vec<Block> = Vec::new();
+    let mut summary = String::new();
+    for (ci, cname) in CLASSES.iter().enumerate() {
+        let (bud, cap) = budget(if cname.starts_with("roof") { "rain_car" } else { cname });
+        let mut by_src: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (k, b) in blocks_all.iter().enumerate() {
+            if b.cls == ci {
+                by_src.entry(b.src).or_default().push(k);
+            }
+        }
+        for v in by_src.values_mut() {
+            v.sort_by(|a, b| {
+                let (da, db) = (blocks_all[*a].t1 - blocks_all[*a].t0, blocks_all[*b].t1 - blocks_all[*b].t0);
+                db.total_cmp(&da).then(a.cmp(b))
+            });
+        }
+        let mut used: BTreeMap<usize, f64> = BTreeMap::new();
+        let mut pick: Vec<usize> = Vec::new();
+        let mut total = 0.0;
+        let mut round = 0;
+        loop {
+            let mut any = false;
+            for (s, v) in &by_src {
+                if let Some(&k) = v.get(round) {
+                    let d = blocks_all[k].t1 - blocks_all[k].t0;
+                    let u = used.get(s).cloned().unwrap_or(0.0);
+                    if total + d <= bud && u + d <= cap {
+                        pick.push(k);
+                        total += d;
+                        used.insert(*s, u + d);
+                    }
+                    any = true;
+                }
+            }
+            if !any {
+                break;
+            }
+            round += 1;
+        }
+        pick.sort();
+        if !pick.is_empty() {
+            summary.push_str(&format!("{cname}: {} blocks {:.0} s from {} recordings\n", pick.len(), total, used.len()));
+        }
+        for k in pick {
+            let b = &blocks_all[k];
+            chosen.push(Block {
+                cls: b.cls,
+                src: b.src,
+                t0: b.t0,
+                t1: b.t1,
+                gain_db: b.gain_db,
+                kurt: b.kurt,
+                onsets: b.onsets,
+                centroid: b.centroid,
+                samples: b.samples.clone(),
+            });
+        }
+    }
+    std::fs::write(out.join("tex_bank.bin"), to_bytes(&chosen, &srcs)).map_err(|e| e.to_string())?;
+    // manifest and credits
+    let blocks_json: Vec<Out> = chosen
+        .iter()
+        .enumerate()
+        .map(|(k, b)| {
+            let s = &srcs[b.src];
+            let (name, sha) = names.get(&b.src).cloned().unwrap_or_default();
+            Out::Obj(vec![
+                ("id".into(), Out::S(format!("{}_{k:03}_{}", CLASSES[b.cls], s.id))),
+                ("class".into(), Out::S(CLASSES[b.cls].into())),
+                ("source_id".into(), Out::S(s.id.clone())),
+                ("source_class".into(), Out::S(s.cls.clone())),
+                ("source_file".into(), Out::S(name)),
+                ("source_sha256".into(), Out::S(sha)),
+                ("t0".into(), Out::F(m::round(b.t0 * 1000.0) / 1000.0)),
+                ("t1".into(), Out::F(m::round(b.t1 * 1000.0) / 1000.0)),
+                ("gain_db".into(), Out::F(m::round(b.gain_db * 100.0) / 100.0)),
+                ("kurtosis_2k5_6k".into(), Out::F(m::round(b.kurt * 100.0) / 100.0)),
+                ("onsets_per_s".into(), Out::F(m::round(b.onsets * 100.0) / 100.0)),
+                ("centroid_hz".into(), Out::F(m::round(b.centroid))),
+                ("title".into(), Out::S(s.title.clone())),
+                ("author".into(), Out::S(s.author.clone())),
+                ("page".into(), Out::S(s.page.clone())),
+                ("license".into(), Out::S(s.license.clone())),
+                ("checked".into(), Out::S(s.checked.clone())),
+            ])
+        })
+        .collect();
+    gb::write_json(&out.join("manifest.json"), &Out::Obj(vec![("blocks".into(), Out::Arr(blocks_json))]))?;
+    let mut cr = String::from(
+        "# Credits: recorded weather textures (rain, wind, drips, hail)\n\nEvery block comes from a field recording released \
+under Creative Commons Zero (CC0 1.0) on Freesound. CC0 needs no attribution; we credit the recordists anyway, with \
+thanks. Each recording was screened in 5 s windows, its clean stretches cut, high-passed and levelled; weathersynth \
+layers and crossfades them. Licences were checked on each sound page on the date shown.\n\n| Freesound sound | title | \
+recordist | licence | checked | blocks |\n|---|---|---|---|---|---|\n",
+    );
+    let mut per_src: BTreeMap<usize, (usize, f64, Vec<&str>)> = BTreeMap::new();
+    for b in &chosen {
+        let e = per_src.entry(b.src).or_insert((0, 0.0, Vec::new()));
+        e.0 += 1;
+        e.1 += b.t1 - b.t0;
+        if !e.2.contains(&CLASSES[b.cls]) {
+            e.2.push(CLASSES[b.cls]);
+        }
+    }
+    for (s, (n, d, cl)) in &per_src {
+        let x = &srcs[*s];
+        cr.push_str(&format!(
+            "| [{}]({}) | {} | {} | CC0 1.0 | {} | {n} ({:.0} s: {}) |\n",
+            x.id,
+            x.page,
+            x.title.replace('|', "/"),
+            x.author,
+            x.checked,
+            d,
+            cl.join(", ")
+        ));
+    }
+    std::fs::write(out.join("CREDITS.md"), cr).map_err(|e| e.to_string())?;
+    print!("{summary}");
+    eprintln!("texbank-build: {} blocks, {:.1} s", chosen.len(), t0.elapsed().as_secs_f64());
+    Ok(())
+}
+
+/// The WSTEX1 bytes of a list of blocks (the layout Bank::parse reads).
+pub fn bank_bytes(blocks: &[TexBlock]) -> Vec<u8> {
+    let mut o = Vec::new();
+    o.extend_from_slice(MAGIC);
+    o.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+    for b in blocks {
+        o.push(b.cls);
+        o.extend_from_slice(&b.src_id.to_le_bytes());
+        o.extend_from_slice(&(b.samples.len() as u32).to_le_bytes());
+    }
+    let mut data = Vec::new();
+    for b in blocks {
+        for v in &b.samples {
+            data.extend_from_slice(&crate::grainbank::to_i16(*v).to_le_bytes());
+        }
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &v in &data {
+        h ^= v as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    o.extend_from_slice(&data);
+    o.extend_from_slice(&h.to_le_bytes());
+    o
+}
+
+/// The live bank's pieces (`texbank-live --bank BIN --manifest FULL/manifest.json --out-dir DIR [--per-class S]
+/// [--max-block S]`): the classes the live engine plays (outdoor rain, the roof, wind), each at most S seconds, taken
+/// round-robin over its recordings (each block's middle, at most max-block seconds). Written as the committed asset
+/// folder, like assets/grains: DIR/manifest.json, DIR/blocks/<id>.ogg (Vorbis q6, bit-exact container) and
+/// DIR/CREDITS.md; `texbank-pack` makes tex_bank.bin from it (the release's grains job). The offline bank keeps
+/// everything for the loops.
+pub fn run_live(args: &[String]) -> Result<(), String> {
+    let bank = Bank::load(&arg(args, "--bank").ok_or("--bank BIN")?)?;
+    let dir = PathBuf::from(arg(args, "--out-dir").ok_or("--out-dir DIR")?);
+    let full = arg(args, "--manifest").ok_or("--manifest FULL/manifest.json (the sources' titles and pages)")?;
+    let meta = source_meta(Path::new(&full))?;
+    // (blocks long enough for texmix::PARAMS's longest segment and its crossfade: 12 + 1 s at 1 % varispeed)
+    let per: f64 = arg(args, "--per-class").and_then(|v| v.parse().ok()).unwrap_or(45.0);
+    let maxb: f64 = arg(args, "--max-block").and_then(|v| v.parse().ok()).unwrap_or(15.0);
+    let live = [
+        "rain_light",
+        "rain_moderate",
+        "rain_heavy",
+        "roof_light",
+        "roof",
+        "roof_heavy",
+        "wind_light",
+        "wind_moderate",
+        "wind_strong",
+        "rain_under",
+    ];
+    let mut keep: Vec<TexBlock> = Vec::new();
+    let mut report = String::new();
+    for c in live {
+        let ci = class_index(c).unwrap() as u8;
+        let mut by: Vec<(u32, Vec<usize>)> = Vec::new();
+        for (k, b) in bank.blocks.iter().enumerate() {
+            if b.cls != ci {
+                continue;
+            }
+            match by.iter_mut().find(|(s, _)| *s == b.src_id) {
+                Some(e) => e.1.push(k),
+                None => by.push((b.src_id, vec![k])),
+            }
+        }
+        let mut total = 0.0;
+        let mut round = 0;
+        let mut n = 0;
+        'outer: loop {
+            let mut any = false;
+            for (_, v) in &by {
+                let Some(&k) = v.get(round) else { continue };
+                any = true;
+                let s = &bank.blocks[k].samples;
+                // (light rain: room for every take, its sparse close-drop ones too: the user's light B)
+                let per_c = if c == "rain_light" { per.max(75.0) } else { per };
+                let want = ((maxb.min(per_c - total)) * SR) as usize;
+                if want < (14.0 * SR) as usize {
+                    break 'outer;
+                }
+                let len = want.min(s.len());
+                let a = (s.len() - len) / 2;
+                // (each live block at BLOCK_LUFS on its own: the live layers' gains assume it; a 15 s piece of a take
+                // may sit a few dB off its recording's median, and the live mix has no loop to level as a whole)
+                let mut piece: Vec<f32> = s[a..a + len].to_vec();
+                let x64: Vec<f64> = piece.iter().map(|v| *v as f64).collect();
+                let mut g = m::undb(BLOCK_LUFS - loudness::integrated(&x64, SR, false));
+                let pk = piece.iter().fold(0.0f32, |p, v| p.max(v.abs())) as f64;
+                if pk * g > 0.99 {
+                    g = 0.99 / pk;
+                }
+                for v in piece.iter_mut() {
+                    *v = (*v as f64 * g) as f32;
+                }
+                keep.push(TexBlock { cls: ci, src_id: bank.blocks[k].src_id, samples: piece });
+                total += len as f64 / SR;
+                n += 1;
+            }
+            if !any {
+                break;
+            }
+            round += 1;
+        }
+        report.push_str(&format!("{c}: {n} blocks {total:.0} s\n"));
+    }
+    std::fs::create_dir_all(dir.join("blocks")).map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    let mut per_src: BTreeMap<u32, (usize, f64, Vec<&str>)> = BTreeMap::new();
+    for (k, b) in keep.iter().enumerate() {
+        let c = CLASSES[b.cls as usize];
+        let id = format!("{c}_{k:03}_{}", b.src_id);
+        let file = format!("blocks/{id}.ogg");
+        let x: Vec<f64> = b.samples.iter().map(|v| *v as f64).collect();
+        write_ogg_q(&dir.join(&file), &x, "6")?;
+        let m = meta.get(&b.src_id).cloned().unwrap_or_default();
+        let e = per_src.entry(b.src_id).or_insert((0, 0.0, Vec::new()));
+        e.0 += 1;
+        e.1 += b.samples.len() as f64 / SR;
+        if !e.2.contains(&c) {
+            e.2.push(c);
+        }
+        entries.push(Out::Obj(vec![
+            ("id".into(), Out::S(id)),
+            ("class".into(), Out::S(c.into())),
+            ("source_id".into(), Out::I(b.src_id as i64)),
+            ("file".into(), Out::S(file)),
+            ("seconds".into(), Out::F(m::round(b.samples.len() as f64 / SR * 1000.0) / 1000.0)),
+            ("title".into(), Out::S(m.0)),
+            ("author".into(), Out::S(m.1)),
+            ("page".into(), Out::S(m.2)),
+            ("license".into(), Out::S(m.3)),
+            ("checked".into(), Out::S(m.4)),
+        ]));
+    }
+    gb::write_json(&dir.join("manifest.json"), &Out::Obj(vec![("blocks".into(), Out::Arr(entries))]))?;
+    let mut cr = String::from(
+        "# Credits: the live recorded rain and wind (weathersynth's texture bank)\n\nEvery block comes from a field \
+recording released under Creative Commons Zero (CC0 1.0) on Freesound. CC0 needs no attribution; we credit the \
+recordists anyway, with thanks. Each recording was screened, its clean stretches cut, high-passed and levelled; \
+weathersynth crossfades them live. Licences were checked on each sound page on the date shown.\n\n| Freesound sound | \
+title | recordist | licence | checked | blocks |\n|---|---|---|---|---|---|\n",
+    );
+    for (sid, (n, d, cl)) in &per_src {
+        let m = meta.get(sid).cloned().unwrap_or_default();
+        cr.push_str(&format!(
+            "| [{sid}]({}) | {} | {} | CC0 1.0 | {} | {n} ({d:.0} s: {}) |\n",
+            m.2,
+            m.0.replace('|', "/"),
+            m.1,
+            m.4,
+            cl.join(", ")
+        ));
+    }
+    std::fs::write(dir.join("CREDITS.md"), cr).map_err(|e| e.to_string())?;
+    print!("{report}{} blocks from {} recordings -> {}\n", keep.len(), per_src.len(), dir.display());
+    Ok(())
+}
+
+/// (title, author, page, licence, checked) per source id, from a texbank-build manifest.
+fn source_meta(p: &Path) -> Result<BTreeMap<u32, (String, String, String, String, String)>, String> {
+    let t = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let j = proto::parse_limit(&t, 1 << 26)?;
+    let Some(Json::Arr(list)) = j.get("blocks") else { return Err("manifest: no blocks".into()) };
+    let mut out = BTreeMap::new();
+    for b in list {
+        let s = |k: &str| b.str(k).unwrap_or("").to_string();
+        if let Ok(id) = s("source_id").parse::<u32>() {
+            out.insert(id, (s("title"), s("author"), s("page"), s("license"), s("checked")));
+        }
+    }
+    Ok(out)
+}
+
+/// Vorbis at quality q through ffmpeg's libvorbis (bit-exact container: no encoder tag, no metadata).
+fn write_ogg_q(path: &Path, x: &[f64], q: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let raw: Vec<u8> = x.iter().flat_map(|v| (*v as f32).to_le_bytes()).collect();
+    let mut ch = Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-y", "-f", "f32le", "-ar", "44100", "-ac", "1", "-i", "-"])
+        .args(["-c:a", "libvorbis", "-q:a", q, "-map_metadata", "-1", "-fflags", "+bitexact"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("ffmpeg: {e}"))?;
+    ch.stdin.take().ok_or("ffmpeg stdin")?.write_all(&raw).map_err(|e| format!("ffmpeg: {e}"))?;
+    if !ch.wait().map_err(|e| format!("ffmpeg: {e}"))?.success() {
+        return Err(format!("ffmpeg could not write {}", path.display()));
+    }
+    Ok(())
+}
+
+/// `texbank-pack [--manifest assets/tex/manifest.json] [--out assets/tex_bank.bin]`: the committed Ogg blocks into the
+/// live bank, decoded as grainbank-pack decodes the thunder grains (ffmpeg's own Vorbis decoder, -c:a vorbis, its float
+/// output; the i16 rounding is ours), so the decoder build is the only moving part (the release checks the sha256).
+pub fn run_pack(args: &[String]) -> Result<(), String> {
+    let manifest = arg(args, "--manifest").unwrap_or_else(|| "assets/tex/manifest.json".into());
+    let out = arg(args, "--out").unwrap_or_else(|| format!("assets/{BANK_FILE}"));
+    let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{manifest}: {e}"))?;
+    let doc = proto::parse_limit(&text, 1 << 24)?;
+    let base = Path::new(&manifest).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let Some(Json::Arr(list)) = doc.get("blocks") else { return Err("manifest: no blocks".into()) };
+    let mut blocks = Vec::new();
+    for b in list {
+        let id = b.str("id").ok_or("block without id")?;
+        let cls = b.str("class").and_then(class_index).ok_or_else(|| format!("{id}: unknown class"))? as u8;
+        let file = b.str("file").ok_or_else(|| format!("{id}: no file"))?;
+        if file.contains("..") || file.starts_with('/') {
+            return Err(format!("{id}: file outside the folder"));
+        }
+        let o = std::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-v", "error", "-c:a", "vorbis", "-i"])
+            .arg(base.join(file))
+            .args(["-ac", "1", "-ar", "44100", "-f", "f32le", "-"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("ffmpeg: {e}"))?;
+        if !o.status.success() || o.stdout.len() < 4 {
+            return Err(format!("ffmpeg could not decode {file}"));
+        }
+        let samples: Vec<f32> = o.stdout.chunks_exact(4).map(|p| f32::from_le_bytes([p[0], p[1], p[2], p[3]])).collect();
+        blocks.push(TexBlock { cls, src_id: b.num("source_id").unwrap_or(0.0) as u32, samples });
+    }
+    let bytes = bank_bytes(&blocks);
+    let tmp = format!("{out}.new");
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("{tmp}: {e}"))?;
+    std::fs::rename(&tmp, &out).map_err(|e| format!("{out}: {e}"))?;
+    let secs: f64 = blocks.iter().map(|b| b.samples.len() as f64 / SR).sum();
+    println!("{} blocks, {secs:.0} s, {:.1} MB -> {out}", blocks.len(), bytes.len() as f64 / 1e6);
+    Ok(())
+}

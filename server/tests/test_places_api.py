@@ -455,5 +455,71 @@ class EarthdPlacesTest(unittest.TestCase):
         self.assertEqual(md.kinds, [])                                     # (nothing fetched for it)
         self.assertEqual(conn._places_followups, earthd.PLACES_FOLLOWUPS)
 
+
+class EarthdTownsTest(unittest.TestCase):
+    """earthd's 'towns' (api.towns in the mod, 1.12): placenames.labels' towns round a point from the regions on disk
+    (nothing fetched), the largest first with their distance; the radius and count capped; complete only when every
+    region round the point is there; bad requests answered with why."""
+
+    def run_towns(self, msg, labels, have=True):
+        import os
+        import tempfile
+        import earthd
+        sent, asked = [], []
+        tmp = tempfile.mkdtemp()
+
+        class FakeNames:
+            def labels(self, lat, lon, radius_m, limit=400, fetch=False, kind="background"):
+                asked.append((lat, lon, radius_m, limit, fetch))
+                return list(labels)
+
+            def path(self, key):
+                p = os.path.join(tmp, str(key).replace("/", "_"))
+                if have:
+                    open(p, "w").close()
+                return p
+
+        async def run():
+            from concurrent.futures import ThreadPoolExecutor
+            pool = ThreadPoolExecutor(1)
+            names = FakeNames()
+            s = types.SimpleNamespace(place_pool=pool, place_names=lambda: names)
+            conn = types.SimpleNamespace(s=s, send=sent.append)
+            conn._town_rows = lambda *a: earthd.Connection._town_rows(conn, *a)
+            try:
+                await earthd.Connection.towns(conn, msg)
+            finally:
+                pool.shutdown()
+        asyncio.run(run())
+        return sent, asked
+
+    def test_towns_round_a_point(self):
+        import placenames
+        rows = [("Baltimore", 39.2904, -76.6122, "city", 585708.0), ("Towson", 39.4015, -76.6019, "town", float("nan"))]
+        sent, asked = self.run_towns({"id": 3, "lat": LAT, "lon": LON, "radius": 1e9, "limit": 10 ** 6}, rows)
+        self.assertEqual(asked, [(LAT, LON, placenames.LABELS_RADIUS_MAX_M, placenames.LABELS_MAX, False)])
+        self.assertEqual(len(sent), 1)
+        out = sent[0]
+        self.assertEqual((out["type"], out["id"], out["complete"]), ("towns_result", 3, True))
+        self.assertEqual([r[0] for r in out["towns"]], ["Baltimore", "Towson"])
+        self.assertEqual(out["towns"][0][3:5], ["city", 585708])
+        self.assertEqual(out["towns"][1][4], 0)                       # (no population mapped)
+        self.assertAlmostEqual(out["towns"][0][5], 1900, delta=150)   # (m from Fells Point to Baltimore's point)
+
+    def test_defaults_and_missing_regions(self):
+        import earthd
+        sent, asked = self.run_towns({"id": 4, "lat": LAT, "lon": LON}, [], have=False)
+        self.assertEqual(asked[0][2:4], (earthd.TOWNS_RADIUS_DEFAULT_M, earthd.TOWNS_LIMIT_DEFAULT))
+        self.assertEqual(sent, [{"type": "towns_result", "id": 4, "towns": [], "complete": False}])
+
+    def test_says_why(self):
+        sent, asked = self.run_towns({"id": 5, "lat": 95, "lon": 0}, [])
+        self.assertEqual(sent, [{"type": "towns_result", "id": 5, "towns": [], "complete": False,
+                                 "error": "bad coordinates"}])
+        sent, _ = self.run_towns({"id": 6, "lat": "x", "lon": 0}, [])
+        self.assertEqual(sent[0]["error"], "bad request")
+        self.assertEqual(asked, [])
+
+
 if __name__ == "__main__":
     unittest.main()

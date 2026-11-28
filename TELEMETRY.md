@@ -70,6 +70,7 @@ Sent once per session, and again only when something changes.
 | game graphics settings | preset, mesh, textures, terrain, lighting, shadows, anisotropic, AA, vsync, depth of field, SSAO, motion blur, reflections, grass, display mode | to compare like with like |
 | BeamNG.Earth settings | quality preset, trees and their distance, ground cover, grass distance, rocks, night lights, distant traffic, view distance, terrain detail, building distance, ground photo size, object detail, roads, clouds, sky mode, map style, frame pacing, full-priority loading | which of our options cost the most |
 | other mods (rounded) | 0, 1, 2-4, 5-9, ... | other mods can slow the game too |
+| engine patches | grass, ground textures, terrain swaps, game speed: each `on`, `off`, `failed` or `none` | a game update that stops a patch from applying shows at once |
 
 Amounts are rounded into steps, so they describe a class of machine rather than one machine. Only the settings named
 here are read; nothing else from your game folder.
@@ -143,6 +144,15 @@ the app may ask it to build them, the same way as the aerial packs above: the re
 and the version, at most once per square every 6 hours, only with the main switch on, and the server keeps the square
 to build it, not who asked. Prebuilt plans are only ever made by the project's own machine and signed; nothing your
 computer makes is uploaded.
+
+## Not telemetry: live air traffic
+
+The live air traffic (off by default) is not part of telemetry and is not sent to us. When you turn it on, the
+settings page first says what it sends and to whom: your approximate area (a point on a grid about 17 miles / 28 km
+wide, never your exact position) about every 15 seconds to adsb.lol (airplanes.live or adsb.fi when adsb.lol is busy),
+and, only with Flight routes on, the flight numbers around you to adsbdb.com. Nothing is sent while it is off or while
+you are not in the world. These services see your internet address, as any website does. The Network load counts above
+include requests to these services like any other.
 
 ## What happens to the data
 
