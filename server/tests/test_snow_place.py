@@ -61,7 +61,7 @@ class Server:
     def __init__(self, svc):
         self.snow, self.connections, self.changes, self.road_changes = svc, [], 0, 0
 
-    def snow_changed(self):
+    def snow_changed(self, fields=None):
         self.changes += 1
 
     def snow_roads_changed(self):

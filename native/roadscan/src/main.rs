@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Raised whenever a finding's meaning or a threshold changes; compare refuses two versions.
-pub const SCAN_VERSION: u32 = 2;
+pub const SCAN_VERSION: u32 = 3;     // (3: edge_drop, the real step off a lane's free edge; lips no regression of their own)
 
 fn die(msg: String) -> ! { eprintln!("roadscan: {}", msg); std::process::exit(2) }
 
@@ -197,7 +197,8 @@ fn cmd_compare(args: &[String]) {
             (None, Some(_)) => "new",
             _ => "gone",
         };
-        if matches!(status, "worse" | "new") && jb.map_or(false, |jb| b[jb].sev >= 2) { bad += 1; }
+        // (a lip is the part of an edge drop under 15 cm: judged by edge_drop, the real height, not by the window)
+        if matches!(status, "worse" | "new") && jb.map_or(false, |jb| b[jb].sev >= 2 && b[jb].kind != "lip") { bad += 1; }
         j.push_str(&format!("{{\"status\":\"{}\",\"a\":{},\"b\":{}}}", status, i.map_or("null".into(), |i| row(&a[i])), jb.map_or("null".into(), |jb| row(&b[jb]))));
     }
     j.push_str(&format!("\n],\"regressions\":{}}}\n", bad));

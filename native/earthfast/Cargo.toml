@@ -101,6 +101,10 @@ incremental = true
 # SharedGate locks byte zero, like the workers using msvcrt.locking. Already in Cargo.lock.
 windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_System_IO"] }
 pyo3 = { version = "0.30", features = ["generate-import-lib"] }   # links python3.dll without a Python install (cross builds)
+# gpu.rs dxgi_preemption: the adapter's DXGI_ADAPTER_DESC2 preemption granularity for the server's log (2026-11-27).
+# Microsoft's windows crate at the version wgpu-hal's DX12 backend already builds (Cargo.lock), with the DXGI feature
+# its Win32_Graphics_Dxgi_Common already turns on: no new crate, no new code compiled beyond our call
+windows = { version = "=0.58.0", default-features = false, features = ["Win32_Graphics_Dxgi"] }
 
 [patch.crates-io]
 anyhow = { version = "=1.0.104", path = "vendor/anyhow-1.0.104" }

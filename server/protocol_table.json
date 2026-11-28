@@ -467,6 +467,14 @@
     "limit": {"type": "num", "optional": true}
    }
   },
+  "ground": {
+   "doc": "the modding API's ground heights past the terrain block (api.groundHeight 1.13, ground.lua's 16 m lattice corners; earthd ground: the DEM at a zoom set by each point's distance from the origin; a bad coordinate false for that point only)",
+   "fields": {
+    "id": {"type": "int"},
+    "anchorId": {"type": "int"},
+    "pts": {"type": "list", "doc": "[x, y, ...] in that anchor's frame, at most GROUND_POINTS_MAX points"}
+   }
+  },
   "map_focus": {
    "doc": "the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)",
    "fields": {
@@ -779,6 +787,15 @@
     "buildings": {"type": "list", "optional": true},
     "next": {"type": "str", "optional": true},
     "truncated": {"type": "bool", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "ground_result": {
+   "doc": "... the modding API's ground heights: z in the same frame for each point (false: no elevation there; not null, which a JSON array may not keep in place)",
+   "fields": {
+    "id": {"type": "int"},
+    "anchorId": {"type": "int"},
+    "z": {"type": "list"},
     "error": {"type": "str", "optional": true}
    }
   },

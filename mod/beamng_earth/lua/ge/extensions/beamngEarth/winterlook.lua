@@ -48,12 +48,20 @@ end
 M.state = nil           -- the server's last snow state (hello.snow / 'snow')
 M.looked = false        -- the snow layer wears the stock snow textures
 
--- The server's snow state (nil: winter off or gone: everything back).
+-- Pure: a state with snow on the ground (cover over 0 eighths). A place with none ('real' at cover 0: the server's
+-- 'snow' message when its table goes, or a first table without snow) is no snow, whatever the last place had.
+function M.snowy(s)
+  return type(s) == 'table' and (tonumber(s.cover) or 0) > 0
+end
+
+-- The server's snow state (nil: winter off or gone; or no snow at the place: everything back). A snowy place's look
+-- was kept through the next place's 'snow' at cover 0 (Stelvio, then Baltimore, 2026-11-28: its snow layer still in
+-- the stock snow's grain and normals).
 function M.set(s)
   M.state = type(s) == 'table' and s or nil
   local terrain = require('beamngEarth/terrain')
   local gc = require('beamngEarth/groundcover')
-  if M.state then
+  if M.snowy(M.state) then
     if not M.looked then
       local look = M.snowLook(function(p) return FS and FS:fileExists(p) end)
       if look then M.looked = terrain.setLookOverride(M.MATERIAL, look) or false end

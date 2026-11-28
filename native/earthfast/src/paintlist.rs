@@ -740,7 +740,10 @@ fn step_pads(img: &mut Array3<u8>, sq: &Sq, polys: &PaintPolys, st: &PaintStyle)
     let col = st.colors.slice(numpy::ndarray::s![pk..pk + 1, ..]);
     let tn = st.tone.slice(numpy::ndarray::s![pk..pk + 1, ..]);
     let (luma, sat, green) = st.tone_args();
-    *img = crate::roadtone::tone_paint(img.view(), &cov, 1, col, tn, st.radius(w, sq.size), luma, sat, green);
+    // (652, paintpar.rs: roadtone::tone_paint's numbers on several threads, over the pads' rows alone)
+    let cover = crate::paintpar::Cover { planes: vec![Some(cov)], rows: (r0, r0 + nr) };
+    crate::paintpar::tone_paint_sparse(img, &cover, &crate::paintpar::Tone {
+        colors: col, tone: tn, radius: st.radius(w, sq.size), luma, sat, green });
 }
 
 /// _fill_island_photos: each roundabout footprint the photo shows green filled with its greens' median pulled toward a
@@ -757,52 +760,71 @@ fn step_islands(img: &mut Array3<u8>, sq: &Sq, polys: &PaintPolys, st: &PaintSty
     }
     let orig = img.clone();
     let lawn_green = st.c[S_LAWN_GREEN] as i32;
-    let green: Vec<bool> = (0..h * w).map(|p| {
-        let q = pix(&orig, p / w, p % w);
-        2 * q[1] as i32 - q[0] as i32 - q[2] as i32 >= lawn_green
-    }).collect();
     let share = st.c[S_ISLAND_LAWN_SHARE];
     let mut mask = vec![0u8; w * h];
     for pts in &shapes {
-        mask.fill(0);
+        // (652: the footprint's own rows and columns, not the whole photo three times per footprint. Pillow's fill
+        // draws between its vertices truncated to integers: their box, a pixel wider each way, holds every pixel it
+        // sets. The canvas stays the photo's, so the fill itself is as before.)
+        let (mut c0, mut c1, mut r0, mut r1) = (i64::MAX, i64::MIN, i64::MAX, i64::MIN);
+        for &(c, r) in pts {
+            let (c, r) = (c as i32 as i64, r as i32 as i64);
+            c0 = c0.min(c);
+            c1 = c1.max(c);
+            r0 = r0.min(r);
+            r1 = r1.max(r);
+        }
+        let (c0, c1) = ((c0 - 1).clamp(0, w as i64) as usize, (c1 + 2).clamp(0, w as i64) as usize);
+        let (r0, r1) = ((r0 - 1).clamp(0, h as i64) as usize, (r1 + 2).clamp(0, h as i64) as usize);
+        if c0 >= c1 || r0 >= r1 {
+            continue;
+        }
         pil::polygon(&mut pil::Canvas { px: &mut mask, w: w as i32, h: h as i32 }, pts, 255);
         let (mut nm, mut ns) = (0usize, 0usize);
         let mut sel: [Vec<u8>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-        for p in 0..w * h {
-            if mask[p] == 0 {
-                continue;
-            }
-            nm += 1;
-            if green[p] {
-                ns += 1;
-                let q = pix(&orig, p / w, p % w);
-                for k in 0..3 {
-                    sel[k].push(q[k]);
+        for j in r0..r1 {
+            for i in c0..c1 {
+                if mask[j * w + i] == 0 {
+                    continue;
+                }
+                nm += 1;
+                let q = pix(&orig, j, i);
+                if 2 * q[1] as i32 - q[0] as i32 - q[2] as i32 >= lawn_green {
+                    ns += 1;
+                    for k in 0..3 {
+                        sel[k].push(q[k]);
+                    }
                 }
             }
         }
-        if nm == 0 || (ns as f64) < st.c[S_ISLAND_MIN_GREEN] * nm as f64 {
-            continue;
-        }
-        let base: [f64; 3] = if ns >= 8 {
-            // np.median of uint8 (float64), int() truncating
-            [0, 1, 2].map(|k| {
-                let v = &mut sel[k];
-                v.sort_unstable();
-                let n = v.len();
-                let med = if n % 2 == 1 { v[n / 2] as f64 } else { (v[n / 2 - 1] as f64 + v[n / 2] as f64) / 2.0 };
-                med.trunc()
-            })
+        let fill = if nm == 0 || (ns as f64) < st.c[S_ISLAND_MIN_GREEN] * nm as f64 {
+            None
         } else {
-            [0, 1, 2].map(|k| st.c[S_ISLAND_GRASS + k])
+            let base: [f64; 3] = if ns >= 8 {
+                // np.median of uint8 (float64), int() truncating
+                [0, 1, 2].map(|k| {
+                    let v = &mut sel[k];
+                    v.sort_unstable();
+                    let n = v.len();
+                    let med = if n % 2 == 1 { v[n / 2] as f64 } else { (v[n / 2 - 1] as f64 + v[n / 2] as f64) / 2.0 };
+                    med.trunc()
+                })
+            } else {
+                [0, 1, 2].map(|k| st.c[S_ISLAND_GRASS + k])
+            };
+            Some([0, 1, 2].map(|k| {
+                (base[k] * (1.0 - share) + st.c[S_ISLAND_LAWN + k] * share).round_ties_even() as i64 as u8
+            }))
         };
-        let fill: [u8; 3] = [0, 1, 2].map(|k| {
-            (base[k] * (1.0 - share) + st.c[S_ISLAND_LAWN + k] * share).round_ties_even() as i64 as u8
-        });
-        for p in 0..w * h {
-            if mask[p] != 0 {
-                for k in 0..3 {
-                    img[[p / w, p % w, k]] = fill[k];
+        for j in r0..r1 {
+            for i in c0..c1 {
+                if mask[j * w + i] != 0 {
+                    mask[j * w + i] = 0;        // (the canvas clean for the next footprint)
+                    if let Some(fill) = fill {
+                        for k in 0..3 {
+                            img[[j, i, k]] = fill[k];
+                        }
+                    }
                 }
             }
         }
@@ -815,15 +837,26 @@ fn step_corners(img: &mut Array3<u8>, before: &Array3<u8>, sq: &Sq, polys: &Pain
     let (w, h) = (sq.w as i64, sq.h as i64);
     let k = 2i64;
     let px_m = (w * k) as f64 / sq.size;
-    let painted_in = img.clone();       // (rgb: the windows' colours come from the roads' paint, not the corners')
     let pk = PAVED_KIND as usize;
     let flat = [st.colors[[pk, 0]], st.colors[[pk, 1]], st.colors[[pk, 2]]];
     let op = st.colors[[pk, 3]];
     let top = sq.top();
     let floor_div = |a: i64, b: i64| a.div_euclid(b);
-    for p in polys.polys.iter() {
+    // (652: each pad's window, coverage and colour first, read from the photo as the roads left it (no pad is
+    // blended yet, so no copy of it is needed), the pads on par.rs's threads; then the blends, in the pads' order as
+    // before: pads that overlap blend one over the other the same way)
+    struct Pad {
+        pr0: usize,
+        pc0: usize,
+        sh: usize,
+        sw: usize,
+        a: Vec<f32>,
+        colour: [f32; 3],
+    }
+    let painted_in: &Array3<u8> = img;
+    let prepare = |p: &Poly| -> Option<Pad> {
         if p.is_empty() {
-            continue;
+            return None;
         }
         let c: Vec<f64> = p.iter().map(|q| (q[0] - sq.x0) * px_m).collect();
         let r: Vec<f64> = p.iter().map(|q| (top - q[1]) * px_m).collect();
@@ -834,7 +867,7 @@ fn step_corners(img: &mut Array3<u8>, before: &Array3<u8>, sq: &Sq, polys: &Pain
         let c1 = (w * k).min(-floor_div(-((cmax + 1.0) as i64), k) * k);
         let r1 = (h * k).min(-floor_div(-((rmax + 1.0) as i64), k) * k);
         if c1 <= c0 || r1 <= r0 {
-            continue;
+            return None;
         }
         let (ww, wh) = ((c1 - c0) as usize, (r1 - r0) as usize);
         let mut mask = vec![0u8; ww * wh];
@@ -854,8 +887,8 @@ fn step_corners(img: &mut Array3<u8>, before: &Array3<u8>, sq: &Sq, polys: &Pain
         for y in 0..sh {
             for x in 0..sw {
                 let (j, i) = (pr0 + y, pc0 + x);
-                if a[y * sw + x] < 0.5 && pix(&painted_in, j, i) != pix(before, j, i) {
-                    let q = pix(&painted_in, j, i);
+                if a[y * sw + x] < 0.5 && pix(painted_in, j, i) != pix(before, j, i) {
+                    let q = pix(painted_in, j, i);
                     for ch in 0..3 {
                         sel[ch].push(q[ch] as f32);
                     }
@@ -870,6 +903,14 @@ fn step_corners(img: &mut Array3<u8>, before: &Array3<u8>, sq: &Sq, polys: &Pain
                 if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
             });
         }
+        Some(Pad { pr0, pc0, sh, sw, a, colour })
+    };
+    let n = polys.polys.len();
+    let mut pads: Vec<Option<Pad>> = (0..n).map(|_| None).collect();
+    let threads = crate::par::threads_for(n, 64);
+    crate::par::rows(&mut pads, 1, threads, |q, out| out[0] = prepare(&polys.polys[q]));
+    for pad in pads.into_iter().flatten() {
+        let Pad { pr0, pc0, sh, sw, a, colour } = pad;
         for y in 0..sh {
             for x in 0..sw {
                 let s = a[y * sw + x] * op;
@@ -890,20 +931,12 @@ fn step_roads(img: &mut Array3<u8>, sq: &Sq, rd: &PaintRoads, st: &PaintStyle,
     if s.kind.is_empty() && pavement.is_empty() {
         return;
     }
-    let k = st.colors.nrows();
-    let mut cov = crate::roadtone::line_cover(sq.h, sq.w, k, s.kind.len(), |q| {
-        let g = s.segs[q];
-        (g[0], g[1], g[2], g[3], s.hw[q], s.kind[q])
-    });
-    for (kind, mask) in pavement {
-        let start = kind * sq.w * sq.h;
-        for (p, &value) in cov[start..start + sq.w * sq.h].iter_mut().zip(mask.iter()) {
-            *p = p.max(value as f32 / 255.0);
-        }
-    }
+    // (652, paintpar.rs: roadtone's line_cover + tone_paint, the same numbers, with planes for the kinds the square
+    // has and on several threads)
+    let cover = crate::paintpar::line_cover_sparse(sq.h, sq.w, st.colors.nrows(), &s.segs, &s.hw, &s.kind, pavement);
     let (luma, sat, green) = st.tone_args();
-    *img = crate::roadtone::tone_paint(img.view(), &cov, k, st.colors.view(), st.tone.view(), st.radius(sq.w, sq.size),
-                                       luma, sat, green);
+    crate::paintpar::tone_paint_sparse(img, &cover, &crate::paintpar::Tone {
+        colors: st.colors.view(), tone: st.tone.view(), radius: st.radius(sq.w, sq.size), luma, sat, green });
 }
 
 /// surface.paint_square's paint of the photo rgb (h, w, 3, row 0 north) over [x0, x0 + size]² of the anchor frame in
@@ -980,28 +1013,29 @@ impl PaintLayers {
     }
 
     pub(crate) fn apply(&self, mut img: Array3<u8>) -> Array3<u8> {
+        use crate::paintpar::timed;
         let (x0,y0,size) = self.area;
         let (h,w,_) = img.dim();
         let sq = Sq { x0, y0, size, w, h };
         let st = &self.style;
         if img.is_empty() { return img; }
         if !self.simple {
-            if let Some(f) = &self.fields { step_fields(&mut img, &sq, f, st); }
+            if let Some(f) = &self.fields { timed(0, || step_fields(&mut img, &sq, f, st)); }
             let golf: Vec<_> = self.golf.iter().map(Option::as_ref).collect();
-            step_golf(&mut img, &sq, st, &golf);
-            if let Some(p) = &self.lots { step_pads(&mut img, &sq, p, st); }
-            if let Some(p) = &self.pads { step_pads(&mut img, &sq, p, st); }
+            timed(1, || step_golf(&mut img, &sq, st, &golf));
+            if let Some(p) = &self.lots { timed(2, || step_pads(&mut img, &sq, p, st)); }
+            if let Some(p) = &self.pads { timed(3, || step_pads(&mut img, &sq, p, st)); }
         }
         if !self.has_roads { return img; }
         if !self.simple {
-            if let Some(p) = &self.islands { step_islands(&mut img, &sq, p, st); }
+            if let Some(p) = &self.islands { timed(4, || step_islands(&mut img, &sq, p, st)); }
         }
-        let before = (!self.simple && self.corners.is_some()).then(|| img.clone());
+        let before = (!self.simple && self.corners.is_some()).then(|| timed(6, || img.clone()));
         if let Some(r) = &self.roads {
             let masks: Vec<_> = self.pavement.iter().map(|(k,m)| (*k,m.view())).collect();
-            step_roads(&mut img, &sq, r, st, &masks);
+            timed(5, || step_roads(&mut img, &sq, r, st, &masks));
         }
-        if let (Some(p), Some(before)) = (&self.corners, before) { step_corners(&mut img, &before, &sq, p, st); }
+        if let (Some(p), Some(before)) = (&self.corners, before) { timed(6, || step_corners(&mut img, &before, &sq, p, st)); }
         img
     }
 }

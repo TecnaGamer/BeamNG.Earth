@@ -40,6 +40,14 @@ seasonlook.setSnow(nil)
 T.check(m.fields.baseColorDetailTex == '/assets/materials/terrain/sand/t_sand/t_sand_b.png'
   and m.fields.normalDetailTexSize == '4', 'winter gone: its own look back')
 T.check(gc.snow == 1, 'and all the grass')
+-- a snowy place, then one with no snow ('real' at cover 0): the snow layer's own look and all the grass again
+seasonlook.setSnow({ mode = 'real', cover = 8, depth = 4 })
+T.check(m.fields.baseColorDetailTex:find('t_snow_b', 1, true) ~= nil and W.looked, 'a snowy place: snow')
+seasonlook.setSnow({ mode = 'real', cover = 0, depth = 0 })
+T.check(m.fields.baseColorDetailTex == '/assets/materials/terrain/sand/t_sand/t_sand_b.png'
+  and m.fields.normalDetailTexSize == '4' and not W.looked, 'a place with no snow: its own look back')
+T.check(gc.snow == 1 and W.state and W.state.cover == 0, 'all the grass; the state kept')
+T.check(not W.snowy({ mode = 'real' }) and not W.snowy(nil) and W.snowy({ cover = 1 }), 'snowy: cover over 0')
 seasonlook.setSnow({ mode = 'heavy', cover = 8, depth = 4 })
 seasonlook.restore()
 T.check(m.fields.normalDetailTexSize == '4' and gc.snow == 1 and not W.looked, 'the level ended: restored')

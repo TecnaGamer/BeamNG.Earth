@@ -7,9 +7,10 @@
 -- road class under the car, its condition dry / damp / wet / salt_wet / slush ...; BNE_WET_ROADS: the REAL road) and this
 -- module's own model from the rain the weather shows (wetness rises within minutes in rain and dries over DRY_S after
 -- it; a preset storm over a dry real road is wet: M.wetOf). The level is
--- quantised to LEVELS steps, and only a step change writes materials: one batch, at most BATCH per frame (setField and
--- reload each), never per frame otherwise (SkyCycle's stutters came from refreshing materials all the time, the plan's
--- research note 2). Dry or the weather Off: every material back to its own values (only those still holding ours).
+-- quantised to LEVELS steps (LEVEL_HYST past a boundary: M.levelStep), and only a step change writes materials: one
+-- batch, at most BATCH per frame (setField and reload each), only those whose values change, never per frame otherwise
+-- (SkyCycle's stutters came from refreshing materials all the time, the plan's research note 2). Dry or the weather
+-- Off: every material back to its own values (only those still holding ours).
 --
 -- Grip (the user, 2026-11-26: "grip should follow the weather shown in game", "yes, plus deep-water aquaplaning"):
 -- the own model's wetness (the rain shown, not the snowstate, which winter.lua has itself) as a road condition, dry /
@@ -23,7 +24,13 @@
 local M = {}
 
 M.LEVELS = 4              -- wetness steps (0 dry .. LEVELS soaked)
-M.BATCH = 12              -- materials written per frame during a change
+-- Materials written per frame during a change. A write (setField, flush, reload) costs 2-3.5 ms (the local road state
+-- plan's L0, Windows and the Deck), and a city has ~600 wet-capable materials: 12 a frame made every step ~50 frames
+-- 25-40 ms slower, and showers step the level a few times an hour (the 2026-11-28 lag hunt). One a frame: a step
+-- rolls over ~10-30 s, which the minutes of wetting and drying hide.
+M.BATCH = 1
+M.LOOK_MAX = 64           -- ... and at most this many looked at a frame (those already on the step's values are skipped)
+M.LEVEL_HYST = 0.04       -- a step changes only this far past its boundary (no back and forth at a boundary in showers)
 M.CHECK_S = 2             -- the wetness looked at this often
 M.WET_TAU_S = 240         -- own model: wetting time constant in rain (to ~63 %)
 M.DRY_S = 2700            -- own model: drying from soaked to dry after the rain (45 min; faster in sun: later)
@@ -49,7 +56,7 @@ M.NAMES = {
   repair1_west_coast_usa = 'asphalt', road_crack = 'asphalt',
   sidewalk_concrete = 'concrete', sidewalk1 = 'concrete', curbs = 'concrete', gutter1 = 'concrete',
   m_gm_concrete_plain = 'concrete', italy_sidewalk_tiles = 'concrete', italy_cobblestone = 'concrete',
-  bne_highway_concrete = 'concrete', bne_bridge_concrete = 'concrete', bne_eu_curb = 'concrete',
+  bne_highway_concrete = 'concrete', bne_bridge_concrete = 'concrete', bne_deck_concrete = 'concrete', bne_eu_curb = 'concrete',
   tactile_indicator = 'marking', bne_eu_tactile = 'marking',
   line_white = 'marking', line_yellow = 'marking', line_dashed_long = 'marking', crossing_white = 'marking',
   roadmarkings1 = 'marking', bne_rail_xing_rubber = 'asphalt',
@@ -66,7 +73,10 @@ M.PREFIXES = {
 M.WORDS = { { 'sidewalk', 'concrete' }, { 'curb', 'concrete' }, { 'kerb', 'concrete' }, { 'pavement', 'concrete' },
   { 'paver', 'concrete' }, { 'cobble', 'concrete' }, { 'concrete', 'concrete' }, { 'asphalt', 'asphalt' },
   { 'crossing', 'marking' }, { 'marking', 'marking' } }
-M.WORDS_NOT = { 'glass', 'light', 'lamp', 'sign', 'glow', 'decal_' }
+-- (skidmark: the tyres' skid-mark decals, AsphaltRoad_track_skidmarks. Its first write of new values froze the game for
+-- 12.4 s on the Steam Deck and 620 ms on Windows (one write, its call 0.3 ms: the engine's next frame; broker wl2,
+-- 2026-11-28), once per new wet step a session: the lag felt in changing rain. Not a road surface: never wetted.)
+M.WORDS_NOT = { 'glass', 'light', 'lamp', 'sign', 'glow', 'decal_', 'skidmark' }
 M.NOT = { bne_bld_sky = true, bne_bld_skywin = true, bne_bld_glasshouse = true, bne_bld_lobby = true }   -- (lit windows)
 M.WET_DARK = 0.85         -- a porosity-1 surface's colour at full wetness: x (1 - WET_DARK) (Lagarde's 0.2..0.5); at 0.6 the
                           -- Tokyo sidewalks hardly showed it in the broker shots (wb9), at 0.95 clearly (wb11); 0.7 with
@@ -191,6 +201,20 @@ function M.levelOf(w)
   return math.max(0, math.min(M.LEVELS, math.floor((tonumber(w) or 0) * M.LEVELS + 0.5)))
 end
 
+-- Pure: the level shown at wetness w after the level prev (nil: none yet): levelOf(w), but a step away from prev only
+-- once w is LEVEL_HYST past prev's boundary (a shower's wetting and the dry spells between them crossed a boundary
+-- back and forth: a full rewrite each time). Dry (w 0) is always level 0.
+function M.levelStep(w, prev)
+  w = tonumber(w) or 0
+  local k = M.levelOf(w)
+  prev = tonumber(prev)
+  if not prev or k == prev or w <= 0 then return k end
+  if k > prev then
+    return (w >= (prev + 0.5) / M.LEVELS + M.LEVEL_HYST) and k or prev
+  end
+  return (w <= (prev - 0.5) / M.LEVELS - M.LEVEL_HYST) and k or prev
+end
+
 -- Pure: one step of the own wetness model: w (0..1) after dt s of rain mmh (mm/h).
 function M.wetStep(w, mmh, dt)
   w, mmh, dt = tonumber(w) or 0, tonumber(mmh) or 0, math.max(0, tonumber(dt) or 0)
@@ -252,9 +276,11 @@ local level = 0           -- the level applied (or being applied)
 local queue = nil         -- names left to write for the level
 local orig = {}           -- name -> { class, color = {...} or nil, rough = number or nil, ours = { color, rough } }
 local known = nil         -- name -> class of the materials seen (nil: not scanned)
+local classes = {}        -- name -> class or false: M.classOf of every material name met (a rescan classifies new ones only)
 local timer, rescan = 0, 0
 local puddle = 0          -- the puddles' step applied
 local grip = nil          -- the grip condition handed to winter.lua (nil dry)
+local road, roadPlace = nil, nil    -- W1's road wetness shown (M.roadStep) and winter.place's place it is for
 M.writes, M.source = 0, 'none'
 local ws = nil            -- wetstate.lua, loaded with the new look
 local look = nil          -- the new look on the puddle material: { orig = its own fields, cube = the cubemap set }
@@ -394,9 +420,23 @@ end
 local function scan()
   known = {}
   for _, nm in ipairs((scenetree.findClassObjects and scenetree.findClassObjects('Material')) or {}) do
-    local cls = M.classOf(nm)
+    local cls = classes[nm]
+    if cls == nil then cls = M.classOf(nm) or false; classes[nm] = cls end
     if cls then known[nm] = cls end
   end
+end
+
+-- The order a step writes in: the streets first (asphalt, concrete, markings), then the rest; by name within a class.
+-- (The queue is used from its end.)
+local FIRST = { asphalt = 1, concrete = 2, marking = 3 }
+local function rankOf(name)
+  local c = (known and known[name]) or (orig[name] and orig[name].class)
+  return FIRST[c] or 9
+end
+local function queueSort(a, b)
+  local ra, rb = rankOf(a), rankOf(b)
+  if ra ~= rb then return ra > rb end
+  return a > b
 end
 
 local function writeOne(name, k)
@@ -423,15 +463,21 @@ local function writeOne(name, k)
     end
     orig[name] = nil
   else
+    -- (a field already holding this step's value is not set again: a material with nothing to change is not reloaded)
     local col, ro = M.wetValues(o.class, o.color, o.rough, k)
-    if col then m:setField('baseColorFactor', 0, col); o.ours.color = m:getField('baseColorFactor', 0); changed = true end
-    if ro then m:setField('roughnessFactor', 0, ro); o.ours.rough = m:getField('roughnessFactor', 0); changed = true end
+    if col and not (o.ours.colorK == k and m:getField('baseColorFactor', 0) == o.ours.color) then
+      m:setField('baseColorFactor', 0, col); o.ours.color = m:getField('baseColorFactor', 0); o.ours.colorK = k; changed = true
+    end
+    if ro and not (o.ours.roughK == k and m:getField('roughnessFactor', 0) == o.ours.rough) then
+      m:setField('roughnessFactor', 0, ro); o.ours.rough = m:getField('roughnessFactor', 0); o.ours.roughK = k; changed = true
+    end
   end
   if changed then
     m:flush()          -- (seasonlook.lua's order: flush, then reload)
     m:reload()
     M.writes = M.writes + 1
   end
+  return changed
 end
 
 local function startLevel(k)
@@ -447,22 +493,37 @@ local function startLevel(k)
   else
     for name in pairs(known) do queue[#queue + 1] = name end
   end
-  table.sort(queue)
+  table.sort(queue, queueSort)
+  if #queue == 0 then queue = nil end
 end
 
--- W1's road condition under the car ('dry', 'wet', 'packed' ...), or nil without a road surface state.
+-- W1's road condition under the car ('dry', 'wet', 'packed' ...), or nil without a road surface state: winter.lua's
+-- stableRow (a wet film the same on every plow class: no flip of the whole scene at a turn onto another street).
 local function winterCond()
   local wm = package.loaded['beamngEarth/winter']
   if not (wm and wm._state) then return nil end
   local ok, state, cls = pcall(wm._state)
   if not ok or type(state) ~= 'table' or type(state.roads) ~= 'table' then return nil end
-  local row = state.roads[(tonumber(cls) or 2) + 1]
+  local row
+  if wm.stableRow then row = wm.stableRow(state.roads, tonumber(cls) or 2)
+  else row = state.roads[(tonumber(cls) or 2) + 1] end
   return type(row) == 'table' and row[1] or nil
 end
 
--- W1's wetness of the road under the car, or nil without a road surface state.
+-- W1's wetness of the road under the car (nil without a road surface state) and the place it is for (winter.place).
 local function winterWet()
-  return M.wetFromCondition(winterCond())
+  local wm = package.loaded['beamngEarth/winter']
+  local ok, place = pcall(function() return wm and wm.place and wm.place() or 0 end)
+  return M.wetFromCondition(winterCond()), ok and place or 0
+end
+
+-- Pure: W1's road wetness as shown after dt s, w moving toward the state's (target): wetting as the rain model does
+-- (WET_TAU_S), drying at DRY_S. A new state each UTC hour (wet, then damp, then dry as the film dries) used to switch
+-- every wet material and the terrain's carriageways at once; now they follow over minutes.
+function M.roadStep(w, target, dt)
+  w, target, dt = tonumber(w) or 0, tonumber(target) or 0, math.max(0, tonumber(dt) or 0)
+  if target > w then return w + (target - w) * (1 - math.exp(-dt / M.WET_TAU_S)) end
+  return math.max(target, w - dt / M.DRY_S)
 end
 
 -- The new look's check (every CHECK_S): the wet state synced to the weather shown (src(): weather.lua's wetInputs),
@@ -506,17 +567,21 @@ end
 function M.update(dt, rainMmH, on, gripOn, src)
   dt = tonumber(dt) or 0
   if queue then
-    for _ = 1, M.BATCH do
+    -- (the checks go on meanwhile; a new step restarts the queue, and what is already on it is skipped)
+    local wrote, looked = 0, 0
+    while wrote < M.BATCH and looked < M.LOOK_MAX do
       local name = table.remove(queue)
       if not name then break end
-      pcall(writeOne, name, level)
+      looked = looked + 1
+      local ok, did = pcall(writeOne, name, level)
+      if ok and did then wrote = wrote + 1 end
     end
     if #queue == 0 then queue = nil end
-    return true
   end
   timer, rescan = timer + dt, rescan + dt
-  if timer < M.CHECK_S then return level > 0 or own > 0 or grip ~= nil or puddle > 0 end
+  if timer < M.CHECK_S then return queue ~= nil or level > 0 or own > 0 or grip ~= nil or puddle > 0 end
   local step = nil
+  local dtCheck = timer
   if M.v2 then
     step = checkV2(on, gripOn, src, timer)
   else
@@ -524,21 +589,32 @@ function M.update(dt, rainMmH, on, gripOn, src)
   end
   timer = 0
   setGrip(gripOn and M.gripCond(own, grip) or nil)
-  local w, wsrc = M.wetOf(on, winterWet(), own)
+  -- W1's road wetness: a new place's at once (a teleport: not the last place's drying), one place's over minutes
+  local target, at = winterWet()
+  if target == nil then
+    road, roadPlace = nil, nil
+  elseif road == nil or at ~= roadPlace then
+    road, roadPlace = target, at
+  else
+    road = M.roadStep(road, target, dtCheck)
+  end
+  local w, wsrc = M.wetOf(on, road, own)
   M.source = wsrc
   setPuddles(step or M.puddleStep(w))
-  local k = M.levelOf(w)
+  local k = M.levelStep(w, level)
   if k ~= level then
     startLevel(k)
-  elseif k > 0 and rescan >= M.RESCAN_S then
+  elseif k > 0 and rescan >= M.RESCAN_S and not queue then
     rescan = 0
     local before = known
     scan()
     queue = {}
     for name in pairs(known) do if not (before and before[name]) or not orig[name] then queue[#queue + 1] = name end end
+    table.sort(queue, queueSort)
     if #queue == 0 then queue = nil end
   end
   return level > 0 or own > 0 or queue ~= nil or grip ~= nil or puddle > 0 or (M.v2 and ws ~= nil and ws.active())
+    or (road or 0) > 0
 end
 
 -- The new puddle look on or off (weather.lua, the setting): off puts the material's own values back at once and the
@@ -584,6 +660,7 @@ end
 
 function M.level() return level end
 function M.wetness() return own end
+function M.roadWetness() return road end      -- (W1's road wetness shown, nil: none)
 function M.grip() return grip end
 -- The puddles' alpha threshold shown now (255: none; aquaplane.lua's water depth in them).
 function M.puddleRefShown() return refOf(puddle) end
@@ -591,6 +668,8 @@ function M.puddleRefShown() return refOf(puddle) end
 -- The level goes: nothing to restore (the materials load again with the next level); state cleared.
 function M.reset()
   own, level, queue, orig, known, timer, rescan, puddle = 0, 0, nil, {}, nil, 0, 0, 0
+  classes = {}
+  road, roadPlace = nil, nil
   look, horizon, env = nil, { timer = 0, city = nil, pending = nil }, nil   -- (the material and the level info load again)
   if ws then ws.reset() end
   setGrip(nil)
@@ -603,6 +682,7 @@ end
 -- state says wet, and its own rain wets them again within minutes (WET_TAU_S).
 function M.onTeleport()
   own = 0
+  road, roadPlace = nil, nil   -- (the road state's wetness: the state's own at once, not drying from the last place's)
   timer = M.CHECK_S
   -- (the new puddle look: wetstate's real-weather memory too, the same way; a preset's or the BeamMP host's stays)
   if ws then ws.onTeleport() end

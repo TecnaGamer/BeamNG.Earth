@@ -341,6 +341,16 @@ def cmd_warm(args):
     print(f"{label}: done, {bad} failed (logs in {d / 'logs'}; KEY.err beside the tiles)")
 
 
+def seed_cip(seed):
+    """The CIP cells' build the warm read the map cells from (<seed>/mapdata/raw/cip/<release>/<build>), when it is one:
+    the offline builds are pinned to it (BNE_V2_CIP=on, BNE_V2_CIP_BUILD). Otherwise cip.reader takes the build from
+    cdn.json's switch, which offline is not read: the cells the warm had from the CIP build were asked of Overture's
+    files instead and every tile failed offline (Baltimore's Russell Street corridor, 2026-11-28)."""
+    root = seed / "mapdata" / "raw" / "cip"
+    builds = sorted({p.name for p in root.glob("*/*") if p.is_dir()}) if root.is_dir() else []
+    return builds[0] if len(builds) == 1 else None
+
+
 def cmd_build(args):
     d, c = corridor(args.name)
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", args.state) or args.state.startswith("warm") or args.state in RAW \
@@ -348,6 +358,9 @@ def cmd_build(args):
         raise SystemExit("--state: lower-case letters, digits, _ and - (not warm*, seed, tiles or an input's name)")
     tree = Path(args.tree).resolve() if args.tree else TREE
     env = state_env(args)
+    cip = seed_cip(d / "cache" / "seed")
+    if cip and "BNE_V2_CIP" not in env:
+        env.update(BNE_V2_CIP="on", BNE_V2_CIP_BUILD=cip)
     meta = dict(tree=str(tree), env=env, offline=True)
     sf = d / "states" / (args.state + ".json")
     if sf.exists() and read(sf) != meta and not args.fresh:

@@ -115,12 +115,20 @@ pub fn block_chunk_grid<'py>(
     let full = missing.len() == (n / side) * (n / side);
     if let Some((o, r)) = &tangent {
         py.detach(|| {
-            for c in &need_geo {
-                for y in c.y..c.y + side {
-                    for x in c.x..c.x + side {
-                        let (la, lo, _) = crate::e2g_one(xs[x], ys[y], 0., o, r);
-                        lat[[y, x]] = la;
-                        lon[[y, x]] = lo;
+            // (each sample's position from its own lattice point, over par's threads in fixed parts: the same bits on
+            // any number; then pasted into its chunk)
+            let ss = side * side;
+            let geo = crate::par::map(need_geo.len() * ss, |i| {
+                let (c, k) = (&need_geo[i / ss], i % ss);
+                let (la, lo, _) = crate::e2g_one(xs[c.x + k % side], ys[c.y + k / side], 0., o, r);
+                (la, lo)
+            });
+            for (j, c) in need_geo.iter().enumerate() {
+                for dy in 0..side {
+                    for dx in 0..side {
+                        let (la, lo) = geo[j * ss + dy * side + dx];
+                        lat[[c.y + dy, c.x + dx]] = la;
+                        lon[[c.y + dy, c.x + dx]] = lo;
                     }
                 }
             }
@@ -221,19 +229,24 @@ pub fn block_chunk_grid<'py>(
         let (la, lo) = (la.readonly(), lo.readonly());
         let (la, lo, z) = (la.as_array(), lo.as_array(), z.as_array());
         py.detach(|| {
+            // (each sample's height from its own position and elevation, over par's threads in fixed parts: the same
+            // bits on any number; then pasted into its chunk)
+            let ss = side * side;
+            let src_of = |j: usize, k: usize| -> [usize; 2] {
+                let c = &missing[j];
+                if full { [c.y + k / side, c.x + k % side] } else { [0, j * ss + k] }
+            };
+            let vals = crate::par::map(missing.len() * ss, |i| {
+                let src = src_of(i / ss, i % ss);
+                match &tangent {
+                    Some((o, r)) => crate::g2e_one(la[src], lo[src], z[src], o, r).2,
+                    None => projected.unwrap()[src],
+                }
+            });
             for (j, c) in missing.iter().enumerate() {
                 for dy in 0..side {
                     for dx in 0..side {
-                        let dst = [c.y + dy, c.x + dx];
-                        let src = if full {
-                            dst
-                        } else {
-                            [0, j * side * side + dy * side + dx]
-                        };
-                        u[dst] = match &tangent {
-                            Some((o, r)) => crate::g2e_one(la[src], lo[src], z[src], o, r).2,
-                            None => projected.unwrap()[src],
-                        };
+                        u[[c.y + dy, c.x + dx]] = vals[j * ss + dy * side + dx];
                     }
                 }
             }

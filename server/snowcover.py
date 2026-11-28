@@ -139,7 +139,20 @@ class Field:
         return self.uniform if self.uniform is not None else self.cells.get((ci, cj))
 
 
+# The local weather S1 tables (snowfield.py, BNE_LOCAL_WEATHER=snowfield): rows of S1_COLS (z m on the absolute 150 m
+# grid, cover facing the pole 0..8, its depth bin, cover facing the equator, its depth bin, age 0..3), at most S1_ROWS,
+# only where the cell has ground; snowlook.rs reads them by the texel's aspect (S1_COLS of a spec's tables: an S1 field)
+S1_COLS = 6
+S1_ROWS = 40
+
+
+def _is_s1(t):
+    return t is not None and bool(t.rows) and len(t.rows[0]) == S1_COLS
+
+
 def _has_cover(t):
+    if _is_s1(t):
+        return any(int(r[1]) > 0 or int(r[3]) > 0 for r in t.rows)
     return t is not None and any(int(r[1]) > 0 for r in t.rows)
 
 
@@ -282,6 +295,8 @@ def _window(f, south, west, north, east):
                 idx[cj - cj0, ci - ci0] = seen[k]
         if not tabs:
             return None
+    if any(_is_s1(t) for t in tabs):
+        return _window_s1(res, ci0, cj0, idx, tabs)
     tables = np.zeros((len(tabs), 8, 4), np.int32)
     counts = np.zeros((len(tabs), 17), np.int32)
     for n, t in enumerate(tabs):
@@ -291,6 +306,29 @@ def _window(f, south, west, north, east):
         for r, row in enumerate(rows):
             if not (0 <= row[1] <= 8 and 0 <= row[2] <= 6 and 0 <= row[3] <= 3):
                 raise ValueError(f"snow table row out of range: {row}")
+            tables[n, r] = row
+        counts[n, 0] = len(rows)
+        counts[n, 1:16] = road_slots(t.road)
+        counts[n, 16] = min(max(int(t.ice), 0), 8)
+    return (res, ci0, cj0, idx, tables, counts)
+
+
+def _window_s1(res, ci0, cj0, idx, tabs):
+    """_window's arrays of S1 tables: tables (n, rows, S1_COLS) int32 (rows: the longest table's), counts as _window's.
+    A field mixes no table kinds (a W2 table among S1 ones is an error)."""
+    if not all(_is_s1(t) for t in tabs):
+        raise ValueError("snow field: S1 and W2 tables mixed")
+    nr = max(len(t.rows) for t in tabs)
+    if nr > S1_ROWS:
+        raise ValueError(f"snow table (S1) with {nr} rows, at most {S1_ROWS}")
+    tables = np.zeros((len(tabs), nr, S1_COLS), np.int32)
+    counts = np.zeros((len(tabs), 17), np.int32)
+    for n, t in enumerate(tabs):
+        rows = sorted(tuple(int(v) for v in r) for r in t.rows)
+        for r, row in enumerate(rows):
+            if not (0 <= row[1] <= 8 and 0 <= row[2] <= 6 and 0 <= row[3] <= 8 and 0 <= row[4] <= 6
+                    and 0 <= row[5] <= 3) or (r and row[0] <= rows[r - 1][0]):
+                raise ValueError(f"snow table (S1) row out of range or out of order: {row}")
             tables[n, r] = row
         counts[n, 0] = len(rows)
         counts[n, 1:16] = road_slots(t.road)
@@ -344,11 +382,42 @@ def spec_for_box(south, west, north, east):
                            wsh is not None)).encode())
     if win is not None:
         res, ci0, cj0, idx, tables, counts = win
-        h.update(repr((res, ci0, cj0, idx.shape)).encode())
+        # (an S1 field's tables carry their own shape: the kind is in the key, never one table read as the other)
+        h.update(repr((res, ci0, cj0, idx.shape) + (("s1", tables.shape) if tables.shape[2] == S1_COLS else ()))
+                 .encode())
         h.update(idx.tobytes())
         h.update(tables.tobytes())
         h.update(counts.tobytes())
     return Spec(("snow", h.hexdigest()[:20]), win, perm, leaf, wsh, credits, trees)
+
+
+def _look_of(win, roads):
+    """What of a field window (_window) a texture's snow look reads: the window as it is, or (roads False: texels too
+    coarse for the roads' plow classes, no road mask) without its road shares. None: no cover there."""
+    if win is None:
+        return None
+    res, ci0, cj0, idx, tables, counts = win
+    if not roads:
+        counts = counts.copy()
+        counts[:, 1:16] = 0
+    return (res, ci0, cj0, idx.shape, idx.tobytes(), tables.tobytes(), counts.tobytes())
+
+
+def look_changes(old, new, box, roads):
+    """Does a texture over box (south, west, north, east deg) look different under Field new than under Field old
+    (either None: no snow known)? Its spec's other parts (the permanent snow, the winter packs) are the same under both:
+    only the tables round it count, the road shares only with roads (its texels fine enough for them). No cover before
+    and after: no change (the server's snow_changed re-renders only where this is True)."""
+    return _look_of(_window(old, *box), roads) != _look_of(_window(new, *box), roads)
+
+
+def uniform_changes(old, new):
+    """(with roads, without) look_changes for two fields with one table everywhere (or None): the same for every
+    texture. None when either has tables by cell (then per texture)."""
+    if any(f is not None and f.uniform is None for f in (old, new)):
+        return None
+    box = (0.0, 0.0, 0.0, 0.0)          # (a uniform window's cell is the box's: the same one under both)
+    return look_changes(old, new, box, True), look_changes(old, new, box, False)
 
 
 def key_parts(spec):

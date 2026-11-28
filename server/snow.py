@@ -284,7 +284,7 @@ class Service:
     table cut to it (w2_table); None (or failing): the kernel's bands as they are."""
 
     def __init__(self, fetch=None, mode=None, clock=time.time, retry_s=RETRY_S, cover=None, winter=None, relief=None,
-                 retry_fast_s=RETRY_FAST_S):
+                 retry_fast_s=RETRY_FAST_S, field=None):
         self.fetch = fetch if fetch is not None else weather.fetch_hourly
         self.mode = mode or MODE or "real"
         self.winter = (WINTER or self.mode in PRESETS) if winter is None else bool(winter)
@@ -305,21 +305,44 @@ class Service:
         self.table_changes = 0
         self.places_left = 0
         self.cover = (cover if cover is not None else _snowcover()) if self.winter else None
+        # local weather S1 (snowfield.py, BNE_LOCAL_WEATHER=snowfield): the photos' snow from the field's tables by
+        # cell (field_tick), the player's own state (grip, roads, grass) still from this service's site; a preset's
+        # snow stays the preset's
+        self.field = field if (self.cover is not None and self.mode not in PRESETS) else None
+        self.field_busy = False
+        self.field_task = None      # (the running ring job: the server's task, field_tick)
         if self.cover is not None:
             # (a preset's provider draws the climatic permanent snow too, as BNE_SNOW's presets; the real state never:
             # snow only where its forcing put it)
             self.cover.set_provider(self.provider, climate=self.mode in PRESETS)
 
     def provider(self, south, west, north, east):
-        """snowcover's provider: the last table as a uniform Field (None while there is none or no cover in it)."""
-        t = _drawn(self.table)
-        if t is None:
+        """snowcover's provider: the last table as a uniform Field (None while there is none or no cover in it); with
+        the snow field (local weather S1), its cells' tables."""
+        if self.field is not None:
+            return self.field.provider(south, west, north, east)
+        return self.field_of(self.table)
+
+    def field_of(self, t):
+        """A shared table (rows, road, ice) as the provider's uniform Field (None: none, or nothing white in it)."""
+        t = _drawn(t)
+        if t is None or self.cover is None:
             return None
         try:
             table = self.cover.Table(t[0], t[1], t[2])
         except TypeError:           # (a snowcover before Table.ice)
             table = self.cover.Table(t[0], t[1])
         return self.cover.Field(CELL_DEG, uniform=table)
+
+    def _changed(self, s, old, new):
+        """Server.snow_changed with the provider's Fields before and after: only the textures whose look changed are
+        made again (snowcover.look_changes)."""
+        try:
+            fields = (self.field_of(old), self.field_of(new))
+        except Exception as e:      # (a cover without Field: every texture, as before)
+            log.debug("snow: no fields for the change: %s: %s", type(e).__name__, e)
+            fields = None
+        return s.snow_changed(fields=fields)
 
     def backoff(self, fails):
         """Seconds before another try after `fails` failed fetches in a row: retry_fast_s doubling, at most retry_s."""
@@ -353,8 +376,9 @@ class Service:
                          site[2], raw.get("relief"), "" if drawn else " (no snow drawn before or after)",
                          table_change(old, self.table, old_view, view))
             s = conn.s
-            if drawn and hasattr(s, "snow_changed"):     # (no snow before and after: nothing drawn changes)
-                s.snow_changed()
+            # (no snow before and after: nothing drawn changes; the snow field draws its own tables)
+            if drawn and self.field is None and hasattr(s, "snow_changed"):
+                Service._changed(self, s, old, self.table)
             for c in list(getattr(s, "connections", ()) or ()):
                 c.send({"type": "snow", "snow": dict(view)})
         return changed
@@ -375,6 +399,7 @@ class Service:
             if site is not None and weather.distance_m(site[0], site[1], lat, lon) <= NEW_PLACE_M:
                 return False
             had = _drawn(self.table) is not None
+            old = self.table
             roads = self.road_snow is not None
             self.table, self.view, self.site = None, None, None
             self.bins, self.ice, self.bank_bins, self.road_snow = [-1] * 8, -1, [-1] * 5, None
@@ -383,13 +408,61 @@ class Service:
                  lat, lon, "had snow" if had else "had none")
         s = conn.s
         if had:
-            if hasattr(s, "snow_changed"):
-                s.snow_changed()
+            if self.field is None and hasattr(s, "snow_changed"):   # (the field's tables are their cells': kept)
+                Service._changed(self, s, old, None)
             for c in list(getattr(s, "connections", ()) or ()):
                 c.send({"type": "snow", "snow": {"mode": "real", "cover": 0, "depth": 0}})
         if roads and hasattr(s, "snow_roads_changed"):
             s.snow_roads_changed()
         return True
+
+    def field_tick(self, conn, lat, lon, arrived=False):
+        """(event loop) The snow field's due work round the player at (lat, lon): the near ring (its own forcing a
+        cell, the anchor's cell first), then the far ring, one job at a time in an executor; the cells whose tables
+        changed are drawn again (Server.snow_changed with the field before and after and the changed cells: only the
+        textures whose look changed, at the live retexture's pace). arrived: a teleport (the new place's ring at once)."""
+        f = self.field
+        if f is None or self.field_busy or not (arrived or f.due(lat, lon)):
+            return
+        self.field_busy = True
+        loop, server = conn.loop, conn.s
+
+        async def run():
+            try:
+                for ring in ("near", "far"):
+                    try:
+                        staged = await loop.run_in_executor(None, f.update, lat, lon, ring)
+                    except Exception as e:      # (update keeps its own retry; a bug here must not stop the rings)
+                        log.warning("snow field %s ring: %s: %s", ring, type(e).__name__, e)
+                        continue
+                    if staged is not None:
+                        Service._publish(server, f, staged)
+            finally:
+                self.field_busy = False
+        # (the server's task, not the connection's: a disconnect while a ring runs cancels none of it, and the tables
+        # it made are published with their renders' invalidation in one step)
+        self.field_task = loop.create_task(run())
+
+    @staticmethod
+    def _publish(server, f, staged):
+        """(event loop) A ring's staged tables published and the renders invalidated in the same step: the field
+        before, its tables taken (snowfield.publish), the field after, Server.snow_changed with both (its snow
+        generation: renders in flight are checked) and the changed cells; when that fails, every texture again
+        (no table may change without its renders' invalidation)."""
+        before = f.provider(-90.0, -180.0, 90.0, 180.0)
+        changed = f.publish(staged)
+        if not changed or not hasattr(server, "snow_changed"):
+            return changed
+        try:
+            server.snow_changed(fields=(before, f.provider(-90.0, -180.0, 90.0, 180.0)), cells=changed)
+        except Exception as e:
+            log.warning("snow field: the change's invalidation failed (%s: %s): every texture again",
+                        type(e).__name__, e)
+            try:
+                server.snow_changed()
+            except Exception as e2:
+                log.error("snow field: no invalidation at all: %s: %s", type(e2).__name__, e2)
+        return changed
 
     def _commit_roads(self, conn, look):
         """(event loop) W3's look of a new state: the bank bins kept for the hysteresis; when the road skins' winter
@@ -494,7 +567,8 @@ class Tracker:
         self.msg = None
         self.bin = -1
         self.pose = None            # (lat, lon) of the last pose
-        self.epoch = 0              # the place's number: a teleport makes a new one
+        self.epoch = 0              # the place's number: a teleport makes a new one (a new anchor too: new_anchor)
+        self.frame = None           # the last pose's anchor: ("aid", id), or its frame's (lat0, lon0)
 
     def due(self, svc, lat, lon, z, now):
         if self.inflight or now < self.retry_at:
@@ -522,16 +596,36 @@ class Tracker:
         svc.leave(conn, lat, lon)
         return True
 
-    def on_pose(self, conn, frame, x, y, z):
-        """earthd Connection._pose_ground: the player at (x, y, z) in its anchor's frame. Nothing without the service
-        (BNE_WINTER off)."""
+    def new_anchor(self, frame, aid=None):
+        """A pose under another anchor than the last (a teleport, a rebase): a state is computed for here at once and
+        one still being fetched is dropped when it comes, so the first state after it is this place's (the mod drops
+        the origin's at a teleport and takes the next one as the destination's: winter.lua onTeleport; Codex on
+        17fb1d0e). The anchor by its id (earthd's pose: aid), so a snapped teleport onto the same frame origin under a
+        new anchor is one too (Codex on 2ebc7b8f: within REFETCH_M and REZ_M no state came until the next UTC hour,
+        the car on stock grip); without an id, by the frame's origin. The forcing is cached per cell and hour
+        (Service.forcing): mostly no fetch. True when it was."""
+        at = ("aid", aid) if aid is not None else \
+            (float(getattr(frame, "lat0", 0.0)), float(getattr(frame, "lon0", 0.0)))
+        old, self.frame = self.frame, at
+        if old is None or old == at:
+            return False
+        self.epoch += 1
+        self.last, self.inflight, self.retry_at, self.fails = None, False, 0.0, 0
+        return True
+
+    def on_pose(self, conn, frame, x, y, z, aid=None):
+        """earthd Connection._pose_ground: the player at (x, y, z) in its anchor's frame (aid: that anchor's id).
+        Nothing without the service (BNE_WINTER off)."""
         svc = conn.s.snow
         if svc is None:
             return
         lat, lon, h = (float(v) for v in frame.enu_to_geodetic(x, y, z))
         if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(h)):
             return
-        self.arrive(conn, svc, lat, lon)
+        arrived = self.arrive(conn, svc, lat, lon)
+        moved = self.new_anchor(frame, aid)
+        if getattr(svc, "field", None) is not None:
+            svc.field_tick(conn, lat, lon, arrived or moved)
         now = svc.clock()
         if not self.due(svc, lat, lon, h, now):
             return

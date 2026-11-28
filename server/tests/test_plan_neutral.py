@@ -97,6 +97,9 @@ NOT_LISTED = {
     "BNE_PUDDLES": "the puddle plan: R1 only adds the rain history to the live weather message (weather.PUDDLES_V2); "
                    "R2 on will change the skins' puddle geometry (roadwear), so it stays keyed and is not proven "
                    "plan-neutral",
+    "BNE_LOCAL_WEATHER": "no build switch at all (revisit.NOT_SWITCHES): local weather (snowfield.py, S1) is live; its "
+                         "snow photos are keyed by their S1 tables (snowcover.key_parts), never in plans or facts; "
+                         "nothing the planning reaches imports snowfield or snowcover",
     "BNE_TUNNEL_ROAD_OVER": "road tiles' tunnel entrances only (portals.fit: the headwall's top under a road crossing "
                             "over the mouth); not yet proven plan-neutral both ways, so it stays keyed with the "
                             "Revamped roads setting",

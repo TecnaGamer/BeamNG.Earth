@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+<asset><contributor><authoring_tool>BeamNG.Earth tools/build_airtraffic_shapes.py (models: devo343, Live Air Traffic)</authoring_tool></contributor><unit meter="1" name="meter"/><up_axis>Z_UP</up_axis></asset>
+<library_effects>
+<effect id="lat_text-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>0.07 0.09 0.17 1</color></diffuse></lambert></technique></profile_COMMON></effect>
+</library_effects>
+<library_materials>
+<material id="lat_text-mat" name="lat_text"><instance_effect url="#lat_text-fx"/></material>
+</library_materials>
+<library_geometries>
+<geometry id="lat_glyph_B8-g"><mesh>
+<source id="lat_glyph_B8-g-p"><float_array id="lat_glyph_B8-g-p-a" count="123">0 0.126 0 0 0.384 0.613 0 0.384 0.824 0 0.384 0.176 0 0.384 0.437 0 0.535 0.176 0 0.554 0 0 0.728 0.018 0 0.851 0.071 0 0.925 0.16 0 0.949 0.287 0 0.938 0.374 0 0.903 0.446 0 0.848 0.501 0 0.775 0.535 0 0.832 0.567 0 0.874 0.611 0 0.9 0.668 0 0.908 0.735 0 0.885 0.855 0 0.815 0.937 0 0.693 0.984 0 0.513 1 0 0.126 1 0 0.526 0.824 0 0.58 0.818 0 0.535 0.437 0 0.604 0.429 0 0.652 0.405 0 0.603 0.184 0 0.619 0.797 0 0.642 0.764 0 0.526 0.613 0 0.682 0.364 0 0.652 0.208 0 0.65 0.719 0 0.642 0.673 0 0.619 0.64 0 0.58 0.619 0 0.691 0.307 0 0.681 0.25</float_array><technique_common><accessor source="#lat_glyph_B8-g-p-a" count="41" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+<vertices id="lat_glyph_B8-g-v"><input semantic="POSITION" source="#lat_glyph_B8-g-p"/></vertices>
+<triangles count="43" material="lat_text-mat"><input semantic="VERTEX" source="#lat_glyph_B8-g-v" offset="0"/><p>0 1 2 0 3 4 5 3 0 5 0 6 5 6 7 5 7 8 5 8 9 9 10 11 9 11 12 9 12 13 9 13 14 14 15 16 14 16 17 14 17 18 14 18 19 14 19 20 14 20 21 14 21 22 23 0 2 23 2 24 23 24 25 1 0 4 1 4 26 1 26 27 1 27 28 29 5 9 22 23 25 22 25 30 22 30 31 32 1 28 32 28 33 34 29 9 14 22 31 14 31 35 14 35 36 14 36 37 14 37 38 14 38 32 14 32 33 14 33 39 14 39 40 40 34 9 40 9 14</p></triangles>
+</mesh></geometry>
+</library_geometries>
+<library_visual_scenes><visual_scene id="scene" name="scene">
+<node id="base00" name="base00"><node id="start01" name="start01">
+<node id="lat_glyph_B8" name="lat_glyph_B8"><instance_geometry url="#lat_glyph_B8-g"><bind_material><technique_common><instance_material symbol="lat_text-mat" target="#lat_text-mat"/></technique_common></bind_material></instance_geometry></node>
+</node><node id="collision-1" name="collision-1"/></node>
+</visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>

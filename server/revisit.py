@@ -412,7 +412,12 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 # where no snow can lie. Anything else snow comes to change must carry its own spec part, snowcover.py)
                 "BNE_WINTER", "BNE_SNOW", "BNE_WET_ROADS",
                 # (the trees' leaf cycle, leafcycle.py: a field of the anchor's message only, the mod's trees by it)
-                "BNE_LEAF_CYCLE")
+                "BNE_LEAF_CYCLE",
+                # (the live air traffic's test switch, airtraffic.TEST_ON: a hello flag for the mod, nothing built)
+                "BNE_AIRTRAFFIC_TEST",
+                # (local weather, snowfield.py and the later parts: live weather only; S1's snow photos are keyed by
+                # their tables as W2's, snowcover.key_parts with the S1 tables' own marker)
+                "BNE_LOCAL_WEATHER")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
@@ -542,8 +547,15 @@ def keyed_env(k):
 # BNE_ROADSYS=surface 11 (M5 round 7): ... the end at its 0.1 m key and its direction to 1e-4 instead, the same
 # whichever cells were read, and a batch of pins planned with the union's landings again (9's per-part landings and
 # 10's reads of every end's own cell cost 2-5x the CPU where the map's reads are short and never kept).
+# BNE_ROADSYS=surface 12 (M5 round 8, earthfast 643): a short chain keeps its profile's deck end where the plans' ground
+# past it lies more than 0.75 m off, and its approach is ramped to it at its class grade, ending short of its first
+# junction (roadsys._keep_ends, pins_near's ramps; native/roadsys endmatch.rs kept_ends / approach_run / ramp_dz).
+# BNE_ROADSYS=surface 13 (M5 round 8, earthfast 643): a road's plans read the surface model's ground plus the ground
+# filter's cut where that cut is the road's own embankment (grading._Planner._embank_obs, earthfast embank_lift).
+# BNE_ROADSYS=surface 14 (M5 round 8): a kept deck end wholly or not at all, never on a link; the embankment in the plans'
+# ground itself (embankfield through plan_elev, BNE_ROADSYS_EMBANK=on), not in the plans' obs.
 ROADSYS_STRUCTURES_VERSION = 2
-ROADSYS_SURFACE_VERSION = 11
+ROADSYS_SURFACE_VERSION = 14
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
                    "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1,

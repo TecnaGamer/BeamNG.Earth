@@ -1,6 +1,7 @@
 //! Threads for the per-sample kernels (the plan apply's grade_points_binned, the mip levels, the CPU BC1 / BC7
-//! encoders): one cap for every kernel of a process, so that several server processes busy at once do not each start
-//! a thread per core.
+//! encoders; since 651 the terrain block's elementwise ones through fill / map / any: dnp's dm_vec, geo_tile_of,
+//! dem_sample, sea_cell_lookup, landcover_classify, the block lattice's coordinates): one cap for every kernel of a
+//! process, so that several server processes busy at once do not each start a thread per core.
 //!
 //! The cap is the smallest of:
 //! - the CPUs this process may run on: its affinity (cpupin.py pins the server's processes to the server's cores and
@@ -129,6 +130,54 @@ pub fn rows<T: Send, F: Fn(usize, &mut [T]) + Sync>(out: &mut [T], row_len: usiz
     });
 }
 
+/// Values in a run of fixed parts (PART items each).
+pub const PART: usize = 4096;
+/// Elementwise kernels: at most one thread per this many items (a thread's start ~20-50 µs: a 1024² block's 1 M points
+/// split 4-8 ways, a few thousand points stay on the calling thread).
+pub const MAP_ITEMS_PER_THREAD: usize = 32768;
+
+/// out[i] = f(i) for every i, over up to threads_for(len, MAP_ITEMS_PER_THREAD) threads in fixed parts of PART items.
+/// Each value comes from its own index only (no reduction): the same bits on any number of threads.
+pub fn fill<T: Send, F: Fn(usize) -> T + Sync>(out: &mut [T], f: F) {
+    let threads = threads_for(out.len(), MAP_ITEMS_PER_THREAD);
+    if threads <= 1 {
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = f(i);
+        }
+        return;
+    }
+    let parts: Vec<(usize, &mut [T])> = out.chunks_mut(PART).enumerate().collect();
+    run_parts(parts, threads, |(k, part)| {
+        for (j, o) in part.iter_mut().enumerate() {
+            *o = f(k * PART + j);
+        }
+    });
+}
+
+/// (0..n).map(f) collected, as fill (T: Default for the buffer).
+pub fn map<T: Send + Default + Clone, F: Fn(usize) -> T + Sync>(n: usize, f: F) -> Vec<T> {
+    let mut out = vec![T::default(); n];
+    fill(&mut out, f);
+    out
+}
+
+/// Whether f(i) holds for any i in 0..n, over fixed parts as fill (each part stops at its first hit; an any() of
+/// booleans: the same answer on any number of threads).
+pub fn any<F: Fn(usize) -> bool + Sync>(n: usize, f: F) -> bool {
+    let threads = threads_for(n, MAP_ITEMS_PER_THREAD);
+    if threads <= 1 {
+        return (0..n).any(f);
+    }
+    let hit = std::sync::atomic::AtomicBool::new(false);
+    let parts: Vec<usize> = (0..n.div_ceil(PART)).collect();
+    run_parts(parts, threads, |k| {
+        if !hit.load(Ordering::Relaxed) && (k * PART..((k + 1) * PART).min(n)).any(&f) {
+            hit.store(true, Ordering::Relaxed);
+        }
+    });
+    hit.load(Ordering::Relaxed)
+}
+
 /// The per-sample kernels' thread cap for this process (n >= 1; 0: back to BNGE_NATIVE_THREADS and the CPU set).
 /// Returns the threads a large call uses now.
 #[pyfunction]
@@ -162,6 +211,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fill_map_any_as_serial() {
+        let n = 3 * MAP_ITEMS_PER_THREAD + 17;      // (over the threads' minimum: split on 2, 3 and 8)
+        for t in [1, 2, 3, 8] {
+            SET_CAP.store(t, Ordering::Relaxed);
+            let got = map(n, |i| (i as f64).sqrt().to_bits());
+            assert!(got.iter().enumerate().all(|(i, &v)| v == (i as f64).sqrt().to_bits()));
+            assert!(any(n, |i| i == n - 1));
+            assert!(!any(n, |i| i == n));
+            let mut v = vec![0u8; 5];
+            fill(&mut v, |i| i as u8 + 1);
+            assert_eq!(v, [1, 2, 3, 4, 5]);
+        }
+        SET_CAP.store(0, Ordering::Relaxed);
     }
 
     #[test]

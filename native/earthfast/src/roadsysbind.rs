@@ -2,7 +2,7 @@
 //! read's segment table (RoadsysSegments), asks for the tile's read list (roadsys_reads) until nothing is missing,
 //! then builds the tile's shadow product (roadsys_build); tools/widecorpus/checks.py's audit (roadsys_audit) runs the
 //! same M0 checks the CLI does. All maths in native/roadsys (no platform maths, no FMA, BTreeMap only).
-use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -440,6 +440,49 @@ pub fn roadsys_end_lifts<'py>(py: Python<'py>, parts: Vec<(PyReadonlyArray2<'py,
     Ok(got.into_iter().map(|v| PyArray1::from_vec(py, v)).collect())
 }
 
+/// (643, M5 round 8) The ends a short chain keeps at its profile's heights (native/roadsys endmatch.rs kept_ends): parts
+/// [(points (n, 2), heights (n,))], ends [(ground past its first end, past its last end)], runs [(m its approach is free
+/// there, ...)] (NaN: not read), grades, speeds (m/s; per part: its class's), prm (short_m, dz_m, ramp_min_m, clear_m, ride_a) -> per part
+/// (ramp m at its first end, the lift still made there, ramp m at its last end, lift there), NaN where not kept.
+#[pyfunction]
+pub fn roadsys_kept_ends(parts: Vec<(PyReadonlyArray2<'_, f64>, PyReadonlyArray1<'_, f64>)>, ends: Vec<(f64, f64)>,
+                         runs: Vec<(f64, f64)>, grades: Vec<f64>, speeds: Vec<f64>, prm: (f64, f64, f64, f64, f64)) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+    if ends.len() != parts.len() || runs.len() != parts.len() || grades.len() != parts.len() || speeds.len() != parts.len() {
+        return Err(PyValueError::new_err("roadsys_kept_ends: one ends pair, run pair, grade and speed per part"));
+    }
+    let mut pp = Vec::with_capacity(parts.len());
+    for (p, z) in &parts {
+        let (p, z) = (p.as_array(), z.as_slice()?);
+        if p.ncols() != 2 || p.nrows() != z.len() { return Err(PyValueError::new_err("roadsys_kept_ends: inconsistent part")); }
+        pp.push(((0..p.nrows()).map(|i| [p[[i, 0]], p[[i, 1]]]).collect::<Vec<_>>(), z.to_vec()));
+    }
+    let k = roadsys::endmatch::KeepPrm { short_m: prm.0, dz_m: prm.1, ramp_min_m: prm.2, clear_m: prm.3, ride_a: prm.4 };
+    Ok(roadsys::endmatch::kept_ends(&pp, &ends, &runs, &grades, &speeds, &k).into_iter().map(|v| (v[0], v[1], v[2], v[3])).collect())
+}
+
+/// (643, M5 round 8) A deck end's approach (native/roadsys endmatch.rs approach_run): lines [(points (n, 2), [(arc m,
+/// node id)], [arc m of a structure's boundary])], the walk's line, arc, direction and reach -> (m free, points (k, 2)).
+#[pyfunction]
+pub fn roadsys_approach_run<'py>(py: Python<'py>, lines: Vec<(PyReadonlyArray2<'py, f64>, Vec<(f64, u64)>, Vec<f64>)>,
+                                 li: usize, s0: f64, fwd: bool, max_m: f64) -> PyResult<(f64, Bound<'py, PyArray2<f64>>)> {
+    let mut ll = Vec::with_capacity(lines.len());
+    for (p, nodes, stops) in &lines {
+        let p = p.as_array();
+        if p.ncols() != 2 { return Err(PyValueError::new_err("roadsys_approach_run: points of 2 columns")); }
+        ll.push(roadsys::endmatch::RunLine { pts: (0..p.nrows()).map(|i| [p[[i, 0]], p[[i, 1]]]).collect(), nodes: nodes.clone(), stops: stops.clone() });
+    }
+    let (run, pts) = py.detach(|| roadsys::endmatch::approach_run(&ll, li, s0, fwd, max_m));
+    let n = pts.len();
+    let flat: Vec<f64> = pts.into_iter().flatten().collect();
+    Ok((run, numpy::ndarray::Array2::from_shape_vec((n, 2), flat).unwrap().into_pyarray(py)))
+}
+
+/// (643, M5 round 8) A kept end's approach ramp (native/roadsys endmatch.rs ramp_dz): the change at arcs s.
+#[pyfunction]
+pub fn roadsys_ramp_dz<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, dz0: f64, ramp: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    Ok(PyArray1::from_vec(py, roadsys::endmatch::ramp_dz(s.as_slice()?, dz0, ramp)))
+}
+
 /// (M3) The floors the squares hold over other roads inside a box: [(x, y, map feature)] (square.rs floor_points),
 /// each square's own, in square then stroke order (duplicates between squares kept: the caller matches by distance).
 #[pyfunction]
@@ -746,6 +789,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_blend, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_deck_depth, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_end_lifts, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_kept_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_approach_run, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_ramp_dz, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_floor_points, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_xsec_half_extent, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_clear, m)?)?;
