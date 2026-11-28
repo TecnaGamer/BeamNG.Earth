@@ -914,6 +914,7 @@ RETEX_RATE = 8.0
 MAP_RETEX_BOOST = 4         # the 3D map open: RETEX_INFLIGHT and RETEX_RATE times this (retexture: in workers)
 RETEX_INFLIGHT = 2         # (2: the 3D map's quick textures sharpen as their photos come, 2026-11-07)
 RETEX_REPEAT = 3
+SNOW_HIST_MAX = 64          # snow generations whose fields are kept (Server._snow_since; older: made again)
 # Shown in the mod's UI (V1_3_SPEC §C), after the imagery credits.
 ELEVATION_CREDIT = "Elevation: Mapterhorn (https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen"
 
@@ -1312,6 +1313,9 @@ class Server:
         self.retex_rate = retex_rate
         self.retex_inflight = RETEX_INFLIGHT
         self.retex_todo = set()
+        self.snow_gen = 0               # snow state changes so far (snow_changed) and their (fields, uniform) ...
+        self.snow_hist = {}
+        self.tile_gen = {}              # ... far tile renders in flight -> the snow generation they were submitted at
         self.retex_busy = 0
         self._retex_next = 0.0
         self._retex_timer = None
@@ -4979,38 +4983,143 @@ class Server:
         return snowcovermod.spec_for_square(anchor.frame, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M,
                                             size)
 
-    def snow_changed(self):
-        """(event loop) The snow state changed (W1's state, a preset set live: snow_mode): every far tile with a
-        texture re-rendered at the live retexture's pace, nearest a player first (each takes its new spec: far_snow),
-        every block's photo at its next base refresh (base_stale). A committed block's snow layer follows with its next
-        build (its .ter is the engine's). Returns the far tiles queued."""
-        n = 0
+    def snow_changed(self, fields=None):
+        """(event loop) The snow state changed (W1's state, a preset set live: snow_mode): the far tiles with a texture
+        whose snow look changed marked stale and re-rendered at the live retexture's pace, nearest a player first (each
+        takes its new spec: far_snow), the blocks' photos whose look changed at their next base refresh (base_stale).
+        A committed block's snow layer follows with its next build (its .ter is the engine's). Returns the far tiles
+        marked.
+        fields: (old, new) snowcover Fields of a W1 state change (snow.Service: the shared table before and after,
+        None for no snow); a texture changes only where its look does (_snow_tile_changed: the tables round its square;
+        the road shares only under texels fine enough for the roads, _snow_roads_of). None (a mode set live): every
+        texture. Only tiles some connection shows or holds are queued (the others are stale: rendered again when sent).
+        Each change is a new snow generation (snow_gen, its fields kept in snow_hist): a render submitted before it,
+        a first build too, is checked when it is in (_tile_done, _snow_since) and made again where its look changed.
+        Stelvio, 2026-11-28: a road share moving in one plow class re-rendered all 1,403 far tiles, twice in two
+        minutes."""
+        uni = snowcovermod.uniform_changes(*fields) if fields is not None else None
+        gen = self.snow_gen = getattr(self, "snow_gen", 0) + 1
+        hist = getattr(self, "snow_hist", None)
+        if hist is None:
+            hist = self.snow_hist = {}
+        hist[gen] = (fields, uni)
+        for g in [g for g in hist if g <= gen - SNOW_HIST_MAX]:
+            del hist[g]
+        n = queued = 0
+        viewers = getattr(self, "_retex_viewers", None)
         for ck, info in list(self.tiles.items()):
             if getattr(info, "material", None) is None or getattr(info, "texture", None) is None:
                 continue
+            if not Server._snow_tile_changed(self, fields, uni, ck, getattr(info, "tile", None), info):
+                continue
             info.stale = True
-            self.retex_request(ck, pump=False)
             n += 1
-        if n:
+            if callable(viewers) and not viewers(ck):
+                continue                # (nobody shows it: re-rendered when sent again)
+            self.retex_request(ck, pump=False)
+            queued += 1
+        if queued:
             self._retex_pump()
+        blocks = 0
         if self.near_visual == "detail":
-            self.base_stale.update(k for k in self.hm if k[0] in self.anchors)
+            for k in self.hm:
+                if k[0] in self.anchors and k not in self.base_stale and \
+                        Server._snow_block_changed(self, fields, uni, k):
+                    self.base_stale.add(k)
+                    blocks += 1
         self.snow_changes = getattr(self, "snow_changes", 0) + 1
-        log.info("snow state changed (%s): %d far tiles to texture again, %d block photos", snowcovermod.MODE, n,
-                 len(self.base_stale))
+        log.info("snow state changed (%s): %d far tiles to texture again (%d shown), %d block photos",
+                 snowcovermod.MODE, n, queued, blocks)
         return n
 
+    def _snow_tile_changed(self, fields, uni, ck, tile, info):
+        """Does far tile ck's snow look differ between a change's (old, new) fields (None: every texture changes; uni:
+        snowcover.uniform_changes of them)? Called as Server._snow_tile_changed(self, ...)."""
+        if fields is None:
+            return True
+        try:
+            if tile is None:
+                tile = farfield.tile_of(ck[1])
+            roads = Server._snow_roads_of(self, tile, info)
+            if uni is not None:
+                return uni[0] if roads else uni[1]
+            return snowcovermod.look_changes(fields[0], fields[1], Server._snow_tile_box(self, ck, tile), roads)
+        except Exception as e:          # (no frame for it: as before, made again)
+            log.debug("snow change: %s: %s", type(e).__name__, e)
+            return True
+
+    def _snow_block_changed(self, fields, uni, key):
+        """Does block key's photo look differ between a change's fields (its texels always fine enough for roads)?"""
+        if fields is None:
+            return True
+        if uni is not None:
+            return uni[0]
+        try:
+            return snowcovermod.look_changes(fields[0], fields[1], Server._snow_block_box(self, key), True)
+        except Exception as e:
+            log.debug("snow change: %s: %s", type(e).__name__, e)
+            return True
+
+    def _note_snow_gen(self, ck):
+        """A far tile render of ck submitted now: the snow generation it reads (or a later one), for _tile_done."""
+        gens = getattr(self, "tile_gen", None)
+        if gens is None:
+            gens = self.tile_gen = {}
+        gens[ck] = getattr(self, "snow_gen", 0)
+
+    def _snow_since(self, gen0, ck, info):
+        """Did far tile ck's snow look change after snow generation gen0 (its render's, submitted then: it read that
+        state or a later one)? A generation no longer kept counts as a change."""
+        hist = getattr(self, "snow_hist", None) or {}
+        for g in range(int(gen0) + 1, int(getattr(self, "snow_gen", 0)) + 1):
+            h = hist.get(g)
+            if h is None or Server._snow_tile_changed(self, h[0], h[1], ck, getattr(info, "tile", None), info):
+                return True
+        return False
+
+    def _snow_roads_of(self, tile, info):
+        """Can the road shares change a far tile's snow (snow_masks: its texels fine enough for the roads' plow classes,
+        at the size it has or may be rendered at)? Called as Server._snow_roads_of(self, ...)."""
+        try:
+            if isinstance(tile, farfield.GTile):
+                return False
+            node = tile.base if isinstance(tile, farfield.Piece) else tile
+            if callable(getattr(self, "map_on", None)) and self.map_on():
+                return True             # (the 3D map's textures as fine as the screen: any)
+            px = max(int(getattr(info, "tex_px", 0) or 0), int(self.tex_size(node.level)))
+            return bool(surfacemod.far_photo_roads(node.size, px))
+        except Exception:
+            return True
+
+    def _snow_tile_box(self, ck, tile):
+        """(south, west, north, east) of a far tile's texture square (tile_where), for snowcover.look_changes."""
+        anchor = self.anchors.get(ck[0])
+        if anchor is None:
+            anchor = next(iter(self.anchors.values()))
+        return snowcovermod.box_of(*self.tile_where(anchor, tile))
+
+    def _snow_block_box(self, key):
+        """(south, west, north, east) of block key's base photo square (base_snow's)."""
+        anchor = self.anchors[key[0]]
+        size = self.layout.block * heightmap.SQUARE
+        return snowcovermod.box_of(anchor.frame, key[1] - size / 2 - BASE_SHIFT_M, key[2] - size / 2 - BASE_SHIFT_M,
+                                   size)
+
     def snow_roads_changed(self):
-        """(event loop) Winter W3: the road skins' winter part changed (snow.Service._commit_roads: a first snowy state,
-        a bank bin moving): every connection's road tiles sent again (their skins rebuilt under the new key)."""
+        """(event loop) Winter W3: the road skins' winter part changed (snow.Service._commit_roads: snow on the roads
+        or none any more, a bank bin moving): every connection's road geotile SKINS built and sent again under the new
+        key (roads.GeoTracker.reskin; the mod swaps each in place, its old parts shown until the new ones are made).
+        The content (buildings, bridges, props) never reads the winter part (roadwear.wear_key): not sent again, and
+        the anchor road tiles (roads.Tracker) do not read it either. Before (Baltimore, 2026-11-28) every connection
+        got a new tracker: every tile's content again, the builds running dropped, eight times in 13 min."""
         n = 0
         for c in list(getattr(self, "connections", ()) or ()):
-            if getattr(c, "roads", None) is None:
+            reskin = getattr(getattr(c, "roads", None), "reskin", None)
+            if not callable(reskin):
                 continue
-            c.roads.close()
-            c.roads = road_tracker(c)
+            reskin()
             n += 1
-        log.info("snowy roads changed: road tiles again for %d connections", n)
+        log.info("snowy roads changed: road skins again for %d connections", n)
         return n
 
     def snow_masks(self, anchor, tile, px, snow):
@@ -7391,6 +7500,7 @@ class Server:
             prev = self.tiles[ck]           # --colormatch: its texture is rendered again
         fut = self.tile_inflight.get(ck)
         if fut is None:
+            Server._note_snow_gen(self, ck)         # (the snow state it reads: _tile_done checks it)
             fut = self.tile_inflight[ck] = loop.run_in_executor(self.tile_pool, self.make_tile, anchor, tile, prev)
             fut.add_done_callback(lambda f: self._tile_done(ck, f))
         if not shield:
@@ -7468,7 +7578,13 @@ class Server:
 
     def _tile_done(self, ck, fut):
         self.tile_inflight.pop(ck, None)
+        gens = getattr(self, "tile_gen", None)
+        gen0 = gens.pop(ck, None) if gens is not None else None
+        moved = gen0 is not None and gen0 != getattr(self, "snow_gen", 0)
         if fut.cancelled() or fut.exception() is not None:
+            prev = self.tiles.get(ck)
+            if moved and prev is not None and prev.stale:   # (its last texture, marked stale meanwhile: queued now)
+                self.retex_request(ck)
             return
         before = self.tiles.get(ck)
         info = self.tiles[ck] = fut.result()
@@ -7494,6 +7610,12 @@ class Server:
                 self._cm_settle(ck, rk, st, pump=False)
         if before is not None and info is not before:     # a re-render: stale at once again, or not
             info.retex_repeat = (0 if recovered else before.retex_repeat) + 1 if info.stale else 0
+        if moved and info.material is not None and info.texture is not None and not info.stale and \
+                Server._snow_since(self, gen0, ck, info):
+            # (submitted before a snow change that changes its look, a first build too: it may have read the old
+            # state; stale before the far stream sends it, which then asks for its re-render: farstate.rs)
+            info.stale, info.retex_repeat = True, 0
+            self.retex_request(ck, pump=False)
         if info.stale:
             self._retex_pump()
         if self.matslots.short():
@@ -7541,6 +7663,7 @@ class Server:
                 renewed = await loop.run_in_executor(self.tile_pool, self._write_reslot, ck, info)
             except (OSError, ValueError) as exc:
                 log.warning("tile %s of anchor %d: material name not renewed (%s)", ck[1], ck[0], exc)
+                Server._note_snow_gen(self, ck)
                 built = matslotsmod.rebuild_renewal(self, ck, anchor, tile, loop)
                 await built
                 self._tile_done(ck, built)
@@ -7726,6 +7849,7 @@ class Server:
             anchor = self.anchors.get(ck[0]) or self.anchors.get(viewers[0].active if viewers else None)
             if anchor is None:
                 continue
+            Server._note_snow_gen(self, ck)         # (the snow state it reads: _tile_done checks it)
             fut = self.tile_inflight[ck] = self.loop.run_in_executor(self.tile_pool, self.make_tile, anchor, tile, prev)
             fut.add_done_callback(lambda f, ck=ck: self._tile_done(ck, f))
             fut.add_done_callback(self._retex_done)
@@ -10745,7 +10869,7 @@ class Connection:
     def _pose_ground(self, aid, x, y, vx, vy, msg):
         self.gravity.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
         if self.s.snow is not None:         # (BNE_WINTER only)
-            self.snow.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
+            self.snow.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0), aid)
         self.ground_ahead(aid, x, y, vx, vy)
         self.deck_spans(aid, x, y)
         if self.s.sea is not None:

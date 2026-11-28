@@ -16,8 +16,11 @@ What changed in each release of BeamNG.Earth, newest first.
   built in from devo343's Live Air Traffic add-on (no separate window or program to run). Aircraft models with airline
   colours, lights, contrails that follow the real weather, engine sounds, labels, a follow camera and a seat view, and
   the aircraft on the 2D and 3D maps (click one to set the GPS). Turning it on first says what is sent and to whom:
-  only your approximate area, about every 15 seconds while you are in the world. Keys: Ctrl+Alt+A on / off,
-  Ctrl+Alt+K labels, Ctrl+Alt+C contrails, Ctrl+Alt+I what is that plane, Ctrl+Alt+S sounds, Ctrl+Alt+F follow.
+  only your approximate area, about every 15 seconds while you are in the world. Labels are off by default
+  (Ctrl+Alt+K turns them on: the nearest few aircraft and the one you look at, never parked ones). If devo343's own
+  Live Air Traffic add-on is still on, a notice offers to switch it off (otherwise every aircraft shows twice). Keys:
+  Ctrl+Alt+A on / off, Ctrl+Alt+K labels, Ctrl+Alt+C contrails, Ctrl+Alt+I what is that plane, Ctrl+Alt+S sounds,
+  Ctrl+Alt+F follow.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
@@ -85,6 +88,14 @@ What changed in each release of BeamNG.Earth, newest first.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed
+- Winter (Experimental): reduced lag and buildings briefly disappearing after a teleport or a weather update. A place
+  with no snow on its roads no longer sends every road tile again, and a change of snow on the roads now sends only
+  the road surfaces, not the buildings. A change in the snow state now re-renders only the distant ground it actually
+  changes, instead of every distant tile.
+- Wet roads: the whole road should no longer switch between wet and dry when you turn onto another kind of street.
+  It now stays as wet as the wettest street nearby, and as the road dries over the hour the wet look fades over
+  minutes instead of switching at once. After a teleport the road should no longer keep the last place's wetness:
+  it shows the new place's at once.
 - Reduced the chance of the game's terrain texture cache (`temp/art/terrainmaterialcache` in BeamNG's user folder)
   filling up with old ground photos: they now go with their session, and a one-time clean-up at the next start removes
   the ones earlier versions left behind (several GB on long-time test machines).

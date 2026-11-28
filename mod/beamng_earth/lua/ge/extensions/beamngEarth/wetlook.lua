@@ -255,6 +255,7 @@ local known = nil         -- name -> class of the materials seen (nil: not scann
 local timer, rescan = 0, 0
 local puddle = 0          -- the puddles' step applied
 local grip = nil          -- the grip condition handed to winter.lua (nil dry)
+local road, roadPlace = nil, nil    -- W1's road wetness shown (M.roadStep) and winter.place's place it is for
 M.writes, M.source = 0, 'none'
 local ws = nil            -- wetstate.lua, loaded with the new look
 local look = nil          -- the new look on the puddle material: { orig = its own fields, cube = the cubemap set }
@@ -450,19 +451,33 @@ local function startLevel(k)
   table.sort(queue)
 end
 
--- W1's road condition under the car ('dry', 'wet', 'packed' ...), or nil without a road surface state.
+-- W1's road condition under the car ('dry', 'wet', 'packed' ...), or nil without a road surface state: winter.lua's
+-- stableRow (a wet film the same on every plow class: no flip of the whole scene at a turn onto another street).
 local function winterCond()
   local wm = package.loaded['beamngEarth/winter']
   if not (wm and wm._state) then return nil end
   local ok, state, cls = pcall(wm._state)
   if not ok or type(state) ~= 'table' or type(state.roads) ~= 'table' then return nil end
-  local row = state.roads[(tonumber(cls) or 2) + 1]
+  local row
+  if wm.stableRow then row = wm.stableRow(state.roads, tonumber(cls) or 2)
+  else row = state.roads[(tonumber(cls) or 2) + 1] end
   return type(row) == 'table' and row[1] or nil
 end
 
--- W1's wetness of the road under the car, or nil without a road surface state.
+-- W1's wetness of the road under the car (nil without a road surface state) and the place it is for (winter.place).
 local function winterWet()
-  return M.wetFromCondition(winterCond())
+  local wm = package.loaded['beamngEarth/winter']
+  local ok, place = pcall(function() return wm and wm.place and wm.place() or 0 end)
+  return M.wetFromCondition(winterCond()), ok and place or 0
+end
+
+-- Pure: W1's road wetness as shown after dt s, w moving toward the state's (target): wetting as the rain model does
+-- (WET_TAU_S), drying at DRY_S. A new state each UTC hour (wet, then damp, then dry as the film dries) used to switch
+-- every wet material and the terrain's carriageways at once; now they follow over minutes.
+function M.roadStep(w, target, dt)
+  w, target, dt = tonumber(w) or 0, tonumber(target) or 0, math.max(0, tonumber(dt) or 0)
+  if target > w then return w + (target - w) * (1 - math.exp(-dt / M.WET_TAU_S)) end
+  return math.max(target, w - dt / M.DRY_S)
 end
 
 -- The new look's check (every CHECK_S): the wet state synced to the weather shown (src(): weather.lua's wetInputs),
@@ -517,6 +532,7 @@ function M.update(dt, rainMmH, on, gripOn, src)
   timer, rescan = timer + dt, rescan + dt
   if timer < M.CHECK_S then return level > 0 or own > 0 or grip ~= nil or puddle > 0 end
   local step = nil
+  local dtCheck = timer
   if M.v2 then
     step = checkV2(on, gripOn, src, timer)
   else
@@ -524,7 +540,16 @@ function M.update(dt, rainMmH, on, gripOn, src)
   end
   timer = 0
   setGrip(gripOn and M.gripCond(own, grip) or nil)
-  local w, wsrc = M.wetOf(on, winterWet(), own)
+  -- W1's road wetness: a new place's at once (a teleport: not the last place's drying), one place's over minutes
+  local target, at = winterWet()
+  if target == nil then
+    road, roadPlace = nil, nil
+  elseif road == nil or at ~= roadPlace then
+    road, roadPlace = target, at
+  else
+    road = M.roadStep(road, target, dtCheck)
+  end
+  local w, wsrc = M.wetOf(on, road, own)
   M.source = wsrc
   setPuddles(step or M.puddleStep(w))
   local k = M.levelOf(w)
@@ -539,6 +564,7 @@ function M.update(dt, rainMmH, on, gripOn, src)
     if #queue == 0 then queue = nil end
   end
   return level > 0 or own > 0 or queue ~= nil or grip ~= nil or puddle > 0 or (M.v2 and ws ~= nil and ws.active())
+    or (road or 0) > 0
 end
 
 -- The new puddle look on or off (weather.lua, the setting): off puts the material's own values back at once and the
@@ -584,6 +610,7 @@ end
 
 function M.level() return level end
 function M.wetness() return own end
+function M.roadWetness() return road end      -- (W1's road wetness shown, nil: none)
 function M.grip() return grip end
 -- The puddles' alpha threshold shown now (255: none; aquaplane.lua's water depth in them).
 function M.puddleRefShown() return refOf(puddle) end
@@ -591,6 +618,7 @@ function M.puddleRefShown() return refOf(puddle) end
 -- The level goes: nothing to restore (the materials load again with the next level); state cleared.
 function M.reset()
   own, level, queue, orig, known, timer, rescan, puddle = 0, 0, nil, {}, nil, 0, 0, 0
+  road, roadPlace = nil, nil
   look, horizon, env = nil, { timer = 0, city = nil, pending = nil }, nil   -- (the material and the level info load again)
   if ws then ws.reset() end
   setGrip(nil)
@@ -603,6 +631,7 @@ end
 -- state says wet, and its own rain wets them again within minutes (WET_TAU_S).
 function M.onTeleport()
   own = 0
+  road, roadPlace = nil, nil   -- (the road state's wetness: the state's own at once, not drying from the last place's)
   timer = M.CHECK_S
   -- (the new puddle look: wetstate's real-weather memory too, the same way; a preset's or the BeamMP host's stays)
   if ws then ws.onTeleport() end

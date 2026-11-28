@@ -183,6 +183,56 @@ at.setEnabled(true)
 at.onResult({ type = 'air_traffic_result', id = 987654, ok = true, srvNow = NOW, ac = { { h = 'eeeeee', lat = 0, lon = 0, ts = NOW } } })
 T.check(at._items().eeeeee == nil, 'an answer for no request in flight is dropped')
 
+-- labels: off by default; Ctrl+Alt+K turns them on (flight numbers first)
+T.check(at.labelMode == 'off', 'labels off by default')
+at.cycleLabels()
+T.check(at.labelMode == 'flight' and vals.airTrafficLabels == 'flight', 'Ctrl+Alt+K: flight numbers, saved')
+at.cycleLabels(); at.cycleLabels(); at.cycleLabels()
+T.check(at.labelMode == 'off', '... and round to off')
+-- the nearest few and the one looked at; parked aircraft never
+local cands = {}
+for i = 1, 20 do cands[i] = { dist = i * 100, dot = 0.5 } end
+local aimed = { dist = 9000, dot = 0.999 }
+cands[#cands + 1] = aimed
+local picked = at.pickLabels(cands, 5, 12)
+T.check(#picked == 6, 'five nearest + the one looked at: ' .. #picked)
+T.check(picked[1].dist == 100 and picked[5].dist == 500 and picked[6] == aimed, 'nearest first, then the aimed one')
+local picked2 = at.pickLabels({ { dist = 100, dot = 0.999 }, { dist = 200, dot = 0.1 } }, 5, 12)
+T.check(#picked2 == 2, 'the aimed one among the nearest is not doubled')
+T.check(#at.pickLabels({ { dist = 100, dot = 0.1 } }, 0, 12) == 0, 'nothing aimed at, no slots: none')
+T.check(at.parked({ base = { ground = true, gs = 0 } }) and not at.parked({ base = { ground = true, gs = 12 } })
+  and not at.parked({ base = { ground = false, gs = 0 } }), 'parked = on the ground, not moving')
+
+-- devo343's old add-on on beside it: noticed, switched off only on the click
+local oldExt = { unloaded = false }
+FS = { fileExists = function(_, path) return path ~= at.OLD_ADDON_FILE or liveAirTraffic ~= nil end }  -- (mounted while on)
+liveAirTraffic = oldExt
+local deactivated = nil
+core_modmanager = {
+  getModForFilename = function(f) return f == at.OLD_ADDON_FILE and 'live_air_traffic' or nil end,
+  deactivateMod = function(name) deactivated = name end,
+}
+extensions.unload = function(name) if name == 'liveAirTraffic' then liveAirTraffic = nil end end
+at._oldAddon().checkT = -1e9
+local on, name = at.oldAddonActive()
+T.check(on and name == 'live_air_traffic', 'the old add-on is seen, by its mod')
+T.check(deactivated == nil and liveAirTraffic ~= nil, 'nothing changed before the click')
+T.check(at.disableOldAddon() == true and deactivated == 'live_air_traffic' and liveAirTraffic == nil,
+  'the click: its extension unloaded, its mod deactivated')
+at._oldAddon().checkT = -1e9
+T.check(at.oldAddonActive() == false, 'then it is off')
+core_modmanager.getModForFilename = function() return 'beamng_earth' end      -- (a copy inside our own mod)
+liveAirTraffic = oldExt
+at._oldAddon().checkT = -1e9
+local okOwn = at.disableOldAddon()
+T.check(not okOwn and deactivated == 'live_air_traffic', 'never deactivates BeamNG.Earth itself')
+core_modmanager.getModForFilename = function() return nil end
+liveAirTraffic = oldExt
+at._oldAddon().checkT = -1e9
+local okD, why = at.disableOldAddon()
+T.check(not okD and why:find('Mods page'), 'an unpacked copy: says where to switch it off')
+liveAirTraffic, core_modmanager = nil, nil
+
 -- a test server's hello (BNE_AIRTRAFFIC_TEST): on for the session without the consent, nothing saved; the
 -- settings' later apply of the saved (off) value does not turn it off; another hello without it: back to the setting
 vals.airTraffic, vals.airTrafficConsent = false, 0

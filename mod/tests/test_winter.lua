@@ -284,4 +284,52 @@ for _ = 1, 70 do W.update(1.0) end
 T.check(byName().ASPHALT_OLD.staticFrictionCoefficient == 0.80 and speeding.winter == W, 'stale: the shown wet stays')
 W.reset()
 
+-- Baltimore, 2026-11-28 ("the entire road randomly switches from wet to dry while driving"): an hour after rain the
+-- kernel's busy classes are dry (P0-P2) and the side streets wet (P3-P4); the slots and the readout followed the class
+-- under the car, so every turn onto another kind of street switched the whole terrain road (one layer). A wet film is
+-- now the wettest class's on every class; snow and ice stay per class.
+do
+  local dryR, wetR = { 'dry', 0, 5, 'dry', 0, 0, 1 }, { 'wet', 0.4, 5, 'wet', 0, 0, 1 }
+  local list = { dryR, dryR, dryR, wetR, wetR }
+  T.check(W.stableRow(list, 0) == wetR and W.stableRow(list, 2) == wetR and W.stableRow(list, 4) == wetR,
+    'a wet film: the wettest class\'s on every class')
+  local packed = { 'packed', 40, -5, 'loose', 80, 0, 0.9 }
+  local mixed = { wetR, dryR, dryR, packed, packed }
+  T.check(W.stableRow(mixed, 3) == packed and W.stableRow(mixed, 1) == wetR and W.stableRow(mixed, 0) == wetR,
+    'snow stays its class\'s own; a wet film the wettest film\'s')
+  T.check(W.stableRow(nil, 2) == nil and W.stableRow({}, 2) == nil, 'no rows: none')
+  local st = { type = 'snowstate', v = 1, lat = 39.28, lon = -76.59, roads = list, bridges = list,
+    ground = { 0, 0, 0, 0, 0, 0, 0 } }
+  local p0 = W.place()
+  W._setClass(0)
+  W.onState(st)
+  T.check(W.place() == p0 + 1, 'a first state: a new place')
+  local f0, r0 = byName().ASPHALT_OLD.staticFrictionCoefficient, W.readout()
+  for _, c in ipairs({ 3, 1, 4, 0 }) do
+    W._setClass(c)
+    W.apply()
+    T.check(byName().ASPHALT_OLD.staticFrictionCoefficient == 0.80 and byName().ASPHALT.staticFrictionCoefficient == 0.80
+      and W.readout() == r0, 'class P' .. c .. ': the same wet road and readout')
+  end
+  T.check(f0 == 0.80 and r0 == 'Wet road, 5\194\176C', 'wet on the main road too (' .. tostring(r0) .. ')')
+  W.onState({ type = 'snowstate', v = 1, lat = 39.29, lon = -76.60, roads = list, bridges = list, ground = st.ground })
+  T.check(W.place() == p0 + 1, 'the next hour\'s state of the place: the same place')
+  W.onState({ type = 'snowstate', v = 1, lat = 35.46, lon = -118.77, roads = list, bridges = list, ground = st.ground })
+  T.check(W.place() == p0 + 2, 'a teleport\'s state: a new place')
+  -- Codex on 17fb1d0e: a teleport drops the origin's state at once (the grip, the readout), and the first state after
+  -- it is a new place however near (a 5-25 km teleport refetches without crossing PLACE_M)
+  W.onTeleport()
+  local gms = core_environment.groundModels
+  T.check(select(1, W._state()) == nil and byName().ASPHALT_OLD == gms.ASPHALT_OLD.cdata and W.readout() == '',
+    'a teleport: the origin\'s wet road off the grip and the readout')
+  W.onState({ type = 'snowstate', v = 1, lat = 35.55, lon = -118.77, roads = list, bridges = list, ground = st.ground })
+  T.check(W.place() == p0 + 3 and byName().ASPHALT_OLD.staticFrictionCoefficient == 0.80,
+    'the destination\'s state, 10 km on: a new place, its own road')
+  W.setShown('wet')
+  W.onTeleport()
+  T.check(byName().ASPHALT_OLD.staticFrictionCoefficient == 0.80, 'a teleport under the shown rain: wet from it')
+  W.setShown(nil)
+  W.reset()
+end
+
 T.done('test_winter')
