@@ -152,6 +152,25 @@ def test_the_page_lists_the_worst_junction_first_with_both_sides(tmp_path):
     assert "1 &rarr; <b>5</b>" in doc and "3 &rarr; 5" in doc     # (a row, and the column's totals)
 
 
+def test_the_page_says_why_a_side_failed(tmp_path):
+    # (the report says only that earth_view exited: the page reads the side's log for the exception and its detail)
+    import eval_page
+    run = tmp_path / "run"
+    (run / "x" / "after").mkdir(parents=True)
+    (run / "x" / "after" / "view.log").write_text(
+        "building road tile (0, 4) ...\nTraceback (most recent call last):\n  File \"a.py\", line 1, in <module>\n"
+        "grade3d.solve.NotSolved: grade3d: block [0.0, 0.0, 1500.0, 1500.0] has no answer: these cannot hold:\n"
+        "  clearance 5.15 m at (1.0, 2.0): [a] over [b]\n  grade 0.120 of [c]\nwrote nothing\n", encoding="utf-8")
+    rows = [{"name": "x", "what": "w", "error": "earth_view exited 1 (see after/view.log)"}]
+    (run / "report.json").write_text(json.dumps({"before": str(tmp_path), "after": str(tmp_path), "junctions": rows}))
+    assert eval_page.failure(str(run), "x") == [("after", [
+        "grade3d.solve.NotSolved: grade3d: block [0.0, 0.0, 1500.0, 1500.0] has no answer: these cannot hold:",
+        "  clearance 5.15 m at (1.0, 2.0): [a] over [b]", "  grade 0.120 of [c]"])]
+    doc = open(eval_page.build(str(run), str(tmp_path / "page")), encoding="utf-8").read()
+    assert "after: grade3d: block [0.0, 0.0, 1500.0, 1500.0] has no answer" in doc
+    assert "<pre>" in doc and "clearance 5.15 m at (1.0, 2.0): [a] over [b]" in doc and "wrote nothing" not in doc
+
+
 def test_a_before_only_capture_builds_no_after_side(tmp_path, monkeypatch):
     import types
     built = []

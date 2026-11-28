@@ -12,6 +12,7 @@ import datetime
 import html
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,34 @@ def badness(r):
     return (0, -sum((c[k][1] or 0) for k, _n in CHECK_NAMES), r["name"])
 
 
+FAILURE_LINES = 8           # lines of a failure's detail shown under its exception (a contradiction's named laws)
+
+
+def failure(run, name):
+    """[(side, [lines])] of a junction's sides whose build ended in an exception: the last exception line of the side's
+    view.log (`module.Name: message`, as a traceback ends) and the indented lines after it (NotSolved's contradiction,
+    each law by its place and paths). The report says only that earth_view exited: the page says why."""
+    out = []
+    for side in ("before", "after"):
+        p = os.path.join(run, name, side, "view.log")
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        at = [i for i, ln in enumerate(lines) if re.match(r"^[A-Za-z_][\w.]*(Error|Exception|NotSolved)\w*: ", ln)]
+        if not at:
+            continue
+        i = at[-1]
+        got = [lines[i]]
+        for ln in lines[i + 1:i + 1 + FAILURE_LINES]:
+            if not ln.startswith("  "):
+                break
+            got.append(ln)
+        out.append((side, got))
+    return out
+
+
 def cell(b, a):
     if b is None and a is None:
         return "<td>-</td>"
@@ -62,7 +91,9 @@ h2{font-size:17px;margin:36px 0 4px}.mute{color:var(--mute)}code{font-size:13px}
 table{border-collapse:collapse;width:100%;margin:16px 0;font-size:14px}th,td{padding:6px 8px;border-bottom:1px solid
 var(--line);text-align:left;white-space:nowrap}th{font-weight:600}td.hot{background:var(--hot)}td.bad b{color:var(--bad)}
 td.good b{color:var(--good)}a{color:inherit}img{width:100%;height:auto;border:1px solid var(--line);border-radius:4px;
-display:block;margin-top:8px}.diff{max-width:900px}.wrap{overflow-x:auto}
+display:block;margin-top:8px}.diff{max-width:900px}.wrap{overflow-x:auto}td.err{color:var(--bad);white-space:normal}
+pre{font-size:12px;line-height:1.4;padding:10px;border:1px solid var(--line);border-radius:4px;overflow-x:auto;
+white-space:pre-wrap;word-break:break-all}
 """
 
 
@@ -82,6 +113,8 @@ def build(run, out):
         if os.path.isfile(d):
             shutil.copyfile(d, os.path.join(img, f"{r['name']}_diff.png"))
     up, la = tree_rev(rep["before"]), tree_rev(rep["after"])
+    # (the sides' names as the run gave them, earth_eval --labels: upstream, latest when it did not)
+    lb, ll = (rep.get("labels") or ["upstream", "latest"])[:2]
     when = datetime.datetime.fromtimestamp(os.path.getmtime(os.path.join(run, "report.json"))).strftime("%Y-%m-%d %H:%M")
     tot = {k: [sum((counts(r)[k][i] or 0) for r in results) for i in (0, 1)] for k, _n in CHECK_NAMES}
     e = html.escape
@@ -89,7 +122,10 @@ def build(run, out):
     for r in results:
         n = r["name"]
         if r.get("error"):
-            rows.append(f'<tr><td><a href="#{e(n)}">{e(n)}</a></td><td colspan="4">error: {e(r["error"])}</td></tr>')
+            why = failure(run, n)
+            head = (f"{why[-1][0]}: " + why[-1][1][0].split(": ", 1)[-1]) if why else r["error"]
+            rows.append(f'<tr><td><a href="#{e(n)}">{e(n)}</a></td><td class="err" colspan="4">error: '
+                        f'{e(head[:160])}</td></tr>')
             continue
         c = counts(r)
         verdict = ("worse, " if r.get("worse") else "") + ("changed" if r.get("changed") else r.get("verdict", ""))
@@ -109,10 +145,10 @@ def build(run, out):
                      f'<td>{(s or 0.0):.0f} s</td></tr>')
     if trows:
         ch = 100.0 * (ta - tb) / tb
-        timing = (f'<h2>Build time: upstream &rarr; latest</h2><p><b>{tb:.0f} s &rarr; {ta:.0f} s ({ch:+.0f} %)</b> over '
+        timing = (f'<h2>Build time: {e(lb)} &rarr; {e(ll)}</h2><p><b>{tb:.0f} s &rarr; {ta:.0f} s ({ch:+.0f} %)</b> over '
                   f'{len(trows)} junctions; the new solver passes (interchange shapes, road laws) logged {ts:.0f} s '
-                  f'of CPU time.</p><div class="wrap"><table><thead><tr><th>junction</th><th>upstream</th>'
-                  f'<th>latest</th><th>change</th><th>solver passes (CPU)</th></tr></thead><tbody>'
+                  f'of CPU time.</p><div class="wrap"><table><thead><tr><th>junction</th><th>{e(lb)}</th>'
+                  f'<th>{e(ll)}</th><th>change</th><th>solver passes (CPU)</th></tr></thead><tbody>'
                   f'{"".join(trows)}</tbody></table></div><p class="mute">Earth\'s own build of each place (its terrain '
                   f'block and road tiles), both sides built in the same run on the same machine; the solver time is '
                   f'what those passes logged, summed over their cells and worker processes (CPU time: it can exceed the '
@@ -125,28 +161,30 @@ def build(run, out):
         n = r["name"]
         c = counts(r)
         line = ", ".join(f"{name} {c[k][0]} &rarr; {c[k][1]}" for k, name in CHECK_NAMES if c[k] != (None, None))
-        pic = (f'<img src="img/{e(n)}.jpg" alt="{e(n)}: upstream views on top, latest underneath" loading="lazy">'
+        pic = (f'<img src="img/{e(n)}.jpg" alt="{e(n)}: {e(lb)} views on top, {e(ll)} underneath" loading="lazy">'
                if os.path.isfile(os.path.join(img, f"{n}.jpg")) else '<p class="mute">no picture</p>')
         diff = (f'<details><summary>close-up change (red rose, blue fell, grey now something else)</summary>'
                 f'<img class="diff" src="img/{e(n)}_diff.png" alt="{e(n)} close-up change" loading="lazy"></details>'
                 if os.path.isfile(os.path.join(img, f"{n}_diff.png")) else "")
+        fail = "".join(f'<p><b>{e(side)} side failed:</b></p><pre>{e(chr(10).join(lines))}</pre>'
+                       for side, lines in (failure(run, n) if r.get("error") else []))
         secs.append(f'<section id="{e(n)}"><h2>{e(n)}</h2><div class="mute">{e(r.get("what", ""))}'
-                    f'{"<br>" + line if line else ""}</div>{pic}{diff}</section>')
+                    f'{"<br>" + line if line else ""}</div>{fail}{pic}{diff}</section>')
     doc = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Earth junctions: latest against upstream</title><style>{CSS}</style></head><body><main>
-<h1>Earth junctions: latest against upstream</h1>
-<p class="mute">Latest eval run, {e(when)}. Each picture has the upstream views on top and the latest views underneath:
+<title>Earth junctions: {e(ll)} against {e(lb)}</title><style>{CSS}</style></head><body><main>
+<h1>Earth junctions: {e(ll)} against {e(lb)}</h1>
+<p class="mute">Latest eval run, {e(when)}. Each picture has the {e(lb)} views on top and the {e(ll)} views underneath:
 the area 1 km round from the south-west (the ground that rose red, fell blue), the close-up from above and from the
 south-west. Cyan boxes are 4 m trucks on the roads, violet ones 4.3 m wagons on the tracks; a box is yellow or red where
 it hits Earth's geometry (terrain included).</p>
-<p>upstream: <code>{e(up[0])}</code> {e(up[1])} <span class="mute">{e(up[2])}</span><br>
-latest: <code>{e(la[0])}</code> {e(la[1])} <span class="mute">{e(la[2])}</span></p>
+<p>{e(lb)}: <code>{e(up[0])}</code> {e(up[1])} <span class="mute">{e(up[2])}</span><br>
+{e(ll)}: <code>{e(la[0])}</code> {e(la[1])} <span class="mute">{e(la[2])}</span></p>
 {timing}
 <div class="wrap"><table><thead><tr><th>junction ({len(results)})</th>""" + "".join(
         f"<th>{name}<br><span class=mute>{tot[k][0]} &rarr; {tot[k][1]}</span></th>" for k, name in CHECK_NAMES) + \
         f"""<th>result</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
-<p class="mute">upstream &rarr; latest. Junctions with the most left hitting first.</p>
+<p class="mute">{e(lb)} &rarr; {e(ll)}. Junctions with the most left hitting first.</p>
 {''.join(secs)}
 </main></body></html>
 """
