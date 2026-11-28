@@ -22,6 +22,19 @@ import plsigns
 
 
 class PolishSigns(unittest.TestCase):
+    def test_date_line_queries_skip_sign_data_and_road_cells(self):
+        import plstock
+        box = (-256., -256., 256., 256.)
+        with mock.patch.object(plsigns, "ON", True), \
+                mock.patch.object(plsigns.plmapillary, "token", return_value="test"), \
+                mock.patch.object(plsigns, "index", side_effect=AssertionError("foreign sign lookup")), \
+                mock.patch("mapcells.cells_for_bbox", side_effect=AssertionError("foreign road lookup")):
+            for lon in (-180., -179.999, 179.999, 180.):
+                frame = geodesy.EnuFrame(52., lon)
+                self.assertFalse(plsigns.covers(frame, box))
+                self.assertEqual(plsigns.tile_rows(frame, box, [], None), [])
+                self.assertEqual(plstock.sign_stream(None, frame, box, None, object(), False, False).rows, [])
+
     def test_originals_and_models_agree(self):
         art = ROOT / "tools/sign_art/pl"
         assets = ROOT / "mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/pl_signs"

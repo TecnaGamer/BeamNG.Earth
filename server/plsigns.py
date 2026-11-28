@@ -59,13 +59,24 @@ def signature():
     return digest.hexdigest()[:16]
 
 
-def covers(frame, box):
-    if not ON:
-        return False
+def _polish_tile_bounds(frame, box, pad=0.):
+    """Return the tile's lon/lat bounds inside the Polish survey envelope."""
     x0, y0, x1, y1 = box[:4]
-    la, lo, _ = frame.enu_to_geodetic(np.array([x0,x1,x0,x1]), np.array([y0,y0,y1,y1]), 0.)
-    return (min(lo) < 25 and max(lo) > 14 and min(la) < 55.1 and max(la) > 48.9
-            and max(lo) - min(lo) < 180 and intersects_poland((min(lo),min(la),max(lo),max(la))))
+    lat, lon, _ = frame.enu_to_geodetic(np.array([x0-pad, x0-pad, x1+pad, x1+pad]),
+                                        np.array([y0-pad, y1+pad, y0-pad, y1+pad]), 0.)
+    if not (np.isfinite(lat).all() and np.isfinite(lon).all()):
+        return None
+    west, east = min(lon), max(lon)
+    if east - west >= 180:  # local tile crosses the date line
+        return None
+    west, south = max(west, 14.), max(min(lat), 48.9)
+    east, north = min(east, 25.), min(max(lat), 55.1)
+    return (west, south, east, north) if west <= east and south <= north else None
+
+
+def covers(frame, box):
+    bounds = _polish_tile_bounds(frame, box) if ON else None
+    return bounds is not None and intersects_poland(bounds)
 
 
 def cache_parts(frame=None, box=None, rsigns=True):
@@ -227,12 +238,10 @@ def tile_rows(frame, box, roads, elev, cache_dir=None, fetcher=None):
     if not ON or not plmapillary.token():
         return []
     x0, y0, x1, y1 = box
-    pad = REACH
-    lat, lon, _ = frame.enu_to_geodetic(np.array([x0 - pad, x0 - pad, x1 + pad, x1 + pad]),
-                                        np.array([y0 - pad, y1 + pad, y0 - pad, y1 + pad]), 0.)
-    west, south, east, north = min(lon), min(lat), max(lon), max(lat)
-    if east - west > 180 or east < 14 or west > 25 or north < 48.9 or south > 55.1:
+    bounds = _polish_tile_bounds(frame, box, REACH)
+    if bounds is None:
         return []
+    west, south, east, north = bounds
     a, b = cell(west, south)
     c, d = cell(east, north)
     records = [r for i in range(a, c + 1) for j in range(b, d + 1) for r in index().get((i, j), ())

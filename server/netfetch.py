@@ -546,6 +546,7 @@ ROLES = {
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",
     "www.wikidata.org": "landmarks in the map's search",
+    "graph.mapillary.com": "additional mapped road signs in Poland",
     "overpass-api.de": "nearby category search on Enter",
     "query.wikidata.org": "notable category search on Enter",
     "routing.openstreetmap.de": "GPS routes",

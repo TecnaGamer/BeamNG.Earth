@@ -208,9 +208,12 @@ def post_layout(md, frame, bounds, elev, context, left_hand, mph, local_roads=()
         roads = [(fid, sp, np.asarray(p), lon) for fid, sp, p, lon in local_roads]
         ring = islands.ring_fids(roads)
     else:
-        lat, lon, _ = frame.enu_to_geodetic(np.array([x0-pad-30, x1+pad+30]), np.array([y0-pad-30, y1+pad+30]), 0.)
+        coverage = plsigns._polish_tile_bounds(frame, bounds, pad + 30.)
+        if coverage is None:
+            return Nearby([])
+        west, south, east, north = coverage
         by_id, ring = {}, set()
-        for key in mapcells.cells_for_bbox(min(lat), min(lon), max(lat), max(lon)):
+        for key in mapcells.cells_for_bbox(south, west, north, east):
             try:
                 feats = context.cell(key)
             except OSError:

@@ -156,7 +156,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 ## Experimental Polish road signs
 
-The position layers use OpenStreetMap, Mapillary, the Wrocław municipal sign inventory and the Polish national boundary from Geoportal. The sign models use individually credited SVG originals from Wikimedia Commons. [Sources and licences](server/data/pl_signs/NOTICE.md) · [Coverage and import](docs/POLISH_ROAD_SIGNS.md).
+The position layers use OpenStreetMap, Mapillary (`graph.mapillary.com`), the Wrocław municipal sign inventory and the Polish national boundary from Geoportal. The sign models use individually credited SVG originals from Wikimedia Commons. [Sources and licences](server/data/pl_signs/NOTICE.md) · [Coverage and import](docs/POLISH_ROAD_SIGNS.md).
 
 ## Never contacted
 
