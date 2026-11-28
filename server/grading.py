@@ -3533,6 +3533,9 @@ class _Planner:
             return got
         out = []
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        # (its height limit, as a ground road's: Compiegne's underground car park aisle, maxheight 2.1, was held a full
+        # road's 5.15 m under the courtyard's aisle 8.6 m from its portal)
+        lims = self._cell_enu(k).get("height_limits") or []
         if f is not None and len(f):
             rs = roadsmod.road_specs(f, None, self.widths)
             # (the tunnels TunnelProfiles builds: tunnel_specs, a feature all in its tunnel too, which road_specs
@@ -3555,7 +3558,8 @@ class _Planner:
                     # shoulders, and the deck over it ended 1.4 m inside the trench its plan cut, a 5.9 m step)
                     out.append(_gsh.Member((str(f.ids[i]), "tunnel", int(round(mid[0])), int(round(mid[1]))), line,
                                            "tunnel", spec.cls + ("_link" if _is_link(spec) else ""), spec.kmh, -1.0,
-                                           float(spec.width) / 2 + shoulder(spec), None, ids, node_xy=at))
+                                           float(spec.width) / 2 + shoulder(spec), _signs_of(line, lims), ids,
+                                           node_xy=at))
         with self.lock:
             if len(memo) > 256:
                 memo.clear()

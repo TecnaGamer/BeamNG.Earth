@@ -144,6 +144,16 @@ def test_a_track_under_its_own_deck_is_cut_there_and_chains_through_it():
     assert len(rail_paths) == 1 and abs(rail_paths[0].length - 1000) < 2 * network.OVERLAP_M
 
 
+def test_a_ways_decks_at_two_levels_are_two_decks():
+    # (Gravelly Hill: a link on a level-1 deck going on onto a level-4 one; fused as one way's copies, the level-1 deck
+    # went on as the level-4 one, over the level-3 motorway the map has it under)
+    lo = _m(("link", "deck", 50, 0), _line(0, 0, 100, 0), "deck", level=1.0)
+    hi = _m(("link", "deck", 300, 0), _line(100, 0, 500, 0), "deck", level=4.0)
+    out = network.one_way([lo, hi])
+    assert sorted((float(m.level), round(float(m.line[0, 0])), round(float(m.line[-1, 0]))) for m in out) == \
+        [(1.0, 0, 100), (4.0, 100, 500)]
+
+
 def test_other_ways_are_untouched():
     ms = [_rail("w1", _line(0, 0, 600, 0)), _rail("w2", _line(0, 4, 600, 4)), _m("a", _line(0, 0, 100, 0))]
     out = network.one_way(ms)
@@ -247,6 +257,22 @@ def test_a_deck_landing_on_a_roads_middle_is_not_over_a_road_leaving_it_beside()
     assert [c for c in net.crossings if _gsh._over(net.members[c[0]], net.members[c[2]]) is not None] == []
 
 
+def test_two_roads_crossing_at_a_node_of_both_are_joined_there_whatever_their_levels():
+    # (Barcelona's bus depot: a floor mapped as layer 1, no bridge, crossing an aisle on its middle at a node of both:
+    # the map connects them there. A deck crossing a road with no node of both stays over it)
+    def mm(key, line, kind, level, at):
+        return Member(key, np.asarray(line, np.float64), kind, "service", None, level, 3.0, None,
+                      frozenset(c for c, _x, _y in at), node_xy=tuple(at))
+    aisle = mm("aisle", _line(-50, 0, 50, 0, 11), "ground", 0.0, [("a0", -50.0, 0.0), ("x", 0.0, 0.0), ("a1", 50.0, 0.0)])
+    floor = mm("floor", _line(0, -50, 0, 50, 11), "deck", 1.0, [("f0", 0.0, -50.0), ("x", 0.0, 0.0), ("f1", 0.0, 50.0)])
+    net = network.build([aisle, floor])
+    assert net.crossings == [] and len(net.joins) == 1
+    linenet.reset()
+    bridge = mm("bridge", _line(0, -50, 0, 50, 11), "deck", 1.0, [("b0", 0.0, -50.0), ("b1", 0.0, 50.0)])
+    net = network.build([aisle, bridge])
+    assert net.joins == [] and len(net.crossings) == 1
+
+
 def _part(way, kind, line, level, nodes):
     return Member((way, kind, 0, 0), np.asarray(line, np.float64), kind, "primary", None, level, 4.0, None,
                   frozenset(c for c, _x, _y in nodes), node_xy=tuple(nodes))
@@ -276,3 +302,14 @@ def test_a_portal_by_a_road_it_crosses_keeps_the_separation():
           _part("s", "ground", _line(-100, 1, 1.5, 1), 0.0, [("s0", -100, 1), ("s1", 1.5, 1)])]
     net = network.build(ms)
     assert net.crossings
+
+
+def test_a_bridge_starting_just_before_a_deck_it_crosses_is_the_one_over_it():
+    # (Montfort Drive by LBJ: its level-2 bridge starts 1.4 m before the level-1 ramp deck it crosses, its ground part
+    # ending short of the ramp. The ground part's end by the ramp was a crossing of its own, under the ramp, at the joint
+    # where the bridge is over it: the one point held 6.35 m under the ramp and 6.35 m over it)
+    ms = [_part("m", "ground", _line(0, -40, 0, -1.4, 21), 0.0, [("m0", 0, -40), ("m1", 0, -1.4)]),
+          _part("m", "deck", _line(0, -1.4, 0, 60, 2), 2.0, [("m1", 0, -1.4), ("m2", 0, 60)]),
+          _part("r", "deck", _line(-100, 0, 100, 0, 101), 1.0, [("r0", -100, 0), ("r1", 100, 0)])]
+    net = network.build(ms)
+    assert [sorted(float(net.members[k].level) for k in (i, j)) for i, _si, j, _sj, _q in net.crossings] == [[1.0, 2.0]]

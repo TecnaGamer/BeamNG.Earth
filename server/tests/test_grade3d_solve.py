@@ -118,6 +118,19 @@ def test_a_contradiction_is_named_not_eased():
     assert "clearance" in msg and "hi deck" in msg and "lo deck" in msg, msg
 
 
+def test_a_contradiction_is_named_by_what_lies_round_it():
+    # (the same contradiction with a city's streets and bridges 5 km off, which hold: the search reads round the
+    # conflict first, and names only what contradicts)
+    far = [m._replace(line=m.line + np.array([5000.0, 5000.0])) for m in _grid_with_bridges()]
+    ms = [_m("hi", _line(-300, 0, 300, 0, 61), "deck", level=2.0), _m("lo", _line(0, -300, 0, 300, 61), "deck", level=1.0),
+          _m("link", _line(0, 10, 10, 0, 4))] + far
+    _net, _sm, _lw, pr = _pose(ms)
+    with pytest.raises(solve.NotSolved) as e:
+        solve.solve(pr)
+    named = str(e.value).split("\n")[1:]
+    assert named and all("hi deck" in ln or "lo deck" in ln or "link" in ln for ln in named), named
+
+
 def _hilly(xy):
     return 10.0 + 6.0 * np.sin(xy[:, 0] / 90.0) + 4.0 * np.cos(xy[:, 1] / 70.0)
 

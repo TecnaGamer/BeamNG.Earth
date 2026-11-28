@@ -83,6 +83,19 @@ def test_an_order_by_the_kinds_where_the_map_also_joins_them_there_is_no_clearan
     assert x.why == "kinds" and x.upper is not None
 
 
+def test_a_path_coming_back_to_its_own_node_is_joined_there():
+    # (Perth's Tonkin Highway: one path out over its deck carriageway, round a loop and back on its ground carriageway to
+    # the node it left from, the two crossing 7 m before it: joined there, no clearance)
+    deck = _m("deck", np.array([[-400.0, -40.0], [-10.0, -1.0], [-4.0, 1.0], [0.0, 0.0]]), "deck", 1.0, cls="motorway")
+    out = _m("out", np.array([[0.0, 0.0], [300.0, 30.0]]), cls="motorway")       # (straight on from the deck)
+    loop = _m("loop", np.array([[300.0, 30.0], [300.0, -400.0], [-500.0, -400.0], [-500.0, 0.0]]), cls="motorway")
+    ground = _m("ground", _line(-500, 0, 0, 0, 51), cls="motorway")
+    net = network.build([deck, out, loop, ground])
+    assert len(net.paths) == 1
+    (x,) = [y for y in layers.order(net) if {net.members[y.a].key, net.members[y.b].key} == {"deck", "ground"}]
+    assert x.upper is None and x.why == "joined"
+
+
 def test_two_tunnels_at_one_level_are_left_apart():
     ms = [_m("road", _line(-200, 0, 200, 0), "tunnel", level=-1.0), _m("track", _line(0, -200, 0, 200), "tunnel", level=-1.0)]
     net = network.build(ms)

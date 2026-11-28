@@ -54,20 +54,24 @@ def _near_end(network, i, s):
 
 
 def path_joins(network):
-    """{(path, path): [(s on the first, s on the second)]} of the network's joins, the lower path first."""
+    """{(path, path): [(s on the first, s on the second)]} of the network's joins, the lower path first; a path's joins
+    with itself under (path, path), each both ways round (a loop coming back onto the path: Perth's Tonkin Highway, one
+    path out over its deck carriageway and back 4.6 km later on its ground one, the two ending on one node: left out,
+    their crossing 7 m before that node was a clearance the join made impossible)."""
     out = {}
     for i, si, j, sj in network.joins:
         (p, s), (r, t) = network.path_s(i, si), network.path_s(j, sj)
-        if p == r:
-            continue
         if p > r:
             p, s, r, t = r, t, p, s
         out.setdefault((p, r), []).append((s, t))
+        if p == r:
+            out[(p, r)].append((t, s))
     return out
 
 
 def joined_near(network, joins, a, sa, b, sb, near_m=JOINED_NEAR_M):
-    """Whether the paths of members a and b are joined within near_m (along both) of where a at sa crosses b at sb."""
+    """Whether the paths of members a and b (one path or two) are joined within near_m (along both) of where a at sa
+    crosses b at sb."""
     (p, s), (r, t) = network.path_s(a, sa), network.path_s(b, sb)
     if p > r:
         p, s, r, t = r, t, p, s
