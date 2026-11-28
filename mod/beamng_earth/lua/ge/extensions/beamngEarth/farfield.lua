@@ -722,19 +722,20 @@ M.PREVIEW_LIFT_MIN_M = 5
 M.PREVIEW_LIFT_EYE_SHARE = 0.008    -- at most this share of the eye's height (never seen from up there)
 local preview = {on = false, eye = 0}
 
+local function hidePreview(inst)
+  if not inst.preview then return end
+  local o = getObj(inst)
+  if o then setHidden(o, true); writePos(o, inst, 0) end
+  inst.hidden, inst.off, inst.preview = true, 0, nil
+end
+
 function M.setPreview(on, eye)
   on = on and true or false
   preview.eye = tonumber(eye) or 0
   if on == preview.on then return end
   preview.on = on
   if not on then          -- (back to the swap's own rule: previewed tiles hidden until their group starts)
-    for _, inst in pairs(pending) do
-      if inst.preview then
-        local o = getObj(inst)
-        if o then setHidden(o, true); writePos(o, inst, 0) end
-        inst.hidden, inst.off, inst.preview = true, 0, nil
-      end
-    end
+    for _, inst in pairs(pending) do hidePreview(inst) end
   end
 end
 
@@ -865,7 +866,7 @@ local function startGroup(g, cam)
     local r = live[key]
     if r and not seen[r] then rems[#rems + 1], seen[r] = r, true end
   end
-  local adds, unknown = {}, nil
+  local adds, unknown, failed = {}, nil, nil
   for _, key in ipairs(g.add) do
     local a = pending[key]
     if a then
@@ -875,12 +876,23 @@ local function startGroup(g, cam)
         pending[key] = nil
         doom(a, true)
       else
+        if a.failed then failed = key end
         if cur and not seen[cur] then rems[#rems + 1], seen[cur] = cur, true end
         adds[#adds + 1] = a
       end
     elseif not live[key] then
       unknown = key
     end
+  end
+  if #rems > 0 and (unknown or failed) then
+    -- Keep the existing footprint. Hidden imports can be reused if a later swap arrives complete.
+    for _, a in ipairs(adds) do
+      hidePreview(a)
+      a.prefetch = true
+    end
+    log('W', 'beamngEarth', 'far_swap ' .. tostring(g.id) .. ': keeping existing terrain, missing ' .. (unknown or failed))
+    g.state = 'done'
+    return true
   end
   -- adds take their cover state at once; covered (or hidden) removes go at once (nothing to see)
   local visAdds, visRems, errN, errO = {}, {}, 0, 0

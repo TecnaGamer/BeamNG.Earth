@@ -84,6 +84,40 @@ print(string.format('farfield swaps in view: overlap frames per swap %.1f with t
   r1 > 0 and o1 / r1 or 0, r0 > 0 and o0 / r0 or 0))
 T.check(o1 > 0, 'the C2 crossover (CROSS = 1) still runs on request')
 
+-- The coarse mesh remains visible if the server ends the stream with a replacement missing.
+local coarse = key(1, -3, 10)
+local kids = { key(0, -6, 20), key(0, -5, 20), key(0, -6, 21), key(0, -5, 21) }
+farfield.onTile(tile(1, 1, -3, 10))
+farfield.onSwap(swap(1, nextId, { coarse })); nextId = nextId + 1
+step(3)
+local coarseObj = obj(coarse)
+T.check(visible(coarseObj), 'coarse coverage is present before the split')
+farfield.onTile(tile(1, 0, -6, 20))
+farfield.onTile(tile(1, 0, -5, 20))
+farfield.onTile(tile(1, 0, -6, 21))
+farfield.setPreview(true, 600)
+farfield.onSwap(swap(1, nextId, kids, { coarse })); nextId = nextId + 1
+farfield.onDone({ anchorId = 1 })
+step(5)
+T.check(visible(coarseObj), 'an incomplete split retains the coarse terrain')
+T.check(not visible(obj(kids[1])), 'an incomplete split does not draw overlapping levels')
+farfield.setPreview(false)
+farfield.onTile(tile(1, 0, -5, 21))
+farfield.onSwap(swap(1, nextId, kids, { coarse })); nextId = nextId + 1
+step(5)
+T.check(not visible(coarseObj) and visible(obj(kids[1])) and visible(obj(kids[4])),
+  'a complete retry replaces the coarse terrain')
+
+local firstChild = obj(kids[1])
+local realExists = FS.fileExists
+FS.fileExists = function(_, path) return not path:find(kids[1], 1, true) end
+farfield.onTile(tile(1, 0, -6, 20))
+step(1)
+FS.fileExists = realExists
+farfield.onSwap(swap(1, nextId, { kids[1] })); nextId = nextId + 1
+step(3)
+T.check(visible(firstChild), 'a failed same-key import also retains the previous mesh')
+
 -- the terrain block newly covering a far tile: it drops to its cover state in the commit frame (detail / terrain
 -- mode: the block drawn). An edge-ring tile sinks under the block at once, an interior one hides at once.
 local function coverFrames(sinkS)
