@@ -36,6 +36,18 @@ local car = { x = 0, y = 0, z = 0 }
 getPlayerVehicle = function() return { getPosition = function() return vec3(car.x, car.y, car.z) end,
   getVelocity = function() return vec3(0, 0, 0) end } end
 
+-- Advance the road timers once per simulated frame, even when several frames
+-- fit in one tick of the host's clock.
+local frameMs = 0
+hptimer = function()
+  local last = frameMs
+  return { stopAndReset = function()
+    local elapsed = frameMs - last
+    last = frameMs
+    return elapsed
+  end }
+end
+
 local geodesy = require('beamngEarth/geodesy')
 local geotile = require('beamngEarth/geotile')
 local roads = require('beamngEarth/roads')
@@ -46,12 +58,15 @@ local gov = {}
 function gov:try() return true end
 function gov:charge() end
 function gov:chargeMotion() end
--- frames until the import queues are empty, then a few more (the deferred collision rebuild fires after them): the
--- per-frame budget is wall-clock, so a fixed 6 frames left work queued on a slow CI runner (windows-latest, 2026-11-14)
+local function step(aid, a)
+  frameMs = frameMs + 1000 / 60
+  roads.update(gov, aid, car, nil, a)
+end
+-- Drain the imports, then let the deferred collision work run.
 local function run(aid, a)
   local n = 0
-  repeat roads.update(gov, aid, car, nil, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
-  for _ = 1, 3 do roads.update(gov, aid, car, nil, a) end
+  repeat step(aid, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
+  for _ = 1, 3 do step(aid, a) end
 end
 
 local LAT, LON = 39.2834, -76.5934
@@ -81,11 +96,12 @@ local skin = [[{ key = "]] .. key .. [[", anchorId = %d, q = 0.03125, pivot = { 
   road = { shape = "/s/rs_%d_road.cdae", pos = { %f, %f, 0 } },
   walk = { shape = "/s/rs_%d_walk.cdae", pos = { %f, %f, 0 } },
   walkcol = { shape = "/s/rs_%d_walkcol.cdae", pos = { %f, %f, 0 } },
+  puddle = { shape = "/s/rs_%d_puddle.cdae", pos = { %f, %f, 0 } },
   colliders = { walk = { { 0, 0, 0, 1, 1, 1 } }, walkcol = { { 0, 0, 0, 1, 1, 1 } } } }]]
 local function skinOf(aid, a)
   local x, y = a:geodeticToWorld(clat, clon, 0)
   files['/s/rs_' .. aid .. '.json'] = string.format(skin, aid, x, y, aid, x - 118, y - 118, aid, x - 118, y - 118,
-    aid, x - 118, y - 118)
+    aid, x - 118, y - 118, aid, x - 118, y - 118)
   return { type = 'roads_skin', anchorId = aid, key = key, path = '/s/rs_' .. aid .. '.json' }
 end
 local function objsWith(pat)
@@ -163,6 +179,14 @@ end
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
 run(1, A)
 T.check(#objsWith('rs_1_road') == 1 and #objsWith('rs_1_walk.') == 1, 'skin made')
+do  -- the puddles: made hidden while dry, shown and hidden again as the ground gets wet and dries (wetlook.lua)
+  local pz = objsWith('rs_1_puddle')
+  T.check(#pz == 1 and pz[1].hidden == true and pz[1].fields.collisionType == 'None', 'the puddles made, hidden, render only')
+  T.check(roads.setPuddles(true) == 1 and pz[1].hidden == false, 'wet: shown')
+  T.check(roads.setPuddles(true) == 0, 'the same state: nothing touched')
+  roads.setPuddles(false)
+  T.check(pz[1].hidden == true, 'dry: hidden again')
+end
 roads.collisionRebuilt()
 T.check(roads.settledFor(1, car.x, car.y), 'settled: the geotile under the car made with its skin')
 T.check(roads.readyAround(1, car.x, car.y, 50) == false or true, 'readyAround runs')
@@ -292,7 +316,7 @@ do
   local function rc(want, what)
     local got = reloads()
     if got ~= want then
-      print(string.format('  %s: reloads %d, want %d, queued %d, os.clock %.2f', what, got, want, roads.queued(), os.clock()))
+      print(string.format('  %s: reloads %d, want %d, queued %d, frame time %.2f ms', what, got, want, roads.queued(), frameMs))
     end
     T.check(got == want, what)
   end
@@ -374,4 +398,55 @@ do
   roads.reset()
 end
 
+-- Dynamic cliff content remains in its geographic frame; contact strips follow
+-- the anchor skin. Rock rows are restored on reconnect, not duplicated on rebase.
+do
+  require('beamngEarth/cliffcontact').ready = true -- private cache prepared at hello
+  roads.configureCliffs({available=true, natural=true, roadCuts=true})   -- (hello: cliffs on)
+  roads.reset()
+  roads.setGeo(true)
+  calls = {}
+  car.x, car.y = A:geodeticToWorld(clat, clon, 0)
+  local data = {frame={clat,clon}, chunks={}, h='cliffs',
+    cliff={shape='/s/dynamic_cliff.cdae',pos={-118,-118,0},pivot=40,relief=60},
+    cliff2={shape='/s/dynamic_cliff2.cdae',pos={-118,-118,0},pivot=40,relief=60},
+    talus={groups={'talus_large_a08060'},items={{0,10,20,40,0,1,8,.2,1,0,0,0,1,0,0,0,1}}}}
+  local msg={anchorId=1,key=key,data=data,frame={clat,clon},h='cliffs'}
+  T.check(roads.onTile(msg,1,A), 'cliff geotile accepted')
+  T.check(not roads.cliffPiecesReady(key,1), 'geographic rock rows wait for both faces')
+  run(1,A)
+  local faces=objsWith('dynamic_cliff')
+  T.check(#faces==2 and roads.cliffPiecesReady(key,1), 'geographic cliff faces imported')
+  T.check(faces[1].fields.collisionType=='None' and faces[2].fields.collisionType=='None', 'cliff skins use the existing terrain collision')
+  local rows=called('trees','onGeoRows')
+  T.check(#rows==1 and rows[1][3]=='t'..key and rows[1][7]==17, 'rocks retain basis stride and geographic key')
+  local xf=geodesy.transformOf(geotile.placement(frame,A,0,0,40).r,geotile.placement(frame,A,0,0,40).t)
+  local x,y,z=xf:apply(-118,-118,0)
+  T.near(faces[1].pos.x,x,1e-8,'cliff x at geographic pivot')
+  T.near(faces[1].pos.z,z,1e-8,'cliff z at geographic pivot')
+  roads.onSkin({anchorId=1,key=key,data={cliffStrip1={shape='/s/dynamic_strip_a.cdae',pos={0,0,0}}}},1)
+  run(1,A)
+  T.check(#objsWith('dynamic_strip_a')==1, 'geographic contact strip imported')
+  T.check(objsWith('dynamic_strip_a')[1].fields.collisionType=='None', 'contact decoration does not add collision')
+  calls={}
+  car.x,car.y=B:geodeticToWorld(clat,clon,0)
+  roads.replace(B,2)
+  run(2,B)
+  T.check(#objsWith('dynamic_cliff')==2 and #called('trees','onGeoRows')==0, 'rebase keeps faces and does not duplicate rock rows')
+  roads.onSkin({anchorId=2,key=key,data={cliffStrip1={shape='/s/dynamic_strip_b.cdae',pos={0,0,0}}}},2)
+  run(2,B)
+  T.check(#objsWith('dynamic_strip_a')==0 and #objsWith('dynamic_strip_b')==1, 'contact strip replaced with the new anchor skin')
+  require('beamngEarth/cliffcontact').ready = false
+  roads.onSkin({anchorId=2,key=key,data={cliffStrip1={shape='/s/dynamic_strip_missing.cdae',pos={0,0,0}}}},2)
+  run(2,B)
+  T.check(#objsWith('dynamic_strip')==0 and #objsWith('dynamic_cliff')==2, 'unavailable contact skin removes old strip without removing cliff faces')
+  roads.onTile(msg,2,B)
+  T.check(#called('trees','onGeoRows')==1, 'reconnect restores cleared rock rows')
+  roads.onDrop({anchorId=2,key=key})
+  run(2,B)
+  T.check(#objsWith('dynamic_cliff')==0 and #objsWith('dynamic_strip')==0, 'geotile drop removes cliff and skin')
+  local drops=called('trees','dropKey')
+  T.check(#drops==1 and drops[1][3]=='g:t'..key, 'geotile drop removes its rock population')
+  roads.configureCliffs(nil)
+end
 T.done('test_roadgeo')

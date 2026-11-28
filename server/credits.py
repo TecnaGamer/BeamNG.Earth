@@ -59,8 +59,6 @@ IMAGERY = {
     "naipusda": "USDA NAIP",
     "naip": "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",
     "usgs": "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",       # (USGS's requested credit line)
-    "eox2023": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
-               "(Contains modified Copernicus Sentinel data 2023)",
     "eox2016": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
                "(Contains modified Copernicus Sentinel data 2016 & 2017)",
 }
@@ -86,7 +84,6 @@ WEATHER_ID = "wx:open-meteo"
 # The full wordings above stay the attribution of record: hello.attribution (the settings page) and CREDITS.md.
 SHORT = {
     "img:md6in": "MD iMAP", "img:naipusda": "USDA NAIP", "img:naip": "USDA NAIP", "img:usgs": "USGS",
-    "img:eox2023": "EOX Sentinel-2 cloudless 2023 (Copernicus)",
     "img:eox2016": "EOX Sentinel-2 cloudless 2016 (Copernicus)",
     "img:ct2023": "CT ECO", "img:ma2025": "MassGIS", "img:dc2025": "DC OCTO", "img:indiana": "Indiana IGIO",
     "img:ohio": "Ohio OGRIP", "img:ncarolina": "NC OneMap", "img:penn": "PEMA / PASDA", "img:virginia": "VGIN",
@@ -126,6 +123,8 @@ FEATURES = {
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
+    # (winterpacks.py: the winter looks' packs; the consumer names them where it used them)
+    "land:esa-cci-lc": "ESA Land Cover CCI", "land:jrc-gsw": "EC JRC/Google (Global Surface Water)",
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {
@@ -150,6 +149,13 @@ LONG = {
     "roof:lod2-ee": "Building 3D model data: Republic of Estonia Land and Spatial Development Board 2026 (open data "
                     "licence, https://geoportaal.maaruum.ee/opendata-licence); roof shapes read from the models' "
                     "faces, data changed",
+    "land:esa-cci-lc": "Evergreen share of the trees: ESA Land Cover CCI project team; Defourny, P. (2019): ESA Land "
+                       "Cover Climate Change Initiative (Land_Cover_cci): Global Land Cover Maps, Version 2.0.7. "
+                       "Centre for Environmental Data Analysis; with thanks to the ESA Climate Change Initiative and "
+                       "the Land Cover CCI project, data changed",
+    "land:jrc-gsw": "Water share: Source: EC JRC/Google. Pekel, J.-F., Cottam, A., Gorelick, N., Belward, A. S. (2016): "
+                    "High-resolution mapping of global surface water and its long-term changes. Nature 540, 418-422 "
+                    "(Copernicus Programme), data changed",
     "roof:lod2-wien": "Roof shapes and heights in Vienna: Datenquelle: Stadt Wien - data.wien.gv.at (Generalisiertes "
                       "Dachmodell LOD2.1, CC BY 4.0), data changed",
 }

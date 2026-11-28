@@ -891,6 +891,372 @@ pub fn surface_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
     Ok((pts_arr.into_pyarray(py), oo.into_pyarray(py), at_arr.into_pyarray(py)))
 }
 
+// ---- puddles (the 2026-11-26 playtest: "theres no puddles either. remember this game has physicly based textures") ---
+// Where rain water stands on a paved road: the low points of its drive surface (a sag of the centre line's profile:
+// the water runs down both ways to it, along the edges a crown drains to), the gutters by a kerb (between the drains)
+// and the wheel paths' ruts (more on a worn surface). Each a quad of the puddle atlas (roadwear.py PUDDLE_CELLS: 4
+// shapes a row, the rows' masks ever shallower: sags deepest, then gutters, then the ruts of poor and of fair roads),
+// shown by the mod only while the ground is wet (wetlook.lua: the atlas's alpha threshold falls as the rain fills them,
+// rises as they dry). As wear_plan's pieces: from the road's seed and its distance along its whole centre line (the
+// same puddles in every tile that builds the road), cut at the other carriageways and the box.
+
+pub const K_PUDDLE_SAG: i64 = 20;
+pub const K_PUDDLE_GUTTER: i64 = 21;
+pub const K_PUDDLE_RUT: i64 = 22;
+
+const SAG_STEP_M: f64 = 2.0;        // m between the profile's samples
+const SAG_LOW_M: f64 = 12.0;        // a sag is the lowest sample this far either way ...
+const SAG_RISE_M: f64 = 30.0;       // ... and the road rises at least SAG_MIN_M within this far on both sides
+const SAG_MIN_M: f64 = 0.04;
+const SAG_MIN_MOTORWAY_M: f64 = 0.08;   // (a motorway's drainage: only marked sags)
+const GUTTER_EVERY: (f64, f64) = (8.0, 22.0);
+const RUT_EVERY: (f64, f64) = (12.0, 40.0);
+const WHEEL_M: f64 = 0.85;          // m from a lane's centre to a wheel path
+const FIT_TRIES: usize = 4;         // a puddle shrunk this many times to stay on the carriageway (road_puddles)
+
+/// Puddles of the road's sags: (distance along, depth m) of every low point of the centre line's profile within the
+/// windows (both sides SAG_RISE_M long within the line: a sag at its end is unknown, its next road decides).
+fn sags(ln: &Line, win: &[(f64, f64)], min_depth: f64) -> Vec<(f64, f64)> {
+    let len = ln.len();
+    let n = (len / SAG_STEP_M).floor() as usize;
+    if n < 4 { return Vec::new(); }
+    let z: Vec<f64> = (0..=n).map(|k| ln.at(k as f64 * SAG_STEP_M).2).collect();
+    let lo = (SAG_LOW_M / SAG_STEP_M).round() as usize;
+    let rise = (SAG_RISE_M / SAG_STEP_M).round() as usize;
+    let mut out = Vec::new();
+    for k in rise..=n.saturating_sub(rise) {
+        let s = k as f64 * SAG_STEP_M;
+        if !overlaps(win, s - 10.0, s + 10.0) { continue; }
+        let (a, b) = (k.saturating_sub(lo), (k + lo).min(n));
+        // the lowest within lo either way (ties: the first)
+        if (a..=b).any(|j| z[j] < z[k] || (z[j] == z[k] && j < k)) { continue; }
+        let left = (k - rise..k).map(|j| z[j]).fold(f64::NEG_INFINITY, f64::max);
+        let right = (k + 1..=k + rise).map(|j| z[j]).fold(f64::NEG_INFINITY, f64::max);
+        let depth = (left - z[k]).min(right - z[k]);
+        if depth >= min_depth { out.push((s, depth)); }
+    }
+    out
+}
+
+/// One road's puddles (wear_plan's road attrs; gutter: kerbs along its edges).
+fn road_puddles(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], gutter: bool) {
+    let len = ln.len();
+    if len < 4.0 { return; }
+    let seed = a[A_SEED] as u64;
+    let cls = (a[A_CLS] as i64).clamp(0, 7);
+    let hw = a[A_HW];
+    if !(hw > 0.8) { return; }
+    let lanes = (a[A_LANES].round() as i64).max(1);
+    let drive = a[A_DRIVE].max(1.0).min(2.0 * hw);
+    let doff = a[A_DOFF];
+    let lw = drive / lanes as f64;
+    let oneway = a[A_ONEWAY] > 0.5;
+    let mapped = a[A_COND] >= 0.0;
+    let base = if mapped { a[A_COND] } else {
+        let mut rng = Rng::new(seed, 1);
+        (BASE_COND[cls as usize] + rng.range(-0.25, 0.25)).clamp(0.02, 0.98)
+    };
+    let win = windows(ln, &ctx.bx, hw + 8.0);
+    if win.is_empty() { return; }
+    // A puddle quad kept on the carriageway: each corner (emit_quad's, turned by `turn`) within hw of the centre line,
+    // measured at the corner's own distance along it (a turned or long quad on a bend reached past the edge: the sag
+    // puddles of a 7 m road out to 3.8 m). edge (side, inset): the quad hugs that edge, its offset taken again from
+    // its width as it shrinks. Too big: shorter and narrower (FIT_TRIES steps), then the turn dropped; never fits:
+    // none.
+    let fits = |s: f64, d: f64, along: f64, across: f64, turn: f64| -> bool {
+        let (x, y, _z, tx, ty) = ln.at(s);
+        let (cx, cy) = (x - ty * d, y + tx * d);
+        let (cs, sn) = (turn.dcos(), turn.dsin());
+        let (ux, uy) = (tx * cs - ty * sn, tx * sn + ty * cs);
+        let (vx, vy) = (-uy, ux);
+        let (a, b) = (along / 2.0, across / 2.0);
+        [(a, b), (a, -b), (-a, -b), (-a, b)].iter().all(|&(fa, fb)| {
+            let (px, py) = (cx + ux * fa + vx * fb, cy + uy * fa + vy * fb);
+            let sa = (s + (px - x) * tx + (py - y) * ty).clamp(0.0, len);
+            let (qx, qy, _qz, qtx, qty) = ln.at(sa);
+            ((px - qx) * -qty + (py - qy) * qtx).abs() <= hw + 1e-9
+        })
+    };
+    let quad = |out: &mut Out, s: f64, d: f64, along: f64, across: f64, turn: f64, kind: i64, cell: i64,
+                edge: Option<(f64, f64)>| {
+        let (mut along, mut across, mut turn) = (along, across, turn);
+        let offset = |across: f64| match edge { Some((side, inset)) => side * (hw - across / 2.0 - inset), None => d };
+        for k in 0..=FIT_TRIES {
+            if k == FIT_TRIES { turn = 0.0; }
+            let dd = offset(across);
+            if fits(s, dd, along, across, turn) {
+                let (x, y, z, tx, ty) = ln.at(s);
+                emit_quad(ctx, out, r, (x - ty * dd, y + tx * dd, z), (tx, ty), turn, along, across, kind, cell);
+                return;
+            }
+            if k < FIT_TRIES {
+                along *= 0.8;
+                across *= 0.85;
+            }
+        }
+    };
+    // sags: along the edges the crown drains to (a one-way road's cross-fall: its right edge; a two-way crown both),
+    // bigger with the sag's depth; a deep one on a narrow road across its middle too
+    let min_depth = if cls == CLS_MOTORWAY { SAG_MIN_MOTORWAY_M } else { SAG_MIN_M };
+    for (i, (s, depth)) in sags(ln, &win, min_depth).into_iter().enumerate() {
+        let mut rng = Rng::new(seed, 0x3000 + i as u64 * 7 + (s / SAG_STEP_M) as u64);
+        let along = (5.0 + 30.0 * depth).clamp(4.0, 12.0) * rng.range(0.8, 1.2);
+        let across = (0.9 + 5.0 * depth).clamp(0.8, (0.8 * hw).min(2.6));
+        let sides: &[f64] = if oneway { &[-1.0] } else { &[1.0, -1.0] };
+        for &side in sides {
+            let d = side * (hw - across / 2.0 - 0.1);
+            quad(out, s + rng.range(-1.5, 1.5), d, along, across, rng.range(-0.06, 0.06), K_PUDDLE_SAG,
+                 rng.pick(4) as i64, Some((side, 0.1)));
+        }
+        if depth >= 0.15 && hw < 4.0 {
+            quad(out, s, doff, along * 0.8, (2.0 * hw - 2.0 * across).max(1.0), rng.range(-0.05, 0.05), K_PUDDLE_SAG,
+                 rng.pick(4) as i64, None);
+        }
+    }
+    // gutters: by a kerb, between the drains, more on a worn surface
+    if gutter && cls != CLS_MOTORWAY {
+        for (side_i, side) in [1.0f64, -1.0].iter().enumerate() {
+            let mut rng = Rng::new(seed, 0x3100 + side_i as u64);
+            let mut s = rng.range(0.0, GUTTER_EVERY.1);
+            while s < len {
+                let cond = condition(base, mapped, seed, s);
+                let along = rng.range(2.0, 5.0);
+                let across = rng.range(0.6, 1.2).min(0.5 * hw);
+                let (turn, cell, keep) = (rng.range(-0.08, 0.08), rng.pick(4) as i64, rng.f());
+                if keep < (0.6 * (1.3 - cond)).clamp(0.3, 0.75) && overlaps(&win, s - along, s + along) {
+                    quad(out, s, side * (hw - across / 2.0 - 0.05), along, across, turn, K_PUDDLE_GUTTER, 4 + cell,
+                         Some((*side, 0.05)));
+                }
+                s += rng.range(GUTTER_EVERY.0, GUTTER_EVERY.1);
+            }
+        }
+    }
+    // ruts: in the wheel paths of each lane, the more and the deeper the worse the surface
+    if cls != CLS_SERVICE || base < 0.5 {
+        for k in 0..lanes {
+            let c = doff - drive / 2.0 + (k as f64 + 0.5) * lw;
+            for (w_i, w) in [-WHEEL_M, WHEEL_M].iter().enumerate() {
+                let mut rng = Rng::new(seed, 0x3200 + 2 * k as u64 + w_i as u64);
+                let mut s = rng.range(0.0, RUT_EVERY.1);
+                while s < len {
+                    let cond = condition(base, mapped, seed, s);
+                    let along = rng.range(2.5, 7.0);
+                    let across = rng.range(0.35, 0.6);
+                    let (turn, cell, keep) = (rng.range(-0.04, 0.04), rng.pick(4) as i64, rng.f());
+                    let row = if cond < 0.5 { 8 } else { 12 };
+                    if keep < (0.25 + 0.55 * (1.0 - cond)) && overlaps(&win, s - along, s + along) {
+                        quad(out, s, c + w, along, across, turn, K_PUDDLE_RUT, row + cell, None);
+                    }
+                    s += rng.range(RUT_EVERY.0, RUT_EVERY.1) / (1.3 - cond).max(0.5);
+                }
+            }
+        }
+    }
+}
+
+/// roadwear.puddle_chunks: the puddles of a tile's roads, wear_plan's arguments (pts, off, attrs, excl, bx) and gutter
+/// (R,): 1 where the road has kerbs along its edges. Returns as wear_plan (points (M, 4): a quad's corners, the corner
+/// number; offsets (P + 1,); per piece (P, 5): kind K_PUDDLE_*, across, along, -1, atlas cell 0..15).
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn puddle_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
+                        attrs: PyReadonlyArray2<'py, f64>, excl: PyReadonlyArray2<'py, i64>,
+                        bx: PyReadonlyArray1<'py, f64>, gutter: PyReadonlyArray1<'py, u8>)
+                        -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>)> {
+    let (p, o, a, e, b, g) = (pts.as_array(), off.as_array(), attrs.as_array(), excl.as_array(), bx.as_array(),
+                              gutter.as_array());
+    let nr = o.len().saturating_sub(1);
+    if a.nrows() != nr || (nr > 0 && a.ncols() < NA) || b.len() < 4 || p.ncols() < 3 || (e.nrows() > 0 && e.ncols() < 2)
+        || g.len() != nr {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "puddle_plan: pts (N, 3), off (R + 1), attrs (R, 15), excl (E, 2), box (4), gutter (R)"));
+    }
+    let lines: Vec<Line> = (0..nr).map(|r| {
+        let (s, t) = (o[r] as usize, (o[r + 1] as usize).min(p.nrows()));
+        let s = s.min(t);
+        Line::new((s..t).map(|i| p[[i, 0]]).collect(), (s..t).map(|i| p[[i, 1]]).collect(),
+                  (s..t).map(|i| p[[i, 2]]).collect())
+    }).collect();
+    let rows: Vec<Vec<f64>> = (0..nr).map(|r| (0..NA).map(|c| a[[r, c]]).collect()).collect();
+    let gut: Vec<bool> = g.iter().map(|&v| v != 0).collect();
+    let block: Vec<f64> = rows.iter().map(|v| v[A_BLOCK]).collect();
+    let ex: HashSet<(usize, usize)> = (0..e.nrows()).filter_map(|k| {
+        let (x, y) = (e[[k, 0]], e[[k, 1]]);
+        if x >= 0 && y >= 0 { Some((x as usize, y as usize)) } else { None }
+    }).collect();
+    let bxa = [b[0], b[1], b[2], b[3]];
+    let work = p.nrows() * 64;
+    let out = crate::release(py, work, move || {
+        let bl = Blockers::new(&lines, &block, ex);
+        let ctx = Ctx { bl: &bl, bx: bxa, fit_to_road: false };
+        let mut out = Out { off: vec![0], ..Default::default() };
+        for r in 0..nr {
+            if rows[r][A_WEAR] > 0.5 && rows[r][A_AISLE] < 0.5 && lines[r].x.len() >= 2 {
+                road_puddles(&ctx, &mut out, r, &lines[r], &rows[r], gut[r]);
+            }
+        }
+        out
+    });
+    let m = out.pts.len();
+    let flat: Vec<f64> = out.pts.iter().flat_map(|q| q.iter().copied()).collect();
+    let at: Vec<f64> = out.attrs.iter().flat_map(|q| q.iter().copied()).collect();
+    let np = out.attrs.len();
+    let pts_arr = numpy::ndarray::Array2::from_shape_vec((m, 4), flat)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let at_arr = numpy::ndarray::Array2::from_shape_vec((np, 5), at)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok((pts_arr.into_pyarray(py), out.off.into_pyarray(py), at_arr.into_pyarray(py)))
+}
+
+// ---- the puddles as spots for the mod's aquaplaning ---------------------------------------------------------------
+
+const SPOT_GRID_M: f64 = 4.0;       // the vertex bins
+const SPOT_MARGIN_M: f64 = 0.05;    // a vertex this far outside a quad still counts for its height
+
+fn round_to(x: f64, q: f64) -> f64 { (x / q).round() * q }
+
+/// A skin's puddle quads as spots (the mod's aquaplaning looks each tyre up in them: ge aquaplane.lua, vehicle
+/// aquaplane.lua). Per quad (corners front left, front right, back right, back left: emit_quad's order; poly (4N)
+/// absolute, its atlas uv (4N): roadwear.py PUDDLE_CELLS, row 0 at the top) its centre, along axis, half sizes and
+/// atlas cell, its height the mean of the draped puddle mesh's vertices inside it (verts relative to origin: the
+/// surface the tyre meets, not the centre line's height); a quad with none (cut off by the tile's clip: the
+/// neighbour's skin has it) is left out. Rows: x, y, z (relative to origin, mm), ux, uy (1e-4), a, b (half along /
+/// across, mm), cell. The vertices are summed in a fixed order (bins row by row, each in vertex order): the same
+/// bits on every machine.
+pub fn spots(poly: &[[f64; 2]], uv: &[[f64; 2]], verts: &[[f64; 3]], origin: [f64; 3]) -> Vec<[f64; 8]> {
+    let mut bins: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (k, v) in verts.iter().enumerate() {
+        if v.iter().all(|c| c.is_finite()) {
+            bins.entry(((v[0] / SPOT_GRID_M).floor() as i64, (v[1] / SPOT_GRID_M).floor() as i64)).or_default().push(k);
+        }
+    }
+    let mut out = Vec::new();
+    for q in 0..poly.len().min(uv.len()) / 4 {
+        let c: Vec<[f64; 2]> = (0..4).map(|k| [poly[4 * q + k][0] - origin[0], poly[4 * q + k][1] - origin[1]]).collect();
+        let (cx, cy) = ((c[0][0] + c[1][0] + c[2][0] + c[3][0]) / 4.0, (c[0][1] + c[1][1] + c[2][1] + c[3][1]) / 4.0);
+        // along: back to front (the front edge's middle less the back edge's); across: right to left
+        let (fx, fy) = ((c[0][0] + c[1][0] - c[2][0] - c[3][0]) / 2.0, (c[0][1] + c[1][1] - c[2][1] - c[3][1]) / 2.0);
+        let (lx, ly) = ((c[0][0] + c[3][0] - c[1][0] - c[2][0]) / 2.0, (c[0][1] + c[3][1] - c[1][1] - c[2][1]) / 2.0);
+        let (len_a, len_b) = ((fx * fx + fy * fy).sqrt(), (lx * lx + ly * ly).sqrt());
+        if !(len_a > 1e-6 && len_b > 1e-6 && cx.is_finite() && cy.is_finite()) { continue; }
+        let (ux, uy) = (fx / len_a, fy / len_a);
+        let (a, b) = (len_a / 2.0, len_b / 2.0);
+        // its atlas cell from the uv: the lowest u, the highest v (row 0 at the top)
+        let u0 = (0..4).map(|k| uv[4 * q + k][0]).fold(f64::INFINITY, f64::min);
+        let v1 = (0..4).map(|k| uv[4 * q + k][1]).fold(f64::NEG_INFINITY, f64::max);
+        if !(u0.is_finite() && v1.is_finite()) { continue; }
+        let col = ((u0 * 4.0).round() as i64).clamp(0, 3);
+        let row = (((1.0 - v1) * 4.0).round() as i64).clamp(0, 3);
+        // its height: the mesh vertices inside it
+        let reach = a.max(b) + SPOT_MARGIN_M;
+        let (i0, i1) = (((cx - reach) / SPOT_GRID_M).floor() as i64, ((cx + reach) / SPOT_GRID_M).floor() as i64);
+        let (j0, j1) = (((cy - reach) / SPOT_GRID_M).floor() as i64, ((cy + reach) / SPOT_GRID_M).floor() as i64);
+        let (mut zs, mut n) = (0.0f64, 0usize);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                if let Some(ks) = bins.get(&(i, j)) {
+                    for &k in ks {
+                        let (dx, dy) = (verts[k][0] - cx, verts[k][1] - cy);
+                        if (dx * ux + dy * uy).abs() <= a + SPOT_MARGIN_M && (dy * ux - dx * uy).abs() <= b + SPOT_MARGIN_M {
+                            zs += verts[k][2];
+                            n += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if n == 0 { continue; }
+        out.push([round_to(cx, 1e-3), round_to(cy, 1e-3), round_to(zs / n as f64, 1e-3), round_to(ux, 1e-4),
+                  round_to(uy, 1e-4), round_to(a, 1e-3), round_to(b, 1e-3), (row * 4 + col) as f64]);
+    }
+    out
+}
+
+/// roadwear.puddle_spots: spots() of poly (4N, 2+) absolute, uvq (4N, 2), verts (V, 3) relative to origin (3):
+/// (S, 8).
+#[pyfunction]
+pub fn puddle_spots<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, uvq: PyReadonlyArray2<'py, f64>,
+                         verts: PyReadonlyArray2<'py, f64>, origin: PyReadonlyArray1<'py, f64>)
+                         -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (p, u, v, o) = (poly.as_array(), uvq.as_array(), verts.as_array(), origin.as_array());
+    if p.ncols() < 2 || u.ncols() < 2 || p.nrows() != u.nrows() || p.nrows() % 4 != 0
+        || (v.nrows() > 0 && v.ncols() < 3) || o.len() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "puddle_spots: poly (4N, 2+), uvq (4N, 2), verts (V, 3), origin (3)"));
+    }
+    let pp: Vec<[f64; 2]> = (0..p.nrows()).map(|i| [p[[i, 0]], p[[i, 1]]]).collect();
+    let uu: Vec<[f64; 2]> = (0..u.nrows()).map(|i| [u[[i, 0]], u[[i, 1]]]).collect();
+    let vv: Vec<[f64; 3]> = (0..v.nrows()).map(|i| [v[[i, 0]], v[[i, 1]], v[[i, 2]]]).collect();
+    let rows = spots(&pp, &uu, &vv, [o[0], o[1], o[2]]);
+    let n = rows.len();
+    let flat: Vec<f64> = rows.into_iter().flatten().collect();
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 8), flat)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+// ---- the puddle atlas's masks (tools/make_puddle_atlas.py writes them as the mod's texture source) -----------------
+
+/// The puddle atlas's alpha (size x size, row 0 at the top; 4 x 4 cells of size / 4): cell (row, col) a puddle of
+/// shape col whose water depth (0..255: the material's alpha test threshold falls as the rain fills them) peaks at
+/// PEAK[row] in its middle and falls to 0 at its rim. Its outline: an ellipse filling the cell with a ragged edge
+/// (seeded value noise of three octaves, the same on every CPU: integer hashes, no transcendental functions).
+pub fn puddle_atlas(size: usize) -> Vec<u8> {
+    const PEAK: [f64; 4] = [1.0, 0.85, 0.72, 0.6];
+    let size = size.max(16) / 16 * 16;
+    let cs = size / 4;
+    let mut out = vec![0u8; size * size];
+    // value noise on a lattice of `cells` per unit, smooth-stepped, seeded
+    let noise = |seed: u64, u: f64, v: f64, cells: f64| -> f64 {
+        let (x, y) = (u * cells, v * cells);
+        let (ix, iy) = (x.floor(), y.floor());
+        let (fx, fy) = (x - ix, y - iy);
+        let h = |i: f64, j: f64| -> f64 {
+            let k = mix(seed ^ mix((i as i64 as u64).wrapping_mul(0x9E37) ^ (j as i64 as u64).wrapping_mul(0x85EB_CA6B)));
+            (k >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+        let a = h(ix, iy) + (h(ix + 1.0, iy) - h(ix, iy)) * sx;
+        let b = h(ix, iy + 1.0) + (h(ix + 1.0, iy + 1.0) - h(ix, iy + 1.0)) * sx;
+        a + (b - a) * sy
+    };
+    for row in 0..4 {
+        for col in 0..4 {
+            let seed = 0x5EED_0000 + (row * 4 + col) as u64;
+            // per shape: the ellipse's squash and a lobe (col 3: two pools joined)
+            let (ax, ay) = [(0.80, 0.92), (0.62, 0.95), (0.88, 0.88), (0.70, 0.95)][col];   // (across u, along v)
+            for py_ in 0..cs {
+                for px in 0..cs {
+                    // u, v in -1..1 across the cell (the quad's uv: u across the road, v along it: roadwear.py)
+                    let u = (px as f64 + 0.5) / cs as f64 * 2.0 - 1.0;
+                    let v = (py_ as f64 + 0.5) / cs as f64 * 2.0 - 1.0;
+                    let mut r = ((u / ax) * (u / ax) + (v / ay) * (v / ay)).sqrt();
+                    if col == 3 {               // two pools: the narrower waist between them
+                        let w = 1.0 - 0.35 * (1.0 - (v * 2.2).abs().min(1.0));
+                        r = ((u / (ax * w)) * (u / (ax * w)) + (v / ay) * (v / ay)).sqrt();
+                    }
+                    let (uu, vv) = ((u + 1.0) / 2.0, (v + 1.0) / 2.0);
+                    let n = 0.55 * noise(seed, uu, vv, 3.0) + 0.3 * noise(seed ^ 1, uu, vv, 7.0)
+                        + 0.15 * noise(seed ^ 2, uu, vv, 17.0);
+                    // the rim pushed in and out by the noise; the depth falls from the middle to it
+                    let rim = (0.86 + 0.45 * (n - 0.5)).min(0.97);       // (never past the cell: its neighbours in the mips)
+                    let d = (1.0 - r / rim.max(0.2)).max(0.0);
+                    let depth = (d.min(0.5) / 0.5 * PEAK[row]).clamp(0.0, 1.0);
+                    let (x, y) = (col * cs + px, row * cs + py_);
+                    out[y * size + x] = (depth * 255.0).round() as u8;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// roadwear.puddle_atlas: the atlas's alpha (size x size u8, row 0 the top).
+#[pyfunction]
+pub fn puddle_atlas_px<'py>(py: Python<'py>, size: usize) -> Bound<'py, PyArray1<u8>> {
+    puddle_atlas(size).into_pyarray(py)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -966,6 +1332,136 @@ mod tests {
         for q in a3.iter().filter(|q| is_var(q)) {
             assert!(a1.iter().any(|w| w[0] == q[0] && w[1] == q[1] && w[3] == q[3]));
         }
+    }
+
+    fn puddles(ln: &Line, a: &[f64], bx: [f64; 4], gutter: bool) -> Out {
+        let bl = Blockers::new(std::slice::from_ref(ln), &[a[A_BLOCK]], HashSet::new());
+        let ctx = Ctx { bl: &bl, bx, fit_to_road: false };
+        let mut out = Out { off: vec![0], ..Default::default() };
+        road_puddles(&ctx, &mut out, 0, ln, a, gutter);
+        out
+    }
+
+    fn vee(len: f64, grade: f64) -> Line {
+        let n = (len / 2.0) as usize + 1;
+        Line::new((0..n).map(|i| i as f64 * 2.0).collect(), vec![0.0; n],
+                  (0..n).map(|i| (i as f64 * 2.0 - len / 2.0).abs() * grade).collect())
+    }
+
+    #[test]
+    fn puddles_stand_in_the_sag() {
+        let a = attrs_row(3.5, 2.0, 4.0, 4242.0);
+        let out = puddles(&vee(400.0, 0.01), &a, [-10.0, -50.0, 410.0, 50.0], false);
+        let sag: Vec<usize> = (0..out.attrs.len()).filter(|&k| out.attrs[k][0] as i64 == K_PUDDLE_SAG).collect();
+        assert_eq!(sag.len(), 3, "both edges and the middle of a 0.3 m sag on a 7 m road");
+        for k in sag {
+            let q = &out.pts[out.off[k] as usize..out.off[k + 1] as usize];
+            let cx = q.iter().map(|p| p[0]).sum::<f64>() / 4.0;
+            assert!((cx - 200.0).abs() < 2.0, "at the low point: {cx}");
+            assert!(q.iter().all(|p| p[1].abs() <= 3.5 + 1e-9), "on the carriageway");
+            assert!((0..4).contains(&(out.attrs[k][4] as i64)), "the deepest row's cells");
+        }
+        // a flat road and a steady grade: no sag
+        let flat = puddles(&straight(400.0), &a, [-10.0, -50.0, 410.0, 50.0], false);
+        assert!(flat.attrs.iter().all(|q| q[0] as i64 != K_PUDDLE_SAG));
+        let tilt = Line::new(vec![0.0, 400.0], vec![0.0, 0.0], vec![0.0, 8.0]);
+        assert!(puddles(&tilt, &a, [-10.0, -50.0, 410.0, 50.0], false).attrs.iter().all(|q| q[0] as i64 != K_PUDDLE_SAG));
+        // a shallow dip under SAG_MIN_M: none
+        let dip = puddles(&vee(400.0, 0.001), &a, [-10.0, -50.0, 410.0, 50.0], false);
+        assert!(dip.attrs.iter().all(|q| q[0] as i64 != K_PUDDLE_SAG));
+    }
+
+    #[test]
+    fn puddles_by_kerbs_and_in_the_wheel_paths() {
+        let mut a = attrs_row(4.0, 2.0, 4.0, 99.0);
+        a[A_COND] = 0.2;                   // a worn street
+        let ln = straight(1000.0);
+        let bx = [-10.0, -50.0, 1010.0, 50.0];
+        let no_kerb = puddles(&ln, &a, bx, false);
+        assert!(no_kerb.attrs.iter().all(|q| q[0] as i64 != K_PUDDLE_GUTTER));
+        let kerb = puddles(&ln, &a, bx, true);
+        let g = kerb.attrs.iter().filter(|q| q[0] as i64 == K_PUDDLE_GUTTER).count();
+        assert!(g > 30 && g < 220, "gutter puddles a km on both sides: {g}");
+        let ruts = kerb.attrs.iter().filter(|q| q[0] as i64 == K_PUDDLE_RUT).count();
+        assert!(ruts > 20, "a worn street's ruts: {ruts}");
+        // a new surface: fewer ruts
+        a[A_COND] = 0.95;
+        let newer = puddles(&ln, &a, bx, true).attrs.iter().filter(|q| q[0] as i64 == K_PUDDLE_RUT).count();
+        assert!(newer < ruts / 2, "new {newer} vs worn {ruts}");
+        // the same road twice, and a smaller box: the same puddles where they share it
+        a[A_COND] = 0.2;
+        let (p1, p2) = (puddles(&ln, &a, bx, true), puddles(&ln, &a, bx, true));
+        assert_eq!(p1.off, p2.off);
+        assert!(p1.pts.iter().zip(&p2.pts).all(|(x, y)| x == y));
+        let part = puddles(&ln, &a, [300.0, -50.0, 500.0, 50.0], true);
+        assert!(!part.attrs.is_empty());
+        for k in 0..part.attrs.len() {
+            let q = &part.pts[part.off[k] as usize..part.off[k + 1] as usize];
+            assert!((0..p1.attrs.len()).any(|j| p1.attrs[j] == part.attrs[k]
+                && p1.pts[p1.off[j] as usize..p1.off[j + 1] as usize] == *q), "a part tile's puddle is the whole road's");
+        }
+    }
+
+    #[test]
+    fn puddles_stay_on_a_bending_carriageway() {
+        // a worn kerbed street round a 40 m radius bend, dipping in the middle: every corner of every puddle within
+        // the half width of the centre line (its distance to the arc)
+        let (rad, n) = (40.0f64, 160usize);
+        let pts: Vec<(f64, f64, f64)> = (0..=n).map(|i| {
+            let t = i as f64 / n as f64 * 2.0;          // 2 rad of arc, 80 m
+            ((t.dcos()) * rad, (t.dsin()) * rad, (t - 1.0).abs() * 0.4)
+        }).collect();
+        let ln = Line::new(pts.iter().map(|p| p.0).collect(), pts.iter().map(|p| p.1).collect(),
+                           pts.iter().map(|p| p.2).collect());
+        let mut a = attrs_row(3.5, 2.0, 5.0, 31337.0);
+        a[A_COND] = 0.15;
+        let out = puddles(&ln, &a, [-60.0, -60.0, 60.0, 60.0], true);
+        assert!(out.attrs.len() > 5, "puddles laid: {}", out.attrs.len());
+        assert!(out.attrs.iter().any(|q| q[0] as i64 == K_PUDDLE_SAG), "the dip's sag puddles");
+        for p in &out.pts {
+            let r = p[0].dhypot(p[1]);
+            assert!((r - rad).abs() <= 3.5 + 1e-6, "a corner {:.3} m off the centre line", (r - rad).abs());
+        }
+    }
+
+    #[test]
+    fn puddle_atlas_rows_ever_shallower() {
+        let n = 256;
+        let px = puddle_atlas(n);
+        assert_eq!(px.len(), n * n);
+        let cs = n / 4;
+        let peak = |row: usize, col: usize| (0..cs).flat_map(|y| (0..cs).map(move |x| (x, y)))
+            .map(|(x, y)| px[(row * cs + y) * n + col * cs + x]).max().unwrap();
+        for col in 0..4 {
+            assert_eq!(peak(0, col), 255);
+            assert!(peak(1, col) < 255 && peak(2, col) < peak(1, col) && peak(3, col) < peak(2, col));
+        }
+        // a cell's rim and corners dry; the same pixels every time
+        assert_eq!(px[0], 0);
+        assert_eq!(px[cs - 1], 0);
+        assert_eq!(puddle_atlas(n), px);
+    }
+
+    #[test]
+    fn puddle_spots_from_quads_and_mesh() {
+        // a 6 x 1 m quad along +y at (110, 205) in the frame (corners front left, front right, back right, back
+        // left), an atlas cell in row 2, column 1; the mesh (relative to the origin (100, 200, 0)) inside it at
+        // 3.0-3.2 m, one vertex beside it and one past its end
+        let (cx, cy) = (110.0, 205.0);
+        let poly = vec![[cx - 0.5, cy + 3.0], [cx + 0.5, cy + 3.0], [cx + 0.5, cy - 3.0], [cx - 0.5, cy - 3.0]];
+        let (u0, v0, u1, v1) = (0.25, 0.25, 0.5, 0.5);        // roadwear.py _grid(4, 4) cell 9: row 2, column 1
+        let uv = vec![[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
+        let verts = vec![[10.0, 4.0, 3.0], [10.2, 6.0, 3.2], [10.0, 5.0, 3.1], [19.0, 5.0, 9.0], [10.0, 9.5, 7.0]];
+        let s = spots(&poly, &uv, &verts, [100.0, 200.0, 0.0]);
+        assert_eq!(s.len(), 1);
+        let r = s[0];
+        assert_eq!((r[0], r[1]), (10.0, 5.0));
+        assert!((r[2] - 3.1).abs() < 1e-9, "the mean of the three vertices inside: {}", r[2]);
+        assert_eq!((r[3], r[4]), (0.0, 1.0));
+        assert_eq!((r[5], r[6], r[7]), (3.0, 0.5, 9.0));
+        // no vertex inside (the neighbour tile's part): none; the same bits every time
+        assert!(spots(&poly, &uv, &verts[3..], [100.0, 200.0, 0.0]).is_empty());
+        assert_eq!(spots(&poly, &uv, &verts, [100.0, 200.0, 0.0]), s);
     }
 
     #[test]

@@ -38,12 +38,12 @@ import fast
 import junctions
 import mapcells
 import mapgeom
-import photosurface
 import racedig
 import roadmesh
 import roadsurf
 import roadsmooth
 import roadshape
+import roadsys
 import staging
 import structures
 
@@ -519,6 +519,8 @@ def level_ranges(feats, i, _home=True):
     Its home cell's copy's (home_copy): lengthened over the roads crossing under it and joined over the lidar's
     elevated stretches, the copy in each cell saw other roads (a ramp by I-395 in Baltimore: one deck from 9.5 % in
     one cell, two with a ground gap at 14-16 % in the next, both drawn, one 8 m under the other)."""
+    if MAPPED_RANGES():
+        return tag_level_ranges(feats, i)
     if _home and HOME_RANGES_ON:
         h = home_copy(feats, i)
         if h is not None:
@@ -540,9 +542,20 @@ def level_ranges(feats, i, _home=True):
     return list(got)
 
 
+def MAPPED_RANGES():
+    """BNE_ROADSYS=surface (the road system's M5, the user 2026-11-25: "the map's tag strictly"): every off-ground range
+    is the map's own (tag_level_ranges): no range lengthened over the roads under it, joined over lidar stretches or
+    inferred from a grade separation, for the deck builder, its bents and caps, the ground roads and the grading alike,
+    so a bridge stops at its mapped end and the road goes on onto its graded approach. The facts made from them are
+    keyed apart (_facts_key) and the plans too (plancache.plans_format)."""
+    return roadsys.SURFACE
+
+
 def _level_lists(feats, idx):
     """{i: level_ranges(feats, i)} of features idx (the memos' lists themselves: callers must not change them): the
     home copies' (home_copy) and this layer's each made at once, the neighbours asked once."""
+    if MAPPED_RANGES():
+        return {i: tag_level_ranges(feats, i) for i in idx}
     out, own, by = {}, [], {}
     me = feats.__dict__.get("_bnge_cell")
     hook = feats.__dict__.get("_bnge_neighbours")
@@ -729,6 +742,9 @@ def _facts_key(feats, kind, extra):
     if cid is None or not revisit.ON or revisit.CACHE_DIR is None:
         return None
     # (by FACTS_FORMAT, not the code: kept across updates, the user, 2026-11-02; cid carries the map data's versions)
+    # (MAPPED_RANGES: the facts of the mapped ranges, apart from everyone else's)
+    if MAPPED_RANGES():
+        kind = f"{kind}.mapped"
     return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra)
 
 
@@ -753,12 +769,14 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 31     # 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 32     # 32: a segment Overture merged from several OSM ways takes the surface most of it has (merged_surface; Sulzburg's Herrenweg, GitHub #1506), 2026-11-24; 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
     """A baked pack's facts of this layer's cell (bakepack.py), as JSON bytes, or None."""
     import revisit
+    if MAPPED_RANGES():             # (the shared and baked facts are the lengthened ranges': none here)
+        return None
     cid = feats.__dict__.get("_bnge_cell")
     if cid is None or revisit.CACHE_DIR is None:
         return None
@@ -1982,39 +2000,9 @@ def _surface_rules():
 
 
 def _surface_value(feats, i):
-    """Feature i's surface value: the map's (_map_surface_value), else, for a road the map says nothing about, what the
-    regional photo's colour says (photosurface.py, BNE_PHOTO_SURFACE=1: "asphalt" for a road that is grey like it, "grass"
-    for a lane as green as its verges, "gravel" for a pale neutral one)."""
-    v = _map_surface_value(feats, i)
-    if v is None and photosurface.ON:
-        v = _photo_surface(feats).get(i)
-    return v
-
-
-def _photo_surface(feats):
-    """{feature index: "asphalt", "grass" or "gravel"} of feats' roads the photo says are paved, grass lanes or gravel, remembered on feats. A candidate whose photo
-    tile is not on the disk yet is not known: the verdicts stand for FACTS_SHORT_S s and revisit.fault says nothing
-    built from them is kept (the specs' disk cache included: PR #634's idiom), so they are made again once it is."""
-    st = feats.__dict__
-    got = st.get("_photo_surface")
-    if got is not None and (got[1] is None or time.monotonic() < got[1]):
-        if got[1] is not None:
-            import revisit
-            revisit.fault()
-        return got[0]
-    if st.get("_photo_busy"):           # (asked again from inside its own making: the map's value alone)
-        return {}
-    st["_photo_busy"] = True
-    try:
-        v, missing = photosurface.verdicts(feats, lambda i: _map_surface_value(feats, i))
-    finally:
-        st["_photo_busy"] = False
-    v = {i: {"paved": "asphalt"}.get(k, k) for i, k in v.items()}     # ("grass" and "gravel" are surface values as they are)
-    if missing:
-        import revisit
-        revisit.fault()
-    st["_photo_surface"] = (v, time.monotonic() + FACTS_SHORT_S if missing else None)
-    return v
+    """Feature i's surface value: the map's (_map_surface_value). (The regional photo's colour once filled in a road the
+    map says nothing about, BNE_PHOTO_SURFACE, retired 2026-11-26: roadsurf.py's aerial verdict does that.)"""
+    return _map_surface_value(feats, i)
 
 
 def _map_surface_value(feats, i):
@@ -2024,12 +2012,108 @@ def _map_surface_value(feats, i):
     import busstations
     if busstations.PASSAGE_IDS and str(feats.ids[i]) in busstations.PASSAGE_IDS:
         return "asphalt"            # a bus station's drive lane (Hradec: the map says paving_stones for the whole yard)
-    osm = feats.attrs.get("osm_surface")
+    osm = osm_surface_column(feats)
     if osm is not None and i < len(osm):
         v = str(osm[i]).strip()
         if v and v.lower() not in ("nan", "none"):
             return v
     return _rule_value(feats.rules.get("surface"), i)
+
+
+def _osm_text(v):
+    """An OpenStreetMap text column's element as a value, or None ("", "nan" and "none" in any case: no value)."""
+    v = str(v).strip()
+    return v if v and v.lower() not in ("nan", "none") else None
+
+
+def _surface_look(cls, v):
+    """What a surface value is drawn as, for comparing two of them: 'rock' / 'grass' (the ground's own materials,
+    terrain_surface) or surface_kind's paved / cobble / gravel / dirt."""
+    t = surface_token(v)
+    if t in ROCKISH:
+        return "rock"
+    if t in GRASSY:
+        return "grass"
+    return surface_kind(cls, v)
+
+
+UNPAVED_LOOKS = frozenset({"gravel", "dirt", "grass", "rock"})
+
+
+def _overlap(s, e, ranges):
+    """Length of [s, e] inside the union of the disjoint ranges [(a, b)]."""
+    return sum(max(0.0, min(e, b) - max(s, a)) for a, b in ranges)
+
+
+def merged_surface(cls, osm, own, rules):
+    """The surface value of a segment Overture merged from several OpenStreetMap ways: osm, the surface of the one way
+    its tags were joined from (src_record; own: that way's ranges on the segment, fractions of its length), unless the
+    rest of the segment, by Overture's surface rules ([(value, start, end)]), is mostly of another look (_surface_look):
+    then that look's value covering the most of the rest. Every look weighed by its share of the segment: the joined
+    way's by its own ranges, Overture's rules by their length outside them (a generic "unpaved" as the joined way's
+    look when that is unpaved too); a tie keeps osm. Pure."""
+    share, best = {}, {}
+    mine = _surface_look(cls, osm)
+    share[mine] = sum(b - a for a, b in own)
+    for v, s, e in rules:
+        v = _osm_text(v)
+        if v is None or v.lower() == "unknown":     # (Overture's "unknown": no surface known there)
+            continue
+        w = (e - s) - _overlap(s, e, own)
+        if w <= 0.0:
+            continue
+        # Overture's generic "unpaved" (its list has no grass, ground or compacted: OSM's are folded into it) says
+        # nothing against an unpaved joined way: it counts as that way's look, never against it
+        look = mine if mine in UNPAVED_LOOKS and surface_token(v) == "unpaved" else _surface_look(cls, v)
+        share[look] = share.get(look, 0.0) + w
+        if w > best.get(look, (None, 0.0))[1]:
+            best[look] = (v, w)
+    top = max(share, key=lambda k: (share[k], k == mine))
+    return osm if top == mine or share[top] <= share[mine] else best[top][0]
+
+
+def osm_surface_column(feats):
+    """feats' osm_surface column (osmtags.join: the surface of each road's own OpenStreetMap way) with the segments
+    Overture merged from several ways corrected, kept on feats; the column itself where none needs it.
+
+    Overture merges the ways between two junctions into one segment ("src_ways", overture.way_sources) and osmtags.join
+    reads the tags of one of them, the way covering most of it (src_record). Its surface held for the whole segment, and
+    Overture's own surface rules, which have each way's surface along it, were never read: Sulzburg's Herrenweg, a
+    gravel track (w50822567, w1563039711), merged with the grass track before it (w50822566, 35 % of the segment), was
+    drawn as a grass track with grass growing on it (2026-11-20). A segment whose ways are mostly of another look than
+    the joined way now takes that look (merged_surface). One look per segment still: the segment is not split."""
+    st = getattr(feats, "__dict__", None)
+    st = st if isinstance(st, dict) else {}     # (a stand-in class's mappingproxy: nothing kept)
+    if "_osm_surface_col" in st:
+        return st["_osm_surface_col"]
+    col = feats.attrs.get("osm_surface")
+    ways, table = feats.rules.get("src_ways"), feats.rules.get("surface")
+    recs, classes = feats.attrs.get("src_record"), feats.attrs.get("class")
+    out = col
+    if (col is not None and recs is not None and ways is not None and len(ways.feature) and table is not None
+            and len(table.feature)):
+        vals = None
+        for i in np.unique(np.asarray(ways.feature, np.int64)).tolist():
+            if i >= len(col):
+                continue
+            osm = _osm_text(col[i])
+            if osm is None:
+                continue
+            rec = str(recs[i])
+            own = [(float(s), float(e)) for w, s, e in ways.for_feature(i) if str(w) == rec]
+            rules = [(v, float(s), float(e)) for v, s, e in table.for_feature(i)]
+            if not own or not rules:
+                continue
+            cls = str(classes[i]) if classes is not None else "unknown"
+            v = merged_surface(cls, osm, own, rules)
+            if v != osm:
+                if vals is None:
+                    vals = [str(x) for x in col.tolist()]
+                vals[i] = v
+        if vals is not None:
+            out = mapgeom.text_column(vals)
+    st["_osm_surface_col"] = out
+    return out
 
 
 # Untagged minor roads in country where the mapped ones are gravel (2026-11-03: Estonia's unclassified roads and
@@ -2359,7 +2443,7 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
         keep = True             # (specs made while a download failed are not remembered: asked again, PR #634)
         import germanroads
         extra = (widths is not None, bool(left_hand)) + ((franceroads.VERSION,) if franceroads.ON else ()) + (
-            (photosurface.TAG,) if photosurface.ON else ()) + ((europewalks.VERSION,) if europewalks.enabled() else ()) + (
+            ()) + ((europewalks.VERSION,) if europewalks.enabled() else ()) + (
             (germanroads.VERSION,) if germanroads.ON else ()) + roadsurf.layer_tags(feats)
         cid = feats.__dict__.get("_bnge_cell")
         # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
@@ -3365,6 +3449,14 @@ def _callable_key(fn):
     return (id(getattr(fn, "__self__", None)), getattr(fn, "__func__", fn))
 
 
+def clear_placements():
+    """The kept Placements let go (budget.register_shed): each holds its cells' map features, so a shed that dropped
+    the map data's cells kept them alive here (16 Placements, ~190 MB of a Baltimore road process after 80 geotiles,
+    2026-11-26)."""
+    with _PLACEMENT_LOCK:
+        _PLACEMENT_LRU.clear()
+
+
 def placement_context(cells, urban_fn=None, widths=None, left_hand=False):
     """The Placement of cells' roads with road_specs(feats, urban_fn, widths, left_hand)'s widths: one per tile (each
     caller moving the roads' lines by it: road tiles, grading, the traffic AI's lanes, the signs' rows, decks). The
@@ -3833,7 +3925,7 @@ def _map_surface_values(feats):
         return got
     import fast
     fast.require(380, "map_surface_values")
-    out = fast._ef.map_surface_values(len(feats), feats.attrs.get("osm_surface"), feats.rules.get("surface"))
+    out = fast._ef.map_surface_values(len(feats), osm_surface_column(feats), feats.rules.get("surface"))
     feats.__dict__["_map_surface_values"] = out
     return out
 
@@ -3860,7 +3952,7 @@ def _raw_flat(feats):
 def _spec_inputs(feats):
     """A layer's columns as the spec kernels read them (earthfast.RoadRules): geometry, class codes, the rules' and
     OpenStreetMap's values, lane evidence, surface kinds (surface_kind of each class and surface value), the sidewalk
-    tag, Sweden's and the European tests; kept on feats (not with BNE_PHOTO_SURFACE: its verdicts expire)."""
+    tag, Sweden's and the European tests; kept on feats."""
     st = feats.__dict__
     got = st.get("_spec_inputs")
     if got is not None:
@@ -3895,15 +3987,9 @@ def _spec_inputs(feats):
         r = ring_radius(feats, i)
         if r is not None:
             radius[i] = r
-    # surfaces: the map's value (BNE_PHOTO_SURFACE: the photo's for a road the map says nothing of), its kind by
+    # surfaces: the map's value, its kind by
     # surface_kind and its token by surface_token, each pair worked out once
-    import photosurface
-    vals = _map_surface_values(feats)
-    if photosurface.ON:         # (earthfast roadnet::verdicts: the photo asked only where an eligible road has none)
-        fast.require(392, "photo_values")
-        vals = fast._ef.photo_values(vals, np.ascontiguousarray(elig, bool), lambda: _photo_surface(feats))
-    else:
-        vals = list(vals)
+    vals = list(_map_surface_values(feats))
     good = sc["good"]
     name = sc["name"]
     # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
@@ -3925,7 +4011,7 @@ def _spec_inputs(feats):
     if n:
         first = ll[co[ro[po[:-1]]]]
         se = np.asarray(sweden.contains(first[:, 0], first[:, 1]), bool)
-    se_tag, se_kind, se_tok, tokens = _surface_rules().sweden_surfaces(cls_s, se, a.get("osm_surface"), sf["tokens"])
+    se_tag, se_kind, se_tok, tokens = _surface_rules().sweden_surfaces(cls_s, se, osm_surface_column(feats), sf["tokens"])
     aisle = fast._ef.aisles(se, rules.get("subclass"))
     cols = {"cls": cls, "elig": elig, "has_w": has_w, "wv": wv, "osm_w": _osm_widths(feats, *OSM_WIDTH_M),
             "osm_lanes": osm_lanes, "osm_ms": _osm_values(feats, "maxspeed", 5.0, 200.0), "has_ow": has_ow,
@@ -3936,8 +4022,7 @@ def _spec_inputs(feats):
             "region": _width_regions(feats)}
     got = {"geo": (ll, co, ro, po), "cols": cols, "built": [k in BUILT for k in _KINDS], "names": names, "pos": pos,
            "tokens": tokens}
-    if not photosurface.ON:
-        st["_spec_inputs"] = got
+    st["_spec_inputs"] = got
     return got
 
 
@@ -6769,6 +6854,9 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                     mark("centre", st.centre, markings.BARRIER_LINE_W, at(off + sd * markings.BARRIER_LINE_M))
             elif role == "lane":
                 along = at(off)
+                if sweden and how == "bus":      # (M6: broken, wider than the lane lines)
+                    mark("lane", "line_white", max(lw_, markings.M6_W), along, markings.M6_PATTERN)
+                    continue
                 if lane_growth is None:
                     mark("lane", "line_white", lw_, along, None if how else pat)
                     continue
@@ -8157,6 +8245,7 @@ class BridgeProfiles:
 
     wet = None      # wet(lat, lon) -> water depth (m) or None: decks clear the water (water_clear)
     infra_fn = None     # infra_fn(cell key) -> the infrastructure Features (bridge:structure tags: bridgetypes)
+    water_fn = None     # water_fn(cell key) -> the water Features (BNE_DECK_SKEW: the waterways a deck end crosses)
 
     def __init__(self, frame, cell_fn, elev):
         self.frame, self.cell_fn, self.elev = frame, cell_fn, elev
@@ -8387,6 +8476,7 @@ class BridgeProfiles:
                         lines += mapgeom.enu_rings(feats, self.frame, rings)
                         roads_.append(((fid, "g"), lines))
                         self.__dict__.setdefault("_gcls", {})[(fid, "g")] = rs[i].cls     # (LEVEL_SPACING)
+                        self.__dict__.setdefault("_ghw", {})[(fid, "g")] = rs[i].width / 2  # (roadshape's skew)
                     elif _rail_drawn(feats, i):
                         # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
                         # lay on the tracks; only roads under a deck were counted)
@@ -9042,9 +9132,10 @@ class BridgeProfiles:
                         # first part's region), or None: this one
     region_of = None    # region_of(self, comp, pool) -> owner_of's region, with no side effect (ChainStore._region_of)
 
-    def parts_todo(self, todo, solved_only=False, part_ids=False):
+    def parts_todo(self, todo, solved_only=False, part_ids=False, retry=True):
         """[(fid, spec, xy, z, lon)] of the parts todo [((fid, j), feats, i)], each solved with its chain (once);
-        solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
+        solved_only: only those solved already; part_ids: return (fid, j) rather than fid; retry=False: a part published
+        short is taken as it is (its note: the reader is short too), never solved again for this reader (_retry_due)."""
         out = []
         for key, feats, i in todo:
             ring = None
@@ -9057,7 +9148,7 @@ class BridgeProfiles:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 if not self._held_in(key, ring):
                     continue
-            if not solved_only and self.__dict__.get("profile_retry"):
+            if not solved_only and retry and self.__dict__.get("profile_retry"):
                 self._retry_due(key)    # (P3c: a short profile's chain asked again when due; Codex review of P3c)
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
@@ -9314,7 +9405,10 @@ class BridgeProfiles:
         if roadshape.DECKS and self.STRUCTURES:
             shapes = roadshape.shape_chain(comp, pool, zs, ground,
                                            lambda k: (k in keep or (own is not None and k == key))
-                                           and self._deck_simple(k, pool))
+                                           and self._deck_simple(k, pool),
+                                           hw_of=self.__dict__.get("_ghw"),
+                                           water=self._waterways(comp, pool) if roadshape.SKEW_627 else (),
+                                           frame=self.frame)
         shaped = {k: ((v[0], _shaped_line(shapes[k]["xy"], shapes[k], len(v[1])), shapes[k]["z"], v[3]) if k in shapes
                       else v) for k, v in keep.items()}
         if own is not None and key in shapes:
@@ -9361,6 +9455,39 @@ class BridgeProfiles:
                     shaped[k] = (v[0], xy, z.view(_SurfaceHeights) if roadshape.SURFACE_PROFILE else z, v[3])
         elif roadshape.SURFACE_PROFILE and reqs is not None and keep and not getattr(self, "PROFILE_OFF", False):
             roadshape.profile_skipped("window" if block is not None else "partial chain")
+        # (BNE_ROADSYS=heights, the road rewrite's M2: a whole chain's decks at the one profile per carriageway, solved
+        # here from its read list (roadsys.chain_heights: the vertical components holding its decks), in place of
+        # deck_profile + _tie_beside; its components' ground runs go to the plans' second stage as terrain targets
+        # (grading.PROFILE_PINS), as P3b's pins do. A deck on no structure stroke: today's heights, the chain's every part)
+        if (roadsys.HEIGHTS and prof is None and self.STRUCTURES and block is None and comp and len(keep) == len(comp)
+                and not getattr(self, "PROFILE_OFF", False)):
+            n0 = short.n
+            try:
+                prof = roadsys.chain_heights(self, list(comp), {k: shaped[k] for k in comp})
+                prof_short = short.n > n0
+            except Exception as ex:
+                prof_short = True
+                with roadsys._memo_lock:
+                    roadsys.STATS["error"] += 1
+                log.debug("chain %s: roadsys heights: %s: %s", key, type(ex).__name__, ex)
+                import revisit
+                revisit.fault(here=True)        # (today's heights here, the profile's elsewhere: not kept)
+                prof = None
+            if prof is not None and any(k not in prof["deck_z"] or len(prof["deck_z"][k]) != len(shaped[k][1])
+                                        or not np.isfinite(prof["deck_z"][k]).all() for k in comp):
+                prof = None
+            if prof is not None:
+                dd = self.__dict__.setdefault("depth", {})
+                kk = self.__dict__.setdefault("kept", {})
+                for k in comp:
+                    v = shaped[k]
+                    shaped[k] = (v[0], v[1], np.asarray(prof["deck_z"][k], np.float64), v[3])
+                    # (M3: drawn with the depth its floors were solved with: its structure's, roadsys._deck_depth)
+                    if prof.get("depth", {}).get(k) is not None:
+                        dd[k] = float(prof["depth"][k])
+                    # (M5 round 8: the ends the chain kept at its profile's heights, their approaches' ramps:
+                    # roadsys._keep_ends, read by roadsys.pins_near through ChainView.kept_of_part)
+                    kk[k] = tuple(prof.get("kept", {}).get(k, ()))
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read
@@ -9582,6 +9709,59 @@ class BridgeProfiles:
                         out.append(np.stack([e, n], axis=1))
         return out
 
+    def _waterways(self, comp, pool):
+        """[((fid, "w"), [xy (k, 2)], half width m)] of the mapped waterways (OSM waterway=river / stream / canal /
+        drain, not in a tunnel or culvert: roadshape.WATERWAYS) in the cells within roadshape.NEAR_M of the chain's
+        decks, this frame (roadshape's skew: the line a deck end may be the abutment of). Each cell's read once; a cell
+        that cannot be read: none from it, the build not kept (revisit.fault)."""
+        if self.water_fn is None or not comp:
+            return []
+        import genground
+        import revisit
+        pts = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in comp])
+        lo, hi = pts.min(0) - roadshape.NEAR_M, pts.max(0) + roadshape.NEAR_M
+        la, lon, _ = self.frame.enu_to_geodetic(np.array([lo[0], hi[0]]), np.array([lo[1], hi[1]]), np.zeros(2))
+        keys = mapcells.cells_for_bbox(float(la.min()), float(lon.min()), float(la.max()), float(lon.max()))
+        memo = self.__dict__.setdefault("_wlines", {})
+        out = []
+        for key in sorted(keys, key=str):
+            with self.lock:
+                got = memo.get(str(key))
+            if got is None:
+                got = []
+                try:
+                    with revisit.scope() as read:
+                        f = self.water_fn(key)
+                        if f is not None and len(f):
+                            xy = None
+                            for i in np.flatnonzero(np.asarray(f.kind) == 2):
+                                tags = genground._tags(f, i)
+                                if tags.get("tunnel") or str(tags.get("location") or "") == "underground":
+                                    continue
+                                way = str(tags.get("waterway") or genground._attr(f, "class", i) or "")
+                                if way not in roadshape.WATERWAYS:
+                                    continue
+                                w = genground._width(tags.get("width"))
+                                hw = w / 2 if w else genground.WATERWAY_HALF.get(way, 1.5)
+                                if xy is None:
+                                    xy = f.xy_in(self.frame)
+                                rings = [np.asarray(r, np.float64)[:, :2] for part in f.parts(i, xy) for r in part
+                                         if len(r) >= 2]
+                                if rings:
+                                    got.append(((str(f.ids[i]), "w"), rings, float(hw)))
+                    if read.complete:
+                        with self.lock:
+                            memo[str(key)] = got
+                except Exception as ex:     # (no waterways from it rather than no deck: not kept)
+                    log.debug("waterways: %s: %s", type(ex).__name__, ex)
+                    revisit.fault()
+                    got = []
+            for k, rings, hw in got:
+                keep = [r for r in rings if not ((r.max(0) < lo).any() or (r.min(0) > hi).any())]
+                if keep:
+                    out.append((k, keep, hw))
+        return out
+
     def _structure(self, chain, infra_out=None):
         """The truss beams of a solved chain [(xy, z, width)] and the piers under its ends (bridgetypes); ([], []) for a
         plain deck. infra_out (a list): the infrastructure Features read are added to it (structures.shadow's bridge
@@ -9790,6 +9970,8 @@ class TunnelProfiles(BridgeProfiles):
         self._pins = {}             # part id -> (start, end) geodetic floor heights of its ends inside the hill
                                     # (_chain_pins; NaN at a portal)
         self._subsea = set()        # part ids whose underwater profile was solved successfully
+        self.holes = {}             # (T1, BNE_ROADSYS_TUNNELS) sub-part fid -> its holes' reach in from its start / end
+                                    # portal (the road system's record, tunnelrec.py; 0: no portal there)
 
     def _raw_ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -9803,8 +9985,7 @@ class TunnelProfiles(BridgeProfiles):
         blocks and the grading each ask for a network from their own cell, and solved it with whatever cells that had
         brought: I-395's ramps under Washington pinned to different joints by the tunnel store and the grading, a 1.4 m
         step in the ground between them (2026-11-12)."""
-        while True:
-            comp = super()._resolve(start, pool, ground, loaded)
+        def end_cells(comp):
             cells = {}
             for k in comp:
                 xy = np.asarray(pool[k][1], np.float64)
@@ -9812,6 +9993,21 @@ class TunnelProfiles(BridgeProfiles):
                 for la_, lo_ in zip(np.asarray(la), np.asarray(lo)):
                     ck = mapcells.cell_of(float(la_), float(lo_))
                     cells.setdefault(str(ck), ck)
+            return cells
+
+        while True:
+            comp = super()._resolve(start, pool, ground, loaded)
+            # the parts as the network's own cells give them (each part's home copy, _canon_pool), whichever cell the
+            # asker loaded first: copies of one part from different cells differ (each cell's tile quantises them, up
+            # to 0.33 m on I-395), and Wacker Drive's network, asked from two cells by two threads, was solved from
+            # different copies and published by whichever finished first (two builds' tunnel meshes 1.5e-5 m apart,
+            # 2026-11-25). Until its cells settle (a copy's ends can lie in other cells).
+            cells = end_cells(comp)
+            for _ in range(4):
+                if not self._canon_pool(pool, [c for c in cells if c in loaded]):
+                    break
+                comp = BridgeProfiles._resolve(self, start, pool, ground, loaded, grow=False)
+                cells = end_cells(comp)
             new = [cells[c] for c in sorted(cells) if c not in loaded]
             if not new or len(loaded) >= CHAIN_CELLS:
                 break
@@ -9831,6 +10027,34 @@ class TunnelProfiles(BridgeProfiles):
         self._tls.read = frozenset(loaded)
         return comp
 
+    def _canon_pool(self, pool, cells):
+        """pool again from these cells (keys): each part's home copy (the copy of the cell its start lies in), else
+        the longest line, then the most map vertices, then the first cell's in key order; a part none of them gives
+        is kept as it was. True when a part changed."""
+        old = dict(pool)
+        pool.clear()
+        best = {}
+        for c in sorted(cells):
+            z, x, y = (int(v) for v in c.split("/"))
+            for k, v in self._cell_entries(mapcells.CellKey(z, x, y))[0]:
+                xy = np.asarray(v[1], np.float64)
+                # (the home copy: the cell's own copy of a part that starts in it, as roads.home_copy takes a feature's;
+                # then the longest line, in mm; then the most map vertices; then the first cell's)
+                la, lo, _ = self.frame.enu_to_geodetic(xy[:1, 0], xy[:1, 1], 0.0)
+                home = str(mapcells.cell_of(float(np.asarray(la)[0]), float(np.asarray(lo)[0]))) == c
+                rank = (home, int(round(math.fsum(dnp.hypot(*np.diff(xy[:, :2], axis=0).T).tolist()) * 1000.0))
+                        if len(xy) > 1 else 0, v[4])
+                got = best.get(k)
+                if got is None or rank > got[0]:
+                    best[k] = (rank, v)
+        for k in sorted(best, key=str):
+            pool[k] = best[k][1]
+        for k in sorted(set(old) - set(pool), key=str):
+            pool[k] = old[k]
+        def same(a, b):
+            return a is b or (a is not None and a[4] == b[4] and a[0] == b[0] and np.array_equal(a[1], b[1]))
+        return not all(same(old.get(k), v) for k, v in pool.items())
+
     @staticmethod
     def _part_id(key):
         # one feature can come as several parts (clipped differently in the map cells around: 97th Street's arch as
@@ -9845,7 +10069,9 @@ class TunnelProfiles(BridgeProfiles):
         if staged is None:
             return
         pid = self._part_id(k)
-        secs, subs, underwater = staged
+        secs, subs, underwater = staged[:3]
+        for n, h in (staged[3] if len(staged) > 3 else {}).items():
+            self.holes[f"{pid}#{n}"] = h
         if underwater:
             self._subsea.add(pid)
         self.sections[pid] = secs
@@ -9868,6 +10094,13 @@ class TunnelProfiles(BridgeProfiles):
         bank was built, an open trench across the avenue with its mouth at the river; GitHub #128)."""
         if self.wet is None:
             return
+        wet = self._chain_wet(comp, pool)
+        with self.lock:
+            for k in comp:
+                self._drowned[self._part_id(k)] = wet
+
+    def _chain_wet(self, comp, pool):
+        """_mark_drowned's test (pure, nothing marked): is a part of the chain comp under water?"""
         wet = False
         gfn = self._raw_ground if self.raw is not None else self._ground
         low = None                      # (the lowest ground at the parts' ends: the lower portal's)
@@ -9891,9 +10124,7 @@ class TunnelProfiles(BridgeProfiles):
             if w.mean() > TUNNEL_WET_SHARE or wet_run_inside(xy, w) >= TUNNEL_WET_RUN_M:
                 wet = True
                 break
-        with self.lock:
-            for k in comp:
-                self._drowned[self._part_id(k)] = wet
+        return wet
 
     def drowned(self, key, ring):
         """Is tunnel part key (fid, j) (ring: its lon/lat points) in a chain with a part under water
@@ -9915,6 +10146,35 @@ class TunnelProfiles(BridgeProfiles):
         self._mark_drowned(self._resolve(key, pool, ground, loaded), pool)
         with self.lock:
             return bool(self._drowned.get(pid))
+
+    def feature_drowned(self, feat, lat, lon):
+        """(T1, BNE_ROADSYS_TUNNELS) Is a tunnel part of the road system's map feature feat (roadsys.feature) in the
+        cell of (lat, lon) in a chain under water (drowned: left on this store's solve until T3)? The grading takes the
+        profile squares' terrain targets round such a tunnel as they were without the record (roadsys.pins_near
+        legacy): the record's portal digs are for the floors it builds."""
+        import roadsys
+        if self.wet is None:
+            return False
+        ck = mapcells.cell_of(float(lat), float(lon))
+        mk = (feat, str(ck))
+        with self.lock:
+            got = self.__dict__.setdefault("_feat_wet", {}).get(mk)
+        if got is not None:
+            return got
+        pool, ground = {}, {}
+        self._load(ck, pool, ground)
+        wet = False
+        for key in sorted(pool, key=str):
+            if roadsys.feature(key[0]) != feat or len(pool[key][1]) < 2:
+                continue
+            # (the chain's own test, pure: never the parts' marks, which a solve's underwater membership rewrites)
+            comp = self._resolve(key, pool, ground, {str(ck)})
+            if self._chain_wet(comp, pool):
+                wet = True
+                break
+        with self.lock:
+            self._feat_wet[mk] = wet
+        return wet
 
     def _chain_pins(self, comp, pool, ground):
         """{key: (start, end)}: the floor height (this frame's z, NaN at a portal) at each end of the chain comp's parts
@@ -10096,6 +10356,28 @@ class TunnelProfiles(BridgeProfiles):
         gfn = self._raw_ground if self.raw is not None else self._ground
         out = []
         self._tls.staged = {}           # (committed by parts() right after, the rest dropped with the next solve)
+        if roadsys.TUNNELS:
+            # (T1, BNE_ROADSYS_TUNNELS: the road system's record decides the floor, sections, portals and holes of a dry
+            # network; one under water stays on this solve until T3)
+            import tunnelrec
+            if any(self._drowned.get(self._part_id(k)) for k in comp):
+                tunnelrec._count("wet")
+            else:
+                rec = tunnelrec.solve(self, comp, pool, ground)
+                if rec is not None:
+                    for k in comp:
+                        got = rec.get(k)
+                        if got is None:
+                            out.append(np.full(len(pool[k][1]), np.nan))
+                            continue
+                        floor, secs, subs, holes = got
+                        xy = np.asarray(pool[k][1], np.float64)
+                        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy[:, :2], axis=0).T))]
+                        floor = self._observed_floor(k, pool, xy, s, floor, secs, (False, False))
+                        self._tls.staged[k] = (secs, subs, False, holes)
+                        out.append(floor)
+                    return out
+                tunnelrec._count("fallback")
         underwater_floors = {}
         if any(self._drowned.get(self._part_id(k)) for k in comp):
             import subsea
@@ -10463,6 +10745,7 @@ class TunnelProfiles(BridgeProfiles):
         def mine(d):
             return {k: v for k, v in d.items() if str(k).split("#")[0] in pids}
         return {"sections": mine(self.sections), "heights": mine(self.heights), "ups": mine(self.ups),
+                "holes": mine(self.holes),
                 "caps": mine(self.caps), "mouths": mine(self.mouths), "open": {o for o in self.open
                                                                                if o.split("#")[0] in pids},
                 "drowned": {k: v for k, v in self._drowned.items() if k in pids},
@@ -10471,8 +10754,8 @@ class TunnelProfiles(BridgeProfiles):
     def _adopt_take(self, extra):
         if not extra:
             return
-        for name in ("sections", "heights", "ups", "caps", "mouths"):
-            for k, v in extra[name].items():
+        for name in ("sections", "heights", "ups", "caps", "mouths", "holes"):
+            for k, v in extra.get(name, {}).items():
                 getattr(self, name).setdefault(k, v)
         self.open.update(extra["open"])
         self._subsea.update(extra.get("subsea", ()))
@@ -10612,8 +10895,8 @@ class ChainView:
 
     mapper = staticmethod(lambda src, dst: _Mapper(src, dst))
 
-    def __getattr__(self, name):        # wet, infra_fn, raw, ends: the stores' settings (setup)
-        if name in ("wet", "infra_fn", "raw", "ends"):
+    def __getattr__(self, name):        # wet, infra_fn, water_fn, raw, ends: the stores' settings (setup)
+        if name in ("wet", "infra_fn", "water_fn", "raw", "ends"):
             st = list(self.cs.stores.values())
             return getattr(st[0], name, None) if st else None
         raise AttributeError(name)
@@ -10685,6 +10968,56 @@ class ChainView:
     def parts_with_ids(self, cells_feats, box):
         """Bridge parts with their stable (fid, part index), including when tiles ask for different spans."""
         return self._parts(cells_feats, box, part_ids=True)
+
+    def parts_published(self, cells_feats, box):
+        """parts_with_ids, a part published short taken as it is (BridgeProfiles.parts_todo retry=False: its reader is
+        short, never kept; the chain solved again only for the readers that keep what they build: the under-deck
+        ceiling's boxes asked a short chain again every PROFILE_RETRY_S, M5 r5)."""
+        return self._parts(cells_feats, box, part_ids=True, retry=False)
+
+    def parts_published_short(self, cells_feats, box, max_m):
+        """parts_published of the parts of max_m or less alone (their mapped line's length): only their chains solved
+        (roadsys._kept_near: a deck end kept at its profile is one of a short chain's, so the ramps never ask the long
+        viaducts' chains solved; asking every chain near each grading query cost the wide corpus +15 % CPU, railramp
+        +51 %)."""
+        x0, y0, x1, y1 = box
+        by = {}
+        for feats in cells_feats:
+            if feats is None or len(feats) == 0:
+                continue
+            bs = self.specs_of(feats)
+            cand = []
+            for i in range(len(feats)):
+                if bs[i] is None:
+                    continue
+                fid = str(feats.ids[i])
+                for j, ring in _keyed(self.keys_of, self.parts_of, feats, i):
+                    ll = np.asarray(ring, np.float64)
+                    if len(ll) < 2:
+                        continue
+                    c = dmath.cos(math.radians(float(ll[0, 1])))
+                    seg = dnp.hypot(np.diff(ll[:, 0]) * c, np.diff(ll[:, 1])) * 111320.0
+                    if float(np.sum(seg)) <= max_m:
+                        cand.append((fid, j, ring, i))
+            if not cand:
+                continue
+            bb = mapgeom.enu_bounds(feats, self.frame, [c[2] for c in cand]).tolist()
+            for (fid, j, ring, i), (emin, emax, nmin, nmax) in zip(cand, bb):
+                if emax < x0 - NEAR_M or emin > x1 + NEAR_M or nmax < y0 - NEAR_M or nmin > y1 + NEAR_M:
+                    continue
+                st = self.cs.store_at(float(ring[0][1]), float(ring[0][0]))
+                todo = by.setdefault(st.region, (st, []))[1]
+                if all(t[0] != (fid, j) for t in todo):
+                    todo.append(((fid, j), feats, i))
+        out = []
+        for _r, (st, todo) in sorted(by.items()):
+            if self.prefer is not None:
+                pst = self.prefer.store(st.region)
+                solved = [t for t in todo if pst._has(t[0])]
+                out += self._map(pst, pst.parts_todo(solved, solved_only=True, part_ids=True, retry=False))
+                todo = [t for t in todo if t not in solved]
+            out += self._map(st, st.parts_todo(todo, part_ids=True, retry=False))
+        return out
 
     def parts_shaped(self, cells_feats, box):
         """parts() with each part's shape (roadshape, BNE_ROADSHAPE=decks; None without one) as a sixth field, from
@@ -10776,6 +11109,25 @@ class ChainView:
                 out.extend(st.__dict__.get("profiles", {}).values())
         return out
 
+    def depth_of_part(self, key):
+        """(M5) m of structure under part key's road as its chain's solve gave it (None: not solved here)."""
+        for st in self._stores():
+            with st.lock:
+                d = st.__dict__.get("depth", {}).get(key)
+            if d is not None:
+                return float(d)
+        return None
+
+    def kept_of_part(self, key):
+        """(M5 round 8) The ends part key's chain solve kept at its profile's heights: ((end, ramp line [(lat, lon)], its
+        arc m, dz at its read point, ramp m, half width), ...) (roadsys._keep_ends); () when none or not solved here."""
+        for st in self._stores():
+            with st.lock:
+                got = st.__dict__.get("kept", {}).get(key)
+            if got is not None:
+                return got
+        return ()
+
     def depth_of(self, fid):
         ds = []
         for st in self._stores():
@@ -10798,6 +11150,7 @@ class ChainView:
 
     heights = property(lambda self: self._merged("heights"))
     mouths = property(lambda self: self._merged("mouths"))
+    holes = property(lambda self: self._merged("holes"))
 
     def _sub(self, method, fid, default):
         for st in self._stores():
@@ -10948,7 +11301,22 @@ def tunnel_floor_at(parts, x, y):
 
 def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     """arch_raise for ground heights at the points (la, lo) of a block in the anchor-frame box (x0, y0, x1, y1),
-    the tunnels from the map cells under it. z as it was when the cells are not at hand."""
+    the tunnels from the map cells under it. z as it was when the cells are not at hand. BNE_ROADSYS=structures: then
+    the ground under the decks' ground ends lowered (roadsys.handover_drop: every evaluator of the physics ground is
+    one of this function's callers, so the blocks, the skins and the decks' hand-over agree node for node);
+    BNE_ROADSYS=surface: and nowhere over a deck's soffit less 0.3 m (roadsys.ground_cut)."""
+    z = _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box)
+    if roadsys.STRUCTURES:
+        try:
+            z = roadsys.ground_cut(frame, cell_fn, la, lo, z, box)
+        except Exception as ex:     # no drop rather than no ground (nothing built with it kept)
+            (log.debug if isinstance(ex, OSError) else log.warning)("deck ends' hand-over: %s: %s", type(ex).__name__, ex)
+            import revisit
+            revisit.fault()
+    return z
+
+
+def _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     try:
         x0, y0, x1, y1 = box
         cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1]), np.array([y0, y1]), np.zeros(2))
@@ -11003,7 +11371,19 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square, rail_parts
     if not parts and not rail:
         return None
     mask = None
-    if parts:
+    if parts and roadsys.TUNNELS:
+        # (T1: the record's sections cut by its hole rule, only where a tube enters a hill; the legacy rule for the rest)
+        import tunnelrec
+        half_ = u.shape[0] * square / 2
+        mask = np.zeros(u.shape, bool)
+        rest = tunnelrec.holes(mask, u, cx - half_, cy - half_, square, parts, getattr(tunnels, "heights", None),
+                               getattr(tunnels, "holes", {}) or {})
+        if rest:
+            mask |= tunnel_hole_mask(rest, u, cx, cy, square, getattr(tunnels, "heights", None),
+                                     getattr(tunnels, "mouths", None))
+        if mask.any():
+            mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
+    elif parts:
         mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
                                 getattr(tunnels, "mouths", None))
         if mask is not None and mask.any():
@@ -11280,13 +11660,14 @@ class _Segs:
         self.lo = np.minimum(self.a, self.b)
         self.hi = np.maximum(self.a, self.b)
 
-    def near(self, pts, gap, skip=None):
-        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). Pure."""
+    def near(self, pts, gap, skip=None, bounds=None):
+        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). bounds: the points'
+        (min, max) per axis when the caller has them (the same values pts.min(0), pts.max(0) give). Pure."""
         import fast
         pts = np.ascontiguousarray(np.asarray(pts, np.float64))
         if not len(pts) or not len(self.h):
             return np.zeros(len(pts), bool)
-        lo, hi = pts.min(0), pts.max(0)
+        lo, hi = (pts.min(0), pts.max(0)) if bounds is None else bounds
         r = self.h + gap
         keep = (self.hi[:, 0] + r >= lo[0]) & (self.hi[:, 1] + r >= lo[1]) & (self.lo[:, 0] - r <= hi[0]) & \
             (self.lo[:, 1] - r <= hi[1])
@@ -11300,11 +11681,11 @@ class _Segs:
                                                         np.ascontiguousarray(r[keep])), bool)
 
 
-def _on_carriageways(pts, others, gap):
+def _on_carriageways(pts, others, gap, bounds=None):
     """Which points (k, 2) lie on a carriageway of others {fid: (centreline (m, 2), half width)} or a _Segs of them
-    (+ gap). Pure."""
+    (+ gap). bounds: the points' (min, max) when the caller has them (_Segs.near). Pure."""
     segs = others if isinstance(others, _Segs) else _Segs(others)
-    return segs.near(pts, gap)
+    return segs.near(pts, gap, bounds=bounds)
 
 
 def _clear_depth(base, out, depth, others, own):
@@ -11913,10 +12294,12 @@ def _line_near(xy, other):
     return out_d, out_q
 
 
-def twin_tunnels(parts):
+def twin_tunnels(parts, rec=None):
     """Pairs of tunnel parts ([(fid, spec, xy, z, lon)]) side by side: [(i, j, midline (k, 3), width)] with i < j their
     indices, the midline along part i (each point halfway to j's line, the floors' mean) and the width of a road
-    surface covering both carriageways (the tube round both: roadmesh.tunnel). Each part in one pair at most. Pure."""
+    surface covering both carriageways (the tube round both: roadmesh.tunnel). Each part in one pair at most. rec (T1):
+    the fids of the road system's record (TunnelProfiles.holes); a pair of two of them is paired by the record's rule.
+    Pure."""
     import roadmesh
     taken, out = set(), []
     for i, (fa, sa, xa, za, _) in enumerate(parts):
@@ -11946,6 +12329,15 @@ def twin_tunnels(parts):
             if near.mean() < TWIN_SHARE:
                 continue
             tb = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xb, axis=0).T))]
+            if roadsys.TUNNELS and rec is not None and fa in rec and fb in rec:
+                # (T1: and b beside a for that share of b's length too (two parts of the record; a network left on the
+                # old solve, under water, paired as before: Tromsoysund's twin bores lost their floor at the mouth): the tube round both runs along a only, and a
+                # short section of one carriageway paired with the other's long one left the long one without a tube
+                # (Moscow's Garden Ring, its twin floors held together by the record))
+                sb_ = np.linspace(0.0, tb[-1], max(2, int(tb[-1] / TWIN_STEP_M) + 1))
+                Pb = np.c_[dnp.interp(sb_, tb, xb[:, 0]), dnp.interp(sb_, tb, xb[:, 1])]
+                if (_line_near(Pb, xa)[0] < reach).mean() < TWIN_SHARE:
+                    continue
             _, qb = _line_near(q, xb)           # (q on xb: its floor by the arc to it)
             sb_at = np.array([tb[k] + dnp.hypot(*(qb[n] - xb[k])) for n, k in enumerate(
                 [int(np.argmin(dnp.hypot(*(xb[:-1] - p).T) + dnp.hypot(*(xb[1:] - p).T))) for p in qb])])
@@ -11986,19 +12378,23 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                             out.append(_chunk(look, w, c))
     parts = [p for p in tunnels.parts(cells, exact) if np.isfinite(p[3]).all()]
     layouts = rampmerges.plans([(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in parts])
-    twins = twin_tunnels(parts)
+    # (T1: the sub-parts the road system's record built (its holes): their cover meets the ground, portals.cover; a
+    # network on the legacy solve keeps its cover as before)
+    rec = set(getattr(tunnels, "holes", None) or ()) if roadsys.TUNNELS else set()
+    twins = twin_tunnels(parts, rec)
     twinned = {k for i, j, _, _ in twins for k in (i, j)}
     jobs = []                                   # (fid, its ends, [(look, width, line)])
     for i, j, mid, width in twins:              # the tube round both, with the first's portals
         if len(mid) >= 2:
-            jobs.append((parts[i][0], (mid[0, :2], mid[-1, :2]), [({**TUNNEL, "tunnel": True, "tube_only": True}, width, mid)],
-                         parts[i][1]))
+            jobs.append((parts[i][0], (mid[0, :2], mid[-1, :2]),
+                         [({**TUNNEL, "tunnel": True, "tube_only": True, "rec": parts[i][0] in rec}, width, mid)], parts[i][1]))
     for n, (fid, spec, xy, z, lon) in enumerate(parts):
         pts = np.c_[xy, z]
         # A covered road needs its own colliding floor even when its mapped surface normally belongs to the
         # terrain paint (rock/grass). That paint lies on the hill/seabed above the bore, never inside it.
         look = _deck_look(spec)
-        lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
+        lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned, "rec": fid in rec},
+                                          spec.width, pts)]
         for look, w, line in rampmerges.trim(fid, extras(spec, pts, lon, defer_dashes=True), layouts):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))
@@ -12032,7 +12428,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                             ch["tunnel_len"] = round(length, 1)             # (the whole sub-part's: sound_boxes)
                             if spec.cls in CONCRETE_WALL_CLASSES:
                                 ch["concrete"] = True   # (a major road's low arch: concrete, as its cutting's walls)
-                            for flag in ("no_tube", "tube_only"):
+                            for flag in ("no_tube", "tube_only", "rec"):
                                 if look.get(flag):
                                     ch[flag] = True
                             if getattr(tunnels, "height", None) is not None:
@@ -13618,6 +14014,32 @@ def _reach_tag(ch, line, st):
                  "f": sub[:, 3].astype(np.int64).tolist()}
 
 
+RS_SKEW_MATCH_M = 1.5     # m a ground road chunk's end may lie off a skewed deck end (roadsys deck.rs SKEW_MATCH_M)
+
+
+def _rs_skew_ground_ends(chunks, skews):
+    """(BNE_ROADSYS=surface, 627) Each ground road chunk whose end lies at a skewed deck end (roadsys.tile_skews) takes
+    its end line ("rs_sk0" / "rs_sk1": unit, to the chunk's left there; roadmesh.ribbon_pairs cuts the ribbon along
+    it), so the asphalt meets the deck's skewed end row. In place."""
+    pts = np.asarray([s[:2] for s in skews], np.float64)
+    dirs = np.asarray([s[2:] for s in skews], np.float64)
+    for c in chunks:
+        if c.get("deck") or c.get("tunnel") or c.get("rs_face") or c.get("rs_mark") or c.get("fixed"):
+            continue
+        n = np.asarray(c.get("n"), np.float64)
+        if n.ndim != 2 or len(n) < 2:
+            continue
+        for e, at, nxt in ((0, 0, 1), (1, -1, -2)):
+            d2 = dnp.hypot(pts[:, 0] - n[at, 0], pts[:, 1] - n[at, 1])
+            j = int(np.argmin(d2))
+            if float(d2[j]) > RS_SKEW_MATCH_M:
+                continue
+            t = n[at, :2] - n[nxt, :2] if e == 1 else n[nxt, :2] - n[at, :2]
+            left = np.array([-t[1], t[0]])
+            d = dirs[j] if float(dirs[j][0]) * float(left[0]) + float(dirs[j][1]) * float(left[1]) >= 0.0 else -dirs[j]
+            c[f"rs_sk{e}"] = [round(float(d[0]), 6), round(float(d[1]), 6)]
+
+
 def _deck_clearance(ch):
     """A generated deck chunk's (points, half-width per segment, slab-plus-girder depth) for RoadClearance."""
     half = np.asarray(ch.get("ws", ch["w"]), np.float64) / 2
@@ -13865,7 +14287,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, v3=None, lamp_coverage=None):
+               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, v3=None,
+               drive=None, lamp_coverage=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -14073,9 +14496,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         return (expanded_walk, deck_shift_fn(frame, source_cells, urban_fn, widths, left_hand),
                 deck_width_fn(frame, source_cells))
 
+    bridge_out = []                             # (BNE_ROADSYS=surface: today's deck chunks its faces stand in for)
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, deck_walk, deck_shift, deck_width,
                              bridge_context, context_m=context_m if traffic_context else None,
                              left_hand=left_hand, country=country, sheet_marks=sheet_marks, surface=v3 if v3_on else None):
+        bridge_out.append(ch)
         if ch.get("deck"):
             decks_near.append(ch)
             traffic_decks.append(_deck_clearance(ch))
@@ -14083,6 +14508,20 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             chunks.append(ch)
         elif deck_context is not None:          # the decks around the tile (roadmesh.deck's parapet test)
             deck_context.append(ch)
+    if roadsys.SURFACE and bridges is not None and bridge_out:
+        # (M4: the decks drawn from the road system's own faces; today's deck chunks of those features stay for the
+        # tile's other users, drawn by neither the road mesh nor the deck mesh)
+        got = roadsys.deck_faces(frame, (x0, y0, x1, y1), bridges, cells, country)
+        if got is not None:
+            face_chunks, covered = got
+            for ch in bridge_out:
+                f = ch.get("fid")
+                if (f is not None and roadsys.feature(f) in covered) or (f is None and not ch.get("tunnel")):
+                    ch["rs_hide"] = True
+            skews = face_chunks[0].get("rs_skews") if face_chunks else None
+            if skews:
+                _rs_skew_ground_ends(chunks, skews)
+            chunks.extend(face_chunks)
     if tunnels is not None:                     # TunnelProfiles: road surfaces and lines through tunnels
         tch = _tunnel_chunks(tunnels, cells, (x0, y0, x1, y1), terrain_paint)
         chunks.extend(tch)
@@ -14179,6 +14618,13 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         crosswalks, jlines, jramps, teeth, zebras = designs.junction_paint(
             de_ctl, roads, de_ctx, crosswalks, jlines, jramps, nodes, signals, left_hand)
     elif walks is not None and str(country or "").upper() != "SE":
+        if drive is not None and drive.get("marks") is not None:
+            # BNE_NODE_MARKINGS: the map's zebras, stop and give-way nodes painted (drivefeat.mapped_marks)
+            import drivefeat as _df
+            crosswalks, mteeth, jlines, mz = _df.mapped_marks(roads, drive["marks"], crosswalks, jlines, signals,
+                                                              country, left_hand)
+            teeth = teeth + mteeth
+            zebras = zebras + [(np.array([cw["a"], cw["b"]])[:, :2], cw["w"] / 2) for cw in mz]
         # every other country: a give-way line across each roundabout entry (roundabouts.entry_marks)
         import roundabouts as _rb
         rb_marks, rb_cuts = _rb.entry_marks(roads, signals, country, priority, crosswalks, left_hand)
@@ -14228,6 +14674,18 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if fill is not None and _box_meets(fill[0], wexact):
                 walks.append({"disc": {"ring": fill[0], "apex": fill[1], "mat": fill[2], "h": fill[3], "dome": fill[4]},
                               "fid": "island"})
+    if walks is not None and drive is not None and drive.get("nodes"):
+        # BNE_CALMING: the mapped islands, chokers and chicanes as kerbed islands (drivefeat.tile_kerbs)
+        import drivefeat as _df
+        for out_ in _df.tile_kerbs(roads, drive["nodes"]):
+            mid_ = offset_polyline(np.vstack([out_[-1:], out_, out_[:2]]), roundabouts.SPLIT_CURB_W / 2)[1:-1]
+            band_ = simplify(np.vstack([mid_, mid_[:1]]), tol=0.05)
+            for piece in clip_polyline(band_, *wexact):
+                run = densify(piece, spacing=2.0)
+                if len(run) >= 2:
+                    walks.append({"pts": run, "side": 1, "caps": (False, False), "ramps": [],
+                                  "w": roundabouts.SPLIT_CURB_W, "fid": "splitter", "h": roundabouts.SPLIT_CURB_H,
+                                  "brick": True, "mat": 7})
     if walks is not None and nodes is not None and isl:        # splitter islands where the map has a refuge (roundabouts.splitters)
         for sp_ in roundabouts.splitters(roads, nodes.get("islands")):
             out_ = sp_["outline"]
@@ -14298,6 +14756,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 chunks.append({"m": markings.ARROW_MATERIAL, "w": 0.0, "tl": 4.0, "p": CENTRE["p"], "layer": "mark",
                                "poly": [[round(float(v), 3) for v in q] for q in corners],
                                "uvq": uv.tolist(), "n": []})
+    if drive is not None and drive.get("nodes"):    # (the mapped humps' triangles, mini roundabouts: drivefeat)
+        import drivefeat as _df
+        teeth = teeth + _df.tile_teeth(roads, drive["nodes"], country, left_hand)
+    if drive is not None and drive.get("infra"):    # (the mapped cattle grids across their roads: drivefeat)
+        import drivefeat as _df
+        for ch in _df.cattle_grid_chunks(drive["infra"], roads, wexact):
+            if skin_own(*np.asarray(ch["poly"], np.float64)[:, :2].mean(0)):
+                chunks.append(ch)
     for tri in teeth:
         if skin_own(*tri[:2].mean(0)[:2]):
             chunks.append(mark_poly(tri))
@@ -14522,6 +14988,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         chunks.extend(roadwear.tile_chunks(
             roads, seen, (min(box[0], wexact[0]), min(box[1], wexact[1]), max(box[2], wexact[2]), max(box[3], wexact[3])),
             roadwear.tier_of(wear), aisles=lot_aisles, skip=jinternal, leaves=leaves,
+            exclude=lambda a, b: ((a, b) in straight or rampmerges.related(a, b, merge_layouts)
+                                  or rampmerges.continuation(a, spec_of[a], b, spec_of[b], paint_joins))))
+    if roads:                                   # puddles (roadwear.puddle_chunks): a mesh of the skin's own, drawn wet
+        import roadwear
+        spec_of = {f: sp for f, sp, _, _ in roads}
+        chunks.extend(roadwear.puddle_chunks(
+            roads, seen, (min(box[0], wexact[0]), min(box[1], wexact[1]), max(box[2], wexact[2]), max(box[3], wexact[3])),
+            has_sidewalks, skip=jinternal,
             exclude=lambda a, b: ((a, b) in straight or rampmerges.related(a, b, merge_layouts)
                                   or rampmerges.continuation(a, spec_of[a], b, spec_of[b], paint_joins))))
     if walks is not None:
@@ -14989,7 +15463,7 @@ class Tracker:
         def stuck():
             # a build that never ends leaves the loading line at "roads & buildings 0/36" with nothing in the log (GitHub
             # #241, a Discord report): said once per tile, with how many are in flight
-            for k in self.building:
+            for k in list(self.building):    # (a snapshot: a tile's done callback or a start can change it meanwhile)
                 t0 = self.started.get(k)
                 if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
                     self.stuck_said.add(k)
@@ -15131,6 +15605,18 @@ class GeoTracker:
         self.redo = set()       # (gx, gy) sent, to be asked for again (redo_all): sent again only where they changed
         self.swap, self.swap_held, self.swap_staged = None, [], 0      # (swap_begin)
         self.skin_h = {}        # (gx, gy) -> the digest of the skin sent (blockworker._geo_skin's "h")
+        self.skin_gen = 0       # (reskin) bumped when every skin is due again: a skin started before is not counted
+        self.reskinning = set()     # (gx, gy) whose skin reskin asked for again: done for progress() meanwhile
+
+    def reskin(self):
+        """The skins' inputs changed, not the content (earthd Server.snow_roads_changed: the road skins' winter part):
+        every skin sent is built and sent again, nearest first as any tile; the content (buildings, bridges, props,
+        season-free) stays as the mod has it, and the mod swaps a skin in place, its old parts kept until the new ones
+        are made (roads.lua onSkin). Before (2026-11-28, Baltimore) a new tracker sent every tile's content again and
+        dropped the builds running. A skin building now (made with the old inputs) is sent but stays due."""
+        self.reskinning |= self.skins
+        self.skins = set()
+        self.skin_gen += 1
 
     def redo_all(self):
         """Every geotile sent is asked for again, content and skin (earthd Connection.stale_swap: they were an
@@ -15165,7 +15651,10 @@ class GeoTracker:
         retry. near_m: only those within it of the car (the catch-up boost: the ground under the car, not SEND_M's
         far edge, where a tile is always on its way while driving)."""
         fast.require(551, "tracker_progress")
-        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, self.skins,
+        # (a skin reskin asked for again counts as there: the mod shows the old one until it comes; no catch-up boost
+        # or loading line for a winter look change)
+        skins = self.skins | self.reskinning if self.reskinning else self.skins
+        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, skins,
                                          getattr(self, "car_m", None), near_m)
 
     def ready_tiles(self, frame, x, y, r):
@@ -15174,7 +15663,15 @@ class GeoTracker:
         Before (2026-10-29) the signs waited until every road geotile round the car was in, which while driving it
         seldom was: signs came only once the car slowed down or stopped, one tile at a time, right next to it."""
         fast.require(551, "road_ready")
-        return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        held = self.reskinning
+        if not held:
+            return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        skins = self.skins                  # (a skin reskin asked for again: the mod has its old one, still ready)
+        self.skins = skins | held
+        try:
+            return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        finally:
+            self.skins = skins
 
     def again(self, keys):
         """The sent geotiles among keys built again (content and this anchor's skin) at the next pose and sent again
@@ -15221,6 +15718,7 @@ class GeoTracker:
                 del self.frames[old]
             self.skins, self.retry, self.fails, self.started, self.stuck_said = set(), {}, {}, {}, set()
             self.need = {}
+            self.reskinning = set()
             self.stats["anchors"] += 1
         if self.pool is None:
             from runtimeprofiler import TileJobs
@@ -15237,11 +15735,11 @@ class GeoTracker:
             if hasattr(getattr(conn, "s", None), "matslots"):
                 job = functools.partial(staging.prepare_shapes, conn.s, "roads", True, aid, k, job)
             fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
-            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
-                                  self._built(conn, a, kk, f, c, sk, m))
+            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make, g=self.skin_gen:
+                                  self._built(conn, a, kk, f, c, sk, m, g))
 
         def stuck():
-            for k in self.building:
+            for k in list(self.building):    # (a snapshot: a tile's done callback or a start can change it meanwhile)
                 t0 = self.started.get(k)
                 if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
                     self.stuck_said.add(k)
@@ -15253,6 +15751,7 @@ class GeoTracker:
             self.sent.discard(k)
             self.skins.discard(k)
             self.skin_h.pop(k, None)
+            self.reskinning.discard(k)
             self.redo.discard(k)
             self.info.pop(k, None)
             self.shown.pop(k, None)
@@ -15262,12 +15761,12 @@ class GeoTracker:
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
                 gone("roads", k, geotiles.key(*k))
 
-        fast.require(551, "road_geo")
+        fast.require(588, "road_geo")
         velocity = (float(vel[0]), float(vel[1])) if vel else (0., 0.)
         fast._ef.road_geo(self, conn, aid, frame, (x, y), velocity, tuple(view) if view else None, foci, tree,
                           ground_busy, now, start, stuck, drop_tile)
 
-    def _built(self, conn, aid, key, fut, content, skin, make):
+    def _built(self, conn, aid, key, fut, content, skin, make, gen=None):
         import geotiles
         if self.futs.get(key) is fut:
             self.building.discard(key)
@@ -15373,7 +15872,9 @@ class GeoTracker:
                     m["slots"] = slots
             return m
         if skin and sk is not None:
-            self.skins.add(key)
+            if gen is None or gen == getattr(self, "skin_gen", 0):
+                self.skins.add(key)         # (else started before a reskin: made with the old inputs, still due)
+                getattr(self, "reskinning", set()).discard(key)
             self.stats["skins"] += 1
             if self.swap is not None:
                 self.swap_staged += 1
@@ -15414,11 +15915,15 @@ def _unwrap(res):
 
 def geo_exact_auto(tile_frame, frame, parts):
     """{what: {pivot}} of a fresh content's parts (parts: {what: {pivot, relief, col}}) whose base shape placed rigidly
-    in frame's world would be off by more than their tolerance (EXACT_TOL_COL_M colliding, EXACT_TOL_M else)."""
+    in frame's world would be off by more than their tolerance (EXACT_TOL_COL_M colliding, EXACT_TOL_M else), and
+    every part marked "ho" (BNE_ROADSYS=structures: the deck, rebuilt round its ends on the anchor's lattice)."""
     import geotiles
     out = {}
     for what, part in (parts or {}).items():
         piv = float(part.get("pivot", 0.0))
+        if part.get("ho"):          # (BNE_ROADSYS=structures: a deck handing over to the anchor's own lattice, always)
+            out[what] = {"pivot": piv}
+            continue
         _r, _t, c = geotiles.placement(tile_frame, frame, (0.0, 0.0, piv))
         tol = EXACT_TOL_COL_M if part.get("col") else EXACT_TOL_M
         if float(part.get("relief", 0.0)) * float(dnp.hypot(c[0], c[1])) > tol:
@@ -15439,6 +15944,10 @@ def shape_files(aid, tx, ty):
     for k in range(2, RAIL_PARTS_MAX + 1):
         out[f"rail{k}"] = f"rail_{aid}_{tx}_{ty}_{k}.cdae"
         out[f"railcol{k}"] = f"railcol_{aid}_{tx}_{ty}_{k}.cdae"
+    import cliffsettings
+    if cliffsettings.SETTINGS.enabled:      # (PR #1412's cliffs, BNE_CLIFFS: no extra names, no staging stat, when off)
+        import cliffscene
+        out.update(cliffscene.shape_files(aid, tx, ty))
     return out
 
 
@@ -15509,7 +16018,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
                bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None,
-               walk_ground=None, speed_traps=(), bus_col=None):
+               walk_ground=None, speed_traps=(), bus_col=None, cliff_mesh=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -15529,6 +16038,10 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     data = {"v": VERSION, "chunks": [] if road_mesh is not None or not decals else
             [{k: v for k, v in c.items() if k != "waterguard"} for c in chunks
              if not c.get("tube_only") and not c.get("wear")]}     # (road wear: a mesh's only, roadwear.py)
+    if cliff_mesh is not None:
+        import cliffscene
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        cliffscene.write(data, out_dir, vfs_dir, aid, tx, ty, (x0, y0, 0.0), cliff_mesh)
     guards = {c["waterguard"]["id"]: c["waterguard"] for c in chunks if c.get("waterguard")}
     if guards:
         data["waterguard"] = [guards[k] for k in sorted(guards)]
@@ -15549,12 +16062,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     if deck_mesh is not None:
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"deck_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), deck_mesh)
+        roadmesh.write(os.path.join(out_dir, shape), deck_mesh, collider=True)
         data["deck"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if tunnel_mesh is not None:     # roadmesh.tunnel: the tubes and portals (colliding)
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh, close="under")
+        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh, close="under", collider=True)
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if guardrail_rows:              # mapped guard rails and the median barriers (guardrails / medians): Forest rows
         import guardrails
@@ -15601,7 +16114,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import medianbarriers
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = shape_files(aid, tx, ty)["barrier"]
-        roadmesh.write(os.path.join(out_dir, shape), barrier_mesh)
+        roadmesh.write(os.path.join(out_dir, shape), barrier_mesh, collider=True)
         data["barrier"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         boxes["barrier"] = medianbarriers.collider_boxes(barrier_chunks)
     if bus_col is not None and bus_col[0] is not None:     # the bus stations' lean collision (busstationmesh.collision)

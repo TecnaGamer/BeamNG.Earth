@@ -8,7 +8,7 @@ service answered 11.7 % 5xx), and many countries have no free 1 m photo at all.
 
 What: a block's base colour (earthd.Server.write_base / blockworker.base_photo, BASE_RENDER_PX over the 1 km block) is
 made from data every place has, instead of the 1 m photo:
-- the colour: Sentinel-2 (10 m; the project's own packs, bngs2, else EOX's cloudless mosaics), rendered over the
+- the colour: Sentinel-2 (10 m; the project's own packs, bngs2, else EOX's 2016 cloudless mosaic), rendered over the
   block's texels as before (imagery.render: the chain cut to SOURCES, chain());
 - the regions at 1 m: ESA WorldCover's class (read at warped points, surface.classes, as the ground's materials are),
   the built-up land's lawns (surface.lawns), Overture's land-use and water polygons, the canopy heights (Meta / WRI
@@ -67,8 +67,10 @@ HALO_M = 128.0
 # the photo's pending mark while some map data it reads is not on disk (earthd.Server.base_ready / _base_kept)
 GEN_PENDING = ("genground_data",)
 LAYERS = ("land_use", "water", "infrastructure", "canopy", "landcover", "roads", "buildings")
-# The imagery sources the generated ground is made from (imagery.SOURCES): Sentinel-2 alone, global
-SOURCES = ("bngs2", "eox2023", "eox2016")
+# The imagery sources the generated ground is made from (imagery.SOURCES): Sentinel-2 alone, global (the project's packs
+# at their own zooms and enlarged for the block's finer texels, else EOX's 2016 mosaic; EOX 2023, CC BY-NC-SA, until
+# 2026-11-23)
+SOURCES = ("bngs2", "bngs2fine", "eox2016")
 
 # Kinds of ground (genground.rs: the same numbers)
 (NONE, TREE, SHRUB, GRASS, CROP, BUILT, BARE, SNOW, WATER, WETLAND, LAWN, PAVED, ROOF, GRAVEL, PATH, BRICK, PAVERS,

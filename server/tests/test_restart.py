@@ -268,6 +268,20 @@ class SessionAdoptionTest(unittest.TestCase):
         for folder in (self.a[0], self.b[0]):
             self.assertIn(("getmtime", Path(folder).name), calls)
 
+    def test_grace_restart_in_the_same_clock_tick_is_seen(self):
+        # Windows' monotonic clock ticks every ~15.6 ms: a disconnect in the same tick as the sweep's snapshot must
+        # still change the stored grace start, or the sweep deletes a folder whose grace just restarted.
+        sid_a = Path(self.a[0]).name
+        c = self.conn()
+        self.s.claim_sessions(c, [sid_a])
+        since = self.s.orphans[sid_a]
+        self.s.connections.remove(c)
+        with mock.patch("earthd.time.monotonic", return_value=since):
+            self.s.drop_claims(c)
+        self.assertNotEqual(self.s.orphans[sid_a], since)
+        self.assertEqual(self.s._finish_session_sweep([(sid_a, since, [])]), [])
+        self.assertIn(sid_a, self.s.orphans)
+
     def test_sweep_rechecks_ownership_after_listing(self):
         self.s.orphan_s = 0  # even a fresh marker qualifies: only the new claim / grace can protect the files
         sid_a, sid_b = Path(self.a[0]).name, Path(self.b[0]).name

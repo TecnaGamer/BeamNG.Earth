@@ -1080,6 +1080,29 @@ class GroundMemoTest(unittest.TestCase):
         self.assertTrue(b.complete)
 
 
+class StreetAlongBoundsTest(unittest.TestCase):
+    def test_hoisted_bounds_equal_the_per_road_path(self):
+        """street_along passes the track points' min / max once; every road's mask equals the old per-road call."""
+        rng = np.random.default_rng(7)
+        for _ in range(20):
+            rail = [np.cumsum(rng.normal(0, 3, (int(rng.integers(5, 60)), 2)), axis=0) for _ in range(3)]
+            cr = [(np.cumsum(rng.normal(0, 8, (int(rng.integers(2, 20)), 2)), axis=0) + rng.normal(0, 40, 2),
+                   float(rng.uniform(0.5, 9))) for _ in range(12)]
+            got = railways.street_along(rail, cr)
+            pts = np.concatenate([np.asarray(x, np.float64)[:, :2] for x in rail])
+            for k, (line, hw) in enumerate(cr):
+                if hw <= railways.STREET_INSET_M:
+                    self.assertIsNone(got[k])
+                    continue
+                m = roads._Segs({0: (np.asarray(line)[:, :2], float(hw))}).near(pts, -railways.STREET_INSET_M)
+                if m.sum() * railways.STEP_M >= railways.STREET_ALONG_M:
+                    np.testing.assert_array_equal(got[k], m)
+                else:
+                    self.assertIsNone(got[k])
+            for j, (line, hw) in enumerate(cr):
+                seg = roads._Segs({0: (np.asarray(line)[:, :2], float(hw))})
+                np.testing.assert_array_equal(seg.near(pts, -1.0), seg.near(pts, -1.0, bounds=(pts.min(0), pts.max(0))))
+
 if __name__ == "__main__":
     unittest.main()
 

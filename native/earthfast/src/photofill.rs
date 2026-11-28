@@ -205,7 +205,7 @@ fn box_blur_cols(data: &mut [u8], h: usize, w: usize, float_radius: f32) {
 }
 
 /// Pillow's GaussianBlur(radius) of an (h, w, nc) 8-bit image, each channel apart (as its 4-byte pixels).
-fn gaussian_blur(img: &[u8], h: usize, w: usize, nc: usize, radius: f32) -> Vec<u8> {
+pub(crate) fn gaussian_blur(img: &[u8], h: usize, w: usize, nc: usize, radius: f32) -> Vec<u8> {
     let r = gaussian_box_radius(radius, 3);
     let mut out = vec![0u8; h * w * nc];
     if r == 0.0 {

@@ -40,7 +40,9 @@ LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage":
         # 6-7 mm, the spots 4 mm (each wear layer's lift its own: the strips are told apart by it)
         # then (the user: "they still float. i want to make them virtualy the same height of the road"): paint 2 mm, the
         # wear 2.2-2.6 mm, spots 1.8 mm (FOLLOW_TOL stays 2 cm: the ground steps by 1/32 m)
-        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026}
+        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026,
+        # puddles (roadwear.puddle_chunks): a mesh of their own over everything here, the water over the paint
+        "puddle": 0.006}
 # The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
 # as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
@@ -301,7 +303,11 @@ def ribbons(chunks, keep_none=False):
             if b - a < 2:
                 continue
             c = chunks[k]
-            out[k] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
+            le, ri = L[a:b], R[a:b]
+            if c.get("rs_sk0") is not None or c.get("rs_sk1") is not None:
+                # (BNE_ROADSYS=surface, 627: a ground road's end at a skewed deck end cut along its end line)
+                le, ri = skew_ends((le + ri) * 0.5, (le - ri) * 0.5, c.get("rs_sk0"), c.get("rs_sk1"))
+            out[k] = (le, ri, _ribbon_v(S[a:b], c), c["m"], layer_of(c),
                       Z[a:b] if c.get("fixed") else None)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
     return out if keep_none else [r for r in out if r is not None]
@@ -410,6 +416,14 @@ TRIM_ALONG_COS = dmath.cos(math.radians(TRIM_ALONG_DEG))
 # one's centre height and cross slope there) at most this far apart: one surface, butted; further, both kept (a step
 # made by the cut would stand in the carriageway: Codex P3d)
 COP_TOL_M = 0.03
+
+
+def _coplanar_decks():
+    """trim_overlaps' coplanar cut on: the decks' heights from one joint profile (BNE_ROADSHAPE=profile, or
+    BNE_ROADSYS=heights, M3: a ramp's deck merging beside the main deck now at its height, both slabs' colliders
+    coplanar, two owners of one lane)."""
+    import roadsys
+    return _roadshape.PROFILE_BUILT or roadsys.HEIGHTS
 
 # Short, connected bridge forks need a common two-dimensional surface. Three independently sloped, flat-width
 # ribbons can start at one height and still overlap by tens of centimetres a few metres later. Keep the longitudinal
@@ -827,7 +841,11 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
         # "noslab", drawn as one already) against anything)
         # (deck ribbons alone: never a marking's or a sidewalk's ribbon, which a tile draws in its window only;
         # Codex review of P3d)
-        ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("tunnel") or c.get("surface_ref"))
+        # (T1, BNE_ROADSYS_TUNNELS: a record's tunnel floor ("rec") is a face of the one profile too, and the record
+        # holds twin carriageways at one floor: two parallel bores 7 m apart (the Caldecott Tunnel) were two slabs over
+        # each other at one height, 500 m2 of lanes with two owners; a legacy tunnel floor stays out as before)
+        ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("surface_ref")
+                                                    or (c.get("tunnel") and not c.get("rec")))
                        for (r, c) in list(rb) + list(context) if r[5] is not None], bool)
         if ok.any():
             pick = np.flatnonzero(ok)
@@ -1447,7 +1465,7 @@ def _ground_runs(rs, ab):
 
 @profile_step('Road mesh generation')
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
-          clip_poly=None):
+          clip_poly=None, puddles=False):
     """The road mesh of a tile (render only; on bridges it lies DECK_SKIN over deck()'s slab): (positions
     relative to origin, tris, uvs, materials, tri material index), or None; with a dirt or gravel strip in it (a
     FADE_PREFIX material) a sixth element, the fade uv (n, 2) (_fade_uv; write, plazas.merge), and those materials
@@ -1463,15 +1481,26 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     ground raised over low arches): a ribbon straight across the road stood under the ground's bumps (up to 30 cm on hills), so it was drawn
     5 cm over it and the tyres sank into it (the user, 2026-10-20). clip_poly (k, 2): a convex polygon the mesh is cut
     to instead of the box (a geotile's quad in the anchor's world: earthfast.clip_tris_convex, the neighbours' cuts
-    along the very same lines); clip then only says where the ribbons reach past the tile (_reach_past)."""
+    along the very same lines); clip then only says where the ribbons reach past the tile (_reach_past). puddles: the
+    mesh of the chunks marked "puddle" alone (roadwear.puddle_chunks: the skin's puddle part), else the road mesh
+    without them."""
+    if puddles:
+        chunks, context = [c for c in chunks if c.get("puddle")], ()
+    else:
+        chunks = [c for c in chunks if not c.get("puddle")]
+        context = [c for c in context if not c.get("puddle")]
     chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
+    if any(c.get("rs_hide") or c.get("rs_slab") for c in chunks):
+        # (BNE_ROADSYS=surface: today's deck chunks the road system's faces stand in for, the parapets' base strips)
+        chunks = [c for c in chunks if not c.get("rs_hide") and not c.get("rs_slab")]
+    context = _shown(context)
     if clip is not None:
         chunks = [_reach_past(c, clip) for c in chunks]
     junctions = _junction_surfaces(chunks, context)
     rbc = ribbon_pairs([c for c in chunks if not c.get("surface_ref")])                  # deck surfaces too: their asphalt over deck()'s concrete
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
-        rbc = list(trim_overlaps(rbc, ctx, junctions, coplanar=_roadshape.PROFILE_BUILT))
+        rbc = list(trim_overlaps(rbc, ctx, junctions, coplanar=_coplanar_decks()))
     if shells.ON:           # (the overlays on decks follow the deck surface and stop at its end: PR #987)
         rbc = _overlays_on_decks(rbc)
     # (each deck end with its layer and width: a ground ribbon's end takes the edges of a deck end of its own layer and
@@ -2046,13 +2075,13 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     bridgetypes.truss_members) in painted steel (TRUSS_STEEL). (positions, tris, uvs, materials, tri
     material index) or None. ground: the tile's ground carriageways (roads.build_tile cover_out) for the parapet
     test, drawn or not (with the roads painted into the ground the chunks have none). Pure."""
-    chunks, context = _slab_chunks(chunks), _slab_chunks(context)
+    chunks, context = _slab_chunks(_shown(chunks)), _slab_chunks(_shown(context))
     dch = [c for c in chunks if c.get("deck")]
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
     rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions,
-                       coplanar=_roadshape.PROFILE_BUILT)
-    faces = [c for c in chunks if "deck_z" in c]
+                       coplanar=_coplanar_decks())
+    faces = [c for c in chunks if "deck_z" in c and not c.get("rs_mark")]
     if not rb and not piers and not beams and not pads and not faces:
         return None
     low_parapet_decks = set(low_parapet_decks or ())
@@ -2198,7 +2227,10 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
             nv += len(bp)
     for c in faces:
         pp = np.column_stack((c["xy"], c["deck_z"]))
-        slab = DECK_DEPTH * c["deck_depth"] / (DECK_DEPTH + GIRDER_D)
+        # (BNE_ROADSYS=surface, M5: the structure's whole depth, its floors' (the user 2026-11-24: the underside where the
+        # clearance assumed it, "some bridges are thicker than others"); the girder kits will split it into slab and
+        # girders. M4 drew the slab's share alone: the underside 1 m over the depth the floors kept)
+        slab = float(c["deck_depth"]) if c.get("rs_face") else DECK_DEPTH * c["deck_depth"] / (DECK_DEPTH + GIRDER_D)
         tops.setdefault(round(slab, 3), []).append(len(P))
         P.append(pp - origin)
         UV.append(pp[:, :2] / DECK_TOP_TILE_M)
@@ -2490,6 +2522,11 @@ def _noses(g):
 
 SHEET_REACH_MAX_M = 40.0    # m past its road's edge a through deck's slab reaches over an exit's union at most
 SHEET_TOL_M = 0.01          # m past an outline piece's ends a row still meets it
+
+
+def _shown(chunks):
+    """chunks without today's deck chunks the road system's own faces stand in for (BNE_ROADSYS=surface, "rs_hide")."""
+    return [c for c in chunks if not c.get("rs_hide")]
 
 
 def _slab_chunks(chunks):
@@ -2854,13 +2891,13 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
     _rb lets deck() share its already-computed ribbons. Returned dictionaries are ordered by deck
     chunk and edge, and include the points deck() uses verbatim.
     """
-    chunks, context = _slab_chunks(chunks), _slab_chunks(context)
+    chunks, context = _slab_chunks(_shown(chunks)), _slab_chunks(_shown(context))
     junctions = _junction_surfaces(chunks, context)
     if _rb is None:
         dch = [c for c in chunks if c.get("deck")]
         cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all,
-                           junctions, coplanar=_roadshape.PROFILE_BUILT)
+                           junctions, coplanar=_coplanar_decks())
     else:
         rb = _rb
     face_runs = [dict(run, deck=-1-i) for i, c in enumerate(chunks) for run in c.get("deck_runs", ())]
@@ -2997,6 +3034,7 @@ def _pier(p, origin, P, T, UV, M, mat):
 TUNNEL_SHOULDER = 1.2      # m of concrete floor between the road's edge and the wall
 TUNNEL_WALL_H = 4.6        # m of upright wall before the vault
 TUNNEL_H = 6.8             # m from the floor to the vault's top
+TUBE_KERB_M = 0.2          # (T1) m a record's tube's shoulders stand over its floor (tunnel(): the chunk's "rec")
 PORTAL_FRAME = 6.0         # m of portal face around the opening (hides the terrain hole's 2 m steps)
 TUNNEL_SIDE = DECK_SIDE    # the tube's concrete (portal faces) ...
 TUNNEL_INNER = "bne_tunnel_inner"   # ... and inside a full tube darker (tunnel.materials.json): lit by the sky as the
@@ -3200,6 +3238,11 @@ def tunnel(chunks, origin, walls=()):
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
         sec = _tunnel_section(hw, th, low, box=low and not stone and portals.ON)    # (a major road's low tube: a box)
+        if c.get("rec"):
+            # (T1: a tube of the road system's record has a kerb TUBE_KERB_M high along each wall: its shoulders were one
+            # with the floor's slab, two coplanar colliding faces over each lane cell (z-fighting; the Caldecott Tunnel))
+            sec = sec.copy()
+            sec[[0, 1, -2, -1], 1] = TUBE_KERB_M
         k, m = len(mid), len(sec)
         rows = np.empty((m, k, 3))
         for j, (off, h) in enumerate(sec):
@@ -3247,10 +3290,11 @@ def tunnel(chunks, origin, walls=()):
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
                 if f_ is not None and (c.get("portal") or (False, False))[e_]:
                     d_ = sm if e_ == 0 else sm[-1] - sm
-                    gr = np.where(d_ <= portals.setback(f_) + 0.5 if portals.setback(f_) > 0 else False, np.inf, gr)
+                    sb_ = portals.setback(f_) + portals.inset(f_)
+                    gr = np.where(d_ <= sb_ + 0.5 if sb_ > 0 else False, np.inf, gr)
             nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
                                                              gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
-                                                             SOIL_UV_M, sec), 0)
+                                                             SOIL_UV_M, sec, rec=bool(c.get("rec"))), 0)
         pups = c.get("portal_up") or (None, None)
         caps = c.get("cap_m") or (None, None)       # (a road over the mouth: its stone top shorter, TunnelProfiles.caps)
         for end, at, pup, cap_m in zip(c.get("portal") or (False, False), (0, k - 1), pups, caps):
@@ -3412,10 +3456,12 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
     return nv
 
 
-def write(path, mesh, close=True):
+def write(path, mesh, close=True, collider=False):
     """mesh: build's (positions, tris, uvs, materials, tri material) and, with a dirt or gravel strip in it, its fade
     uv: the second uv, in the vertex format that also carries a colour (white: the strips' materials leave vertColor
-    off, and the others in the mesh ignore it or multiply by 1)."""
+    off, and the others in the mesh ignore it or multiply by 1). collider: the drawn mesh is its own collider (the
+    mod's "Visible Mesh Final": decks, tunnels, median barriers): moved off the axis-aligned lattice (cdae.unalign; a
+    straight N-S / E-W deck's rows are a degenerate input for the Windows collision build, 8k triangles ~200 ms)."""
     P, T, UV, mats, M = mesh[:5]
     uvs2 = mesh[5] if len(mesh) > 5 else None
     colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
@@ -3423,4 +3469,4 @@ def write(path, mesh, close=True):
     open_tris = over[np.asarray(M, np.int64)] if over.any() and M is not None else None
     import roadsurf3
     return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road", open_tris=open_tris,
-                      colors=colors, close=close, split_drawn=SURFACE_V2 or roadsurf3.ON)
+                      colors=colors, close=close, split_drawn=SURFACE_V2 or roadsurf3.ON, unaligned=bool(collider))

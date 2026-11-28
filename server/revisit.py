@@ -390,13 +390,31 @@ def all_source_id(here):
 NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
                 "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_NETSTATS_PROC", "BNE_LIDAR_GAPS_WAIT",
                 "BNE_TELEMETRY",
+                "BNE_PHOTO_SURFACE",        # (retired 2026-11-26: a player's old setting is ignored, the default's keys)
                 "BNE_ROADSHAPE_DEBUG",      # (v2 P2a's fork records written beside the build: nothing built reads them)
                 "BNE_ROADSURF_V3_DEBUG",    # (v3 S1's lane graphs written beside the build: nothing built reads them)
                 # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
                 # plancache's stage_*)
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
                 # (an older version shown while this one is built: what is kept is this version's either way)
-                "BNE_STALE_REVISIT", "BNE_STALE_DAYS")
+                "BNE_STALE_REVISIT", "BNE_STALE_DAYS",
+                # (where the home cells' lane graphs and the decoded roads layers are kept and when they are written:
+                # the same graphs and layers either way, roadsurf3.LANES_DISK, roadlayercache.ASYNC)
+                "BNE_LANES_DISK", "BNE_ROADS_DEC_ASYNC",
+                # (where a cell's inputs are read from: its CIP cell holds the arrays its sources give, bit for bit,
+                # cip.py; the weekly data builds a CIP build pins are keyed as such, MapData.versions(). Proof: the
+                # portcheck corpus's plans and facts and the sessions' tiles identical with it on and the sources gone)
+                "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD",
+                # (winter W1, snow.py: a live 'snowstate' message only; snow never enters plans, cell facts, tiles or
+                # the decision archives, ~/bnge-tests/winterplan/PLAN.md decisions. W2: the snow on the ground photos is
+                # in the keys of the items it changes, the far tiles' textures and the blocks' base photos, as
+                # snowcover.key_parts: a spec's hash of the band tables, the packs and the look's version, nothing
+                # where no snow can lie. Anything else snow comes to change must carry its own spec part, snowcover.py)
+                "BNE_WINTER", "BNE_SNOW", "BNE_WET_ROADS",
+                # (the trees' leaf cycle, leafcycle.py: a field of the anchor's message only, the mod's trees by it)
+                "BNE_LEAF_CYCLE",
+                # (the live air traffic's test switch, airtraffic.TEST_ON: a hello flag for the mod, nothing built)
+                "BNE_AIRTRAFFIC_TEST")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
@@ -405,11 +423,22 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
 # its reason and fails on a new one). BNGE_ONEWAY_JOINS=0: the one-way ends' lane joins off (the roads layer, so the
 # facts and plans); BNGE_ROADS_IN_GROUND=0: the carriageway meshes in the road tiles (a helper's per-client setting is
 # in the road tile's key too: blockworker._roads_tile_cached).
-OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND")
+OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND", "BNGE_ROADZ_TLM_URL")
+
+
+# A switch keyed by its value: BNE_ROADSYS (the road rewrite) at off or shadow (M1: built again in the background and
+# logged; nothing built or delivered reads it) changes no output and is no build switch; at heights (M2: today's deck
+# builder and grading take its one profile per carriageway) and every later stage it is one (the tiles', plans' and
+# facts' keys: switches_key, plans_switches_key; its version in SWITCH_VERSIONS).
+# BNE_ROADSYS_AREAS (osmareas.py) at audit only reports how the road system's faces meet OSM's mapped road areas;
+# at on the areas shape the carriageways (keyed, with the areas' build in MapData.versions()).
+UNKEYED_VALUES = {"BNE_ROADSYS": ("", "off", "shadow"), "BNE_ROADSYS_AREAS": ("", "off", "audit")}
 
 
 def keyed_env(k):
     """Is environment variable k part of the build switches' hash (code_key, switches_key)?"""
+    if k in UNKEYED_VALUES:
+        return os.environ.get(k, "").strip().lower() not in UNKEYED_VALUES[k]
     return (k.startswith("BNE_") and k not in NOT_SWITCHES) or k in OUTPUT_ENV
 
 
@@ -458,16 +487,88 @@ def keyed_env(k):
 # BNE_ROADSHAPE 9 (P3e, profile): a deck over another along it held as twins are, a twin run held whole once seeded
 # (earthfast 536); the coplanar trim on one seam, where both surfaces meet, past chunk ends inside a part
 # (deck_trim_coplanar); a branch's surface in its union laid on the through deck's; union decks' rows unsimplified.
-SWITCH_VERSIONS = {"BNE_PEDESTRIAN_LIGHTING": 3, "BNE_STRICT_LIGHTING": 2, "BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
+# BNE_ROADSHAPE 10 and BNE_ROADSURF_V3=surface 8 (2026-11-22): the fork records' and the v3 lane graph's segment
+# windows never hold a road both whole and as its lane sections (roadshape.whole_or_sections).
+# BNE_ROADSHAPE 11 (2026-11-25, earthfast 627): the deck ends' skew only as the abutment of a short structure's
+# crossing (roadshape.SKEW_SPAN_MAX_M / SKEW_SET_MAX_M / SKEW_MIN_DEG: the deck-end skew audit), the mapped waterways
+# crossed lines too, the US bridge inventory's skew first where a record matches (nbiskew.py, its build in the map
+# data's versions).
+# BNE_ROADSYS 1 (heights, M2, 2026-11-22): the one profile per carriageway in today's decks and as the plans' terrain
+# targets (roads.BridgeProfiles._chain_solve, roadsys.chain_heights; earthfast 600).
+# BNE_ROADSYS 2 (heights, M3, 2026-11-22): crossings beside a deck no floor, a branch past its nose on its trunk, the
+# active set's releases, floors with today's headroom and the deck's own drawn depth (drawn so too), terrain targets
+# only round deck ends and floors, chains lifted onto their abutments' approach fills (earthfast 602).
+# BNE_ROADSYS=structures 1 (M3 structures, 2026-11-22): heights, the ground under the decks' ground ends dropped and
+# the decks' exact variants rebuilt round them on each anchor's lattice (earthfast 603); keyed as "2s1" (heights'
+# version and its own).
+# BNE_ROADSYS=surface 1 (M4 surface, 2026-11-22): structures, and the decks drawn from the road system's own faces
+# (roadsys.deck_faces, earthfast 606); keyed as "2s1u1" (structures' meaning and its own); its plans are heights' own.
+# BNE_ROADSYS_XSEC 1 (2026-11-22): the road system's cross-sections from OSM's street tags (parking, cycle and bus lanes,
+# shoulders, mapped carriageway widths; native/roadsys xsec.rs XSEC_FORMAT 1, earthfast 610).
+# BNE_ROADSYS 3 (heights, M5, 2026-11-24): twin decks side by side take one height, a structure going on past a
+# stroke's end (another deck, a nose) is no abutment for its chord or its deck-over-ground limit, a measured deck keeps
+# its measured clearance over the road under it (no dig), measured decks held to their measurement, a chain's end on
+# another deck of the chain is no abutment (earthfast 623, QP_FORMAT 6).
+# BNE_ROADSYS=surface 2 (M5): the decks' free edges widened to any structure's mapped paved width (not only their own
+# stroke's, up to 8 m), twins found across their widened gaps.
+# BNE_ROADSYS 4 (M5 round 2, the user's decisions 2026-11-24): the mapped bridge ends (the map's tags, not the deck
+# builder's lengthened ranges) for the structures and the hand-over; clearances by the lower road's class and maxheight
+# signs, the road under cut up to 5 m; each structure's own depth by its design and span (earthfast 626, QP_FORMAT 7).
+# BNE_ROADSYS=surface 3: decks drawn their whole depth, the lengthened stretch past a mapped end drawn as ground road.
+# BNE_ROADSYS=surface 4 (earthfast 627): the deck ends skewed by the deck-end skew rule (native/roadsys skew.rs: the
+# hand-over's ends, the faces' end rows, the ground roads' ends there), the waterways and the bridge inventory read.
+# BNE_ROADSYS=surface 5: a twin's median fill to the middle measured per vertex (the two halves no longer overlap).
+# BNE_ROADSYS_TUNNELS 1 (T1, earthfast 629, the tunnel plan approved 2026-11-25): the tunnels from the road system's
+# record (floors from the one profile, sections never open for want of cover, portals and holes only where a tube
+# enters a hill; tunnelrec.py).
+# BNE_ROADSYS=surface 6 (earthfast 630): the ground under a deck at most at its soffit less 0.3 m (roadsys.ground_cut,
+# native/roadsys ceil.rs; the terrain blocks, skins and content ground from the published decks' heights).
+# BNE_ROADSYS=structures 2 (earthfast 630): the roads meeting a deck end's short approach at its far end (a junction at
+# the end: a roundabout's ring) are the end's own for its drop (native/roadsys handover.rs End.junction), not roads under.
+# BNE_ROADSYS_TUNNELS 2 (earthfast 631): the record's portals dig the approach to the floor (no lift of the floor onto
+# the plans' ground), twin tunnels held at one floor, a twin tube only where both carriageways run side by side.
+# BNE_ROADSYS_TUNNELS 3 (earthfast 636): a lid under a road crossing over the tube stays a lid however short (where
+# the road's lowest lid fits); twin floors at one height cut on one seam (roadmesh.trim_overlaps); a cover's followed
+# top under the ground, read past its sides (portals); round a tunnel the record does not build (under water) the
+# terrain targets as without the record (roadsys.pins_near legacy); twins paired by the record's rule only when both
+# are the record's.
+# BNE_ROADSYS=surface 7 (M5 round 5, earthfast 632): the ceiling counts a ground road or railway beside a deck within the
+# deck's own need (ceil.rs allow), not the read's deepest deck's, so each caller reads the decks near its own points
+# (roadsys.ceil_of_cell's box) and a node's value is the same whichever box asked.
+# BNE_ROADSYS=surface 8 (M5 round 5): the ceiling keeps the ground under every railway the rail tiles draw on the
+# ground (roadsys._ceil_rails: a short rail tunnel under a road bridge too).
+# BNE_ROADSYS=surface 9 (M5 round 7): a cell's pins planned in one batch each take their own landings
+# (grading._landings_each), not the batch's union with other cells' copies of a deck end.
+# BNE_ROADSYS=surface 10 (M5 round 7): each deck end's landing from the copy of the cell the end lies in
+# (grading._landings_in), whichever cells were read round the points.
+# BNE_ROADSYS=surface 11 (M5 round 7): ... the end at its 0.1 m key and its direction to 1e-4 instead, the same
+# whichever cells were read, and a batch of pins planned with the union's landings again (9's per-part landings and
+# 10's reads of every end's own cell cost 2-5x the CPU where the map's reads are short and never kept).
+# BNE_ROADSYS=surface 12 (M5 round 8, earthfast 643): a short chain keeps its profile's deck end where the plans' ground
+# past it lies more than 0.75 m off, and its approach is ramped to it at its class grade, ending short of its first
+# junction (roadsys._keep_ends, pins_near's ramps; native/roadsys endmatch.rs kept_ends / approach_run / ramp_dz).
+# BNE_ROADSYS=surface 13 (M5 round 8, earthfast 643): a road's plans read the surface model's ground plus the ground
+# filter's cut where that cut is the road's own embankment (grading._Planner._embank_obs, earthfast embank_lift).
+# BNE_ROADSYS=surface 14 (M5 round 8): a kept deck end wholly or not at all, never on a link; the embankment in the plans'
+# ground itself (embankfield through plan_elev, BNE_ROADSYS_EMBANK=on), not in the plans' obs.
+ROADSYS_STRUCTURES_VERSION = 2
+ROADSYS_SURFACE_VERSION = 14
+SWITCH_VERSIONS = {"BNE_PEDESTRIAN_LIGHTING": 3, "BNE_STRICT_LIGHTING": 2,
+                   "BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 9, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1,
+                   "BNE_ROADSYS_TUNNELS": 3}
 
 
 def keyed_value(k, v):
     """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
     SWITCH_VERSIONS version after it when it has one."""
     # The surface generation includes the supporting deck and its parapet outline.
-    n = 7 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    n = 8 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    if k == "BNE_ROADSYS" and v.strip().lower() == "structures":
+        n = f"{n}s{ROADSYS_STRUCTURES_VERSION}"     # (heights' meaning and its own: either moves its keys)
+    if k == "BNE_ROADSYS" and v.strip().lower() == "surface":
+        n = f"{n}s{ROADSYS_STRUCTURES_VERSION}u{ROADSYS_SURFACE_VERSION}"   # (structures' and its own)
     if k in ("BNE_SIDEWALK_V2", "BNE_SURFACE_V2") and v.strip().lower() in ("on", "1", "yes", "true"):
         n = 2
     if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":
@@ -520,6 +621,20 @@ def key(kind, *parts):
     if ctx is not None and kind in STALE_KINDS:
         _alias(kind, k, parts, ctx[0])
     return k
+
+
+def frame_parts(lat, lon):
+    """The anchor frame's part of an item's key: its origin as it is, (float(lat), float(lon)), the way blockcache
+    keys the blocks (repr of the frame's lat0 / lon0). Every item built in an anchor's frame (its far tiles and their
+    textures, road, sign and building tiles, the block's base photo) is keyed by it.
+
+    It was each origin rounded to 7 decimals until 2026-11-26: two frames under 5e-8 degrees (~5 mm) apart shared one
+    key, so an item built in the one was served to the other. A far tile at the exact level is the block's own lattice
+    rounded to its height quantum; built in a frame a millimetre off it was one quantum (1/64 m) off the block at
+    0.1-1 % of its vertices, at random spots (MeshDrive64Test l2_bad, the gates' shared test cache: the drive's
+    rebase anchor is the car's spot, a few 1e-7 degrees apart from run to run with the load). The mod's anchors are
+    on its grid (geodesy.snapAnchor: 6 decimals), where round(x, 7) is x: their keys are the same as before."""
+    return float(lat), float(lon)
 
 
 # Items kept across code changes (the user, 2026-11-02: road plans and cell facts survive updates): keyed by their

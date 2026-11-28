@@ -19,7 +19,8 @@
     "materials": {"type": "list", "optional": true, "doc": "--surface on (surface.py)"},
     "base": {"type": "str", "optional": true},
     "baseSize": {"type": "num", "optional": true, "doc": "--near-visual detail: the block's photo"},
-    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"}
+    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"},
+    "cover": {"type": "dict", "optional": true, "doc": "{far key: m}: the exact sink of each far tile across the block's edge against this block (Connection.far_cover; farfield.lua 'partial')"}
    }
   }
  },
@@ -27,9 +28,21 @@
   "pose.cam": ["x", "y", "z", "fx", "fy", "fz", "fovDeg", "h"],
   "weather.cover": ["total", "low", "mid", "high"],
   "weather.wind": ["ms", "fromDeg", "gustMs"],
-  "weather.aloft": ["ms", "fromDeg"]
+  "weather.aloft": ["ms", "fromDeg"],
+  "hello.snow": ["mode", "cover", "depth"],
+  "snow.snow": ["mode", "cover", "depth"]
  },
  "mod_to_server": {
+  "debug_map": {
+   "fields": {
+    "id": {"type": "int"},
+    "layer": {"type": "str"},
+    "s": {"type": "num"},
+    "w": {"type": "num"},
+    "n": {"type": "num"},
+    "e": {"type": "num"}
+   }
+  },
   "hello": {
    "doc": "sessions: the session folders whose files the mod's objects still use (terrain deliveries, far tiles and road tiles; a restarted server keeps each earlier session still named here, docs/ROADMAP.md \"Robustness\" 3)",
    "fields": {
@@ -135,7 +148,9 @@
     "slotsGone": {"type": ["list", "dict"], "optional": true, "doc": "pooled far-tile slots whose far_tile's object is gone: [[slot, serial], ...] (matslots.py)"},
     "foci": {"type": ["list", "dict"], "optional": true, "doc": "other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)"},
     "guardHold": {"type": "bool", "optional": true, "doc": "the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)"},
-    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"}
+    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"},
+    "frameMs": {"type": "num", "optional": true, "doc": "2026-11-22 (architecture v2 V1, additive): the mean wall time of the game's frames since the last pose (governor.lua frameWindow): BNE_V2_HOST's scheduler lowers its CPU target when it rises over the game's own baseline (sched.rs Adapt)"},
+    "frameMaxMs": {"type": "num", "optional": true, "doc": "... and the longest of them"}
    }
   },
   "cache": {
@@ -270,6 +285,35 @@
    "doc": "town signs (townentry.py; additive): the settings page's switch, sent after every hello and on a change",
    "fields": {
     "on": {"type": "bool"}
+   }
+  },
+  "weather_audio": {
+   "doc": "live weather sounds (liveaudio.lua -> server/liveaudio.py -> native/weathersynth live-serve; additive): the Weather page's Weather sounds ('live' / 'prerecorded') and, while live, what the live synth plays from, every 0.25 s and at once on a change (the server's synth fades out when they stop for 1 s: a hung or closed game). volume / thunderVolume: the game's master x Environment channel volume 0..1 for each (the channel the mod's own rain layers and thunder play on). thunders: [{id, at (UTC s the sound reaches the listener), d m, kind strike / close / mid / far, gain 0..1, seed, final}]: final = false a look-ahead hint the synth renders early (up to 30 s ahead, again when the listener moved its distance by 15 %), final = true the strike as it happened (only these play), play (on a final; absent: true) false when the game plays its file: the synth then only ducks its rain at `at`, the file's crack",
+   "fields": {
+    "mode": {"type": "str"},
+    "rainMmH": {"type": "num"},
+    "windMs": {"type": "num"},
+    "shelter": {"type": "num"},
+    "tunnel": {"type": "bool"},
+    "cabin": {"type": "bool"},
+    "volume": {"type": "num"},
+    "thunderVolume": {"type": "num"},
+    "muted": {"type": "bool"},
+    "duck": {"type": "num"},
+    "t": {"type": "num"},
+    "synthRain": {"type": "bool", "optional": true, "doc": "the synth plays the rain (liveaudio.lua LIVE_RAIN); false (the default since 2026-11-26): the game plays its own rain loops in Live too and the synth only the thunder and its ducks; absent: true"},
+    "thunderSet": {"type": "str", "optional": true, "doc": "the Weather page's Thunder sound: 'generated' (the game plays the method B files; the synth only ducks its rain at each strike's crack) or 'recorded' (the synth's grain-bank renderer)"},
+    "rainSet": {"type": "str", "optional": true, "doc": "the Weather page's Rain sound: 'generated' (the synth's physical rain) or 'recorded' (its texture bank of CC0 rain recordings; the physical rain when the synth has no bank)"},
+    "roofNear": {"type": "num", "optional": true, "doc": "the recorded rain's roof heard from outside near the car, 0..1 (hood / bumper cameras 1, orbit by its distance; inside the car the roof goes through the cabin filter instead)"},
+    "enclosed": {"type": "bool", "optional": true, "doc": "under an enclosed shelter (tunnel, closed bridge, building: muffled A, the outdoor rain filtered; absent: true) or an open one (bridge, overpass: muffled B, the under-bridge takes)"},
+    "rainVol": {"type": "num", "optional": true, "doc": "the mod's own rain volume for its layers (RAIN_GAIN x the rain share, 0..1): the synth's rain plays at the files' level times this (absent: 0.5)"},
+    "thunders": {"type": "list", "optional": true}
+   }
+  },
+  "snow_mode": {
+   "doc": "winter (BNE_WINTER, snowcover.py; additive): another snow state live, a debug preset or none / real (dev tools and tests; the server answers with 'snow' and textures what is shown again)",
+   "fields": {
+    "mode": {"type": "str"}
    }
   },
   "road_wear": {
@@ -413,6 +457,16 @@
     "cachedOnly": {"type": "bool", "doc": "only the cells on disk, a wide radius then allowed (places.py)"}
    }
   },
+  "towns": {
+   "doc": "the modding API's towns round a point (api.lua towns; placenames.py labels, the regions on disk only)",
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "radius": {"type": "num", "optional": true},
+    "limit": {"type": "num", "optional": true}
+   }
+  },
   "map_focus": {
    "doc": "the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)",
    "fields": {
@@ -519,6 +573,17 @@
   }
  },
  "server_to_mod": {
+  "debug_map_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "layers": {"type": "list", "optional": true},
+    "legend": {"type": "list", "optional": true},
+    "features": {"type": "list", "optional": true},
+    "note": {"type": "str", "optional": true},
+    "enabled": {"type": "dict", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
   "server_list": {
    "fields": {
     "servers": {"type": "list", "optional": true},
@@ -717,6 +782,15 @@
     "error": {"type": "str", "optional": true}
    }
   },
+  "towns_result": {
+   "doc": "... the modding API's towns (placenames.labels rows [name, lat, lon, class, population, dist m], the largest first)",
+   "fields": {
+    "id": {"type": "int"},
+    "towns": {"type": "list"},
+    "complete": {"type": "bool"},
+    "error": {"type": "str", "optional": true}
+   }
+  },
   "globe": {
    "fields": {
     "anchorId": {"type": "int"},
@@ -757,6 +831,7 @@
   },
   "hello": {
    "fields": {
+    "cliffs": {"type": "dict", "optional": true},
     "runtimeProfiler": {"type": "int", "optional": true},
     "waterguard": {"type": "int", "optional": true},
     "protocol": {"type": "int"},
@@ -794,6 +869,7 @@
     "deshadow": {"type": "str", "optional": true, "doc": "--deshadow lambert|full only (the settings page shows it)"},
     "colormatch": {"type": "str", "optional": true, "doc": "--colormatch s2 only (likewise)"},
     "season": {"type": "str", "optional": true, "doc": "--season auto / fall (seasonlook.lua tints the leaves)"},
+    "snow": {"type": "dict", "optional": true, "doc": "BNE_WINTER only (snowcover.hello): {mode, cover 0..8, depth bin 0..6 for a preset}: winterlook.lua's snow layer look and the grass under snow"},
     "mapPort": {"type": "int", "optional": true, "doc": "the world map's tile endpoint on 127.0.0.1 (maptiles.py)"},
     "prewarm": {"type": "str", "optional": true, "doc": "the shape listing our shapes' materials (prewarm.py; with map data)"},
     "imageryCredits": {"type": "list", "optional": true, "doc": "the world map's credits for its view: [[credit, w, s, e, n] or [credit]] per imagery source, and the rest (weather, elevation); with imagery on only"},
@@ -825,7 +901,9 @@
     "provisional": {"type": "bool", "optional": true, "doc": "2026-10-22: a teleport's ungraded first block"},
     "px": {"type": "num", "nullable": true, "optional": true},
     "py": {"type": "num", "nullable": true, "optional": true, "doc": "the prepare_anchor's spot, echoed"},
-    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"}
+    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"},
+    "koppen": {"type": "int", "optional": true, "doc": "2026-11-26: the anchor's Koppen-Geiger class (climate.koppen_at, Beck et al. 1-30, 0 the sea): the trees' leaf cycle (seasonlook.climateFactor); left out when it cannot be read"},
+    "leaf": {"type": "dict", "optional": true, "doc": "2026-11-27: the place's leaf calendar (leafcycle.anchor_leaf, earthfast phenology 648): baretrees.lua gives each deciduous tree its dates by it; sent only with BNE_LEAF_CYCLE on"}
    }
   },
   "anchor_progress": {
@@ -930,6 +1008,7 @@
   "far_retex": {
    "doc": "--colormatch / --deshadow: a shown (or held) tile's texture rendered again under a new name (additive, protocol 4; exercised by RetexMessagesTest, a session whose colour-match regions turn ready)",
    "fields": {
+    "replacement": {"type": "dict", "optional": true},
     "anchorId": {"type": "int"},
     "key": {"type": "str"},
     "texture": {"type": "str"}
@@ -959,6 +1038,8 @@
     "elevM": {"type": "num"},
     "slTempC": {"type": "num"},
     "pressureHpa": {"type": "num"},
+    "capeJkg": {"type": "num"},
+    "lpi": {"type": "num", "optional": true},
     "utcOffsetS": {"type": "int", "optional": true},
     "tz": {"type": "str", "optional": true},
     "credit": {"type": "str"}
@@ -973,6 +1054,46 @@
     "lon": {"type": "num"},
     "h": {"type": "num"},
     "source": {"type": "str"}
+   }
+  },
+  "snow": {
+   "doc": "winter (BNE_WINTER; additive): the snow state changed live (snow_mode): hello.snow's object again (winterlook.lua)",
+   "fields": {
+    "snow": {"type": "dict"}
+   }
+  },
+  "audio_state": {
+   "doc": "live weather sounds (server/liveaudio.py; additive): the live synth's state for the Weather page and the mod's fallback, at least every 0.5 s while live: 'live' (latencyMs: the output's latency), 'off' (reason when the live path is missing: no weathersynth binary) or 'failed' (reason: the audio device or the synth stopped). The mod plays its own pre-recorded sounds whenever the last 'live' is over 1.5 s old",
+   "fields": {
+    "state": {"type": "str"},
+    "reason": {"type": "str", "optional": true},
+    "latencyMs": {"type": "num", "optional": true},
+    "thunderSets": {"type": "list", "optional": true, "doc": "the thunder sets the synth plays itself ('recorded': its grain bank, every thunder; 'generated': method B's strikes and closes it has ready, see readyThunders); for any other set the mod plays its own files"},
+    "rainSets": {"type": "list", "optional": true, "doc": "the rain sets the synth can play ('generated_b': its Generated rain is method B's live engine, rainb_live.rs; 'recorded' only when its texture bank loaded)"},
+    "readyThunders": {"type": "list", "optional": true, "doc": "[[id, d m], ...]: the thunders the synth has rendered and waiting (at most 24); the mod lets the synth play a generated strike / close only when its id is listed here with d within 15 % of the strike's (else it plays its file and sends the final with play = false)"}
+   }
+  },
+  "snowstate": {
+   "doc": "winter W1 (snow.py, BNE_WINTER only; additive, protocol 4): the snow kernel's state at the player for the UTC hour t; ground [depth mm, bin 0..6, cover 0..8, wet, crust, SWE mm, hours since snow]; roads / bridges per plow class P0..P4 [condition, lane depth mm, pavement degC, edge condition, edge depth mm, grit 0/1, wheel tracks 0..1]; bands [z m, depth mm facing the pole, facing the equator, forest floor, hours since snow]; lake [freezing degree-days, ice mm, days below 0 degC]; winter.lua applies it",
+   "fields": {
+    "v": {"type": "int"},
+    "t": {"type": "int"},
+    "src": {"type": "str"},
+    "winter": {"type": "bool"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "elevM": {"type": "int"},
+    "cellElevM": {"type": "int"},
+    "regime": {"type": "int"},
+    "airC": {"type": "num"},
+    "surfC": {"type": "num"},
+    "ground": {"type": "list"},
+    "roads": {"type": "list"},
+    "bridges": {"type": "list"},
+    "bands": {"type": "list"},
+    "lake": {"type": "list"},
+    "credit": {"type": "str"},
+    "look": {"type": "dict", "optional": true, "doc": "winter W3 (snowroad.py, BNE_WINTER; winterroad.lua): per plow class P0..P4 marking (paint shown 0..1), deck (a deck's snow 0..1), banks (bin 0..4), dirt (0..2); walks [state, cover 0..8] by sidewalk slot (main, residential cleared, residential left, unmaintained)"}
    }
   },
   "block_base": {

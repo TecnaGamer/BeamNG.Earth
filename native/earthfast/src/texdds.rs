@@ -411,6 +411,70 @@ fn derive_map(w: usize, h: usize, c: usize, px: &[u8], derive: &str) -> Result<(
     })
 }
 
+/// derive "coverage:REF" / "coverage:REF:SCALE" (an alpha-tested opacity map, its material's alphaRef 1-255, SCALE
+/// 0.05-4 with at most 3 decimals): Some((REF, SCALE in thousandths)); None for any other derive.
+fn parse_coverage(derive: &str) -> Result<Option<(u8, u64)>, String> {
+    let parts: Vec<&str> = derive.split(':').collect();
+    if parts[0] != "coverage" {
+        return Ok(None);
+    }
+    let bad = || format!("derive {derive:?}: coverage:REF[:SCALE]");
+    let aref: u8 = parts.get(1).ok_or_else(bad)?.parse().map_err(|_| bad())?;
+    let permille = match parts.get(2) {
+        None => 1000,
+        Some(t) => {
+            let (i, f) = t.split_once('.').unwrap_or((t, ""));
+            if f.len() > 3 || i.is_empty() || !i.bytes().chain(f.bytes()).all(|b| b.is_ascii_digit()) {
+                return Err(bad());
+            }
+            i.parse::<u64>().map_err(|_| bad())? * 1000 + format!("{f:0<3}").parse::<u64>().map_err(|_| bad())?
+        }
+    };
+    if aref == 0 || parts.len() > 3 || !(50..=4000).contains(&permille) {
+        return Err(bad());
+    }
+    Ok(Some((aref, permille)))
+}
+
+/// Alpha-tested opacity drawn with the same share at every distance (Castano 2010, "Computing alpha mipmaps"): box
+/// mips average fine detail (the winter trees' twigs) into a faint haze that an alpha test then drops (or, with a low
+/// alphaRef, a solid mass), so a crown thins out with distance and pops at the next detail level. Each level of the
+/// one-channel chain is scaled (texel * aref / v, v the level's own threshold) so the share of its texels at or above
+/// `aref` is level 0's share times `permille` / 1000 (level 0 itself only when that is not 1). Integer, deterministic.
+fn coverage_levels(levels: &mut [(usize, usize, Vec<u8>)], aref: u8, permille: u64) {
+    let Some((_, _, p0)) = levels.first() else { return };
+    let n0 = p0.len().max(1) as u64;
+    let c0 = p0.iter().filter(|&&v| v >= aref).count() as u64;
+    for (i, (_, _, px)) in levels.iter_mut().enumerate() {
+        if i == 0 && permille == 1000 {
+            continue;
+        }
+        let n = px.len() as u64;
+        let target = (2 * c0 * permille * n + n0 * 1000) / (2 * n0 * 1000);
+        let mut hist = [0u64; 256];
+        for &v in px.iter() {
+            hist[v as usize] += 1;
+        }
+        // the threshold v (1-255) whose count of texels at or above it is nearest the target (the higher on a tie)
+        let (mut best, mut best_err, mut above) = (0usize, u64::MAX, 0u64);
+        for v in (1..256usize).rev() {
+            above += hist[v];
+            let err = above.abs_diff(target);
+            if err < best_err {
+                best_err = err;
+                best = v;
+            }
+        }
+        if best == 0 || target == 0 {
+            continue;
+        }
+        let (a, b) = (aref as u32, best as u32);
+        for t in px.iter_mut() {
+            *t = (*t as u32 * a / b).min(255) as u8;
+        }
+    }
+}
+
 /// A float image [h][w][c] halved: each texel the mean of its 2 x 2 (or 2 x 1 / 1 x 2 at a side of 1) source texels.
 fn half(src: &[f32], w: usize, h: usize, c: usize) -> (Vec<f32>, usize, usize) {
     let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
@@ -595,7 +659,8 @@ fn prepare(src: &[u8], format: &str, role: &str, derive: &str) -> Result<Prepare
     let dxgi = parse_format(format)?;
     let role = parse_role(role)?;
     let (w, h, mut c, mut px) = decode_image(src)?;
-    if !derive.is_empty() {
+    let coverage = parse_coverage(derive)?;
+    if !derive.is_empty() && coverage.is_none() {
         (c, px) = derive_map(w, h, c, &px, derive)?;
     }
     if dxgi == DXGI_BC4 && c > 1 {
@@ -608,7 +673,14 @@ fn prepare(src: &[u8], format: &str, role: &str, derive: &str) -> Result<Prepare
     if dxgi == DXGI_BC5 && c < 2 {
         return Err("BC5 needs two channels".into());
     }
-    let levels = mip_chain(w, h, c, px, role)
+    let mut chain = mip_chain(w, h, c, px, role);
+    if let Some((aref, permille)) = coverage {
+        if c != 1 {
+            return Err(format!("derive {derive:?}: a one-channel opacity map only"));
+        }
+        coverage_levels(&mut chain, aref, permille);
+    }
+    let levels = chain
         .into_iter()
         .map(|(lw, lh, p)| {
             let lc = p.len() / (lw * lh);
@@ -671,6 +743,38 @@ fn dds_header(w: usize, h: usize, mips: usize, dxgi: u32) -> Vec<u8> {
     u(&mut o, 1);
     u(&mut o, 0);
     o
+}
+
+/// Encode prefiltered scalar levels using the same BC4 backend as installed
+/// textures. Callers supply nonlinear coverage mips filtered in height space.
+pub(crate) fn scalar_levels_dds(levels: Vec<(usize, usize, Vec<u8>)>) -> Result<Vec<u8>, String> {
+    let (w, h, _) = levels.first().ok_or("empty scalar mip chain")?;
+    let mut out = dds_header(*w, *h, levels.len(), DXGI_BC4);
+    for (w, h, px) in levels {
+        if w == 0 || h == 0 || !w.is_power_of_two() || !h.is_power_of_two() || px.len() != w * h {
+            return Err("invalid scalar mip dimensions".into());
+        }
+        let level = Level { w, h, chans: 1, px };
+        out.extend(encode_rows(&level, DXGI_BC4, 0, h)?);
+    }
+    Ok(out)
+}
+
+/// Linear data with the standard mip filter. RGB detail must remain RGB: a
+/// single-channel shader detail map can introduce a red cast.
+pub(crate) fn data_dds(w: usize, h: usize, channels: usize, pixels: Vec<u8>) -> Result<Vec<u8>, String> {
+    if !w.is_power_of_two() || !h.is_power_of_two() || !matches!(channels, 1 | 3)
+        || pixels.len() != w * h * channels {
+        return Err("invalid detail map dimensions".into());
+    }
+    let dxgi = if channels == 1 { DXGI_BC4 } else { DXGI_BC7 };
+    let levels = mip_chain(w, h, channels, pixels, Role::Data);
+    let mut out = dds_header(w, h, levels.len(), dxgi);
+    for (w, h, pixels) in levels {
+        let level = to_encoder(w, h, channels, &pixels, dxgi);
+        out.extend(encode_rows(&level, dxgi, 0, level.h)?);
+    }
+    Ok(out)
 }
 
 /// Run f(i) for i in 0..n on `threads` workers (an index handed out at a time).
@@ -837,4 +941,50 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(texture_pixels, m)?)?;
     m.add("TEXDDS_ID", TEXDDS_ID)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    fn share(px: &[u8], aref: u8) -> f64 {
+        px.iter().filter(|&&v| v >= aref).count() as f64 / px.len() as f64
+    }
+
+    /// Sparse fine detail (a tenth of the texels opaque, the rest faint: twigs over a haze): box mips average it under
+    /// the alphaRef; the coverage levels keep the drawn share at level 0's down to 8 x 8.
+    #[test]
+    fn coverage_kept_at_every_level() {
+        let (w, h) = (64usize, 64usize);
+        let px: Vec<u8> = (0..w * h)
+            .map(|i| {
+                let x = (i as u32).wrapping_mul(2654435761) >> 7;
+                if x % 10 == 0 { 255 } else { (x % 41) as u8 }
+            })
+            .collect();
+        let mut chain = mip_chain(w, h, 1, px, Role::Data);
+        let s0 = share(&chain[0].2, 100);
+        assert!(share(&chain[3].2, 100) < s0 * 0.5, "the plain mips lose the lines");
+        coverage_levels(&mut chain, 100, 1000);
+        for (lw, _, p) in chain.iter().take(4) {
+            let s = share(p, 100);
+            assert!((s - s0).abs() <= 2.0 / (*lw as f64) + 0.01, "level {lw}: {s} vs {s0}");
+        }
+    }
+
+    #[test]
+    fn coverage_scaled_and_parsed() {
+        let (w, h) = (32usize, 32usize);
+        let px: Vec<u8> = (0..w * h).map(|i| ((i * 37) % 256) as u8).collect();
+        let s0 = share(&px, 50);
+        let mut chain = mip_chain(w, h, 1, px, Role::Data);
+        coverage_levels(&mut chain, 50, 700);
+        assert!((share(&chain[0].2, 50) - 0.7 * s0).abs() < 0.01);
+        assert_eq!(parse_coverage("coverage:50:0.7").unwrap(), Some((50, 700)));
+        assert_eq!(parse_coverage("coverage:100").unwrap(), Some((100, 1000)));
+        assert_eq!(parse_coverage("normal_fft:2").unwrap(), None);
+        assert!(parse_coverage("coverage:0").is_err());
+        assert!(parse_coverage("coverage:50:0.0001").is_err());
+        assert!(parse_coverage("coverage:50:x").is_err());
+    }
 }

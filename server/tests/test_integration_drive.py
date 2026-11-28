@@ -450,6 +450,10 @@ class DriveSettleTest(unittest.TestCase):
 
         # One visible outer tile and one unshown add at the switch. The mod marks
         # anchor 1 lossy and defers its remove until the new ground has settled.
+        # (with the C2 crossover, off by default since 2026-11-21: crossover.CROSS)
+        cross = modsim.XO["CROSS"]
+        modsim.XO["CROSS"] = 1
+        self.addCleanup(modsim.XO.__setitem__, "CROSS", cross)
         state = {}
         python_far_trace([
             "N mesh", "A 1 0 0 0", "T 1 6_5_4 6 81920 65536 0 1 -",
@@ -545,7 +549,20 @@ class DriveBase(unittest.TestCase):
                  "l2_checked": 0, "l2_bad": [], "l2_d64": 0.0, "l2_d32": 0.0, "under_not_l2": [],
                  "mat_bad": [], "max_mats": 0, "budget_over": [], "bilinear": [], "bilinear_over": [],
                  "max_unit_ms": 0.0, "objects_max": 0, "edge_min": math.inf, "edge_min_at": None,
-                 "terrain_latency": None, "anchor_latency": None}
+                 "terrain_latency": None, "anchor_latency": None,
+                 # LOD overlap (2026-11-21): frames that draw two LODs of the same ground (a running crossover's old
+                 # and new tiles, a covered tile sinking over the block), group-frames, cover-frames
+                 "overlap_frames": 0, "xo_group_frames": 0, "cover_frames": 0,
+                 # far geometry over the drawn block (2026-11-21, "im driving through the old lod terrain sometimes with
+                 # the solid ground being under it"): frames where a shown far tile has a vertex inside the block's
+                 # ground above its surface, tile-frames, the worst excess (m) and where
+                 "over_block_frames": 0, "over_block_tile_frames": 0, "over_block_max": 0.0, "over_block_at": None,
+                 "over_block_checks": 0, "partial_frames": 0, "partial_exact_frames": 0}
+        # BNGE_DRIVE_CROSS=1: the far field as before 2026-11-21 (C2 crossovers in view, the 0.3 s cover sink)
+        if os.environ.get("BNGE_DRIVE_CROSS") == "1":
+            xo = (modsim.XO["CROSS"], modsim.XO["COVER_SINK_S"])
+            modsim.XO["CROSS"], modsim.XO["COVER_SINK_S"] = 1, 0.3
+            self.addCleanup(lambda: modsim.XO.update(CROSS=xo[0], COVER_SINK_S=xo[1]))
         exact_grids = {}                             # (anchorId, key, shape) -> float64 vertex heights
         rng = np.random.default_rng(1234)
         textures = {}                                # material name -> local texture path
@@ -573,6 +590,7 @@ class DriveBase(unittest.TestCase):
             path = self.fs(tr["heightmap"])
             self.assertTrue(os.path.exists(path), tr["heightmap"])
             hm[(aid, tr["cx"], tr["cy"])] = (tr["cx"], tr["cy"], read_q16(path, N), tr["zBase"], tr["maxHeight"])
+            st.setdefault("hm_names", {})[(aid, tr["cx"], tr["cy"])] = tr["heightmap"]
             while len(hm) > 8:                      # the committed block is among the newest few
                 del hm[next(iter(hm))]
 
@@ -728,7 +746,7 @@ class DriveBase(unittest.TestCase):
             gov.heavy_now()
             heavy["ms"], heavy["kind"] = heavy["ms"] + TELEPORT_MS, "teleport"
             tr = m["terrain"]
-            far.switch_anchor(m["anchorId"], False, (tr["cx"], tr["cy"]))
+            far.switch_anchor(m["anchorId"], False, (tr["cx"], tr["cy"]), info=tr)
             st["loading_until"] = st["clock"] + CORE["LOADING_AFTER_TELEPORT_S"]
             st["place"] = int(CORE["PLACE_DELAY_FRAMES"])
             player["p"], player["v"] = [0.0, 0.0, (m["groundZ"] or 0.0) + 1.0], [0.0, 0.0]
@@ -741,7 +759,7 @@ class DriveBase(unittest.TestCase):
         def commit_terrain(msg):
             heavy["ms"], heavy["kind"] = heavy["ms"] + commit_ms, "follow"
             old, new = st["block"], (msg["cx"], msg["cy"])
-            far.on_block_commit(*new)
+            far.on_block_commit(*new, msg)
             st["block"] = new
             c.send({"type": "commit_terrain", "anchorId": st["anchor"], "cx": new[0], "cy": new[1]})
             x, y = player["p"][:2]
@@ -774,7 +792,7 @@ class DriveBase(unittest.TestCase):
             player["v"] = [ex - player["p"][0], ey - player["p"][1]]
             tr = m["terrain"]
             far.transform(src, dst)
-            far.switch_anchor(m["anchorId"], True, (tr["cx"], tr["cy"]))
+            far.switch_anchor(m["anchorId"], True, (tr["cx"], tr["cy"]), info=tr)
             st["anchor"], st["block"], st["tp"] = m["anchorId"], (tr["cx"], tr["cy"]), None
             send_commits(m["anchorId"], tr["cx"], tr["cy"])
             st["pose_t"] = CORE["POSE_INTERVAL"]
@@ -817,6 +835,71 @@ class DriveBase(unittest.TestCase):
             files["loaded"].add(inst.path)
             if inst.material:
                 files["loaded"].add(textures[inst.material])
+            if not mesh and inst.level <= 0 and inst.kind != "dae":
+                # (the engine's box of the shape: farfield.lua tileTop, for the N/E under-floor's depth)
+                inst.top = inst.z + float(tile_verts(inst.path)[:, 2].max())
+
+        vert_cache = {}                     # shape path -> its vertices (n, 3) relative to the tile's position
+        over_cache = {}                     # (id, path, offset, block, anchor) -> worst excess (m) over the block
+
+        def tile_verts(path):
+            v = vert_cache.get(path)
+            if v is None:
+                v = vert_cache[path] = np.asarray(cdae.mesh_arrays(cdae.read(path)["meshes"][0])["verts"], np.float64)
+                if len(vert_cache) > 4000:
+                    del vert_cache[next(iter(vert_cache))]
+            return v
+
+        def check_over_block():
+            """The frame's far geometry over the drawn block: every shown current-anchor tile the block's cover box
+            overlaps (an N/E edge tile, a partial one; the rest are hidden), its triangulated surface (+ its cover
+            offset) at every block sample inside the block's ground against the block's height there."""
+            blk = hm.get((st["anchor"], *st["block"]))
+            if blk is None:
+                return
+            cx, cy, g, zb, mh = blk
+            half = modsim.lattice_table(size)["HALF"]
+            bx0, by0 = cx - half, cy - half
+            gx0, gy0, gx1, gy1 = modsim.ground_box(cx, cy, size)
+            stats["over_block_checks"] += 1
+            over = 0
+            for i in list(far.live.values()):
+                if i.cover not in ("edge", "partial") or far.hidden(i) or not i.loaded or i.kind == "dae":
+                    continue
+                off = far.cover_offset(i)
+                if i.cover == "partial":
+                    stats["partial_frames"] += 1
+                    stats["partial_exact_frames"] += far.exact_sink(i) is not None
+                ck = (id(i), i.path, off, cx, cy, st["anchor"])
+                worst = over_cache.get(ck)
+                if worst is None:
+                    # its triangulated surface (build_tile's diagonals) at every block sample of the overlap
+                    h64 = tile_vertex_heights(i.path, i.z, lay.cells)[0]
+                    sp = (i.x1 - i.x0) / lay.cells
+                    N1 = g.shape[0] - 1
+                    sq = LATTICE["SQUARE"]
+                    a0 = max(0, math.ceil((max(i.x0, gx0) - bx0) / sq - 1e-9))
+                    a1 = min(N1, math.floor((min(i.x1, gx1) - bx0) / sq + 1e-9))
+                    b0 = max(0, math.ceil((max(i.y0, gy0) - by0) / sq - 1e-9))
+                    b1 = min(N1, math.floor((min(i.y1, gy1) - by0) / sq + 1e-9))
+                    if a0 > a1 or b0 > b1:
+                        worst = -math.inf
+                    else:
+                        X, Y = np.meshgrid(bx0 + np.arange(a0, a1 + 1) * sq - i.x0, by0 + np.arange(b0, b1 + 1) * sq - i.y0)
+                        z = ff.surface_at(h64, sp, X, Y) + off
+                        hb = zb + g[b0:b1 + 1, a0:a1 + 1].astype(np.float64) * (mh / 65536)
+                        worst = float((z - hb).max())
+                    if len(over_cache) > 20000:
+                        over_cache.clear()
+                    over_cache[ck] = worst
+                if worst > 1e-3:
+                    over += 1
+                    if worst > stats["over_block_max"]:
+                        stats["over_block_max"] = worst
+                        stats["over_block_at"] = (round(clock["sim"], 2), i.key, i.cover, round(off, 3), st["block"])
+            if over:
+                stats["over_block_frames"] += 1
+                stats["over_block_tile_frames"] += over
 
         def watch_deletes():
             """(g) files of the session folder that disappeared since the last look (wall time)."""
@@ -862,6 +945,14 @@ class DriveBase(unittest.TestCase):
                 same = heights_match_block(h64, h32, ref[0], ref[1], blk[4] / 65536)
                 if not (same and tris_ok) or gx0 % (2 * FAR_ST) or gy0 % (2 * FAR_ST):
                     stats["l2_bad"].append((i.key, d64, d32, (gx0, gy0), "block q 1/%g" % (65536 / blk[4])))
+                    dump = os.environ.get("BNGE_DRIVE_L2_DUMP")
+                    if dump:                    # (diagnostics: the tile's and the block's heights where they differ)
+                        jj, ii = np.nonzero(np.abs(h64 - ref[0]) > 1e-9)
+                        with open(dump, "a") as f:
+                            f.write(repr({"key": i.key, "aid": i.aid, "path": i.path, "block": st["block"],
+                                          "hm": st.get("hm_names", {}).get((st["anchor"], *st["block"])), "bbox": i.bbox0, "n": int(len(jj)), "of": int(h64.size),
+                                          "pts": [(int(a_), int(b_), float(h64[a_, b_]), float(ref[0][a_, b_]))
+                                                  for a_, b_ in list(zip(jj, ii))[:12]]}) + "\n")
             # the visible surface between vertices against the engine's bilinear collision (E7):
             # random points in the current-anchor exact tile under the player
             cur = [i for i in under if i.aid == st["anchor"] and i.level == ex and i.loaded]
@@ -1058,7 +1149,14 @@ class DriveBase(unittest.TestCase):
                 mu0 = gov.max_unit()
                 far.update(gov, dt, camera())
                 far_units, imports, est = far.frame["units"], far.frame["imports"], far.frame["est"]
+                covers = sum(1 for i in list(far.moving) if i.grp is None and far.animating(i))
+                if far.active_groups or covers:
+                    stats["overlap_frames"] += 1
+                stats["xo_group_frames"] += far.active_groups
+                stats["cover_frames"] += covers
                 stats["objects_max"] = max(stats["objects_max"], far.objects())
+                if not mesh and st["block"] is not None and st["place"] is None:
+                    check_over_block()
                 # (e) the frame's budget: every unit was granted while frame_spent + est <= b + max unit;
                 # the last one may overshoot by its cost's excess over its estimate (64 cells: costs
                 # move with the object count, so the frame's own excess)
@@ -1222,7 +1320,19 @@ class DriveBase(unittest.TestCase):
               f"  late tiles (other anchor) {far.counters['late_tiles']}, superseded {stats['superseded_tiles']}, "
               f"previous-anchor tiles left {len(far.old)}, "
               f"unknown removes {len(far.unknown_removes)}, bad swaps {len(stats.get('bad_swaps', []))}, "
-              f"server log issues {len(bad)}", file=sys.stderr)
+              f"server log issues {len(bad)}\n"
+              f"  LOD overlap: frames drawing two LODs of the same ground {stats['overlap_frames']} of "
+              f"{clock['frame']}; crossovers {far.counters['crossovers']} ({stats['xo_group_frames']} group-frames, "
+              f"{stats['xo_group_frames'] / max(1, far.counters['crossovers'] + far.counters['instant']):.2f} overlap "
+              f"frames per swap), instant swaps {far.counters['instant']}; covered tiles sinking over the block "
+              f"{stats['cover_frames']} tile-frames\n"
+              f"  far geometry over the drawn block: {stats['over_block_frames']} of {stats['over_block_checks']} frames "
+              f"({stats['over_block_tile_frames']} tile-frames), worst {stats['over_block_max']:.3f} m at "
+              f"{stats['over_block_at']}; partial tile-frames {stats['partial_frames']} "
+              f"({stats['partial_exact_frames']} sunk by the server's exact cover sink)", file=sys.stderr)
+        if not modsim.OLD_COVER:
+            # (terrain mode: no shown far tile reaches the drawn block's surface inside its ground)
+            self.assertEqual(stats["over_block_frames"], 0, stats["over_block_at"])
         bl = np.array(stats["bilinear"]) if stats["bilinear"] else np.zeros(1)
         bb = np.array(stats.get("bilinear_bound") or [0.0])
         wall_p99 = float(np.percentile(walls[steady & not_heavy], 99)) if (steady & not_heavy).any() else 0.0

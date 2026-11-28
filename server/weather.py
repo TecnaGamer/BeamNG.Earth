@@ -26,6 +26,7 @@ import logging
 import math
 import dmath
 import dnp
+import os
 import threading
 import time
 import urllib.parse
@@ -38,8 +39,15 @@ API = "https://api.open-meteo.com/v1/forecast"
 CURRENT = ("temperature_2m", "dew_point_2m", "relative_humidity_2m", "is_day", "precipitation", "rain",
            "showers", "snowfall", "weather_code", "cloud_cover", "cloud_cover_low", "cloud_cover_mid",
            "cloud_cover_high", "surface_pressure", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
-           "visibility")
+           "visibility", "cape", "lightning_potential")
 HOURLY = ("wind_speed_700hPa", "wind_direction_700hPa")      # winds aloft: where the clouds drift
+# The puddles' rain history (the puddle plan R1, ~/bnge-tests/puddles/PLAN_FINAL.md 1.5; BNE_PUDDLES=v2): the past
+# HIST_HOURS of hourly liquid rain and FAO reference evapotranspiration, asked for in the same request (three more
+# hourly variables, past_hours), sent as integers (um) in the message's "hist"; the mod runs its one water store over
+# them (wetstate.lua: no copy of that recurrence here). Each hourly value is the sum over the hour BEFORE its time.
+PUDDLES_V2 = os.environ.get("BNE_PUDDLES", "").strip().lower() == "v2"
+HIST_HOURLY = ("rain", "showers", "et0_fao_evapotranspiration")
+HIST_HOURS = 24
 CREDIT = "Weather data by Open-Meteo.com"
 VERSION = 1                 # weather.v: the message layout
 
@@ -64,18 +72,81 @@ CODE_FLOORS = ((range(51, 58), 0.3, 0.0), (range(61, 68), 1.0, 0.0), (range(80, 
                (range(71, 78), 0.0, 0.5), ((85, 86), 0.0, 0.5), (range(95, 100), 4.0, 0.0))
 
 
-def url(lat, lon):
+def url(lat, lon, history=None):
+    """history (default PUDDLES_V2): also the past HIST_HOURS of HIST_HOURLY."""
+    history = PUDDLES_V2 if history is None else history
     q = {"latitude": f"{lat:.4f}", "longitude": f"{lon:.4f}", "current": ",".join(CURRENT),
-         "hourly": ",".join(HOURLY), "forecast_hours": 1, "wind_speed_unit": "ms", "timeformat": "unixtime",
-         "timezone": "auto", "cell_selection": "land"}
+         "hourly": ",".join(HOURLY + (HIST_HOURLY if history else ())), "forecast_hours": 1,
+         "wind_speed_unit": "ms", "timeformat": "unixtime", "timezone": "auto", "cell_selection": "land"}
+    if history:
+        q["past_hours"] = HIST_HOURS
     return API + "?" + urllib.parse.urlencode(q, safe=",")
+
+
+def _hour_index(times, now):
+    """The index of the hourly entry for now: the last time at or before now (0 when none is, or no times)."""
+    best = 0
+    for k, t in enumerate(times or ()):
+        if isinstance(t, (int, float)) and not isinstance(t, bool) and t <= now:
+            best = k
+    return best
+
+
+def history(hourly, now):
+    """The 'hist' of the message from an hourly block (pure): {"t0": UTC s at the start of the first hour, "rain": [um
+    of liquid rain (rain + showers) per hour], "et0": [um per hour]} over the completed hours up to now (each entry's
+    value is the hour before its time), oldest first; None without rain data. A missing value counts as 0."""
+    times = hourly.get("time") if isinstance(hourly, dict) else None
+    rain, showers, et0 = (hourly.get(k) if isinstance(hourly, dict) else None for k in HIST_HOURLY)
+    if not isinstance(times, list) or not isinstance(rain, list) or not times:
+        return None
+
+    def um(arr, k):
+        v = arr[k] if isinstance(arr, list) and k < len(arr) else None
+        return max(0, min(500000, int(round(_f(v) * 1000))))
+
+    keep = [k for k, t in enumerate(times) if isinstance(t, (int, float)) and not isinstance(t, bool) and t <= now]
+    if not keep:
+        return None
+    return {"t0": int(times[keep[0]]) - 3600,
+            "rain": [min(500000, um(rain, k) + um(showers, k)) for k in keep],
+            "et0": [min(5000, um(et0, k)) for k in keep]}
 
 
 def fetch(lat, lon, net=None):
     """One Open-Meteo GET (blocking) through net (a netfetch.Fetcher; None = the process-wide one):
     the parsed JSON. Raises netfetch.FetchError (RateLimited / HostUnavailable carry retry_after)."""
     net = net if net is not None else netfetch.default_fetcher()
-    return json.loads(net.get(url(lat, lon), kind="background").body.decode("utf-8"))
+    # (the weather is no build's input: its failures fault no build, netfetch.stale_ok; it runs in the loop's default
+    # executor, where a fault was every running build's, every RETRY_S while offline)
+    with netfetch.stale_ok():
+        return json.loads(net.get(url(lat, lon), kind="background").body.decode("utf-8"))
+
+
+# The snow kernel's hourly forcing (winter W1, BNE_WINTER: server/snow.py; ~/bnge-tests/winterplan PROBES.md P9: every
+# name valid; past_hours / forecast_hours set the window). snowfall in cm is left out: Open-Meteo makes it
+# with a fixed 7:1 ratio; the kernel takes the water equivalent and its own density. 12 variables count ~1.2 calls.
+SNOW_HOURLY = ("temperature_2m", "dew_point_2m", "wet_bulb_temperature_2m", "precipitation",
+               "snowfall_water_equivalent", "wind_speed_10m", "shortwave_radiation", "soil_temperature_0cm",
+               "freezing_level_height", "snow_depth", "relative_humidity_2m", "cloud_cover")
+
+
+def hourly_url(lat, lon, past_hours=240, forecast_hours=6):
+    """The road-surface / snow kernel's request: past_hours before now and forecast_hours after (snow.py: 240 + 6
+    with winter, the pack's memory; 24 + 6 for wet roads alone)."""
+    q = {"latitude": f"{lat:.4f}", "longitude": f"{lon:.4f}", "hourly": ",".join(SNOW_HOURLY),
+         "past_hours": int(past_hours), "forecast_hours": int(forecast_hours), "wind_speed_unit": "ms",
+         "timeformat": "unixtime", "timezone": "auto", "cell_selection": "land"}
+    return API + "?" + urllib.parse.urlencode(q, safe=",")
+
+
+def fetch_hourly(lat, lon, past_hours=240, forecast_hours=6, net=None):
+    """The kernel's hourly forcing at (lat, lon): one Open-Meteo GET (blocking) through net, the parsed JSON, under the
+    same "background" limits as fetch (10 s apart, the 500-a-day cap)."""
+    net = net if net is not None else netfetch.default_fetcher()
+    with netfetch.stale_ok():
+        return json.loads(net.get(hourly_url(lat, lon, past_hours, forecast_hours), kind="background").body
+                          .decode("utf-8"))
 
 
 def _f(v, default=0.0):
@@ -135,11 +206,31 @@ def derive(om, lat=None, lon=None):
                     "gustMs": max(ms, _f(cur.get("wind_gusts_10m"), ms))},
            "tempC": t, "dewC": td, "elevM": elev, "slTempC": round(t + LAPSE * elev, 2),
            "pressureHpa": _f(cur.get("surface_pressure"), 1013.25),
+           "capeJkg": round(_f(cur.get("cape")), 1),
            "credit": CREDIT}
+    # lightning potential (J/kg): only DWD ICON-D2 has it (Central Europe; null everywhere else, the weather plan's
+    # research note 3): the mod's thunder class takes it where present (storm.lua), else the code and the CAPE
+    lpi = cur.get("lightning_potential")
+    if isinstance(lpi, (int, float)) and not isinstance(lpi, bool) and math.isfinite(lpi):
+        msg["lpi"] = round(float(lpi), 2)
     hourly = om.get("hourly") or {}
+    now = msg["t"]
+    times = hourly.get("time") if isinstance(hourly.get("time"), list) else []
+    k = _hour_index(times, now)              # (one entry without past_hours: index 0, as before)
     sp, dr = hourly.get("wind_speed_700hPa"), hourly.get("wind_direction_700hPa")
-    if sp and dr and isinstance(sp[0], (int, float)) and isinstance(dr[0], (int, float)):
-        msg["aloft"] = {"ms": float(sp[0]), "fromDeg": float(dr[0])}
+    if (sp and dr and k < len(sp) and k < len(dr) and isinstance(sp[k], (int, float))
+            and isinstance(dr[k], (int, float))):
+        msg["aloft"] = {"ms": float(sp[k]), "fromDeg": float(dr[k])}
+    hist = history(hourly, now) if now else None
+    if hist:
+        msg["hist"] = hist
+        # ET0 now (um/h): the hour in progress where the block has it, else the last completed one
+        et0 = hourly.get("et0_fao_evapotranspiration")
+        nxt = next((j for j, t in enumerate(times) if isinstance(t, (int, float)) and t > now), None)
+        if isinstance(et0, list) and nxt is not None and nxt < len(et0) and isinstance(et0[nxt], (int, float)):
+            msg["et0Umh"] = max(0, min(5000, int(round(_f(et0[nxt]) * 1000))))
+        else:
+            msg["et0Umh"] = hist["et0"][-1]
     if isinstance(om.get("utc_offset_seconds"), int):
         msg["utcOffsetS"] = om["utc_offset_seconds"]
     if isinstance(om.get("timezone"), str):

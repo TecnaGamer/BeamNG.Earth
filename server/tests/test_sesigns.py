@@ -157,7 +157,7 @@ class SeparationTest(unittest.TestCase):
 
 class SpanishTest(unittest.TestCase):
     def main(self, cls="trunk", kmh=100.0, urban=False):
-        return way("m", north(-1000, 1000), PLAIN, spec(11.0, cls, False, kmh, 2, urban=urban))
+        return way("m", north(-1000, 1000), SPLIT, spec(11.0, cls, False, kmh, 3, urban=urban))
 
     def loop(self):
         """A one-way link off the right of a road going north, back round to cross it."""
@@ -180,6 +180,67 @@ class SpanishTest(unittest.TestCase):
     def test_a_plain_slip_road_is_not(self):
         xy = np.c_[np.linspace(0, 60, 9), np.linspace(0, 40, 9)]
         self.assertEqual(sesigns.spanish([self.main(), way("l", xy, {}, spec(6.0, "trunk", True, 50.0, 1, True))]), [])
+
+    def test_matching_loop_on_an_ordinary_road_has_no_f2(self):
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        for tags, lanes in ((PLAIN, 2), ({}, None), ({"lanes": "3"}, 3),
+                            ({**SPLIT, "turn:lanes:forward": "left|through"}, 3),
+                            ({"lanes:forward": "2", "lanes:backward": "2"}, 4)):
+            with self.subTest(tags=tags):
+                main = way("m", north(-1000, 1000), tags, spec(lanes=lanes))
+                self.assertEqual(sesigns.spanish([main, link]), [])
+                self.assertEqual(of(sesigns.all_signs([main, link]), "se_f2"), [])
+
+    def test_a_short_three_lane_pocket_is_not_a_2_plus_1_section(self):
+        main = way("m", north(-50, 50), SPLIT)
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        self.assertEqual(sesigns.spanish([main, link]), [])
+
+    def test_a_1_plus_1_connector_between_sections_still_gets_f2(self):
+        main = way("m", north(-400, 400), PLAIN, spec(lanes=2))
+        ways = [main, way("before", north(-1000, -400), SPLIT),
+                way("after", north(400, 1000), SPLIT),
+                way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))]
+        self.assertIs(sesigns.spanish(ways)[0][1], main)
+        self.assertEqual(len(of(sesigns.all_signs(ways), "se_f2")), 1)
+
+    def test_paired_carriageways_need_a_confirmed_2_plus_1_split(self):
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        for lanes, opposite, expected in ((2, 1, 1), (1, 2, 1), (1, 1, 0), (2, 2, 0),
+                                          (None, 1, 0), (2, None, 0)):
+            with self.subTest(lanes=lanes, opposite=opposite):
+                main = way("m", north(-1000, 1000), {}, spec(8, oneway=True, lanes=lanes))
+                other = way("other", north(1000, -1000, -7), {}, spec(4, oneway=True, lanes=opposite))
+                self.assertEqual(len(sesigns.spanish([main, other, link])), expected)
+
+    def test_unrelated_carriageway_does_not_confirm_a_2_plus_1_road(self):
+        main = way("m", north(-1000, 1000), {}, spec(8, oneway=True, lanes=2))
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        for xy in (north(-1000, 1000, -7), north(1000, -1000, -50), north(1000, -1000, 7),
+                   np.array([[-1000, 0], [1000, 0]]), north(50, -50, -7)):
+            with self.subTest(xy=xy.tolist()):
+                other = way("other", xy, {}, spec(4, oneway=True, lanes=1))
+                self.assertEqual(sesigns.spanish([main, other, link]), [])
+
+    def test_a_2_plus_1_road_split_round_the_junctions_island_still_gets_f2(self):
+        """Rv 27 south of Borås: short one-lane one-ways with no lane tags at the junction, a section 236 m on."""
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        for start, expected in ((-300, 1), (-500, 0)):
+            with self.subTest(section_ends_at=start):
+                main = way("m", north(-150, 150), {}, spec(4.5, oneway=True, lanes=1))
+                section = way("s", north(start - 700, start), SPLIT)
+                self.assertEqual(len(sesigns.spanish([main, section, link])), expected)
+
+    def test_an_island_needs_a_section_of_its_own_class(self):
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        main = way("m", north(-150, 150), {}, spec(4.5, oneway=True, lanes=1))
+        section = way("s", north(-1000, -300), SPLIT, spec(cls="primary"))
+        self.assertEqual(sesigns.spanish([main, section, link]), [])
+
+    def test_an_unpaired_one_way_is_not_a_2_plus_1_road(self):
+        main = way("m", north(-1000, 1000), {}, spec(8, oneway=True, lanes=2))
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        self.assertEqual(sesigns.spanish([main, link]), [])
 
     def test_a_service_road_is_not(self):
         self.assertEqual(sesigns.spanish([self.main(), way("l", self.loop(), {}, spec(6.0, "service", True, 30.0, 1))]), [])
@@ -224,6 +285,150 @@ class RampTest(unittest.TestCase):
     def test_motorway_broken_by_a_bridge_is_not_an_end(self):
         got = sesigns.all_signs([pair("a", north(-800, 0), 2, "motorway"), pair("b", north(30, 800), 2, "motorway")])
         self.assertEqual(of(got, "se_e1") + of(got, "se_e2"), [])
+
+
+def street(fid, xy, cls="residential", oneway=False, dir_=1, width=6.0, median=None, urban=True):
+    sp = roads.Spec(width, "paved", urban, cls, oneway, 2.5, dir_, 50.0, None, median)
+    return (fid, sp, np.c_[np.asarray(xy, np.float64), np.zeros(len(xy))], 18.0)
+
+
+class OneWayTest(unittest.TestCase):
+    """C1 and E16 at a town one-way street's junctions (TSFS 2019:74 4 kap. 3 §, 6 kap. 16-17 §§)."""
+    def tee(self, dir_=1, cross_oneway=False, median=None, urban=True, cls="residential"):
+        # an east-west two-way road along y = 0 and a one-way street north from (0, 0)
+        cross = [street("w", [(-200, 0), (0, 0)], oneway=cross_oneway), street("e", [(0, 0), (200, 0)], oneway=cross_oneway)]
+        return sesigns.oneway_signs(cross + [street("n", [(0, 0), (0, 150)], cls, True, dir_, median=median, urban=urban)])
+
+    def test_c1_both_sides_where_its_traffic_leaves(self):
+        got = self.tee(dir_=-1)                         # (drawn north, driven south: it ends at the junction)
+        c1 = of(got, "se_c1_t")
+        self.assertEqual(len(c1), 2)
+        self.assertEqual(of(got, "se_e16_l") + of(got, "se_e16_r"), [])
+        for g in c1:
+            np.testing.assert_allclose(g.facing, [0.0, 1.0], atol=1e-9)    # (whoever would drive north into it)
+            self.assertGreater(g.p[1], 3.0)                                 # (past the crossing road's edge)
+            self.assertAlmostEqual(abs(g.p[0]), 3.0 + sesigns.PLAIN_SIDE_M)
+
+    def test_e16_at_both_corners_where_it_begins(self):
+        got = self.tee(dir_=1)
+        self.assertEqual(of(got, "se_c1_t"), [])
+        e16 = of(got, "se_e16_l") + of(got, "se_e16_r")
+        self.assertEqual(len(e16), 2)
+        for g in e16:
+            # each corner faces the crossing traffic that reaches it first; the arrow points north, along the street
+            self.assertAlmostEqual(abs(float(g.facing[0])), 1.0)
+            heading_east = g.facing[0] > 0
+            self.assertEqual(g.group, "se_e16_l" if heading_east else "se_e16_r")
+            self.assertEqual(g.p[0] < 0, heading_east)
+
+    def test_no_e16_where_every_crossing_road_is_one_way(self):
+        got = self.tee(dir_=1, cross_oneway=True)       # (the crossing road's own ends get their C1)
+        self.assertEqual(of(got, "se_e16_l") + of(got, "se_e16_r"), [])
+
+    def test_a_divided_roads_carriageway_gets_neither(self):
+        """The road is two-way: its carriageways are one-way, but nobody meets a no-entry sign on it (the user,
+        2026-11-17: only "whenever the road is one way and not when its just the wrong direction")."""
+        self.assertEqual(self.tee(dir_=-1, median=20.0), [])
+        self.assertEqual(self.tee(dir_=1, median=20.0), [])
+
+    def twins(self, gap):
+        # an east-west two-way road along y = 0; one-way streets north from (0, 0) (driven south) and from (gap, 0)
+        # (driven north), the map not pairing them
+        return sesigns.oneway_signs([street("w", [(-200, 0), (0, 0)]), street("m", [(0, 0), (gap, 0)]),
+                                     street("e", [(gap, 0), (200, 0)]),
+                                     street("a", [(0, 0), (0, 150)], oneway=True, dir_=-1),
+                                     street("b", [(gap, 0), (gap, 150)], oneway=True, dir_=1)])
+
+    def test_an_unpaired_carriageway_alongside_the_other_way_is_a_divided_road(self):
+        self.assertEqual(self.twins(14.0), [])
+
+    def test_one_way_streets_a_block_apart_keep_their_signs(self):
+        got = self.twins(60.0)
+        self.assertEqual(len(of(got, "se_c1_t")), 2)
+        self.assertEqual(len(of(got, "se_e16_l") + of(got, "se_e16_r")), 2)
+
+    def test_not_out_of_town_nor_a_service_road(self):
+        self.assertEqual(self.tee(dir_=-1, urban=False), [])
+        self.assertEqual(self.tee(dir_=-1, cls="service"), [])
+
+    def test_not_where_only_a_drive_joins(self):
+        # a one-way street with a car park's way off it: no junction of streets
+        got = sesigns.oneway_signs([street("s", [(0, -150), (0, 0)], oneway=True), street("n", [(0, 0), (0, 150)], oneway=True),
+                                    street("p", [(0, 0), (60, 0)], cls="service")])
+        self.assertEqual(got, [])
+
+    def test_no_c1_where_one_way_roads_merge(self):
+        # two one-way roads join into a third going on north: nobody comes who could turn into either
+        got = sesigns.oneway_signs([street("a", [(-10, -150), (0, 0)], oneway=True), street("b", [(10, -150), (0, 0)], oneway=True),
+                                    street("n", [(0, 0), (0, 150)], oneway=True)])
+        self.assertEqual(got, [])
+
+    def test_c1_where_a_one_way_road_brings_traffic_across(self):
+        # a one-way street ends at a one-way road coming in from the west and going on east
+        got = sesigns.oneway_signs([street("w", [(-200, 0), (0, 0)], oneway=True), street("e", [(0, 0), (200, 0)], oneway=True),
+                                    street("n", [(0, 0), (0, 150)], oneway=True, dir_=-1)])
+        # two on the street, and two on the road's west arm: the street's traffic could turn right into it
+        street_ = [g for g in got if g.p[1] > 4.0]
+        west = [g for g in got if g.p[0] < -4.0]
+        self.assertEqual((len(street_), len(west)), (2, 2))
+        for g in street_:
+            np.testing.assert_allclose(g.facing, [0.0, 1.0], atol=1e-9)
+        for g in west:
+            np.testing.assert_allclose(g.facing, [-1.0, 0.0], atol=1e-9)
+        self.assertEqual(len(got), 4)
+
+    def test_not_on_a_junctions_own_short_link(self):
+        # a 6 m one-way link between two junctions' crossing roads gets none
+        link = [street("w", [(-200, 0), (0, 0)]), street("e", [(0, 0), (200, 0)]),
+                street("k", [(0, 0), (0, 6)], oneway=True, dir_=-1), street("x", [(-100, 6), (0, 6)]),
+                street("y", [(0, 6), (100, 6)])]
+        self.assertEqual(sesigns.oneway_signs(link), [])
+
+    def test_nothing_on_a_two_way_street(self):
+        cross = [street("w", [(-200, 0), (0, 0)]), street("e", [(0, 0), (200, 0)]), street("n", [(0, 0), (0, 150)])]
+        self.assertEqual(sesigns.oneway_signs(cross), [])
+
+    def test_the_groups_have_their_heights(self):
+        with open(TREES, encoding="utf-8") as fh:
+            lua = fh.read()
+        for g in ("se_c1_t", "se_e16_r", "se_e16_l"):
+            self.assertIn(g, guardrails.GROUPS)
+            self.assertIn(f"{g} = {sesigns.HEIGHTS[g]:.2f}", lua)
+
+
+class LivingStreetTest(unittest.TestCase):
+    """E9 and E10 where a gångfartsområde (living_street) meets another street (TSFS 2019:74 6 kap. 1 §)."""
+    def tee(self, cls="living_street", oneway=False, dir_=1, cross="residential"):
+        # an east-west street along y = 0 and the living street north from (0, 0)
+        return sesigns.living_signs([street("w", [(-200, 0), (0, 0)], cross), street("e", [(0, 0), (200, 0)], cross),
+                                     street("n", [(0, 0), (0, 150)], cls, oneway, dir_)])
+
+    def test_e9_in_on_the_right_e10_out_on_the_right(self):
+        got = self.tee()
+        self.assertEqual(sorted(g.group for g in got), ["se_e10", "se_e9"])
+        e9, e10 = of(got, "se_e9")[0], of(got, "se_e10")[0]
+        np.testing.assert_allclose(e9.facing, [0.0, 1.0], atol=1e-9)      # (the drivers turning in, heading north)
+        self.assertGreater(e9.p[0], 0.0)                                    # (on their right: east)
+        np.testing.assert_allclose(e10.facing, [0.0, -1.0], atol=1e-9)    # (the drivers leaving, heading south)
+        self.assertLess(e10.p[0], 0.0)                                      # (on their right: west)
+        for g in got:
+            self.assertGreater(g.p[1], 3.0)                                 # (past the street's edge)
+
+    def test_one_way_only_the_sign_its_traffic_passes(self):
+        self.assertEqual([g.group for g in self.tee(oneway=True, dir_=1)], ["se_e9"])
+        self.assertEqual([g.group for g in self.tee(oneway=True, dir_=-1)], ["se_e10"])
+
+    def test_none_inside_the_area_nor_off_a_car_park(self):
+        self.assertEqual(self.tee(cross="living_street"), [])
+        self.assertEqual(self.tee(cross="service"), [])
+        self.assertEqual(self.tee(cls="residential"), [])
+
+    def test_the_groups_have_their_heights(self):
+        with open(TREES, encoding="utf-8") as fh:
+            lua = fh.read()
+        for g in ("se_e9", "se_e10"):
+            self.assertIn(g, guardrails.GROUPS)
+            self.assertIn(f"{g} = {sesigns.HEIGHTS[g]:.2f}", lua)
 
 
 class ZebraTest(unittest.TestCase):

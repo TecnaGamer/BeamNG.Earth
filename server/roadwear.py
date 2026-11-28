@@ -303,6 +303,91 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
     return out
 
 
+# Puddles (the 2026-11-26 playtest: "theres no puddles either. remember this game has physicly based textures"): where
+# rain water stands on a paved road, laid by the native earthfast.puddle_plan (roadwear.rs: the sags of the centre
+# line's profile, a kerb's gutter, the wheel paths' ruts; from each road's seed and distance along it, as the wear),
+# quads of the puddle atlas (PUDDLE_CELLS: 4 shapes a row, the rows ever shallower). The chunks carry "puddle": 1:
+# roadmesh.build leaves them out of the road mesh, and a geotile's skin draws them as a mesh of their own (blockworker
+# _geo_skin_build: the "puddle" part), which the mod shows only while the ground is wet (wetlook.lua: the material's
+# alpha threshold falls as the rain fills them, rises as they dry: a smooth water film, roughness 0.06, its colour the
+# overcast sky a puddle mirrors: broker r9, our static meshes got no sky reflection at Normal, a dark film vanished on
+# the wet asphalt; an APPROXIMATION for the missing reflections until a real reflection source, a later job: see
+# wetlook.lua). BNE_PUDDLES=off: none (keyed by the build switches).
+PUDDLES = os.environ.get("BNE_PUDDLES", "on").strip().lower() not in ("off", "0", "no", "false")
+PUDDLE_MATERIAL = "bne_puddle"
+PUDDLE_CELLS = _grid(4, 4)
+PUDDLE_KINDS = (20, 21, 22)      # roadwear.rs K_PUDDLE_SAG / GUTTER / RUT
+
+
+def puddle_chunks(roads, seen, box, has_sidewalks, exclude=None, skip=()):
+    """The puddle chunks of a tile's roads (tile_chunks's arguments; has_sidewalks(spec): kerbs along its edges, the
+    gutters). One chunk of quads ("quads": 1, "puddle": 1, "wear": 1: no DecalRoad fallback draws it), or none."""
+    if not PUDDLES or not roads:
+        return []
+    import fast
+    import roads as roadsmod
+    fast.require(639, "puddle_plan")
+    pts, off, rows, gut = [], [0], [], []
+    for fid, spec, p, _lon in roads:
+        p = np.asarray(p, np.float64)
+        pts.append(p[:, :3])
+        off.append(off[-1] + len(p))
+        hw = float(spec.width) / 2
+        paved = spec.kind in roadsmod.BUILT and fid not in skip and len(p) >= 2     # (asphalt and setts: Fells Point's brick streets)
+        drive, lanes, doff = 2 * hw, 1, 0.0
+        if paved:
+            drive, lanes = roadsmod.lane_layout(spec)
+            doff = roadsmod.driving_offset(spec)
+        feats, i = (seen[fid][0], seen[fid][1]) if fid in seen else (None, 0)
+        rows.append((hw, float(drive), float(doff), float(lanes), float(bool(spec.oneway)),
+                     float(CLASS_CODE.get(spec.cls, 7)), float(spec.surf == "concrete"), float(bool(spec.urban)),
+                     _condition(feats, i), float(_seed(fid)), float(paved), 0.0, hw + CUT_MARGIN, 0.0, 0.0))
+        gut.append(1 if paved and has_sidewalks(spec) else 0)
+    if not any(r[10] for r in rows):
+        return []
+    excl = []
+    if exclude is not None:
+        bxs = [(q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()) for q in pts]
+        ids = [r[0] for r in roads]
+        for a, ba in enumerate(bxs):
+            if not rows[a][10]:
+                continue
+            for b, bb in enumerate(bxs):
+                if a != b and ba[0] <= bb[2] + 20 and bb[0] <= ba[2] + 20 and ba[1] <= bb[3] + 20 \
+                        and bb[1] <= ba[3] + 20 and exclude(ids[a], ids[b]):
+                    excl.append((a, b))
+    P, O, A = fast._ef.puddle_plan(np.ascontiguousarray(np.concatenate(pts)), np.asarray(off, np.int64),
+                                   np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, NA)),
+                                   np.asarray(excl, np.int64).reshape(-1, 2), np.asarray(box, np.float64)[:4],
+                                   np.asarray(gut, np.uint8))
+    corners, uvs = [], []
+    for k in range(len(A)):
+        u0, v0, u1, v1 = PUDDLE_CELLS[int(A[k][4]) % len(PUDDLE_CELLS)]
+        corners.extend(np.round(P[O[k]:O[k + 1], :3], 3).tolist())
+        uvs.extend([[u0, v1], [u1, v1], [u1, v0], [u0, v0]])
+    if not corners:
+        return []
+    return [{"m": PUDDLE_MATERIAL, "p": 8, "layer": "puddle", "wear": 1, "puddle": 1, "w": 0.0, "tl": 1.0, "n": [],
+             "poly": corners, "uvq": uvs, "quads": 1}]
+
+
+def puddle_spots(chunks, mesh, origin):
+    """A skin's puddles as spots for the mod's aquaplaning (the native earthfast.puddle_spots: per quad of the chunks
+    marked "puddle" its centre, along axis, half sizes and atlas cell, its height the mean of the puddle mesh's
+    vertices inside it; quads the tile's clip left without any are not there): one flat list, 8 numbers a spot
+    (x, y, z relative to origin, ux, uy, a, b, cell), for the skin's "puddle" part (blockworker _geo_skin_build)."""
+    import fast
+    polys = [c for c in chunks if c.get("puddle") and c.get("quads") and c.get("poly") and c.get("uvq")]
+    if not polys or mesh is None or not len(mesh[0]):
+        return []
+    fast.require(641, "puddle_spots")
+    poly = np.ascontiguousarray(np.concatenate([np.asarray(c["poly"], np.float64)[:, :2] for c in polys]))
+    uvq = np.ascontiguousarray(np.concatenate([np.asarray(c["uvq"], np.float64)[:, :2] for c in polys]))
+    S = fast._ef.puddle_spots(poly, uvq, np.ascontiguousarray(np.asarray(mesh[0], np.float64)[:, :3]),
+                              np.asarray(origin, np.float64)[:3])
+    return [int(x) if k % 8 == 7 else float(x) for k, x in enumerate(np.asarray(S, np.float64).ravel().tolist())]
+
+
 def surface_chunks(pts, off, rows, excl, box, tier):
     """The v2 surface pieces (SURFACE_V2: earthfast.surface_plan) as road mesh chunks; tile_chunks's arrays (the roads'
     centre lines, offsets, attrs rows, excluded pairs), box and tier. Each strip carries its end fade ("fend_m")."""

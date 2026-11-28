@@ -73,7 +73,7 @@ player right now, e.g.:
   full attribution line with one name). The wording is CREDITS.md's, word for word (tested). Message `{"type":"credits","v":1,"near","far","ids","farIds"}`, e.g. near "Imagery: USGS
   The National Map | Elevation: Mapterhorn (see mapterhorn.com/attribution) | Weather data by
   Open-Meteo.com", far "Far imagery: EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH
-  (Contains modified Copernicus Sentinel data 2023)". Checked after poses and swaps at most once a
+  (Contains modified Copernicus Sentinel data 2016 & 2017)". Checked after poses and swaps at most once a
   second, sent only on change, re-sent on hello. `earthd --credits on|off` (default on);
   `Server()` has none, so the golden message streams (test_cli_default, test_v131_default) are
   unchanged. Agreement table, server/README.md protocol table.
@@ -106,7 +106,7 @@ player right now, e.g.:
   interpreter with a stub imgui, plus the two draw-list calls.
 - Deviations: the far part uses the same wording as the near one (EOX asks for its exact wording,
   so "far: Sentinel-2 cloudless" became "Far imagery: EOxCloudless ... (Contains modified Copernicus
-  Sentinel data 2023)"). No capture year for USGS (ImageryOnly tiles carry no date) and no
+  Sentinel data 2016 & 2017)"). No capture year for USGS (ImageryOnly tiles carry no date) and no
   underlying dataset for Mapterhorn (its tiles do not say which survey they come from): the credit
   names Mapterhorn with its attribution page. OSM / Overture are not used yet, so not credited.
   Shown whenever our world is active, also in another level after a teleport (our tiles are on

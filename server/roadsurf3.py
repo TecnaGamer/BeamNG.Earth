@@ -73,6 +73,19 @@ _LANES_LRU = OrderedDict()
 _LANES_LOCK = Lock()
 _LANES_LRU_N = 48
 
+# A home cell's lane graph kept on disk for the server's other processes and later runs of the same code (2026-11-21,
+# road waits: every road, terrain and photo process made each one again, reading the 25-odd cells round it, their
+# road specs and those cells' neighbours; 3-5 s of a Montreal road tile). Beside the home cell's roads mirror (pruned
+# with the mirror: mapdata.prune_mirror). Its key: LANES_DISK_FORMAT, the code and the build switches (revisit.code_key:
+# any change of the server's modules or its native module makes them again), the home cell, the border data, the map
+# data's versions (mapdata.MapData.versions: the release, the tag data, the DEM, the pipeline's switches) and the lane
+# kernel's version and mode. Its read list: every cell the graph read (its input window, distant copies too) with its
+# roads file's stamp, checked on every read. Kept only when complete: nothing read short, every read cell's layer from
+# its own file with the tag data its decode asked for (mapdata.MapData.roads_complete), its revision unchanged.
+# BNE_LANES_DISK=off: in memory only, as before. A reader passes its MapData as the cell function's lanes_md.
+LANES_DISK = os.environ.get("BNE_LANES_DISK", "on") not in ("off", "0", "false")
+LANES_DISK_FORMAT = 1
+
 
 def _cell_lanes(key, cell_fn, memo):
     import countrybounds
@@ -106,8 +119,16 @@ def _cell_lanes(key, cell_fn, memo):
                 if _LANES_LRU.get(home) is entry:
                     _LANES_LRU.move_to_end(home)
             return got
+    md = getattr(cell_fn, "lanes_md", None) if LANES_DISK else None
+    disk = _disk_key(md, key, memo) if md is not None else None
+    if disk is not None:
+        got = _disk_load(md, key, disk)
+        if got is not None:
+            # (not into the LRU: its entries are checked by the decoded layers' tokens, which a hit never decodes)
+            return got
     keys = []
-    got = lanegraph.cell_lanes(key, lambda k: snapshot(k)[0], memo, read_cells=keys, events_only=True)
+    with revisit.scope() as built:
+        got = lanegraph.cell_lanes(key, lambda k: snapshot(k)[0], memo, read_cells=keys, events_only=True)
     stamps = [snapshot(k)[1] for k in keys]
     if any(stamp is not None and getattr(snapshots[k][0], "_road_revision", 0) != stamp[1]
            for k, stamp in zip(keys, stamps)):
@@ -119,7 +140,82 @@ def _cell_lanes(key, cell_fn, memo):
             _LANES_LRU.move_to_end(home)
             if len(_LANES_LRU) > _LANES_LRU_N:
                 _LANES_LRU.popitem(last=False)
+        if disk is not None and built.complete:
+            _disk_store(md, key, disk, got, [(k, snapshots[k][0]) for k in keys])
     return got
+
+
+def _disk_key(md, key, memo):
+    """The disk key (a str) of home cell key's lane graph, or None (no mirror, no code key)."""
+    import countrybounds
+    import hashlib
+    import json
+    import revisit
+    try:
+        vers = memo.get("_lanes_versions")
+        if vers is None:            # (once per build: the same for every home cell it reads)
+            vers = memo["_lanes_versions"] = json.dumps(md.versions(), sort_keys=True, default=str)
+        parts = [LANES_DISK_FORMAT, revisit.code_key(), str(key), countrybounds.signature(), vers,
+                 lanegraph.LANES_VERSION, lanegraph.LANES_FORMAT, lanegraph.MODE, True]
+        return hashlib.sha256(json.dumps(parts, default=str).encode("utf-8")).hexdigest()
+    except Exception:               # (no key: made here, as before)
+        return None
+
+
+def _disk_load(md, key, want):
+    """Home cell key's lane graph kept under key want whose every read cell's roads file is as it was, or None."""
+    import json
+    d = md.roads_product_dir(key, "lanes")
+    if d is None:
+        return None
+    try:
+        with open(os.path.join(d, "ok"), encoding="utf-8") as fh:
+            got, head = fh.readline().rstrip("\n"), fh.read()
+        if got != want:
+            return None
+        rec = json.loads(head)
+        for cell, stamp in rec["read"]:
+            if md.roads_stamp(cell) != stamp:
+                return None
+        os.utime(os.path.join(d, "ok"))         # (read: the last to go, as the mirror's)
+        return rec["graph"]
+    except FileNotFoundError:
+        return None
+    except Exception:               # (damaged, or another format's: made again)
+        return None
+
+
+def _disk_store(md, key, want, got, reads):
+    """Home cell key's lane graph got kept under key want with its read list, when every read cell's layer may be
+    (reads: [(cell, its decoded layer or None)]); nothing raised."""
+    import json
+    import shutil
+    import threading
+    d = md.roads_product_dir(key, "lanes")
+    if d is None:
+        return
+    tmp = None
+    try:
+        read = []
+        for k, f in reads:
+            stamp = md.roads_stamp(str(k))
+            if f is None or stamp is None or not md.roads_complete(k, f):
+                return              # (a cell not there, a stand-in, its tags not joined: made again next time)
+            read.append([str(k), stamp])
+        body = json.dumps({"read": read, "graph": got}, separators=(",", ":"))
+        tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
+        os.makedirs(tmp, exist_ok=True)
+        with open(os.path.join(tmp, "ok"), "w", encoding="utf-8") as fh:
+            fh.write(want + "\n" + body)
+        if os.path.isdir(d):        # (another key's, or another process's of the same)
+            shutil.rmtree(d, ignore_errors=True)
+        os.rename(tmp, d)
+        tmp = None
+    except Exception:
+        pass
+    finally:
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _cells_of(frame, box):
@@ -526,6 +622,7 @@ def paint_geometry(surface, frame, box, widths, pending=None):
                 surface._queue(key, ("roads",))
             return None
         return surface.md.cell(key, layers=("roads",), kind="background").layers.get("roads")
+    cell.lanes_md = surface.md          # (the lane graphs kept on disk: LANES_DISK; a cell not there is never kept)
 
     try:
         country = countrybounds.bundled().at(frame.lat0, frame.lon0)

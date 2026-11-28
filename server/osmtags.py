@@ -15,9 +15,12 @@ replaced source way IDs. The tag values are parsed in the query
 The file is rewritten in place: a version is pinned by its ETag (the cache directory; every range request carries
 If-Match, rangeread.Changed when it moved on), and the next version is taken on the next start (version()).
 
-A layer of its own is not needed: mapdata joins the tags into the roads layer when it builds a cell (all processes
-read the same cell file, so a road's lanes and width agree everywhere). Unreachable: the cell keeps no tags and the
-roads use their width guesses (roads.carriageway), as before.
+A layer of its own is not needed: mapdata joins the tags into the roads layer when it decodes a cell (MapData._osm_join,
+since roads 10; the cell file is Overture's alone), from the server run's one build of the weekly tag shards
+(osmtagshards.py, pagesdata's session), so a road's lanes and width agree in every cell and process of a run, and that
+build is in every key made of them (MapData.versions() "osmtags"). This file is read when the run has no shard build
+(the decode is then keyed "layercake"), or stands in for a shard that could not be read (a stand-in: nothing kept is
+made of it). Unreachable: no tags, the roads use their width guesses (roads.carriageway), as before.
 """
 import json
 import logging
@@ -115,42 +118,13 @@ class OsmTags:
         with self._lock:
             if self._remote is not None and time.time() - self._checked < VERSION_TTL_S:
                 return self._remote
-            pin = os.path.join(self.raw_dir, self.DIR, "pinned")
-            etag = size = None
-            try:
-                with open(pin) as f:
-                    etag, size, when = f.read().split("\n")[:3]
-                    size, when = int(size), float(when)
-                if time.time() - when > VERSION_TTL_S:
-                    etag = None
-            except (OSError, ValueError):
-                etag = None
-            if etag is None:
-                down = os.path.join(self.raw_dir, self.DIR, "unreachable")
-                try:
-                    recent = time.time() - os.path.getmtime(down) < RETRY_S
-                except OSError:
-                    recent = False
-                if recent:
-                    raise rangeread.RangeError(f"{self.url}: unreachable at the last try")
-                try:
-                    r = self.fetcher.get(self.url, kind=kind, headers={"Range": "bytes=0-15"})
-                    etag = r.headers.get("etag", "").strip()
-                    m = rangeread.CONTENT_RANGE.match(r.headers.get("content-range", ""))
-                    if not etag or not m or m.group(3) == "*":
-                        raise rangeread.RangeError(f"{self.url}: no ETag or size")
-                except Exception:
-                    os.makedirs(os.path.dirname(down), exist_ok=True)
-                    open(down, "w").close()
-                    raise
-                size = int(m.group(3))
-                os.makedirs(os.path.dirname(pin), exist_ok=True)
-                with open(pin + ".tmp", "w") as f:
-                    f.write(f"{etag}\n{size}\n{time.time()}\n")
-                os.replace(pin + ".tmp", pin)
+            # (a pin past VERSION_TTL_S stays in use when the server cannot be asked: stale-if-error)
+            etag, size, fresh_for = rangeread.pinned_version(
+                self.fetcher, self.url, os.path.join(self.raw_dir, self.DIR), kind, VERSION_TTL_S, RETRY_S,
+                f"{self.DIR}: {self.url}")
             d = os.path.join(self.raw_dir, self.DIR, re.sub(r"[^A-Za-z0-9]+", "_", etag).strip("_"))
             self._remote = (etag, rangeread.RemoteFile([self.url], size, d, self.fetcher, if_match=etag))
-            self._checked = time.time()
+            self._checked = time.time() - VERSION_TTL_S + fresh_for     # (asked again after fresh_for)
             return self._remote
 
     def _forget(self):

@@ -16,9 +16,11 @@
 --   far_swap {anchorId, id, add = [keys], remove = [keys], dIn?, dOut?}
 --     One LOD change. It runs once every add is loaded, never earlier ("no removal before the
 --     replacement is loaded", so never a hole), and groups that share a key run in arrival order.
---     It runs as a C2 vertical crossover (crossover.lua) whenever any of it is in view, at any
---     distance (v1.3 D: no "beyond 30 km instant" rule), else as an instant swap (C1). At the
---     transition cap a group in view within NEAR_POP_M waits for a free slot instead of popping.
+--     It runs as an instant swap (C1): the removed tiles hide in the frame the added ones show, so
+--     two LODs of the same ground are never drawn together (crossover.CROSS = 0, 2026-11-21). With
+--     CROSS = 1 it runs as a C2 vertical crossover (crossover.lua) whenever any of it is in view, at
+--     any distance (v1.3 D), and at the transition cap a group in view within NEAR_POP_M waits for
+--     a free slot instead of popping.
 --     dIn >= max(new - old), dOut >= max(old - new) are the server's measured amplitudes; without
 --     them (or for a one-sided group) the bound 1.2 * (err_new + err_old) + 0.2 m is used.
 --   far_remove {anchorId, key}  a prefetch eviction, or a previous anchor's tile after a rebase:
@@ -47,13 +49,17 @@
 -- Near visual (server hello.nearVisual, setNearVisual):
 --   'terrain' (v1.2): the TerrainBlock is the visible near ground. The server keeps the 8 x 8 L0
 --     tiles under the committed block loaded, and this module decides their state locally from the
---     block's [cx-1024, cx+1024]^2 ("covered", design 2.3):
---       edge ring (touching the block boundary): lowered by the server's `sink` (>= max(tile -
---         terrain) + 0.3 m), so it is under the terrain everywhere; it acts as an under-floor and
---         covers the 2 m N/E strip past the block's collidable width (lattice.lua);
---       interior: hidden.
+--     block's [cx-1024, cx+1024]^2 ("covered", design 2.3; coverOf):
+--       N/E edge ring (touching the block's N or E boundary): the under-floor of the 1-2 m N/E strip past the
+--         block's collidable width (lattice.lua), its top sunk under the block's floor (the terrain message's zBase)
+--         and at least by the server's `sink`, so no part of it reaches the block's surface;
+--       every other covered tile: hidden (2026-11-21: the server's `sink` is measured against the tile's own lattice,
+--         and a sunk edge tile stood through a provisional or re-graded block's road cuts);
+--       across the block's edge ('partial', a hard commit's coarse tile): sunk by the server's exact cover sink
+--         against this block (terrain message `cover`), else by its error bound.
 --     onBlockCommit runs in the commit frame (the governor's heavy slot): newly uncovered tiles come
---     back at their true height at once; newly covered ones sink over 0.3 s (then hide if interior).
+--     back at their true height at once; newly covered ones drop to their cover state at once too
+--     (crossover.COVER_SINK_S = 0; with a positive value they sink over it, then hide if interior).
 --   'detail' (2026-10-12): the mesh layout ('mesh' below) with the TerrainBlock drawn as the near ground
 --     (aerial photo base colour, terrain.lua): tiles under it are covered as in 'terrain' mode, against
 --     the 512² block (the server forces L-1 under it, so tile edges meet its 128 m-grid edges). The dev
@@ -107,7 +113,6 @@ local sqrt, deg, rad, atan, tan = math.sqrt, math.deg, math.rad, math.atan, math
 
 M.MATERIAL = 'bngEarthFar_v3' -- the material name inside the server's shapes (design 6.2)
 M.MATERIALS_FILE = '/levels/beamng_earth/art/shapes/beamngEarth/main.materials.json'
-M.EDGE_BAND = 128       -- a covered tile nearer than this to the block boundary is in the edge ring
 M.HIDE_DEPTH = 2.0      -- covered tile without a server `sink`: how far it sinks before it hides
 M.DELETE_PRESSURE = 64  -- deletes wait for the import queue unless this many objects are doomed
 -- Lazy unloading (the user, 2026-10-12: "maybe a more lazy unloading system would be better"): a tile
@@ -167,7 +172,7 @@ local nSpares = 0
 local switching = false -- inside switchAnchor: the old anchor's tiles are not parked
 local moving = {}       -- instance -> true while its z offset changes over time
 local lossy = {}        -- anchorId -> true: one of its adds was dropped, ignore its removes
-local block = nil       -- committed terrain block { cx, cy, x0, y0, x1, y1 } (cover box)
+local block = nil       -- committed terrain block { cx, cy, x0, y0, x1, y1, floor?, cover? } (cover box; setBlock)
 local anchorId = nil    -- current (committed) anchor
 local session = nil     -- server session of the current anchor (switchAnchor; nil = not told)
 local doneReceived = false
@@ -187,7 +192,7 @@ local function blockShown() return nearVisual == 'terrain' or (nearVisual == 'de
 local function forcedLevel() return nearVisual == 'detail' and -1 or 0 end
 local counters = { imports = 0, failed = 0, crossovers = 0, instant = 0, pops = 0, textured = 0, materials = 0,
   capWaits = 0, oldCovered = 0, exactFrames = 0, exactMiss = 0, retex = 0, retexStale = 0, retexFailed = 0,
-  parked = 0, revived = 0 }
+  parked = 0, revived = 0, partialExact = 0, partialBound = 0, stripNoTop = 0 }
 local exactLevel = M.EXACT_LEVEL
 local under = { level = nil, old = false, miss = false } -- the tile under the player, last update
 -- Previous anchors whose tiles may still be shown, newest first: { anchor, invs = inverse transforms
@@ -468,33 +473,79 @@ local function spawn(inst)
   if watcher then watcher.onAdd(inst) end
 end
 
--- Cover state of a footprint against the committed block: 'none', 'edge' or 'interior'. In mesh
+-- Cover state of a footprint against the committed block: 'none', 'partial', 'edge' or 'interior'. In mesh
 -- mode the block is invisible, so nothing is covered.
-M.PARTIAL_SINK_K = 1.2     -- a 'partial' tile sinks this many times its error (the crossover bound's factor) ...
+-- Inside the drawn block no far geometry may stand above the block's surface (the user, 2026-11-21: "im driving through
+-- the old lod terrain sometimes with the solid ground being under it"). The server's `sink` is measured against the far
+-- tile's own 2 m lattice, not against the block in use: a provisional block (no road grading, its L0 roads flattened),
+-- a block graded since the tile was made and the block's 1 m samples between lattice points all lie lower in places,
+-- so a sunk edge-ring tile stood through road cuts. Now:
+--   'interior': every covered tile but those along the N/E boundary, hidden (the block draws all of their ground);
+--   'edge': a covered tile along the block's N or E boundary, the under-floor of the 1-2 m strip past the block's
+--     collidable width (lattice.lua): its top (the object's box) sunk under the block's floor (the terrain message's
+--     zBase, <= every sample of the block), so no part of it can reach the block's surface (without a floor or a box:
+--     the server's sink, as before; without that either, hidden);
+--   'partial': a coarse tile across the block's edge (below): sunk by the server's exact cover sink against this block
+--     (the terrain message's `cover`, server Connection.far_cover) when it sent one, else by the error bound.
+M.PARTIAL_SINK_K = 1.2     -- a 'partial' tile sinks at least this many times its error (the crossover bound's factor) ...
 M.PARTIAL_SINK_M = 0.3     -- ... plus this (m)
+M.FLOOR_MARGIN = 0.5       -- m: an 'edge' tile's top this far under the block's floor
 local function visibleCover(c) return c == 'none' or c == 'partial' end
 local function coverOf(inst)
   local b = block
   if not b or not blockShown() then return 'none' end
   local e = 0.01
   if inst.x0 < b.x0 - e or inst.y0 < b.y0 - e or inst.x1 > b.x1 + e or inst.y1 > b.y1 + e then
-    -- across the block's edge: 'partial' (sunk under the terrain by its error, still seen outside the block). A hard
+    -- across the block's edge: 'partial' (sunk under the terrain, still seen outside the block). A hard
     -- commit (follow.HARD_COMMIT_DIST: the ground under the car first) does not wait for the far field to split
     -- these, and on a Steam Deck at 80 mph one straddled the block most of the time, its coarse hills standing
     -- through the near terrain round the car (GitHub #46)
     if inst.x0 < b.x1 - e and b.x0 + e < inst.x1 and inst.y0 < b.y1 - e and b.y0 + e < inst.y1 then return 'partial' end
     return 'none'
   end
-  local d = min(inst.x0 - b.x0, inst.y0 - b.y0, b.x1 - inst.x1, b.y1 - inst.y1)
-  return d < M.EDGE_BAND and 'edge' or 'interior'
+  -- (the strip past the collidable width is on the N and E sides only: the S/W edge ring is all block ground)
+  return (inst.x1 > b.x1 - e or inst.y1 > b.y1 - e) and 'edge' or 'interior'
+end
+
+-- The highest point of a loaded tile's mesh at offset 0 (its object's world box), nil when unknown. Kept once known, over
+-- its position (a rebase moves both; its tilt over 10 km changes a 128 m tile's top by < 0.2 m, inside FLOOR_MARGIN):
+-- the shape never changes under an instance (a new shape is a new instance).
+local function tileTop(inst)
+  local t = inst.topRel
+  if t == nil then
+    local o = inst.loaded and not inst.failed and getObj(inst)
+    if o and o.getWorldBox then
+      local ok, wb = pcall(o.getWorldBox, o)
+      local z = ok and wb and wb.maxExtents and tonumber(wb.maxExtents.z)
+      if z and z == z and abs(z) < 1e7 then t = z - (inst.off or 0) - inst.z end
+    end
+    inst.topRel = t
+  end
+  return t and inst.z + t
+end
+
+-- The server's exact sink of a partial tile against the block in use (nil: none sent for it).
+local function exactSink(inst)
+  local c = block and block.cover
+  if not c or inst.anchor ~= anchorId or inst.session ~= session or live[inst.key] ~= inst then return nil end
+  return tonumber(c[inst.key])
 end
 
 -- Target z offset and hidden flag for a cover state.
 local function coverTarget(inst, cover)
   if cover == 'none' then return 0, false end
-  if cover == 'partial' then return -(M.PARTIAL_SINK_K * (inst.err or 0) + M.PARTIAL_SINK_M), false end
-  if inst.sink then return -inst.sink, cover == 'interior' end
-  return -M.HIDE_DEPTH, true -- no sink from the server: hide rather than risk poking through
+  if cover == 'partial' then
+    local bound = M.PARTIAL_SINK_K * (inst.err or 0) + M.PARTIAL_SINK_M
+    local x = exactSink(inst)
+    return -(x and max(x, M.PARTIAL_SINK_M) or bound), false
+  end
+  if cover == 'interior' then return -(inst.sink or M.HIDE_DEPTH), true end
+  local fl, top = block and block.floor, nil
+  if fl then top = tileTop(inst) end
+  if top then return min(-(inst.sink or 0), fl - M.FLOOR_MARGIN - top), false end
+  -- (no floor, no box: the server's sink as before; without one either, hidden rather than risk poking through)
+  if inst.sink then return -inst.sink, false end
+  return -M.HIDE_DEPTH, true
 end
 
 -- Current cover offset (ends a finished cover animation).
@@ -626,11 +677,19 @@ end
 -- every other change is instant (a newly uncovered tile must be there in the commit frame).
 local function applyCover(inst, animate)
   local c = coverOf(inst)
-  if c == inst.cover then return false end
+  local off, hide = coverTarget(inst, c)
+  if c == inst.cover and off == inst.coverOff and hide == inst.coverHide then return false end
   local fromOff, wasVisible = coverOffNow(inst), (visibleCover(inst.cover) and not inst.hidden)
+  local changed = c ~= inst.cover
   inst.cover = c
-  inst.coverOff, inst.coverHide = coverTarget(inst, c)
-  if animate and wasVisible and c ~= 'none' then
+  inst.coverOff, inst.coverHide = off, hide
+  if c == 'partial' then
+    if exactSink(inst) then counters.partialExact = counters.partialExact + 1 else counters.partialBound = counters.partialBound + 1 end
+  elseif c == 'edge' and not (block and block.floor and tileTop(inst)) then
+    counters.stripNoTop = counters.stripNoTop + 1
+  end
+  -- (a deeper target of the same state, the block replaced in place: at once, it must be under the new block now)
+  if animate and changed and wasVisible and c ~= 'none' and crossover.COVER_SINK_S > 0 then
     inst.coverAnim = { from = fromOff, t0 = clock, dur = crossover.COVER_SINK_S }
     moving[inst] = true
   else
@@ -811,8 +870,14 @@ local function startGroup(g, cam)
     local a = pending[key]
     if a then
       local cur = live[key]
-      if cur and not seen[cur] then rems[#rems + 1], seen[cur] = cur, true end
-      adds[#adds + 1] = a
+      if a.retexture and a.failed and cur then
+        -- A color update must not open a hole when its replacement fails.
+        pending[key] = nil
+        doom(a, true)
+      else
+        if cur and not seen[cur] then rems[#rems + 1], seen[cur] = cur, true end
+        adds[#adds + 1] = a
+      end
     elseif not live[key] then
       unknown = key
     end
@@ -847,6 +912,8 @@ local function startGroup(g, cam)
       mode = 'instant' -- nothing visible to cross over with (first fill)
     elseif not vis then
       mode = 'instant' -- C1: off-screen
+    elseif crossover.CROSS == 0 then
+      mode = 'instant' -- C1 in view too: the old tiles hide in the frame the new ones show (crossover.CROSS)
     elseif activeGroups >= crossover.MAX_GROUPS then
       if nearest <= crossover.NEAR_POP_M then
         counters.capWaits = counters.capWaits + 1
@@ -991,6 +1058,28 @@ function M.onRetex(msg)
     counters.retexStale = counters.retexStale + 1
     return
   end
+  -- Cliff colors are baked into vertices. A photo correction can therefore
+  -- include a new shape at a distinct path; use the normal import/swap queue so
+  -- the old surface remains visible until the replacement has loaded.
+  local replacement = msg.replacement
+  if type(replacement) == 'table' then
+    local current = pending[key] or live[key]
+    if not current or current.doomed or not satmat.isNewer(current.texture, tex)
+        or replacement.anchorId ~= anchorId or tostring(replacement.key) ~= key
+        or type(replacement.shape) ~= 'string' or replacement.shape == current.shape
+        or type(replacement.pos) ~= 'table' or replacement.texture ~= tex then
+      counters.retexStale = counters.retexStale + 1
+      return
+    end
+    local waiting = pending[key] ~= nil
+    replacement.state = current.prefetch and 'prefetch' or 'group'
+    M.onTile(replacement)
+    pending[key].retexture = true
+    -- An already-pending tile belongs to a server swap (or is only prefetched).
+    -- Replace its pending entry without showing it ahead of that group.
+    if not waiting then M.onSwap({ anchorId = anchorId, add = { key } }) end
+    return
+  end
   local hit = false
   for _, inst in ipairs({ live[key] or false, pending[key] or false }) do
     if inst and not inst.doomed and inst.material then
@@ -1005,9 +1094,13 @@ end
 ------------------------------------------------------------------------------------------
 -- terrain block
 
-local function setBlock(cx, cy)
+-- info: the block's terrain message (or nil): zBase, the floor no sample of the block lies under, and `cover`, the
+-- server's exact sinks of the partial tiles against this block's heights ({key = m}).
+local function setBlock(cx, cy, info)
   local x0, y0, x1, y1 = lattice.coverBox(cx, cy)
-  block = { cx = cx, cy = cy, x0 = x0, y0 = y0, x1 = x1, y1 = y1 }
+  local fl = type(info) == 'table' and tonumber(info.zBase) or nil
+  local cv = type(info) == 'table' and type(info.cover) == 'table' and info.cover or nil
+  block = { cx = cx, cy = cy, x0 = x0, y0 = y0, x1 = x1, y1 = y1, floor = fl, cover = cv }
 end
 
 -- Near visual from the server's hello: 'mesh' (tiles are the whole visible ground, the block is
@@ -1036,10 +1129,11 @@ end
 
 function M.rawView() return rawView end
 
--- The terrain block moved (terrain-follow commit frame, after importMaps + setPosition). Covers and
--- uncovers far tiles; about 48 setPosition/setHidden calls for a 256 m move. Returns the changes.
-function M.onBlockCommit(cx, cy)
-  setBlock(cx, cy)
+-- The terrain block moved or was replaced in place (terrain-follow commit frame, after importMaps + setPosition; a
+-- graded block in place of its provisional one). Covers and uncovers far tiles, each against this block (info: its
+-- terrain message, setBlock); about 48 setPosition/setHidden calls for a 256 m move. Returns the changes.
+function M.onBlockCommit(cx, cy, info)
+  setBlock(cx, cy, info)
   local n = 0
   for _, inst in pairs(live) do if applyCover(inst, true) then n = n + 1 end end
   for _, inst in pairs(old) do if applyCover(inst, true) then n = n + 1 end end
@@ -1244,7 +1338,7 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
   end
   doneReceived = false
   if blk then
-    setBlock(blk.cx, blk.cy)
+    setBlock(blk.cx, blk.cy, blk)
     for _, inst in pairs(old) do applyCover(inst, false) end
   elseif blk == false then
     -- (no block in the new frame: the 3D map's view-only origin, core commitRebase 'view'; the car's block stays in
@@ -1702,7 +1796,7 @@ function M.stats()
     if not visibleCover(inst.cover) then covered = covered + 1 end
     if inst.cover == 'partial' then
       partial = partial + 1
-      partialSink = math.max(partialSink, M.PARTIAL_SINK_K * (inst.err or 0) + M.PARTIAL_SINK_M)
+      partialSink = math.max(partialSink, -inst.coverOff)
       partialLevel = math.max(partialLevel or inst.level, inst.level)
     end
     -- shown at its own height across the block's ground (GitHub #46: coarse ground drawn over the near terrain)
@@ -1724,7 +1818,8 @@ function M.stats()
     waitingGroups = waiting, exactLevel = exactLevel, underLevel = under.level, underOld = under.old,
     exactMiss = counters.exactMiss, exactFrames = counters.exactFrames, retex = counters.retex,
     retexStale = counters.retexStale, retexFailed = counters.retexFailed, overBlock = over, overBlockLevel = overLevel, partial = partial,
-    partialSink = partialSink, partialLevel = partialLevel }
+    partialSink = partialSink, partialLevel = partialLevel, partialExact = counters.partialExact,
+    partialBound = counters.partialBound, stripNoTop = counters.stripNoTop }
 end
 
 ------------------------------------------------------------------------------------------

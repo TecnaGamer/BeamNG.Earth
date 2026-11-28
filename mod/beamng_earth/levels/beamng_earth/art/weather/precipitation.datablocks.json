@@ -1,0 +1,19 @@
+{
+  "bngEarthSnowflake": {
+    "name": "bngEarthSnowflake",
+    "class": "PrecipitationData",
+    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c26",
+    "dropTexture": "/levels/beamng_earth/art/weather/bngEarth_snowflake.color.dds",
+    "dropsPerSide": 2,
+    "splashesPerSide": 1
+  },
+  "bngEarthRainDrop": {
+    "name": "bngEarthRainDrop",
+    "class": "PrecipitationData",
+    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c27",
+    "dropTexture": "/levels/beamng_earth/art/weather/bngEarth_raindrop.color.dds",
+    "splashTexture": "art/shapes/particles/Particle_rain_splash.dds",
+    "dropsPerSide": 1,
+    "splashesPerSide": 1
+  }
+}

@@ -88,6 +88,12 @@ nl.setBeam(150)
 T.check(tonumber(light.fields.outerAngle) == 175 and tonumber(light.fields.innerAngle) == 105, 'wide high-mast beam')
 T.check(light.fields.range == '70' and light.id == id, 'beam adjustment reuses the active light')
 nl.dropKey('high-mast')
+nl.onRows('mapped', { {0, 4, 0, 8, 0, 1, 8, 0, 0.5} }, {'lamplens_white'})
+clock = clock + 1; nl.update()
+nl.setBrightness(50)
+T.check(light.fields.color == nl.LIGHT_WHITE.color, 'mapped colour preserved when dimmed')
+T.near(tonumber(light.fields.brightness), nl.LIGHT_WHITE.brightness * 0.25, 1e-9, 'mapped and live brightness compose')
+nl.dropKey('mapped')
 nl.providers.test = function() return {{1, 0, 8, 0}} end
 clock = clock + 1; nl.update()
 T.check(tonumber(light.fields.outerAngle) == nl.LIGHT.outer, 'independent light keeps its original beam')
@@ -181,4 +187,25 @@ nl.setGlow(25)
 clock = clock + 2; nl.update()
 T.near(tonumber(mats.bne_lamp_lens.fields.emissiveIntensityNits), 1000, 1e-6, 'lens at 25 percent')
 T.near(tonumber(mats.bne_bld_facade.fields.emissiveIntensityNits), 200, 1e-6, 'window intensity preserved')
+nl.reset()
+-- the mapped lamps' colours (BNE_LAMP_TAGS: server furniture.LENS_COLOURS): their lens groups kept, each its profile
+nl.onRows('col', { { 0, 1, 0, 8 }, { 1, 2, 0, 8 }, { 2, 3, 0, 8 } }, { 'lamplens', 'lamplens_white', 'lamplens_yellow' })
+local col = nl.nearest(0, 0, 50, 3)
+T.check(#col == 3 and col[1][7] == nil and col[2][7] == 'LIGHT_WHITE' and col[3][7] == 'LIGHT_YELLOW',
+  'a mapped colour keeps its profile, the stock lens none')
+T.check(nl.LIGHT_WHITE.color ~= nl.LIGHT.color and nl.LIGHT_YELLOW.color ~= nl.LIGHT.color, 'their own colours')
+nl.reset()
+-- a dark stormy sky before the clock's night (beamngEarth_weather.duskDark): lamps on; a bright day: not
+do
+  local env0, w0 = core_environment, rawget(_G, 'beamngEarth_weather')
+  local dark = true
+  core_environment = { getLightState = function() return { isNight = false, time = 0.2, nightStart = 0.25, nightEnd = 0.75 } end }
+  beamngEarth_weather = { duskDark = function(ls) return dark and ls.time == 0.2 end }
+  T.check(nl.isNight() == true, 'a storm\'s dusk: night for the lamps')
+  dark = false
+  T.check(nl.isNight() == false, 'a clear dusk: still day')
+  beamngEarth_weather = { duskDark = function() error('boom') end }
+  T.check(nl.isNight() == false, 'a failing weather hook: the clock decides')
+  core_environment, beamngEarth_weather = env0, w0
+end
 T.done('test_nightlights')

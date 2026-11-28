@@ -54,6 +54,12 @@ static void report(const char *fmt, const char *detail) {
     snprintf(msg, sizeof msg, fmt, detail ? detail : "");
     bnge_report("bngearth-gcpatch", "beamngEarth_gcpatch.txt", msg);
 }
+// (off / not applied: said again at every start of the BeamNG.Earth level, bnge_report_sticky)
+static void report_sticky(const char *fmt, const char *detail) {
+    char msg[256];
+    snprintf(msg, sizeof msg, fmt, detail ? detail : "");
+    bnge_report_sticky("bngearth-gcpatch", "beamngEarth_gcpatch.txt", msg);
+}
 
 #define IMM_OFF (IMM - HANDLER)   /* 0x2F: the imm8 within the signature */
 
@@ -107,7 +113,7 @@ static void *watch_flag(void *arg) {
         int want = access(flag, F_OK) == 0;
         if (want != on) {
             if (!set_byte(want ? PATCHED : STOCK)) {
-                report("stopped: mprotect refused%s", NULL);
+                report_sticky("stopped: mprotect refused%s", NULL);
                 return NULL;
             }
             on = want;
@@ -123,14 +129,14 @@ static void *watch_flag(void *arg) {
 __attribute__((constructor)) static void bngearth_gcpatch(void) {
     if (!bnge_is_main_game()) return;
     if (getenv("BNGEARTH_GCPATCH_OFF")) {
-        report("off (BNGEARTH_GCPATCH_OFF set)%s", NULL);
+        report_sticky("off (BNGEARTH_GCPATCH_OFF set)%s", NULL);
         return;
     }
     struct mainprog m;
     memset(&m, 0, sizeof m);
     dl_iterate_phdr(find_main, &m);
     if (!m.seen) {
-        report("not applied: the game's code was not found%s", NULL);
+        report_sticky("not applied: the game's code was not found%s", NULL);
         return;
     }
     unsigned char *code = NULL;
@@ -163,18 +169,18 @@ __attribute__((constructor)) static void bngearth_gcpatch(void) {
         if (matches != 1) {
             char d[32];
             snprintf(d, sizeof d, "%d", matches);
-            report("not applied: the handler was not found in this build (%s matches)", d);
+            report_sticky("not applied: the handler was not found in this build (%s matches)", d);
             return;
         }
         how = " (found by its signature in this build)";
     }
     if (*imm == PATCHED) { report("already applied%s", NULL); return; }
-    if (*imm != STOCK) { report("not applied: unexpected byte (another build)%s", NULL); return; }
+    if (*imm != STOCK) { report_sticky("not applied: unexpected byte (another build)%s", NULL); return; }
     g_imm = imm;
     g_how = how;
     pthread_t t;
     if (pthread_create(&t, NULL, watch_flag, NULL) != 0) {
-        report("not applied: no thread for the level flag%s", NULL);
+        report_sticky("not applied: no thread for the level flag%s", NULL);
         return;
     }
     pthread_detach(t);

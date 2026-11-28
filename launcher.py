@@ -250,7 +250,7 @@ def clear_cache(extra):
 
 # --- the server -----------------------------------------------------------------------------------
 
-def watch_parent():
+def watch_parent(world_server=False):
     """The server's guard: it ends (with its worker processes) when the launcher that started it is gone, e.g. its
     terminal closed (SIGHUP) or it was killed. A server left behind kept the port, so the next start's server could
     not listen and the game talked to the old one (the user's AppImage, 2026-10-16)."""
@@ -282,7 +282,12 @@ def watch_parent():
                         return True
                 else:
                     try:
-                        result = k32.WaitForSingleObject(h, 0xFFFFFFFF)
+                        if world_server:
+                            result = _srvrestart().wait_parent_or_stop(h)
+                            if result == 1:
+                                return False  # launcher explicitly requested a stop
+                        else:
+                            result = k32.WaitForSingleObject(h, 0xFFFFFFFF)
                         if result == 0:                      # WAIT_OBJECT_0: process exited
                             return True
                         error = ctypes.get_last_error()
@@ -300,9 +305,14 @@ def watch_parent():
         return True
 
     def run():
-        gone()
-        print("[BeamNG.Earth] the launcher is gone: the world server stops", flush=True)
+        if gone():
+            print("[BeamNG.Earth] the launcher is gone: the world server stops", flush=True)
         if IS_WIN:
+            if world_server:
+                cleanup = threading.Thread(target=_srvrestart().drain_before_kill, args=(10,),
+                                           name="server-stop", daemon=True)
+                cleanup.start()
+                cleanup.join(10)  # the existing forced tree cleanup also works with a hung disk
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(os.getpid())], capture_output=True)
         else:
             os.killpg(os.getpgid(0), signal.SIGTERM)
@@ -314,7 +324,7 @@ def watch_parent():
 
 def run_server(argv):
     """In this process: server/earthd.py with argv (the --server mode of the packaged app)."""
-    watch_parent()
+    watch_parent(world_server=True)
     sys.path.insert(0, os.path.join(ROOT, "server"))
     import earthd
     sys.argv = ["earthd"] + argv
@@ -514,6 +524,12 @@ def start_server(user_dir, extra, log_path, game_running=None, restart_times=(),
             env[k] = v
     # ... and its "Restart world server" (server/srvrestart.py; RestartingServer), from what is applied now
     restart_env(user_dir, env, restart_times)
+    # Prepare with the actual child environment, including server-only flags,
+    # before its workers can stream. Cached maps also cover --keep-mod/restarts.
+    import cliffstock
+    if env.get("BNE_CLIFFS", "off").strip().lower() in {"1", "on", "true"}:
+        env["BNGE_CACHE_DIR"] = pick_cache_dir(None, extra)
+    cliffstock.prepare_enabled(game_install_dir, user_dir, env=env, diagnostic=lambda text: row("Cliffs", text))
     if overture_release:        # the session's map data release (overture_pick: the same for every start of it)
         env["BNGE_OVERTURE_RELEASE"] = overture_release
     kw = {"cwd": ROOT, "env": env}
@@ -698,6 +714,12 @@ def stop_server(proc):
     row("World server", "stopping")
     try:
         if IS_WIN:
+            if _srvrestart().request_stop(proc.pid):
+                try:
+                    proc.wait(15)  # server and workers drain their log listeners
+                    return
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
         else:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -1715,6 +1737,64 @@ def watch_game_log(user_dir, since):
                 return
 
     threading.Thread(target=run, name="watch-game-log", daemon=True).start()
+
+
+# The engine patches' status files (tools/gcpatch: Linux; enginepatch.py / enginepatch_terfast.py: Windows), one line
+# "<unix time> ...: <state>" each, written at the game's start and again whenever the BeamNG.Earth level starts. A patch
+# that does not apply (a game update it does not recognise: BeamNG 0.40.6 dropped terfast and texkeep unseen, 2026-11-22)
+# is said here as a problem, not left in a file nobody reads; the mod says it in the game too (enginepatches.lua).
+ENGINE_PATCHES = {"gcpatch": "grass kept across terrain block moves", "texkeep": "faster ground texture updates",
+                  "terfast": "faster terrain block swaps", "dtsmooth": "steady game speed"}
+PATCH_WATCH_S = 600         # s after the game's start the status files are watched (Windows: the attach waits for the game)
+
+
+def patch_state(text, since=None):
+    """(state, message) of a status file's text: "on", "off", "failed" or "none" (no line, or one from before since);
+    the same rules as the mod's enginepatches.classify."""
+    line = (text or "").splitlines()[0] if (text or "").strip() else ""
+    head, sep, msg = line.partition(":")
+    try:
+        t = int(head.split()[0])
+    except (ValueError, IndexError):
+        return "none", None
+    msg = msg.strip()
+    if not sep or (since is not None and t < since - 3):
+        return "none", None
+    low = msg.lower()
+    if any(k in low for k in ("half applied", "not applied", "could not be patched", "no thread")) or \
+            low.startswith("stopped"):
+        return "failed", msg
+    if low.startswith("off"):
+        return "off", msg
+    if low.startswith(("applied", "ready", "stock", "installed", "already applied")):
+        return "on", msg
+    return "failed", msg
+
+
+def watch_patch_status(user_dir, since, names=tuple(ENGINE_PATCHES)):
+    """In the background: each engine patch's first status line of this game start; a failed one is a problem."""
+    def run():
+        left, t0 = set(names), time.time()
+        while left and time.time() - t0 < PATCH_WATCH_S:
+            time.sleep(2)
+            for name in sorted(left):
+                try:
+                    with open(os.path.join(user_dir, "temp", f"beamngEarth_{name}.txt"), errors="replace") as f:
+                        state, msg = patch_state(f.read(), since)
+                except OSError:
+                    continue
+                if state == "none":
+                    continue
+                left.discard(name)
+                if state == "failed":
+                    problem(f"Engine patch {name} ({ENGINE_PATCHES[name]}) is NOT applied: {msg}",
+                            "The game runs without it (it still works; this part can be slower). This BeamNG.drive "
+                            "version is probably newer than this BeamNG.Earth: an update of BeamNG.Earth brings it "
+                            "back. (Status: temp/beamngEarth_%s.txt in the game's user folder.)" % name)
+                else:
+                    row("Engine patch", f"{name}: {state}")
+
+    threading.Thread(target=run, name="watch-patch-status", daemon=True).start()
 
 
 def game_launcher_running():
@@ -2735,8 +2815,12 @@ def run(args):
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
             clear_level_flag(user_dir)
+            started_at = time.time()
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args,
                               meanwhile=follow_server if early else None, launch=launch)
+            if user_dir and not args.no_gcpatch:
+                # (Linux: the preload library's four; Windows: the launcher's two, attached below)
+                watch_patch_status(user_dir, started_at, ("dtsmooth", "terfast") if IS_WIN else tuple(ENGINE_PATCHES))
         if IS_WIN and not args.no_gcpatch:
             # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off
             # with BNGEARTH_DTSMOOTH_WIN=0 or BNGEARTH_DTSMOOTH_OFF=1)

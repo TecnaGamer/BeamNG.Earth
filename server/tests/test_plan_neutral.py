@@ -64,15 +64,20 @@ NAME_TABLES = {("revisit", "PLAN_NEUTRAL"), ("revisit", "NOT_SWITCHES"), ("exper
                ("experimental", "IDS"), ("bakepack", "CELL_SCOPED")}
 # The Experimental switches the planning does read (each changes plans or facts): the guard must see every one
 PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARES", "BNE_EU_ROAD_DETAILS",
-              "BNE_FR_ROADS", "BNE_GRADE_GUARD", "BNE_HRDEM_NEAR", "BNE_LIDARBC", "BNE_PHOTO_SURFACE",
+              "BNE_FR_ROADS", "BNE_GRADE_GUARD", "BNE_HRDEM_NEAR", "BNE_LIDARBC",
               "BNE_RAIL_CURVES", "BNE_RAIL_TUNNELS", "BNE_RAIL_XING", "BNE_SUBSEA_RELAX", "BNE_TERRAIN_BUMPS",
               "BNE_TUNNEL_LIDS",
+              # (grading.FOLLOW_ON: the plans' profiles)
+              "BNE_ROAD_FOLLOW",
               # (the Revamped roads setting: tapers, deck K, level spacing, footbridges, rail lifecycle, raceways)
               "BNE_DECK_K_SPEED", "BNE_RACEWAY_DIG", "BNE_FAST_DECK_ENDS", "BNE_FAST_GAP", "BNE_FAST_DECK_GROUND", "BNE_RAIL_LIFECYCLE",
               "BNE_RAIL_SEAM_NATURAL",
               "BNE_SPEED_TAPERS",
               # (road revamp v2 in the Revamped roads setting, 2026-11-19)
-              "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2", "BNE_ROADSURF_V3")
+              "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2", "BNE_ROADSURF_V3",
+              # (the road system rewrite in the Revamped roads setting, 2026-11-24: the plans' format suffix, the
+              # areas fit's and cross-sections' lane widths)
+              "BNE_ROADSYS", "BNE_ROADSYS_AREAS", "BNE_ROADSYS_XSEC")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
     "BNE_PEDESTRIAN_LIGHTING": "selects direct-source lighting road cells and changes generated props",
@@ -86,6 +91,15 @@ NOT_LISTED = {
     "BNE_FR_HOUSES": "comes only with BNE_FR_ROADS and BNE_EU_ROAD_DETAILS (the EU scenery setting), which the plans "
                      "read; its gated code also stores into its callers' objects (buildings.tile_buildings)",
     "BNE_STALE_REVISIT": "no build switch at all (revisit.NOT_SWITCHES)",
+    "BNE_WINTER": "no build switch at all (revisit.NOT_SWITCHES): a live snowstate message only (snow.py); the snow "
+                  "on the ground photos is keyed by its specs in the items it changes (snowcover.key_parts: far "
+                  "textures, base photos), never in plans or facts; nothing the planning reaches imports snowcover",
+    "BNE_WET_ROADS": "no build switch at all (revisit.NOT_SWITCHES): a live snowstate message only (snow.py)",
+    "BNE_LEAF_CYCLE": "no build switch at all (revisit.NOT_SWITCHES): a field of the anchor_ready message only "
+                      "(leafcycle.py); only earthd's anchor reply imports leafcycle, nothing the planning reaches",
+    "BNE_PUDDLES": "the puddle plan: R1 only adds the rain history to the live weather message (weather.PUDDLES_V2); "
+                   "R2 on will change the skins' puddle geometry (roadwear), so it stays keyed and is not proven "
+                   "plan-neutral",
     "BNE_TUNNEL_ROAD_OVER": "road tiles' tunnel entrances only (portals.fit: the headwall's top under a road crossing "
                             "over the mouth); not yet proven plan-neutral both ways, so it stays keyed with the "
                             "Revamped roads setting",

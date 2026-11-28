@@ -16,7 +16,31 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 580 # the newest kernel signature the server calls (earthd checks it at start) ...
+
+# --- the exit: no thread on top of the kernels' Rust frames while the interpreter finalizes -------------------------
+# CPython before 3.14 (the packaged app's 3.12) ends every other thread that takes the GIL during finalization with
+# pthread_exit(), on Linux a forced unwind through all the thread's frames. A background thread in a kernel then (the
+# de-shadow worker's horizon march, an imagery fetch thread's decode, a paced analysis sleeping in pacer.pace under
+# sun_scores, a DEM fetch called back from dem.sample) was unwound through Rust frames: undefined behaviour that crashed
+# (SIGSEGV in the final garbage collection) or hung the process at exit (2026-11-24, test_deshadow under 3.12; earthd
+# and its pool processes exit the same way). The vendored PyO3's exit_guard (earthfast 622, begin_exit) parks those
+# threads instead, as 3.14 does itself. Registered at the module's first import: atexit runs its hooks last-in
+# first-out, so every hook registered after this one (protocol's host shutdown, the caches' closes) runs before it,
+# with the threads still free to finish what they wait for.
+EXIT_WAIT_S = 3.0       # at most this long for the threads still running Python on top of a kernel (a fetch callback)
+
+
+def _exit_hook():
+    import pacer
+    pacer.exiting(EXIT_WAIT_S)          # (its sleepers woken: back into their kernels, which then park)
+    if getattr(_ef, "VERSION", 0) >= 622:
+        _ef.begin_exit(EXIT_WAIT_S)
+
+
+if _ef is not None and sys.version_info < (3, 14):
+    import atexit
+    atexit.register(_exit_hook)
+MIN_VERSION = 649 # (649: roadsys_kept_ends / approach_run / ramp_dz and embank_lift / along, M5 round 8 (first numbered 643); 647: airtraffic adsb_compact / adsbdb_route, the live air traffic; 648: phenology leaf_calendar, the trees' leaf cycle, and texdds' coverage derive; 644: snow_band_table_relief, the snow bands cut to the cell's relief; 641: roadwear puddle_spots, the aquaplaning's puddles; 640: winter W3, snowroad.rs and SnowLook's 15 road slots; 639: roadwear puddle_plan) the newest kernel signature the server calls (earthd checks it at start) ...
 if os.environ.get("BNE_BATTER", "off") == "vanilla":
     # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
     # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)

@@ -56,6 +56,8 @@ impl<'py> Restore<'_, 'py> {
             pxs.extend((1..=2).map(|k| px << k).filter(|&p| p <= max_px));
             pxs.extend((1..=3).map(|k| px >> k).filter(|&p| p >= min_px));
             let rev = s.getattr("tex_rev")?.call_method1("get", (&ck, 0))?;
+            // the snow its texture is keyed with (Server.far_snow: None while winter is off; 625)
+            let snow = s.call_method1("far_snow", (anchor, &tile))?;
             let texture: String = s
                 .call_method1("texture_name", (ck.get_item(0)?, ck.get_item(1)?, rev))?
                 .extract()?;
@@ -66,7 +68,7 @@ impl<'py> Restore<'_, 'py> {
                 let reference = ff.call_method1("global_dem_zoom", (z + 1, cells))?;
                 let mut found = None;
                 for p in pxs {
-                    let k = s.call_method1("tex_key", (anchor, &tile, p))?;
+                    let k = s.call_method1("tex_key", (anchor, &tile, p, &snow))?;
                     let v = revisit.call_method1("load", (&cache, "fartex", k))?;
                     if !v.is_none()
                         && v.get_item(0)?
@@ -133,6 +135,7 @@ impl<'py> Restore<'_, 'py> {
                 tex.set_item("tone", s.getattr("tone")?)?;
                 tex.set_item("leaf_on", im.getattr("leaf_on")?)?;
                 tex.set_item("season_mode", im.getattr("season_mode")?)?;
+                tex.set_item("snow", &snow)?;
                 tex.set_item("keep_fin", self.name_len)?;
                 tex.call_method1("update", (s.call_method0("gen_far_tex")?,))?;
                 if !self.fin.is_none() {
@@ -321,6 +324,7 @@ impl<'py> Restore<'_, 'py> {
                 )?;
             }
             kw.set_item("tile", &t.tile)?;
+            kw.set_item("cliff_colors", extra.call_method1("get", ("cliff_colors", false))?)?;
             kw.set_item("tex_px", px)?;
             kw.set_item("shape", shape)?;
             kw.set_item(

@@ -42,8 +42,8 @@ def _open(src):
     """An osmium file of a path, '-' (stdin) or a pipe (/dev/fd/..: a download streamed)."""
     if src == "-":
         return osmium.io.File("", "pbf")        # (libosmium: an empty name is stdin)
-    if not src.endswith(".pbf"):
-        return osmium.io.File(src, "pbf")       # (a pipe: <(curl ...))
+    if not src.endswith((".pbf", ".osm", ".osm.gz", ".osm.bz2")):
+        return osmium.io.File(src, "pbf")       # (a pipe: <(curl ...); an XML extract is read by its name: tests)
     return src
 
 
@@ -142,12 +142,26 @@ def _deltas(ids):
     return [i - p for i, p in zip(ids, [0] + ids)]
 
 
-def write(out, ways, nodes, nid, nlon, nlat, rules=None):
+def _xsec_table(rows):
+    """The lane shards' "xsec" table of [(way id, {key: value})] (tools/build_lane_tags.py --xsec; railtags.XsecTable
+    reads it): the keys used, sorted; the distinct value rows, sorted; the ids sorted and delta-coded; each one's row."""
+    rows = sorted({int(i): t for i, t in rows}.items())
+    keys = sorted({k for _i, t in rows for k in t})
+    vals = [tuple(t.get(k) for k in keys) for _i, t in rows]
+    sets = sorted(set(vals), key=lambda r: [(v is None, v or "") for v in r])
+    at = {r: j for j, r in enumerate(sets)}
+    return {"keys": keys, "sets": [list(r) for r in sets], "ids": _deltas([i for i, _t in rows]),
+            "set": [at[r] for r in vals]}
+
+
+def write(out, ways, nodes, nid, nlon, nlat, rules=None, xsec=None):
     """The shards: <out>/<x>/<y>.json.gz per SHARD_ZOOM tile with rails, {"ways": {id: tags}, "nodes": [[id, lon,
     lat, tags]]} (a way in every shard its cells are in), and <out>/manifest.json. rules (the lane shards' road rules,
     tools/build_lane_tags.py: [(way id, {key: value}, node refs)], placed as the ways are) add "rules": {key: {value:
     [way ids, sorted, delta-coded: the first, then each minus the one before]}} to the shards that have any; None (the
-    rail shards): no "rules" anywhere."""
+    rail shards): no "rules" anywhere. xsec (the lane shards' street tags, build_lane_tags.py --xsec: [(way id, {key:
+    value}, node refs)], placed as the ways are) adds "xsec" (_xsec_table) to the shards that have any; None: none
+    anywhere."""
     import gzip
     import json
     shards = {}
@@ -160,6 +174,11 @@ def write(out, ways, nodes, nid, nlon, nlat, rules=None):
             continue
         for sx, sy in at:
             shards.setdefault((sx, sy), ({}, [], {}))[0][str(oid)] = tags
+    xs_by = {}
+    for oid, tags, refs in xsec or ():
+        for sx, sy in _tiles(refs, nid, nlon, nlat, shift) or ():
+            shards.setdefault((sx, sy), ({}, [], {}))
+            xs_by.setdefault((sx, sy), []).append((oid, tags))
     for oid, tags, refs in rules or ():
         for sx, sy in _tiles(refs, nid, nlon, nlat, shift) or ():
             by = shards.setdefault((sx, sy), ({}, [], {}))[2]
@@ -178,6 +197,8 @@ def write(out, ways, nodes, nid, nlon, nlat, rules=None):
         if r:
             doc["rules"] = {k: {v: _deltas(sorted(ids)) for v, ids in sorted(by.items())}
                             for k, by in sorted(r.items())}
+        if xs_by.get((sx, sy)):
+            doc["xsec"] = _xsec_table(xs_by[(sx, sy)])
         with gzip.open(path + ".part", "wt", encoding="utf-8", compresslevel=9) as fh:
             json.dump(doc, fh, separators=(",", ":"), ensure_ascii=False)
         os.replace(path + ".part", path)
@@ -185,6 +206,8 @@ def write(out, ways, nodes, nid, nlon, nlat, rules=None):
     counts = {"ways": len(ways), "nodes": len(nodes), "shards": len(shards)}
     if rules is not None:
         counts["rules"] = len(rules)
+    if xsec is not None:
+        counts["xsec"] = len(xsec)
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump({"format": 1, "zoom": SHARD_ZOOM, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                    **counts, "license": "ODbL 1.0, (c) OpenStreetMap contributors"}, fh)

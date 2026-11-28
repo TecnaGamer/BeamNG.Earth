@@ -186,7 +186,8 @@
           1,
           1,
           1
-        ]
+        ],
+        "ambientOcclusionMap": "/assets/materials/decal/asphalt/m_asphalt_pothole_decal/t_asphalt_pothole_decal_ao.data.png"
       },
       {},
       {},
@@ -216,12 +217,16 @@
           1,
           1,
           1
-        ]
+        ],
+        "ambientOcclusionMap": "/assets/materials/baked_props/italy_ground_parts/t_manhole_01_decal_ao.data.png",
+        "metallicFactor": 0.5
       },
       {},
       {},
       {}
-    ]
+    ],
+    "alphaTest": true,
+    "alphaRef": 114
   },
   "bne_spot_oil": {
     "name": "bne_spot_oil",
@@ -273,7 +278,8 @@
           1,
           1,
           1
-        ]
+        ],
+        "ambientOcclusionMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_ao.data.png"
       },
       {},
       {},

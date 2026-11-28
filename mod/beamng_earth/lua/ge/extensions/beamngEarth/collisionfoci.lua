@@ -132,6 +132,7 @@ function M.vehicles()
     if ok and type(d) == 'table' then for _, id in pairs(d) do parked[id] = true end end
   end
   -- (other BeamMP players' cars floating off our block, mpsession.lua: nothing is made solid round them)
+  local buses = package.loaded['beamngEarth/busparked']
   local ms = package.loaded['beamngEarth/mpsession']
   local floats = ms and ms.isFloating
   for i = 0, be:getObjectCount() - 1 do
@@ -140,6 +141,9 @@ function M.vehicles()
       local id = o:getId()
       local p = o:getPosition()
       local occupied = localplayers.controlled(id, o, controlled)
+      -- (our bus at a bus station is parked: as a 'player' car it got a ground island of its own and farcars.lua
+      -- saved and deleted it 2.5 km away, so every station spawned a new one, a ~1 s frame: busparked.lua)
+      if not occupied and buses and buses.isOurs(id) then parked[id] = true end
       out[#out + 1] = { id = id, x = p.x, y = p.y, z = p.z, controlled = occupied,
         kind = occupied and 'player' or traffic[id] and 'traffic' or parked[id] and 'parked' or 'player' }
     end

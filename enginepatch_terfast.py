@@ -260,13 +260,13 @@ def report(user_dir, msg, log=None):
 
 
 def _status(user_dir, msg):
-    if user_dir:
-        try:
-            os.makedirs(os.path.join(user_dir, "temp"), exist_ok=True)
-            with open(os.path.join(user_dir, "temp", STATUS_FILE), "w") as f:
-                f.write(f"{int(time.time())} launcher pid {os.getpid()}: {msg}\n")
-        except OSError:
-            pass
+    ep.write_status(user_dir, STATUS_FILE, msg)
+
+
+def report_sticky(user_dir, msg, log=None):
+    """(off / not applied: said again at every start of the BeamNG.Earth level, enginepatch.keep_saying)"""
+    report(user_dir, msg, log)
+    ep.keep_saying(user_dir, STATUS_FILE, msg)
 
 
 def thread_rips(proc):
@@ -399,7 +399,7 @@ def attach(user_dir, wait_s=600.0, log=None, block=True):
     """Windows: wait for the game process, patch it and follow the level flag (in a thread unless block). The
     TerFastWin, or None (the status file says why)."""
     if env_off():
-        report(user_dir, "off (BNGEARTH_TERFAST_OFF / BNGEARTH_TERFAST_WIN=0)", log)
+        report_sticky(user_dir, "off (BNGEARTH_TERFAST_OFF / BNGEARTH_TERFAST_WIN=0)", log)
         return None
     t0 = time.monotonic()
     pid = None
@@ -409,18 +409,18 @@ def attach(user_dir, wait_s=600.0, log=None, block=True):
             break
         time.sleep(1.0)
     if not pid:
-        report(user_dir, "not applied: the game process was not found", log)
+        report_sticky(user_dir, "not applied: the game process was not found", log)
         return None
     time.sleep(3.0)         # (the executable mapped and relocated)
     try:
         proc = ep.WinProcess(pid)
     except OSError as e:
-        report(user_dir, f"not applied: {e}", log)
+        report_sticky(user_dir, f"not applied: {e}", log)
         return None
     t = TerFastWin(proc, user_dir, log)
     why = t.apply(check=os.environ.get("BNGEARTH_TERFAST_CHECK", "") not in ("", "0"))
     if why:
-        report(user_dir, f"not applied: {why}; stock", log)
+        report_sticky(user_dir, f"not applied: {why}; stock", log)
         proc.close()
         return None
     report(user_dir, "ready: applied while the BeamNG.Earth level runs (launcher patch, block at %#x)" % t.block, log)

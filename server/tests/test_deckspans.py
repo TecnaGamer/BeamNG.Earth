@@ -205,6 +205,38 @@ class DeckFirstTest(unittest.TestCase):
             else:
                 self.assertNotIn(far, loop.jobs[:1], "else nearest first")
 
+    def test_the_waited_tile_while_terrain_is_built(self):
+        """Terrain work narrows the eligible tiles to the send radius (ground_busy); a bridge the guard waits on
+        beyond it is still built, first (codex-speedlod: bridges lagged at 130 mph)."""
+        from concurrent.futures import Future
+        from types import SimpleNamespace
+        import geotiles
+        import roads
+
+        class Loop:
+            def __init__(self):
+                self.jobs = []
+
+            def now(self):
+                return 100.0
+
+            def run_in_executor(self, _pool, _build, aid, gx, gy, content, skin, make):
+                self.jobs.append((gx, gy))
+                return Future()
+
+        far = geotiles.tiles_near(FRAME, 0.0, roads.SEND_M + 400.0, 1.0, exact=True)[0][:2]
+        for first in (False, True):
+            t = roads.GeoTracker()
+            t.pool = object()
+            t.deck_first = {far} if first else set()
+            loop = Loop()
+            t.on_pose(SimpleNamespace(s=None, send=lambda m: None), 1, 0.0, 0.0, loop, None, vel=(0.0, 0.0),
+                      frame=FRAME, ground_busy=True)
+            if first:
+                self.assertEqual(loop.jobs[0], far, "the waited bridge first, beyond the narrowed radius")
+            else:
+                self.assertNotIn(far, loop.jobs, "nothing else that far while the ground is built")
+
 
 if __name__ == "__main__":
     unittest.main()

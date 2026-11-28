@@ -25,7 +25,7 @@ SHADOW = MODE == "shadow"
 DEBUG = os.environ.get("BNE_ROADSURF_V3_DEBUG", "") in ("1", "on", "true")
 
 LANES_VERSION = 570         # earthfast.lane_graph
-LANES_FORMAT = 1            # the records' JSON (shadow_lanes' folder name)
+LANES_FORMAT = 2            # the records' JSON (shadow_lanes' folder name; 2: roadshape.whole_or_sections)
 LANE_REACH_M = 900.0        # m along every stroke from an event's node (inputs within it: an auxiliary lane's 750 m
                             # to the next exit and the walk past it)
 LANE_DIR_M = 20.0           # m an arm's direction is read over (forks.rs's FORK_DIR_M)

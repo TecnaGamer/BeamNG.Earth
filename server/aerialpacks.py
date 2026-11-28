@@ -61,7 +61,7 @@ class Coverage:
         self._lock = threading.Lock()
         self._regions = {}          # (rx, ry) -> (table bytes or None (no file: nothing built), loaded at, next read)
         self._inflight = {}         # (rx, ry) -> threading.Event
-        self._failed = {}           # (rx, ry) -> time of the failed fetch
+        self._failed = {}           # (rx, ry) -> netfetch.Backoff of its failed fetches (COV_FAIL_S, doubling)
         self._asked = []            # times of this process's build requests (MAX_REQUESTS_PER_HOUR)
         self.stats = {}
 
@@ -97,7 +97,8 @@ class Coverage:
             got = self._regions.get(r)
             if got is not None and now < got[2]:
                 return got
-            if now - self._failed.get(r, -1e9) < COV_FAIL_S:
+            b = self._failed.get(r)
+            if b is not None and not b.due(now):
                 return got                      # (the stale one, if any)
             ev = self._inflight.get(r)
             if ev is None:
@@ -124,12 +125,18 @@ class Coverage:
             except OSError:
                 pass
             if body is None:
-                try:
-                    body = self.fetcher.get(f"{self.base}/cov/{r[0]}/{r[1]}.json", kind="demand").body
+                with self._lock:
+                    have = r in self._regions
+                have = have or os.path.exists(path)
+                try:        # (an older copy in hand: its refresh failing is no build's, stale-if-error)
+                    with netfetch.stale_ok(have):
+                        body = self.fetcher.get(f"{self.base}/cov/{r[0]}/{r[1]}.json", kind="demand").body
                     self._count("cov:net")
                 except netfetch.NotFound:
                     body = b""
                     self._count("cov:404")
+                if body and tuple(fast._ef.aerial_cov_table(body)[:2]) != tuple(r):   # (checked before it is kept)
+                    raise ValueError(f"coverage file of another region at {r}")
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
                 with open(tmp, "wb") as fh:
@@ -147,7 +154,13 @@ class Coverage:
                 self._regions[r] = (table, time.time(), fresh_until)
                 self._failed.pop(r, None)
         except Exception as e:                  # (offline, the CDN down, a bad file: the copy on disk, else the live sources)
-            log.info("aerial: coverage %s unavailable (%s: %s)", r, type(e).__name__, e)
+            with self._lock:
+                b = self._failed.get(r)
+                if b is None:
+                    b = self._failed[r] = netfetch.Backoff(COV_FAIL_S, COV_TTL_S)
+                first = b.failed(time.time())
+            log.log(logging.INFO if first else logging.DEBUG, "aerial: coverage %s unavailable (%s: %s)", r,
+                    type(e).__name__, e)
             self._count("cov:error")
             stale = None
             try:
@@ -158,9 +171,8 @@ class Coverage:
             except (OSError, ValueError):
                 ok = False
             with self._lock:
-                self._failed[r] = time.time()
                 if ok and r not in self._regions:
-                    self._regions[r] = (stale, time.time(), time.time() + COV_FAIL_S)
+                    self._regions[r] = (stale, time.time(), b.until)
         finally:
             with self._lock:
                 self._inflight.pop(r, None)

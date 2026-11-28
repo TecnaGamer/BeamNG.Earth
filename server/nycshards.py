@@ -7,11 +7,13 @@ in-place rebuild has replaced, kept its look under the same key for good; and th
 cached on disk with no build in their names) could mix two builds.
 
 Now:
-- The build in use is decided once per process, at the first ask for its identity (Shards.frozen, at a tile's key:
-  blockworker._nyc_key, only for tiles near BOX): the manifest pinned on disk, else one fetched then (FIRST_WAIT_S at
-  most). Its identity, "<built>-<the manifest's sha256, 12 hex>", is in the keys of those tiles; "none" without one
-  (not published, offline, slow: for the whole process, so no tile keyed "none" ever reads a build), "off" when off.
-  A pinned one older than MANIFEST_TTL_S is fetched again in the background for the next process; a 404 unpins it.
+- The build in use is decided once per server run, at the first ask for its identity in any of its processes
+  (Shards.frozen, at a tile's key: blockworker._nyc_key, only for tiles near BOX; the decision is pagesdata's session,
+  so every process of the run, a worker started later too, has the same one): the manifest pinned on disk, else one
+  fetched then (FIRST_WAIT_S at most). Its identity, "<built>-<the manifest's sha256, 12 hex>", is in the keys of
+  those tiles; "none" without one (not published, offline, slow: for the whole run, so no tile keyed "none" ever
+  reads a build), "off" when off. A pinned one older than MANIFEST_TTL_S is fetched again in the background for the
+  next start, by the process that decided it; a 404 unpins it.
   Decoded shards are held in memory under the build's identity, and only once a build is decided.
 - The data of a frozen build only: cells it lists (others: none there), fetched from the host its manifest names
   ("data": the mirror's folder of that build, immutable) else Pages, each checked against the manifest's entry for it
@@ -53,6 +55,7 @@ class Shards:
         raise NotImplementedError
 
     def __init__(self, cache_dir, fetcher=None, local=None, base=None):
+        self.cache_dir = cache_dir
         self.root = os.path.join(cache_dir, "pagesdata", self.NAME, self.VERSION) if cache_dir else None
         self.local = local
         self.base = base
@@ -82,6 +85,18 @@ class Shards:
         ident = f"local-{sha}" if local else f"{re.sub(r'[^0-9A-Za-z_.-]+', '_', str(j.get('built') or 'x'))[:40]}-{sha}"
         return {"id": ident, "cells": cells, "data": None if local else railtags.data_url(j)}
 
+    def _pin_body(self):
+        """(the pinned manifest's bytes, its age s), or (None, None)."""
+        if not self.root:
+            return None, None
+        path = os.path.join(self.root, "manifest.json")
+        try:
+            with open(path, "rb") as fh:
+                body = fh.read()
+            return body, time.time() - os.path.getmtime(path)
+        except OSError:
+            return None, None
+
     def _read_pin(self):
         """(the pinned manifest parsed, or None; its age in s, or None)."""
         if self.local:
@@ -102,11 +117,11 @@ class Shards:
 
     def frozen(self):
         """{"id", "cells" ({"z/x/y": entry} or None: every cell, a local folder without one), "data"} of the build this
-        process uses, or None (none: no data for the whole process). Decided once, at the first ask (a tile's key):
-        the manifest pinned on disk, else one fetched now (FIRST_WAIT_S at most; a 404, a failure or a slow answer:
-        none, for the whole process: Codex review of 869c2a9b, a tile keyed "none" read a build frozen after its key
-        by another tile). A pinned one older than MANIFEST_TTL_S is fetched again in the background for the next
-        process."""
+        run uses, or None (none: no data for the whole run). Decided once a run, at the first ask in any of its
+        processes (a tile's key; pagesdata's session): the manifest pinned on disk, else one fetched now (FIRST_WAIT_S
+        at most; a 404, a failure or a slow answer: none, for the whole run: Codex review of 869c2a9b, a tile keyed
+        "none" read a build frozen after its key by another tile). A pinned one older than MANIFEST_TTL_S is fetched
+        again in the background for the next start."""
         with self.lock:
             if self._frozen is not _UNSET:
                 return self._frozen
@@ -114,26 +129,53 @@ class Shards:
             with self.lock:
                 if self._frozen is not _UNSET:
                     return self._frozen
-            got, age = self._read_pin()
-            if got is None and not self.local and self.root:
-                t = threading.Thread(target=self.pin, name=f"{self.NAME}-manifest", daemon=True)
-                t.start()
-                t.join(FIRST_WAIT_S)
-                got, age = self._read_pin() if not t.is_alive() else (None, None)
-            elif got is not None and not self.local and age is not None and age > MANIFEST_TTL_S:
-                self._pin_later()
+            if self.local or not self.root:
+                got, _age = self._read_pin()
+            else:
+                got = self._session_frozen()
             with self.lock:
                 self._frozen = got
             if got is not None:
                 threading.Thread(target=self._prune, args=(got["id"],), daemon=True).start()
             return got
 
+    def _session_frozen(self):
+        """The run's build (pagesdata.session_take: one decision in every process of the run), parsed, or None."""
+        import pagesdata
+        state = {}
+
+        def decide():
+            body, age = self._pin_body()
+            if body is None:
+                t = threading.Thread(target=self.pin, name=f"{self.NAME}-manifest", daemon=True)
+                t.start()
+                t.join(FIRST_WAIT_S)
+                body, age = self._pin_body() if not t.is_alive() else (None, None)
+            state["age"] = age
+            if body is None or self._parse(body) is None:
+                return None
+            try:
+                return body.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        text, mine = pagesdata.session_take(self.cache_dir, f"{self.NAME}/{self.VERSION}|{self.base}", decide,
+                                            self.NAME)
+        if mine and text is not None and (state.get("age") or 0.0) > MANIFEST_TTL_S:
+            self._pin_later()           # (for the next start: this run keeps the one it decided)
+        return self._parse(text.encode("utf-8")) if text is not None else None
+
     def peek(self):
-        """The frozen build, else the one pinned on disk (not frozen: no wait, no fetch), else None: the main process's
-        guess of the workers' keys (earthd.Server.geo_content_key)."""
+        """The frozen build, else the run's decision (a worker's: pagesdata's session), else the one pinned on disk
+        (not frozen: no wait, no fetch), else None: the main process's guess of the workers' keys
+        (earthd.Server.geo_content_key)."""
         with self.lock:
             if self._frozen is not _UNSET:
                 return self._frozen
+        if not self.local and self.root:
+            import pagesdata
+            found, text = pagesdata.session_get(self.cache_dir, f"{self.NAME}/{self.VERSION}|{self.base}")
+            if found:
+                return self._parse(text.encode("utf-8")) if text is not None else None
         return self._read_pin()[0]
 
     def current(self):
@@ -178,11 +220,13 @@ class Shards:
             if self._pinning or time.time() - self._pin_at < MANIFEST_RETRY_S:
                 return
             self._pinning, self._pin_at = True, time.time()
-        threading.Thread(target=self.pin, name=f"{self.NAME}-manifest", daemon=True).start()
+        # (a stale pin's refresh, for the next process: this one keeps the pin it froze, so a failure is no build's)
+        threading.Thread(target=self.pin, args=(True,), name=f"{self.NAME}-manifest", daemon=True).start()
 
-    def pin(self):
+    def pin(self, stale=False):
         """Fetch the manifest and pin it on disk (for a later ask's freeze, or the next process); a 404 unpins it.
-        True when one is pinned."""
+        True when one is pinned. stale: a pin is in use (stale-if-error: a failure faults no build, netfetch.stale_ok;
+        without one, a first run, a failure is a missing input as before)."""
         import netfetch
         with self.lock:
             self._pin_at = time.time()      # (the next ask after MANIFEST_RETRY_S at the earliest)
@@ -191,7 +235,8 @@ class Shards:
                 self.fetcher = netfetch.Fetcher()
             path = os.path.join(self.root, "manifest.json") if self.root else None
             try:
-                body = self.fetcher.get(f"{self.base}/manifest.json", kind="demand").body
+                with netfetch.stale_ok(stale):
+                    body = self.fetcher.get(f"{self.base}/manifest.json", kind="demand").body
             except netfetch.NotFound:   # (not published, or withdrawn)
                 if path:
                     try:
@@ -200,7 +245,8 @@ class Shards:
                         pass
                 return False
             except Exception as e:      # (offline, the site failing: the pinned one stays)
-                log.debug("%s manifest: %s: %s", self.NAME, type(e).__name__, e)
+                log.log(logging.INFO if stale else logging.DEBUG, "%s manifest: %s: %s%s", self.NAME,
+                        type(e).__name__, e, "; the pinned one stays in use" if stale else "")
                 return False
             if self._parse(body) is None or not path:
                 return False

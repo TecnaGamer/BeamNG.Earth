@@ -160,7 +160,7 @@ class DemandTest(unittest.TestCase):
 # --- network demand per host (rate-limit report §2.2 / §5.4 case 12) ---------------------------------
 NET_LAYOUT = ff.Layout(64)          # the default CLI layout (mesh, 64 cells)
 REBASE_M = 10000.0                  # the mod's default rebaseDistance
-NET_STARTS = {"US": (39.2904, -76.6122, "usgs"), "EU": (48.1374, 11.5755, "eox2023")}   # Baltimore, Munich
+NET_STARTS = {"US": (39.2904, -76.6122, "usgs"), "EU": (48.1374, 11.5755, "eox2016")}   # Baltimore, Munich
 
 
 def imagery_keys(frame, tile, px, src):

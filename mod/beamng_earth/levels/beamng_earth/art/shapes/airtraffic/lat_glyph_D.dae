@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+<asset><contributor><authoring_tool>BeamNG.Earth tools/build_airtraffic_shapes.py (models: devo343, Live Air Traffic)</authoring_tool></contributor><unit meter="1" name="meter"/><up_axis>Z_UP</up_axis></asset>
+<library_effects>
+<effect id="lat_text-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>0.07 0.09 0.17 1</color></diffuse></lambert></technique></profile_COMMON></effect>
+</library_effects>
+<library_materials>
+<material id="lat_text-mat" name="lat_text"><instance_effect url="#lat_text-fx"/></material>
+</library_materials>
+<library_geometries>
+<geometry id="lat_glyph_D8-g"><mesh>
+<source id="lat_glyph_D8-g-p"><float_array id="lat_glyph_D8-g-p-a" count="90">0 0.126 0 0 0.384 0.195 0 0.384 0.805 0 0.476 0.195 0 0.398 0 0 0.595 0.008 0 0.735 0.032 0 0.84 0.076 0 0.928 0.143 0 0.989 0.216 0 1.033 0.299 0 1.058 0.394 0 1.067 0.501 0 1.058 0.607 0 1.033 0.701 0 0.989 0.784 0 0.928 0.857 0 0.84 0.924 0 0.737 0.967 0 0.596 0.992 0 0.398 1 0 0.126 1 0 0.476 0.805 0 0.616 0.786 0 0.616 0.214 0 0.718 0.727 0 0.78 0.632 0 0.801 0.501 0 0.718 0.273 0 0.78 0.369</float_array><technique_common><accessor source="#lat_glyph_D8-g-p-a" count="30" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+<vertices id="lat_glyph_D8-g-v"><input semantic="POSITION" source="#lat_glyph_D8-g-p"/></vertices>
+<triangles count="30" material="lat_text-mat"><input semantic="VERTEX" source="#lat_glyph_D8-g-v" offset="0"/><p>0 1 2 3 1 0 3 0 4 3 4 5 3 5 6 3 6 7 3 7 8 3 8 9 9 10 11 9 11 12 9 12 13 9 13 14 9 14 15 9 15 16 9 16 17 9 17 18 18 19 20 18 20 21 21 0 2 21 2 22 21 22 23 24 3 9 18 21 23 18 23 25 18 25 26 18 26 27 28 24 9 9 18 27 9 27 29 9 29 28</p></triangles>
+</mesh></geometry>
+</library_geometries>
+<library_visual_scenes><visual_scene id="scene" name="scene">
+<node id="base00" name="base00"><node id="start01" name="start01">
+<node id="lat_glyph_D8" name="lat_glyph_D8"><instance_geometry url="#lat_glyph_D8-g"><bind_material><technique_common><instance_material symbol="lat_text-mat" target="#lat_text-mat"/></technique_common></bind_material></instance_geometry></node>
+</node><node id="collision-1" name="collision-1"/></node>
+</visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>

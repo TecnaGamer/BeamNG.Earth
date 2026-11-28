@@ -591,6 +591,14 @@ function M.onPreRender()
   sendView(g, s)
 end
 
+-- the live air traffic's aircraft among the labels (airtraffic.mapRows3d; the rows as they are while it is off)
+local function airRows(rows)
+  local at = rawget(_G, 'beamngEarth_airtraffic')
+  if not (at and at.enabled and at.mapRows3d) then return rows end
+  local ok, out = pcall(at.mapRows3d, rows)
+  return ok and out or rows
+end
+
 -- earthGlobe's update, right after it set this frame's pose: the labels drawn with it (maplabels3d.lua)
 function M.drawLabels(pos, rot, fov)
   if not active or not M.LABELS_IMGUI then return end
@@ -606,7 +614,8 @@ function M.drawLabels(pos, rot, fov)
   labels.drawAt = t
   local q = quat(rot)
   local ok, err = pcall(require('beamngEarth/maplabels3d').draw, {p = vec3(pos), f = q * vec3(0, 1, 0),
-    u = q * vec3(0, 0, 1), r = q * vec3(1, 0, 0), fov = fov, zoom = viewZoom(g, s), O = vec3(ox, oy, oz)}, labels.rows, dt)
+    u = q * vec3(0, 0, 1), r = q * vec3(1, 0, 0), fov = fov, zoom = viewZoom(g, s), O = vec3(ox, oy, oz)},
+    airRows(labels.rows), dt)
   if not ok and not labels.drawErr then labels.drawErr = true; log_('E', 'labels: ' .. tostring(err)) end
 end
 

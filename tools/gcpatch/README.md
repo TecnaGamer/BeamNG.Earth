@@ -46,11 +46,11 @@ terfast replaces the two functions and jumps over the third loop, computing the 
 resolved once per column, the heights' minimum / maximum as integers, the engine's own float coordinate arithmetic
 for the hole scan): the same box, radius, layer mask and hole flag, bit for bit.
 
-- **Linux** (`bngearth_terfast.c`, BeamNG.drive 0.40.4, the 2026-11-06 executable): both functions and the engine
-  functions the replacements call are compared by hash at startup, the vertex-buffer function whole; any difference
-  and nothing is patched. The functions' entries get a 14-byte jump before the game's code runs (the displaced
-  instructions run from a trampoline when the stock function is wanted); the hole loop's first instruction gets a
-  5-byte jump to a stub near the game's code.
+- **Linux** (`bngearth_terfast.c`): found by code, not by address (below, "Finding the engine's code"): the three
+  functions, the two engine functions the replacements call and `getTransform` by masked whole-function signatures,
+  the constants they load checked (+-FLT_MAX, 0.5, 1 / 64); any difference and nothing is patched. The functions'
+  entries get a 14-byte jump before the game's code runs (the displaced instructions run from a trampoline when the
+  stock function is wanted); the hole loop's first instruction gets a 5-byte jump to a stub near the game's code.
 - **Windows** (`enginepatch_terfast.py`, the launcher, as dtsmooth below): the three functions are found by their
   whole code (call targets and rip-relative displacements masked, one match each, the constants they load checked);
   the block holds `win/terfast_win.c` compiled to Win64 machine code (`win/build_terfast.sh` ->
@@ -59,7 +59,9 @@ for the hole scan): the same box, radius, layer mask and hole flag, bit for bit.
   keeps the height scale at another offset and reaches the TerrainFile through another field of the resource's
   holder; the cell layout is the same.
 - The stock code runs outside the BeamNG.Earth level, and for any input the fast path does not expect.
-- `BNGEARTH_TERFAST_CHECK=1`: both run and the status file counts differences. Checked 2026-11-13: Steam Deck, a
+- `BNGEARTH_TERFAST_CHECK=1`: both run and the status file counts differences, per kind (bounds, layers, holes; the hole
+  flag compared right after the stock loop, through a stub in place of the call that follows it;
+  `BNGEARTH_TERFAST_CHECKLOG=1` logs the first 40 differing leaves to `temp/beamngEarth_terfast_check.log`). Checked 2026-11-13: Steam Deck, a
   Baltimore drive (1,696 leaf cells' bounds and holes, 4,304 layer scans) 0 differences; Windows test PC, 31 swaps of
   1024² blocks (7,936 cells) 0 differences. `win/test_terfast.sh` runs the Windows code on Linux on stand-in cells
   against the loops written out sample by sample; `server/tests/test_enginepatch_terfast.py` covers the search and
@@ -99,6 +101,16 @@ mod's `trees.prewarmSaved`, 211 saved shapes warmed at one spot). The 2026-11-05
 texkeep ran without it: its dump has only the grass patch's watcher thread (texkeep's own watcher was not running),
 and texkeep was opt-in then.
 
+**texkeep also keeps the Steam Deck's GPU from faulting (2026-11-22, BeamNG 0.40.6).** Without it the engine's
+terrain material rebuild after a block swap, with Forest items added and removed meanwhile, ends in an amdgpu page
+fault in the game's Render thread (`[gfxhub] page fault ... BeamNGMa ... Render`, client TCP: the texture units reading
+memory that is gone) and a GPU reset. Deck soaks of the V0 prototype's sequence (Bonneville, 1024² swaps every ~2 s,
+Forest adds / removes, streams at 300 / 500 mph): texkeep and terfast off, 2 of 2 runs faulted (after 177 s / in the
+second loop, then the same point again; the V0 prototype's 3 of 4 faults on 0.40.6 ran without both, since neither applied); texkeep off and
+terfast on, faulted after 90 s; texkeep on (with or without terfast): 4 runs of 13-28 min (97 min in all), no fault.
+`-nogfxgpudriven` does not help there: the Linux executable has no such switch (only the Windows build parses the
+`-nogfx*` options), the GPU-cull registry is the same with it.
+
 Steam Deck, 2026-11-13, the same drive with terfast on: 995 kept-pack hits to 51 loads; the frame after a swap
 50.5 -> 25.9 ms (its Render 35.6 -> 13.0 ms), the rebuild's main-thread CPU 23.6 -> 1.5 ms (perf), the swap's two
 frames over the ordinary frame 49 -> 20 ms, the worst frame per swap 67 -> 53 ms (max 221 -> 55).
@@ -112,9 +124,10 @@ returns the texture it kept from the last rebuild of the same file, else it call
 result. A texture not asked for in the last two rebuilds goes (an old block's photo), and so do the least recently used
 beyond 96 textures / ~160 MB; all go after the level ends (above).
 
-- **Written for BeamNG.drive 0.40 Linux (the 2026-10-29 executable).** It compares the code and data it relies on
-  byte for byte at startup (the vtable slots, `createTexture`, both pack-loader call sites, the texture release path).
-  In any other build it does nothing and says so in its status file.
+- **Found by code, not by address** (below): `createTexture`, the pack loader (both call sites at fixed offsets in it,
+  which must load the same profile), `destroySelf` and `requestDeleteTexture` (destroySelf's callee) by masked
+  whole-function signatures; the vtable slots are the relocated words of the RELRO data that hold `createTexture`'s
+  address (0.40.6: three). In any other shape it does nothing and says why in its status file.
 - Measured (PC, I-10 Phoenix at 120 mph, detail mode, 8 ground materials, two drives each way): the frame after a
   block swap 60.8 -> 51.8 ms median (n 74 / 68), its Render time 21.6 -> 13.0 ms; a base-photo refresh
   (`terrain.setBase`, 8 slots) 83 -> 58 ms, its Render time ~31 -> ~7 ms. The Lua part (the `.ter` parse, ~30 ms; the
@@ -257,6 +270,34 @@ see the windows-test-pc notes):
 5. Soak: a 30 min drive in each renderer (`--gfx dx11 / dx12 / vk`), a teleport or two, a level reload, a BeamMP
    join: no crash; then Defender's protection history (antivirus uploads of the .exe only with the user's go).
 6. (Done 2026-11-11: `env_on_windows()` defaults to on; the off switches stay.)
+
+## Finding the engine's code (Linux; 2026-11-22)
+Until 0.40.5 terfast and texkeep checked the engine's code at fixed addresses of one executable. BeamNG 0.40.6
+(2026-11-19, "unspecified security improvements") left the code where it was but moved one texture manager vtable by
+0x20 bytes, and both patches turned themselves off for every Linux player with nothing but a status file saying so.
+Now:
+
+- `mksigs.py BinLinux/BeamNG.drive.x64 > bngearth_sigs.h` writes a **masked whole-function signature** of each engine
+  function the patches use (the function's range from the executable's `.eh_frame`): every byte, except the
+  rip-relative displacements and the rel32 of calls / jumps that leave the function, which a rebuild of unchanged
+  source moves. The instructions, registers, structure offsets, immediates and jumps inside the function must be
+  equal, so a build that changed any structure offset the replacements read does not match (all of them are in the
+  matched functions' own code).
+- At startup each patch searches the game's code for every signature (`bngearth_sigscan.h`: a `memmem` of a 16-byte
+  anchor over the ~50 MB of code, then the full compare; ~10 ms for all of them) and acts only when each matches
+  **exactly once**. Callees and constants are read from the matched code at fixed offsets of the signature and
+  checked there (their own signatures, the float values).
+- Not applied is never silent: the status line says `not applied: another game build (<which function: N matches>;
+  build id <ELF build id>); stock`, and says it again every time the BeamNG.Earth level starts (also `off`); the
+  launcher prints a problem for it (`watch_patch_status`), the mod shows a warning toast once a game run and logs it
+  (`enginepatches.lua`), the performance telemetry's setup carries each patch's state (`enginePatches`: on / off /
+  failed / none), and `tools/compat_check.py` checks all four.
+- `test_sigs.c` lays a `BeamNG.drive.x64` out as the loader does (segments, relative relocations) and runs the patches'
+  own locate functions on it: the targets found, a changed byte refused (`0 matches`), a second copy refused
+  (`2 matches`); `server/tests/test_gcpatch_sigs.py` runs it (and checks `bngearth_sigs.h` is current for the
+  reference build, 0.40.6: build id `1ec1c227...`).
+- After a game update: run the game once (or `test_sigs`); if a patch says `not applied`, look at what changed in that
+  function, update the replacement if needed, and regenerate the header from the new executable.
 
 ## Install
 The Linux download (the AppImage) and `python3 launcher.py` start the game with this library already preloaded:

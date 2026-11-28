@@ -1,0 +1,11 @@
+---
+name: port-module
+description: Port one BeamNG.Earth production callable and its helpers to earthfast with clean-base byte replay.
+---
+
+1. Fill the packet before editing. Name the base SHA and module version, owned paths, real caller, neighbouring kernel, focused test, plan phase, expensive dependency and exact output contract (types, shape, order, errors, writes and callback order).
+2. Capture a nonempty production witness and an edge/error case on that clean base. In scratch, implement `capture(record, cache)` and `invoke(inputs, cache)`. At the real call, freeze all inputs before mutation, record callback queries/answers, ordered result and emitted file bytes. Run `nice -n 10 python3 tools/portcheck/replay.py capture --adapter FILE --server-dir BASE/server --cache FROZEN --cases NEW --work SCRATCH`. Assert expected counts and branch coverage. Deliberately change one result and show the comparator rejects it.
+3. Record Python, Rust, NumPy, Pillow/codec versions, data release, switches, hash seed, CPU features, thread counts and warm/cold state. Capture and replay use different processes and private writable data copies. Test the least certain dependency first. Preserve operation order, deterministic maths and iteration, Python types and exceptions.
+4. Implement new server decisions in Rust. Route the real caller through a registered versioned PyO3 binding and `fast.require`. Delete the replaced Python and fallback. Keep behaviour tests. Replay with `replay` in place of `capture`, the same cases/cache and the candidate server. Prove the real call crossed the binding. Never loosen tolerances, bump a format or regenerate goldens to clear a difference.
+5. Stop the piece on an unexplained difference. Retain the smallest failing input, first divergent field/index/byte and last matching boundary. Keep first failures, partial results and skips. Run the plan's release comparators and gates on the integrated build.
+6. Report VERSION/MIN_VERSION, release binary digests, Linux/Windows runtime evidence, CPU/thread coverage, relevant visuals, dependencies with exact versions/licences, Python added AND removed, historical net counter, elapsed stages and observed usage. Leave scratch parity code out of the product and the worktree for review.

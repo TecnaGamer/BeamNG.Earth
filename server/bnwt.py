@@ -62,6 +62,9 @@ CONTENT = {"base": 1, "transportation": 1, "buildings": 1, "places": 1}
 LAYERS = tuple(ly for v in ARCHIVES.values() for ly in v["layers"])
 ARCHIVE_OF = {ly: name for name, v in ARCHIVES.items() for ly in v["layers"]}
 BASE_URL = (os.environ.get("BNGE_BNWT_URL") or "").strip().rstrip("/")
+ENV_OFF = BASE_URL.lower() == "off"     # (BNGE_BNWT_URL=off: off whatever cdn.json says)
+if ENV_OFF:
+    BASE_URL = ""
 LEVEL = 19              # zstd level of the tiles
 HEAD_BYTES = 16384
 RETRY_S = 600.0         # an archive that could not be read (404, network, wrong version) is asked again after this
@@ -82,6 +85,22 @@ _NOT_ITS_FAULT = (netfetch.Deferred, netfetch.PolicyDenied, netfetch.BudgetExcee
 
 def enabled():
     return bool(BASE_URL)
+
+
+def base_for(fetcher, cache_dir, release, use_switch=False):
+    """The archives' base URL for a process reading Overture `release`: BNGE_BNWT_URL when set (off: none), else the
+    data repo's cdn.json {"bnwt": {"enabled": true, "release": ...}} (cdn.bnwt_base), else "" (the sources). Never
+    raises: a switch that cannot be read is the sources as before."""
+    if BASE_URL or ENV_OFF or not use_switch:
+        return BASE_URL
+    if fast.AVAILABLE is False or getattr(fast._ef, "VERSION", 0) < NATIVE:
+        return ""                   # (the switch's: this build of the server cannot read it)
+    try:
+        import cdn
+        return cdn.bnwt_base(fetcher, cache_dir, release) or ""
+    except Exception as e:      # (offline, a fetcher without the switch: the sources)
+        log.info("bnwt: the CDN switch not read (%s: %s): off", type(e).__name__, e)
+        return ""
 
 
 def source_of(layer, pmt):
@@ -206,7 +225,7 @@ def _local_path(url):
     return None if "://" in url else url
 
 
-def _read_range(fetcher, url, start, end, kind, etag=None, short_ok=False):
+def _read_range(fetcher, url, start, end, kind, etag=None, short_ok=False, lane=LANE):
     """(bytes [start, end) of url, ETag): a file's own bytes, or one range request."""
     path = _local_path(url)
     if path is not None:
@@ -220,7 +239,7 @@ def _read_range(fetcher, url, start, end, kind, etag=None, short_ok=False):
             raise pmtiles.PmtilesError(f"{path}: {len(body)} bytes for {start}-{end - 1}")
         return body, ""
     try:
-        res = fetcher.get(url, kind=kind, headers={"Range": f"bytes={start}-{end - 1}"}, lane=LANE)
+        res = fetcher.get(url, kind=kind, headers={"Range": f"bytes={start}-{end - 1}"}, lane=lane)
     except netfetch.NotFound as e:
         raise Unavailable(f"{url}: not found") from e
     n = len(res.body)
@@ -243,7 +262,7 @@ class Part(pmtiles.Archive):
 
     def _get(self, start, end, kind, etag=None, short_ok=False):
         try:
-            return _read_range(self.r.fetcher, self.url, start, end, kind, etag, short_ok)
+            return _read_range(self.r.fetcher, self.url, start, end, kind, etag, short_ok, self.arch.LANE)
         except pmtiles.Changed:
             self._reset()
             raise
@@ -277,6 +296,8 @@ class Part(pmtiles.Archive):
 
 class Archive:
     """One archive of a release: its index (coverage, parts by tile-id range), the parts, the tiles on disk."""
+
+    LANE = LANE             # (netfetch's lane of its host: cip.Archive's own)
 
     def __init__(self, reader, name):
         self.r, self.name = reader, name
@@ -325,7 +346,7 @@ class Archive:
                     raise Unavailable(f"{lp}: {e}") from e
             else:
                 try:
-                    b = self.r.fetcher.get(self.url, kind=kind, lane=LANE).body
+                    b = self.r.fetcher.get(self.url, kind=kind, lane=self.LANE).body
                 except netfetch.NotFound as e:
                     raise Unavailable(f"{self.url}: not found") from e
             m = json.loads(b)

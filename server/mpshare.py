@@ -178,7 +178,17 @@ def valid_plans(data):
         return False
 
 
+def local_only(cell):
+    """Are cell's plans, here, made with data that stays on this computer (Hong Kong's measured heights or terrain,
+    Switzerland's cut cells: plancache keys them apart)? They are neither shared nor taken from another player, whose
+    plans of the cell are made without it (sharehelper: those sources off) and would be kept under the tagged key.
+    (Germany's measured decks are in the map data's versions, which the share's key holds.)"""
+    import roadz
+    return bool(roadz.hk_cell(cell) or roadz.tlm_tags(cell))
+
+
 # --- the main process's side --------------------------------------------------------------------------------------
+
 class Hub:
     """A player's app's side of sharing, in the main process. send(msg): to the mod (Connection.send). store: a
     plancache.PlanCache whose persist is set (signature, frames, map data versions: has / _kept / _revisit_key / its
@@ -307,7 +317,7 @@ class Hub:
 
     def prefetch(self, lat, lon, vx=0.0, vy=0.0, now=None):
         """Ask the plugin for the cells near (lat, lon) and ahead (vx, vy m/s east / north) we do not have. -> how
-        many asked."""
+        many asked. Never the cells whose plans here are made with data that stays on this computer (local_only)."""
         pc = self.store()
         if pc is None or self.code is None:
             return 0
@@ -326,7 +336,7 @@ class Hub:
         items = []
         asked = {v[1] for v in self.wanted.values()}
         for _d, cell in sorted(set(cells)):
-            if cell in asked or now - self.missed.get(cell, -1e9) < ASK_AGAIN_S or pc.has(cell):
+            if cell in asked or now - self.missed.get(cell, -1e9) < ASK_AGAIN_S or pc.has(cell) or local_only(cell):
                 continue
             key = f"plans/{pc.signature}/{cell[0]}_{cell[1]}_{cell[2]}"
             iid = item_id(self.code, key)
@@ -435,6 +445,10 @@ class Hub:
 
     def _keep(self, pc, key, cell, data):
         m = _KEY.fullmatch(key)
+        if m and local_only(cell):
+            self.stats["refused"] += 1
+            log.info("share: plans of %s refused (made here with data that stays on this computer)", key)
+            return
         if not m or m.group(1) != pc.signature or not valid_plans(data):
             self.stats["refused"] += 1
             log.info("share: plans of %s refused (not readable plans)", key)

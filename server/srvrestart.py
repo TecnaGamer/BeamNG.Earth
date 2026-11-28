@@ -42,7 +42,7 @@ SERVER_KEYS = ("serverCores", "serverPriority", "models3dmr")
 GROUND_ENV = "BNGE_GROUND_SQUARE"       # (heightmap.ground_square)
 
 
-def view(settings):
+def view(settings, environ=None):
     """{setting id: value} of the restart-needing settings in a settings file's dict, as the server takes them (the
     same rules as cpupin.player_settings and experimental.chosen; values as the mod's settings.lua holds them)."""
     import cpupin
@@ -63,6 +63,9 @@ def view(settings):
         version = 1
     for sid in experimental.IDS:
         out[sid] = d.get(sid) is True and version >= experimental.SINCE_VERSION.get(sid, 0)
+    import cliffsettings
+    if cliffsettings.available(environ):
+        out.update(cliffsettings.choices(d))
     return out
 
 
@@ -89,7 +92,7 @@ def supervisor_part(settings, env, base_env):
     grid's value is the server's own (heightmap.SQUARE); only whether it was set by hand comes from here."""
     import experimental
     d = settings if isinstance(settings, dict) else {}
-    v = view(d)
+    v = view(d, env)
     wanted = experimental.env_for(d)
     fixed = []
     for sid, feature_env, _needs in experimental.FEATURES:
@@ -97,7 +100,11 @@ def supervisor_part(settings, env, base_env):
             fixed.append(sid)
     if base_env.get(GROUND_ENV) or _grid_of(env.get(GROUND_ENV)) != v["groundGrid"]:
         fixed.append("groundGrid")      # (by hand, or a dev's BNGE_SERVER_ENV square other than the page's)
-    return {"values": {sid: v[sid] for sid in experimental.IDS}, "fixed": fixed}
+    import cliffsettings
+    values = {sid: v[sid] for sid in experimental.IDS}
+    if cliffsettings.available(env):
+        values.update(cliffsettings.choices(d))
+    return {"values": values, "fixed": fixed}
 
 
 def supervisor_env(env, settings, base_env=None, times=()):
@@ -117,7 +124,8 @@ def start_view(user_dir, environ=None, square=None, hand=()):
     hand: the server's own settings set by hand (an environment variable or option the page's value cannot beat)."""
     import experimental
     environ = os.environ if environ is None else environ
-    out = view(experimental.read_settings(user_dir))
+    import cliffsettings
+    out = view(experimental.read_settings(user_dir), environ)
     if square is not None:
         out["groundGrid"] = "2" if float(square) == 2.0 else "1"
     try:
@@ -129,7 +137,7 @@ def start_view(user_dir, environ=None, square=None, hand=()):
         values = given.get("values")
         if isinstance(values, dict):
             for k, v in values.items():
-                if k in experimental.IDS and type(v) is type(out[k]):
+                if k in out and (k in experimental.IDS or k in cliffsettings.KEYS) and type(v) is type(out[k]):
                     out[k] = v
         if isinstance(given.get("fixed"), list):
             fixed |= {k for k in given["fixed"] if isinstance(k, str) and (k in experimental.IDS or k in SUPERVISOR_KEYS)}
@@ -231,6 +239,48 @@ def wants_restart(code):
     return code == EXIT_CODE
 
 
+def _stop_name(pid):
+    return rf"Local\BeamNGEarth-stop-{pid}"
+
+
+def wait_parent_or_stop(parent):
+    """Windows parent watcher. Wait for the parent handle (0) or our named stop event (1)."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateEventW.restype = wintypes.HANDLE
+    k32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    k32.WaitForMultipleObjects.restype = wintypes.DWORD
+    k32.WaitForMultipleObjects.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE),
+                                          wintypes.BOOL, wintypes.DWORD]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    stop = k32.CreateEventW(None, True, False, _stop_name(os.getpid()))
+    handles = (wintypes.HANDLE * 2)(parent, stop)
+    try:
+        return k32.WaitForMultipleObjects(2 if stop else 1, handles, False, 0xFFFFFFFF)
+    finally:
+        if stop:
+            k32.CloseHandle(stop)
+
+
+def request_stop(pid):
+    """Windows TerminateProcess skips exit hooks. Wake the owned process's parent watcher to drain and exit."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenEventW.restype = wintypes.HANDLE
+    k32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    k32.SetEvent.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = k32.OpenEventW(0x0002, False, _stop_name(pid))  # EVENT_MODIFY_STATE
+    if not handle:
+        return False
+    try:
+        return bool(k32.SetEvent(handle))
+    finally:
+        k32.CloseHandle(handle)
+
+
 def stop_children(log=None, join_s=CHILD_JOIN_S):
     """This process's worker processes ended (terminated, then killed): none may keep the port or the shared memory
     for the next server. Returns how many there were."""
@@ -238,7 +288,8 @@ def stop_children(log=None, join_s=CHILD_JOIN_S):
     kids = multiprocessing.active_children()
     for p in kids:
         try:
-            p.terminate()
+            if os.name != "nt" or not request_stop(p.pid):
+                p.terminate()
         except Exception:
             pass
     for p in kids:
@@ -252,6 +303,18 @@ def stop_children(log=None, join_s=CHILD_JOIN_S):
     if log is not None and kids:
         log.info("restart: %d worker processes stopped", len(kids))
     return len(kids)
+
+
+def drain_before_kill(join_s):
+    """Give both the local listener and worker processes time to flush before forced tree cleanup."""
+    import threading
+    import serverlog
+    drain = threading.Thread(target=serverlog.shutdown, name="log-drain", daemon=True)
+    drain.start()
+    try:
+        stop_children(join_s=join_s)
+    finally:
+        drain.join(join_s)
 
 
 def finish(log=None):
@@ -289,7 +352,7 @@ def finish_soon(hard_s=HARD_EXIT_S):
     def guard():
         time.sleep(hard_s)
         try:
-            stop_children(None, join_s=1.0)
+            drain_before_kill(join_s=1.0)
         finally:
             os._exit(EXIT_CODE)
     threading.Thread(target=guard, name="restart-guard", daemon=True).start()

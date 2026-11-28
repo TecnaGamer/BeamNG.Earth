@@ -1044,7 +1044,7 @@ class OfflineTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def server(self, net, imagery=("usgs", "eox2023", "eox2016")):
+    def server(self, net, imagery=("usgs", "eox2016")):
         s = earthd.Server(self.tmp.name, os.path.join(self.tmp.name, "cache"), imagery=imagery, net=net)
         s.dem = test_server.FakeDem()
         return s

@@ -320,7 +320,147 @@ def lane_metrics(source, quad, terrain, tops, soffits, floors):
     return counts
 
 
-def measure(p, directory, scanner):
+# The M0 audit (native/roadsys/src/audit.rs: double owners, envelope intrusions, blocked openings, piers in faces,
+# parapets in the carriageway, hand-over lips, clearance against the floors, T-cracks, folds): its kinds and flags.
+AUDIT_KINDS = {"road": 0, "walk": 1, "walkcol": 2, "deck": 3, "tunnel": 4, "barrier": 5, "buscol": 6}
+AUDIT_LEVELS = {"ground": 0, "bridge": 1, "tunnel": 2}
+
+
+def audit_kind(what):
+    if what in AUDIT_KINDS:
+        return AUDIT_KINDS[what]
+    return 8 if what.startswith("railcol") else 7 if what.startswith("rail") else 9
+
+
+def audit_input(path, quad, terrain, entries, lines):
+    """The audit's input blob (audit.rs): the tile quad, the physics terrain, every emitted mesh as
+    (kind, collides, [(flags, triangles)]) and the source map's lines."""
+    import struct
+    q = np.asarray(quad, dtype=float).reshape(4, 2)
+    n = len(terrain.z)
+    with open(path, "wb") as f:
+        f.write(b"RSAUDIT1")
+        f.write(q.astype("<f8").tobytes())
+        f.write(struct.pack("<Iqq", n, int(terrain.origin[0]), int(terrain.origin[1])))
+        f.write(np.ascontiguousarray(terrain.z, dtype="<f4").tobytes())
+        f.write(np.ascontiguousarray(terrain.mat == 255, dtype="u1").tobytes())
+        f.write(struct.pack("<I", len(entries)))
+        for kind, collides, groups_ in entries:
+            total = sum(len(t) for _flags, t in groups_)
+            f.write(struct.pack("<BBI", kind, 1 if collides else 0, total))
+            for flags, tri in groups_:
+                rows = np.zeros(len(tri), dtype=[("f", "u1"), ("p", "<f8", (9,))])
+                rows["f"] = flags
+                rows["p"] = np.asarray(tri, dtype=float).reshape(-1, 9)
+                f.write(rows.tobytes())
+        f.write(struct.pack("<I", len(lines)))
+        for road in lines:
+            xy = np.asarray(road["xy"], dtype="<f8").reshape(-1, 2)
+            f.write(struct.pack("<BdI", AUDIT_LEVELS.get(road["level"], 0), float(road["width"]), len(xy)))
+            f.write(xy.tobytes())
+
+
+def audit(directory, quad, terrain, entries, lines, auditor):
+    if auditor is None:
+        return {}
+    src, out = directory / "audit.bin", directory / "audit.json"
+    audit_input(src, quad, terrain, entries, lines)
+    subprocess.run([str(auditor), "audit", str(src), str(out)], check=True)
+    return read(out)
+
+
+# OSM's mapped road areas (area:highway=*; native/roadsys areas.rs): today's road surface (the road meshes' base
+# layer, the deck tops and the terrain's carriageway paint) against them, per tile, when a staged area build is given (WIDE_AREAS_DIR, a folder of
+# tools/build_osm_road_areas.py: manifest.json + its parts). Sums and histograms (additive over tiles) in the tile's
+# "areas"; a few sums in its metrics (areas_*).
+AREAS_DIR = __import__("os").environ.get("WIDE_AREAS_DIR")
+
+
+class _AreasMd:
+    """The map data osmareas reads a staged build through (only its cache folder: the build's head and tiles)."""
+
+    def __init__(self, cache_dir):
+        self.cache_dir = cache_dir
+        self.fetcher = None
+
+
+def area_polygons(lat, lon, quad, frame, cache_dir):
+    """{key: (value, layer, flags, [(role, (k, 2))])} of the staged build's areas round quad (the anchor frame)."""
+    import mapcells
+    import osmareas
+    osmareas.ON, osmareas.DIR = True, AREAS_DIR
+    q = np.asarray(quad, np.float64)
+    la, lo, _ = frame.enu_to_geodetic(q[:, 0], q[:, 1], np.zeros(len(q)))
+    cells = mapcells.cells_for_bbox(float(np.min(la)) - 1e-4, float(np.min(lo)) - 1e-4, float(np.max(la)) + 1e-4,
+                                    float(np.max(lo)) + 1e-4)
+    return osmareas.polygons_for(_AreasMd(cache_dir), cells, frame) or {}
+
+
+def areas_input(path, quad, tris, lines, polys):
+    """The areas audit's input (native/roadsys areas.rs run_input, "RSAREA01"); tris [(code, triangles)]: code 0
+    paved, 1 hatched, 2 not road surface (sidewalks drawn over the paint)."""
+    import struct
+    with open(path, "wb") as f:
+        f.write(b"RSAREA02")
+        f.write(np.asarray(quad, dtype="<f8").reshape(4, 2).tobytes())
+        f.write(struct.pack("<I", sum(len(t) for _g, t in tris)))
+        for gore, t in tris:
+            rows = np.zeros(len(t), dtype=[("g", "u1"), ("p", "<f8", (6,))])
+            rows["g"] = int(gore)
+            rows["p"] = np.asarray(t, dtype=float)[:, :, :2].reshape(-1, 6)
+            f.write(rows.tobytes())
+        f.write(struct.pack("<I", len(lines)))
+        for road in lines:
+            xy = np.asarray(road["xy"], dtype="<f8").reshape(-1, 2)
+            # (the line's own record: where today's width came from, for the width rows)
+            tag = "|".join(str(road.get(k, "")) for k in ("id", "cls", "lanes", "urban", "width", "drive", "oneway")).encode()
+            f.write(struct.pack("<I", len(tag)) + tag)
+            f.write(struct.pack("<dI", float(road["width"]), len(xy)))
+            f.write(xy.tobytes())
+        f.write(struct.pack("<I", len(polys)))
+        for key in sorted(polys):
+            value, layer, flags, rings = polys[key]
+            v = str(value).encode()
+            f.write(struct.pack("<QI", int(key), len(v)) + v + struct.pack("<qBI", int(layer), int(flags), len(rings)))
+            for role, xy in rings:
+                xy = np.asarray(xy, dtype="<f8").reshape(-1, 2)
+                f.write(struct.pack("<BI", int(role), len(xy)))
+                f.write(xy.tobytes())
+
+
+AREA_SUMS = ("eval_m2", "mapped_m2", "gen_m2", "inter_m2", "union_m2", "missing_m2", "extra_m2", "islands",
+             "islands_missed", "extra_splits", "extra_split_m2")
+
+
+def painted_tris(terrain, quad):
+    """The terrain block's carriageway paint (asphalt, cobbles: surface.paint_roads, the ground roads' pavement the
+    game shows under / instead of road meshes) round quad as triangles (two per lattice square)."""
+    q = np.asarray(quad)
+    lo = np.floor(q.min(0) - 2 - terrain.origin).astype(int)
+    hi = np.ceil(q.max(0) + 2 - terrain.origin).astype(int)
+    n = len(terrain.z) - 1
+    x0, y0 = max(lo[0], 0), max(lo[1], 0)
+    x1, y1 = min(hi[0], n), min(hi[1], n)
+    if x1 <= x0 or y1 <= y0:
+        return np.zeros((0, 3, 3))
+    m = np.isin(terrain.mat[y0:y1, x0:x1], [surface.ASPHALT, surface.COBBLE])
+    yy, xx = np.nonzero(m)
+    gx, gy = xx + x0 + terrain.origin[0], yy + y0 + terrain.origin[1]
+    a = np.column_stack((gx, gy, np.zeros(len(gx))))
+    b, c, d = a + [1, 0, 0], a + [1, 1, 0], a + [0, 1, 0]
+    return np.concatenate((np.stack((a, b, c), 1), np.stack((a, c, d), 1))).astype(float)
+
+
+def areas_audit(directory, quad, tris, lines, polys, auditor):
+    if auditor is None or not polys:
+        return None
+    src, out = directory / "areas.bin", directory / "areas.json"
+    areas_input(src, quad, tris, lines, polys)
+    subprocess.run([str(auditor), "areas", str(src), str(out)], check=True)
+    return read(out)
+
+
+def measure(p, directory, scanner, auditor=None):
     frame = geodesy.EnuFrame(p["lat"],p["lon"])
     tiles = {}
     for tile in read(directory/"tiles.json"):
@@ -334,6 +474,8 @@ def measure(p, directory, scanner):
         markings = defaultdict(list)
         bases = []
         src = geotiles.frame(*geotiles.parse(key)[1:])
+        entries = []
+        surface_tris = []                   # (the drawn road surface: the areas audit's)
         for file, src_frame in ((f"rg_{key}.json", src), (f"rs_1_{key}.json",None)):
             data = read(directory/file)
             for what, entry in data.items():
@@ -343,7 +485,13 @@ def measure(p, directory, scanner):
                     continue
                 collision = what!="road" and not (what=="walk" and "walkcol" in data) and not (
                     what.startswith("rail") and not what.startswith("railcol") and "railcol" in data)
+                audited = []
+                entries.append((audit_kind(what), collision, audited))
                 for mat, tri in groups(directory,entry,frame,src_frame,tile["exact"].get(what)):
+                    audited.append(((1 if mat==roadmesh.DECK_TOP else 0) | (2 if mat==roadmesh.DECK_SIDE else 0) |
+                                    (4 if mat=="curbs" else 0) |
+                                    (8 if ctx["layers"].get(mat)=="mark" or mat.startswith(("line_","crossing")) else 0),
+                                    tri))
                     if not what.endswith("col") and not what.startswith("railcol"):
                         metrics["triangles"] += len(tri)
                         metrics["draw_calls"] += 1
@@ -354,6 +502,7 @@ def measure(p, directory, scanner):
                     if what=="deck":
                         if mat==roadmesh.DECK_TOP:
                             tops.extend(tri[upward])
+                            surface_tris.append((0, tri[upward]))
                         soffits.extend(tri[n[:,2]<-.7*np.linalg.norm(n,axis=1)])
                     if what=="deck" and mat==roadmesh.DECK_SIDE:
                         floors.extend(tri[upward])
@@ -363,9 +512,12 @@ def measure(p, directory, scanner):
                                 metrics[k]=max(metrics[k],v)
                             else:
                                 metrics[k]+=v
+                    if what=="walk" and len(tri[upward]):
+                        surface_tris.append((2, tri[upward]))
                     if what=="road":
                         if ctx["layers"].get(mat)=="base" and len(tri[upward]):
                             bases.append(tri[upward])
+                            surface_tris.append((0, tri[upward]))
                         centers = tri[upward].mean(1)
                         # Overlays above a physical deck are intentionally elevated. Exclude those separately below.
                         if ctx["layers"].get(mat)=="mark" or mat.startswith(("line_","crossing")):
@@ -387,10 +539,21 @@ def measure(p, directory, scanner):
             metrics["visual_base_overlap_m2"]=sum(float(line.split()[4]) for line in scanned.splitlines()
                                                     if line.startswith("overlap "))
         metrics.update(lane_metrics(ctx["lines"],quad,terrain,tops,soffits,floors))
+        metrics.update(audit(directory, quad, terrain, entries, ctx["lines"], auditor))
         metrics["source_faults"] = tile.get("source_faults",0)
         metrics["lidar_waits"] = tile.get("lidar_waits",0)
+        area = None
+        if AREAS_DIR:
+            polys = area_polygons(p["lat"], p["lon"], quad, frame, str(directory / "areas-cache"))
+            painted = painted_tris(terrain, quad)
+            area = areas_audit(directory, quad, [(0, painted)] + surface_tris, ctx["lines"], polys, auditor)
+            if area is not None:
+                for k in AREA_SUMS:
+                    metrics["areas_"+k] = area[k]
         tiles[key] = dict(metrics={k:round(float(v),6) for k,v in metrics.items()},
                           seconds=tile["seconds"])
+        if area is not None:
+            tiles[key]["areas"] = area
     if not tiles or not any(t["metrics"].get("lane_samples",0) for t in tiles.values()):
         raise ValueError("no source driving lanes inside selected tiles")
     return tiles
