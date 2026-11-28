@@ -915,6 +915,209 @@ def _stations_near(line, pts, reach):
 
 END_PAST_M = 0.5            # m past a deck's free end its approach's ground is read (chain_heights' lift)
 DECK_HALF_MIN_M = 2.0       # m: a deck part's half width at least, for the ends on another deck (_ends_on_decks)
+# (M5 round 8, BNE_ROADSYS=surface 12, earthfast 643; road shape first) A short chain keeps its profile's deck end where
+# the plans' ground past it lies in a hollow of the elevation, and its approach is ramped to the deck instead (native/
+# roadsys endmatch.rs kept_ends / approach_run / ramp_dz; pins_near's ramps). The profile squares solve each deck within
+# its class's grades; endmatch then lifted or dropped every free end onto the plans' first stage, and over a surface
+# model's filtered embankment (0bff: a 7-9 m trench at the bridge's north end) or a scree cone over a covered section
+# (Stelvio's SS38) a 32 m deck climbed 18-20 % and a 33 m one fell 45 %. Kept: a free end alone at its node of a chain
+# KEEP_SHORT_M long at most, its ground more than KEEP_DZ_M off, with room on its approach (to the first junction or
+# structure, RAMP_MAX_M + RAMP_CLEAR_M read at most) for a ramp of |dz| / its class grade (RAMP_MIN_M at least) and
+# RAMP_CLEAR_M more: the ramp ends that far short of a junction, so the roads there (and their own pins) keep theirs.
+KEEP_ON = SURFACE
+KEPT_KERNEL = 649
+# (the roads built to a design grade, not their links: a track's or a path's profile follows its ground, and a 12 m
+# track deck kept at its profile over a gully stood 15 m off it, Stelvio; a motorway link's kept end at Vancouver's
+# interchange left its 4 m end 0.1 m off the ramped ground at its corners: lips over 20 mm 156 -> 176)
+KEEP_CLASSES = ("motorway", "trunk", "primary", "secondary", "tertiary")
+KEEP_SHORT_M = 60.0
+KEEP_DZ_M = 0.75
+RAMP_MIN_M = 20.0
+RAMP_CLEAR_M = 20.0         # (the pin field's reach past a road's half width: grading.PIN_TAPER_M + a lane)
+RAMP_MAX_M = 100.0         # (with RAMP_CLEAR_M: the decks the ramps are read from lie within the ceiling's own read, so
+                            # its solves serve them: at 150 m they asked chains no one else did, Springfield +53 % CPU)
+RAMP_STEP_M = 2.0
+RAMP_RIDE_A = 0.2 * 9.81    # m/s^2: a ramp's curve at its road's design speed (_class_speed) takes at most this (0.3 g: 0bff
+                            # one sample over 0.5 g at 70 mph more than dev)
+
+
+def _class_speed(spec):
+    """m/s: a ramp's design speed by its road's class (70 mph a motorway, 60 a trunk, 50 a primary, 40 a secondary or
+    tertiary, 30 the rest and links)."""
+    cls = getattr(spec, "cls", None)
+    if bool(getattr(spec, "link", False)):
+        return 13.4
+    return {"motorway": 31.3, "trunk": 26.8, "primary": 22.4, "secondary": 17.9, "tertiary": 17.9}.get(cls, 13.4)
+
+
+def _class_grade(spec):
+    """The class grade limit the profile squares hold a stroke to (native/roadsys prof.rs grade_limit)."""
+    cls = getattr(spec, "cls", None)
+    link = bool(getattr(spec, "link", False))
+    if link:
+        return 0.07
+    return 0.05 if cls == "motorway" else 0.06 if cls == "trunk" else 0.10
+
+
+_run_memo = {}
+
+
+def _node_id(s):
+    import hashlib
+    return int.from_bytes(hashlib.blake2b(str(s).encode(), digest_size=8).digest(), "little")
+
+
+def _run_lines(cell_fn, home, frame):
+    """approach_run's neighbourhood of map cell home: (lines [(points (n, 2) in frame, [(arc m, connector id)], [arc m
+    of each tagged structure or tunnel range's ends])], {feature: line index}) of every road line in the 3 x 3 cells
+    round it (each feature once: home's copy first, then the cells as str() sorts them; single-part lines only).
+    Memoised per frame and cell; None when a cell cannot be read."""
+    import dnp
+    import mapcells
+    import roads
+    mk = (_frame_key(frame), str(home))
+    with _memo_lock:
+        got = _run_memo.get(mk)
+    if got is not None:
+        return got
+    n = 1 << home.z
+    keys = [mapcells.CellKey(home.z, (home.x + dx) % n, home.y + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+            if 0 <= home.y + dy < n]
+    keys = [home] + sorted((k for k in keys if str(k) != str(home)), key=str)
+    lines, index = [], {}
+    for k in keys:
+        feats = cell_fn(k)
+        if feats is None:
+            return None
+        if not len(feats):
+            continue
+        table = feats.rules.get("connectors")
+        rngs = None
+        for i in range(len(feats)):
+            fid = feature(str(feats.ids[i]))
+            if fid in index or int(feats.part_off[i + 1] - feats.part_off[i]) != 1:
+                continue
+            ring = feats.parts(i)[0]
+            if len(ring) != 1 or len(ring[0]) < 2:
+                continue
+            ll = np.asarray(ring[0], np.float64)
+            e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+            xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
+            seg = dnp.hypot(*np.diff(xy, axis=0).T)
+            L = float(np.sum(seg))
+            if not L > 0.0:
+                continue
+            nodes = []
+            if table is not None:
+                for r in table.rows(i):
+                    nodes.append((float(table.start[r]) * L, _node_id(table.value[r])))
+            stops = sorted({float(u) * L for u0, u1, _kind in roads.tag_level_ranges(feats, i) for u in (u0, u1)})
+            index[fid] = len(lines)
+            lines.append((xy, sorted(nodes), stops))
+    got = (lines, index)
+    with _memo_lock:
+        if len(_run_memo) > 64:
+            _run_memo.clear()
+        _run_memo[mk] = got
+    return got
+
+
+def _approach_of(cell_fn, frame, fid, end_xy, past_xy):
+    """(m free, points (k, 2) in frame) of the approach of a deck end at end_xy read at past_xy (approach_run on the
+    deck's own map feature, from past_xy's projection, walking away from the deck), or None."""
+    import dnp
+    import fast
+    import mapcells
+    la, lo, _u = frame.enu_to_geodetic(np.array([float(past_xy[0])]), np.array([float(past_xy[1])]), 0.0)
+    home = mapcells.cell_of(float(np.asarray(la)[0]), float(np.asarray(lo)[0]))
+    got = _run_lines(cell_fn, home, frame)
+    if got is None:
+        return None
+    lines, index = got
+    li = index.get(feature(fid))
+    if li is None:
+        return None
+    xy = lines[li][0]
+    s_past, s_end = _arc_of(xy, past_xy), _arc_of(xy, end_xy)
+    if abs(s_past - s_end) < 1e-6:
+        # (the deck ends at its line's end: the walk starts there, outward, onto the line going on past it)
+        L = float(np.sum(dnp.hypot(*np.diff(xy, axis=0).T)))
+        if s_end <= 0.05:
+            return fast._ef.roadsys_approach_run(lines, li, 0.0, False, RAMP_MAX_M + RAMP_CLEAR_M)
+        if s_end >= L - 0.05:
+            return fast._ef.roadsys_approach_run(lines, li, L, True, RAMP_MAX_M + RAMP_CLEAR_M)
+        return None
+    return fast._ef.roadsys_approach_run(lines, li, s_past, s_past > s_end, RAMP_MAX_M + RAMP_CLEAR_M)
+
+
+def _arc_of(xy, p):
+    """Arc m along polyline xy (k, 2) of the point nearest p (the first segment of equals)."""
+    import dnp
+    a, ab = xy[:-1], np.diff(xy, axis=0)
+    L = dnp.hypot(ab[:, 0], ab[:, 1])
+    t = np.clip(((p[0] - a[:, 0]) * ab[:, 0] + (p[1] - a[:, 1]) * ab[:, 1]) / np.maximum(L * L, 1e-12), 0.0, 1.0)
+    d = dnp.hypot(a[:, 0] + t * ab[:, 0] - p[0], a[:, 1] + t * ab[:, 1] - p[1])
+    k = int(np.argmin(d))
+    return float(np.r_[0.0, np.cumsum(L)][k] + t[k] * L[k])
+
+
+def _keep_ends(store, sf, ks, parts_in, plist, ep, gu):
+    """chain_heights' kept ends (KEEP_*): (the ends' ground with each kept end's set to NaN, so endmatch leaves it at the
+    profile's height; {part key: [(end 0 / 1, its approach's ramp line [(lat, lon)] from its read point, the line's arc
+    m, the deck end's height less the ground there, ramp m, the deck's half width)]}). Only a chain KEEP_SHORT_M long at most reads its
+    ends' approaches (_approach_of); the rule itself is native/roadsys endmatch.rs kept_ends."""
+    import dnp
+    import fast
+    kept = {}
+    total = sum(float(np.sum(dnp.hypot(*np.diff(xy, axis=0).T))) for xy, _z in plist)
+    if not total <= KEEP_SHORT_M:
+        return gu, kept
+    zend = np.array([v for _xy, z in plist for v in (float(z[0]), float(z[-1]))], np.float64)
+    runs, appr = [], {}
+    for i, k in enumerate(ks):
+        r = [float("nan"), float("nan")]
+        if getattr(parts_in[k][0], "cls", None) not in KEEP_CLASSES or bool(getattr(parts_in[k][0], "link", False)):
+            runs.append((r[0], r[1]))
+            continue
+        for e in (0, 1):
+            g = float(gu[2 * i + e])
+            if np.isfinite(g) and abs(g - zend[2 * i + e]) > KEEP_DZ_M:
+                xy = plist[i][0]
+                got = _approach_of(store.cell_fn, sf, k[0] if isinstance(k, tuple) else k, xy[0] if e == 0 else xy[-1],
+                                   ep[2 * i + e])
+                if got is not None:
+                    r[e] = float(got[0])
+                    appr[(i, e)] = np.asarray(got[1], np.float64)
+        runs.append((r[0], r[1]))
+    if not appr:
+        return gu, kept
+    fast.require(KEPT_KERNEL, "roadsys_kept_ends")
+    ramps = fast._ef.roadsys_kept_ends(plist, [(float(gu[2 * i]), float(gu[2 * i + 1])) for i in range(len(ks))], runs,
+                                       [_class_grade(parts_in[k][0]) for k in ks],
+                                       [_class_speed(parts_in[k][0]) for k in ks],
+                                       (KEEP_SHORT_M, KEEP_DZ_M, RAMP_MIN_M, RAMP_CLEAR_M, RAMP_RIDE_A))
+    gu = np.array(gu, np.float64, copy=True)
+    for i, k in enumerate(ks):
+        for e in (0, 1):
+            ramp, lift = float(ramps[i][2 * e]), float(ramps[i][2 * e + 1])
+            if not np.isfinite(ramp) or (i, e) not in appr:
+                continue
+            pts = appr[(i, e)]
+            arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))]
+            cut = arc <= ramp + RAMP_STEP_M + 1e-9
+            pts, arc = pts[cut], np.ascontiguousarray(arc[cut])
+            if len(pts) < 2:
+                continue
+            la, lo, _u = sf.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            ll = np.ascontiguousarray(np.column_stack((np.asarray(la, np.float64), np.asarray(lo, np.float64))))
+            # (the end brought by the lift alone, endmatch's ground there its height so moved; the ramp the rest)
+            to = round(float(zend[2 * i + e]) + lift, 4)
+            kept.setdefault(k, []).append((e, ll, arc, round(to - float(gu[2 * i + e]), 4), ramp,
+                                           _half_width(parts_in[k])))
+            gu[2 * i + e] = to
+    with _memo_lock:
+        STATS["kept_ends"] = STATS.get("kept_ends", 0) + sum(len(v) for v in kept.values())
+    return gu, kept
 
 
 def _half_width(part):
@@ -1003,6 +1206,7 @@ def chain_heights(store, comp, parts, ground_ll=None):
             bad += int((~np.isfinite(z)).sum())
             continue
         out[k] = np.asarray(sf.geodetic_to_enu(la, lo, z)[2], np.float64)
+    kept_ends = {}
     if not bad and out:
         # (M3: the chain brought onto its abutments' ground, the plans' first stage just past each free end (their
         # approach fills), lifted or dropped; a drop reaches no further than the part's nearest floor over another road
@@ -1030,6 +1234,9 @@ def chain_heights(store, comp, parts, ground_ll=None):
                   for k in keys]
         on_deck = _ends_on_decks(ep, [k for k in ks for _ in (0, 1)], others)
         gu = np.where(on_deck, np.nan, gu)
+        # (M5 round 8: the ends a short chain keeps at its profile's heights, their approaches ramped to them: KEEP_*)
+        if KEEP_ON:
+            gu, kept_ends = _keep_ends(store, sf, ks, parts_in, plist, ep, gu)
         # (the floors each part holds over other roads, its holds: a dropped end comes back to the profile by its nearest)
         fp = fast._ef.roadsys_floor_points(sqs, [box[0] - 5.0, box[1] - 5.0, box[2] + 5.0, box[3] + 5.0])
         holds = []
@@ -1071,8 +1278,12 @@ def chain_heights(store, comp, parts, ground_ll=None):
         STATS["total_s"] += time.perf_counter() - t0
     for k in sorted(depth, key=str):
         h.update(str(k).encode() + np.float64(depth[k]).tobytes())
+    for k in sorted(kept_ends, key=str):
+        for e, ll, arc, dz0, ramp, half in kept_ends[k]:
+            h.update(str(k).encode() + np.array([e, dz0, ramp, half], np.float64).tobytes() + ll.tobytes()
+                     + arc.tobytes())
     return {"deck_z": out, "depth": depth, "pins": [], "digest": h.hexdigest()[:16], "knots": [],
-            "squares": [s.info()[2] for s in sqs]}
+            "squares": [s.info()[2] for s in sqs], "kept": kept_ends}
 
 
 def _regions_of(la, lo):
@@ -1202,12 +1413,12 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None, lega
                     for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
                         if len(run) >= 2:
                             lines.append((pla[run], plo[run], z[run], half, w[run], share[run], hand[run], low[run]))
+    pins = _ramp_pins(g0, h0, g1, h1, cell_fn, today_ll) if KEEP_ON else []
     if not lines:
-        return []
+        return roadshape.pins_near([{"pins": pins}], la0, lo0, la1, lo1, pad_m) if pins else []
     alla = np.concatenate([x[0] for x in lines])
     allo = np.concatenate([x[1] for x in lines])
     today = np.asarray(today_ll(alla, allo), np.float64)
-    pins = []
     k = 0
     for pla, plo, z, half, w, share, hand, low in lines:
         t = today[k:k + len(pla)]
@@ -1223,6 +1434,96 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None, lega
             continue
         pins.append((pla, plo, np.round(dz, 4), np.round(t, 4), half, w, share))
     return roadshape.pins_near([{"pins": pins}], la0, lo0, la1, lo1, pad_m)
+
+
+_kept_memo = {}
+RAMP_SNAP_M = 64.0          # m: the grid a query's box is snapped out to for its kept ends' read (_kept_near's memo)
+
+
+def _ramp_pins(g0, h0, g1, h1, cell_fn, today_ll):
+    """(M5 round 8) The kept deck ends' approach ramps (KEEP_*) whose lines come into the box (degrees, grown by the
+    caller's reach) as pins_near's pins: each whole (the same whichever query asks), its change native/roadsys
+    endmatch.rs ramp_dz along its arc (the deck end's height at its read point, back to the plans' own at its ramp's
+    length), its height today the plans' first stage there, the deck's half width, fade and share 1 (_kept_near: the
+    kept ends of the chains near the box)."""
+    import fast
+    found = [f for f in _kept_near(g0, h0, g1, h1, cell_fn)
+             if not (f[0][:, 0].max() < g0 or f[0][:, 0].min() > g1 or f[0][:, 1].max() < h0 or f[0][:, 1].min() > h1)]
+    if not found:
+        return []
+    fast.require(KEPT_KERNEL, "roadsys_ramp_dz")
+    t = np.asarray(today_ll(np.concatenate([f[0][:, 0] for f in found]), np.concatenate([f[0][:, 1] for f in found])),
+                   np.float64)
+    out, k = [], 0
+    for ll, arc, dz0, ramp, half in found:
+        tt = t[k:k + len(ll)]
+        k += len(ll)
+        dz = np.asarray(fast._ef.roadsys_ramp_dz(arc, float(dz0), float(ramp)), np.float64)
+        if not np.isfinite(tt).all():
+            continue
+        one = np.ones(len(ll))
+        out.append((np.ascontiguousarray(ll[:, 0]), np.ascontiguousarray(ll[:, 1]), np.round(dz, 4), np.round(tt, 4),
+                    float(half), one, one))
+    return out
+
+
+def _kept_near(g0, h0, g1, h1, cell_fn):
+    """[(ramp line [(lat, lon)], its arc m, dz at its read point, ramp m, half width)] of the kept deck ends of the
+    bridge chains whose decks come within a ramp's reach of the box (degrees): every one whose ramp can reach into it,
+    whatever the box (a kept end is its chain's alone), from the decks published round it (ChainView.kept_of_part, the
+    box's region's view; its box snapped out to RAMP_SNAP_M and grown by the ramps' reach: only the chains there are
+    solved, as the ceiling reads only the decks near its points; the whole cell's chains read per cell cost the wide
+    corpus +133 % CPU), sorted by content. Kept per snapped box when read complete; [] without a view."""
+    import dmath
+    import mapcells
+    import math
+    import revisit
+    _fid, fr = region((g0 + g1) / 2, (h0 + h1) / 2)
+    view = _decks_view(fr)
+    if view is None:
+        return []
+    bx, by, _u = fr.geodetic_to_enu(np.array([g0, g0, g1, g1]), np.array([h0, h1, h0, h1]), np.zeros(4))
+    sn = RAMP_SNAP_M
+    box = (float(np.floor(np.min(bx) / sn) * sn), float(np.floor(np.min(by) / sn) * sn),
+           float(np.ceil(np.max(bx) / sn) * sn), float(np.ceil(np.max(by) / sn) * sn))
+    mk = (_frame_key(fr), box)
+    with _memo_lock:
+        got = _kept_memo.get(mk)
+    if got is not None:
+        return got
+    r = RAMP_MAX_M + RAMP_CLEAR_M + RAMP_STEP_M
+    reg = (box[0] - r, box[1] - r, box[2] + r, box[3] + r)
+    la, lo, _u = fr.enu_to_geodetic(np.array([reg[0], reg[2], reg[0], reg[2]]), np.array([reg[1], reg[1], reg[3], reg[3]]),
+                                    0.0)
+    la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+    pad = (roads_near_m() + 1.0) / 110574.0
+    padlo = pad / max(0.05, dmath.cos(math.radians(float(np.max(np.abs(la))))))
+    keys = sorted(set(mapcells.cells_for_points(la, lo, pad, padlo)), key=str)
+    out = {}
+    with revisit.scope() as rd:
+        try:
+            cells = [cell_fn(k) for k in keys]
+            for key, _spec, _xy, _z, _lon in view.parts_published_short(cells, reg, KEEP_SHORT_M + 10.0):
+                for _e, ll, arc, dz0, ramp, half in view.kept_of_part(key):
+                    kk = (ll.tobytes(), arc.tobytes(), float(dz0), float(ramp), float(half))
+                    out.setdefault(kk, (ll, arc, float(dz0), float(ramp), float(half)))
+        except Exception as ex:             # (no ramps rather than no ground: not kept)
+            (log.debug if isinstance(ex, OSError) else log.warning)("roadsys ramps: %s: %s", type(ex).__name__, ex)
+            revisit.fault()
+            return []
+    got = [out[k] for k in sorted(out)]
+    if rd.complete:
+        with _memo_lock:
+            if len(_kept_memo) > 512:
+                _kept_memo.clear()
+            _kept_memo[mk] = got
+    return got
+
+
+def roads_near_m():
+    """m: a bridge part within this of a read's box is read (roads.NEAR_M, ChainView._todo's)."""
+    import roads
+    return float(roads.NEAR_M)
 
 
 # ------------------------------------------------------------------------- M3 structures: the deck ends' hand-over

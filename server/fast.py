@@ -40,7 +40,7 @@ def _exit_hook():
 if _ef is not None and sys.version_info < (3, 14):
     import atexit
     atexit.register(_exit_hook)
-MIN_VERSION = 648 # (647: airtraffic adsb_compact / adsbdb_route, the live air traffic; 648: phenology leaf_calendar, the trees' leaf cycle, and texdds' coverage derive; 644: snow_band_table_relief, the snow bands cut to the cell's relief; 641: roadwear puddle_spots, the aquaplaning's puddles; 640: winter W3, snowroad.rs and SnowLook's 15 road slots; 639: roadwear puddle_plan) the newest kernel signature the server calls (earthd checks it at start) ...
+MIN_VERSION = 649 # (649: roadsys_kept_ends / approach_run / ramp_dz and embank_lift / along, M5 round 8 (first numbered 643); 647: airtraffic adsb_compact / adsbdb_route, the live air traffic; 648: phenology leaf_calendar, the trees' leaf cycle, and texdds' coverage derive; 644: snow_band_table_relief, the snow bands cut to the cell's relief; 641: roadwear puddle_spots, the aquaplaning's puddles; 640: winter W3, snowroad.rs and SnowLook's 15 road slots; 639: roadwear puddle_plan) the newest kernel signature the server calls (earthd checks it at start) ...
 if os.environ.get("BNE_BATTER", "off") == "vanilla":
     # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
     # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)

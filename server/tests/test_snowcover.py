@@ -437,7 +437,7 @@ class W1ProviderTest(unittest.TestCase):
             def __init__(self):
                 self.changes, self.connections = 0, []
 
-            def snow_changed(self):
+            def snow_changed(self, fields=None):
                 self.changes += 1
 
         class Conn:

@@ -9478,12 +9478,16 @@ class BridgeProfiles:
                 prof = None
             if prof is not None:
                 dd = self.__dict__.setdefault("depth", {})
+                kk = self.__dict__.setdefault("kept", {})
                 for k in comp:
                     v = shaped[k]
                     shaped[k] = (v[0], v[1], np.asarray(prof["deck_z"][k], np.float64), v[3])
                     # (M3: drawn with the depth its floors were solved with: its structure's, roadsys._deck_depth)
                     if prof.get("depth", {}).get(k) is not None:
                         dd[k] = float(prof["depth"][k])
+                    # (M5 round 8: the ends the chain kept at its profile's heights, their approaches' ramps:
+                    # roadsys._keep_ends, read by roadsys.pins_near through ChainView.kept_of_part)
+                    kk[k] = tuple(prof.get("kept", {}).get(k, ()))
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read
@@ -10971,6 +10975,50 @@ class ChainView:
         ceiling's boxes asked a short chain again every PROFILE_RETRY_S, M5 r5)."""
         return self._parts(cells_feats, box, part_ids=True, retry=False)
 
+    def parts_published_short(self, cells_feats, box, max_m):
+        """parts_published of the parts of max_m or less alone (their mapped line's length): only their chains solved
+        (roadsys._kept_near: a deck end kept at its profile is one of a short chain's, so the ramps never ask the long
+        viaducts' chains solved; asking every chain near each grading query cost the wide corpus +15 % CPU, railramp
+        +51 %)."""
+        x0, y0, x1, y1 = box
+        by = {}
+        for feats in cells_feats:
+            if feats is None or len(feats) == 0:
+                continue
+            bs = self.specs_of(feats)
+            cand = []
+            for i in range(len(feats)):
+                if bs[i] is None:
+                    continue
+                fid = str(feats.ids[i])
+                for j, ring in _keyed(self.keys_of, self.parts_of, feats, i):
+                    ll = np.asarray(ring, np.float64)
+                    if len(ll) < 2:
+                        continue
+                    c = dmath.cos(math.radians(float(ll[0, 1])))
+                    seg = dnp.hypot(np.diff(ll[:, 0]) * c, np.diff(ll[:, 1])) * 111320.0
+                    if float(np.sum(seg)) <= max_m:
+                        cand.append((fid, j, ring, i))
+            if not cand:
+                continue
+            bb = mapgeom.enu_bounds(feats, self.frame, [c[2] for c in cand]).tolist()
+            for (fid, j, ring, i), (emin, emax, nmin, nmax) in zip(cand, bb):
+                if emax < x0 - NEAR_M or emin > x1 + NEAR_M or nmax < y0 - NEAR_M or nmin > y1 + NEAR_M:
+                    continue
+                st = self.cs.store_at(float(ring[0][1]), float(ring[0][0]))
+                todo = by.setdefault(st.region, (st, []))[1]
+                if all(t[0] != (fid, j) for t in todo):
+                    todo.append(((fid, j), feats, i))
+        out = []
+        for _r, (st, todo) in sorted(by.items()):
+            if self.prefer is not None:
+                pst = self.prefer.store(st.region)
+                solved = [t for t in todo if pst._has(t[0])]
+                out += self._map(pst, pst.parts_todo(solved, solved_only=True, part_ids=True, retry=False))
+                todo = [t for t in todo if t not in solved]
+            out += self._map(st, st.parts_todo(todo, part_ids=True, retry=False))
+        return out
+
     def parts_shaped(self, cells_feats, box):
         """parts() with each part's shape (roadshape, BNE_ROADSHAPE=decks; None without one) as a sixth field, from
         the store its line comes from and mapped as that line is."""
@@ -11069,6 +11117,16 @@ class ChainView:
             if d is not None:
                 return float(d)
         return None
+
+    def kept_of_part(self, key):
+        """(M5 round 8) The ends part key's chain solve kept at its profile's heights: ((end, ramp line [(lat, lon)], its
+        arc m, dz at its read point, ramp m, half width), ...) (roadsys._keep_ends); () when none or not solved here."""
+        for st in self._stores():
+            with st.lock:
+                got = st.__dict__.get("kept", {}).get(key)
+            if got is not None:
+                return got
+        return ()
 
     def depth_of(self, fid):
         ds = []
@@ -15540,6 +15598,18 @@ class GeoTracker:
         self.redo = set()       # (gx, gy) sent, to be asked for again (redo_all): sent again only where they changed
         self.swap, self.swap_held, self.swap_staged = None, [], 0      # (swap_begin)
         self.skin_h = {}        # (gx, gy) -> the digest of the skin sent (blockworker._geo_skin's "h")
+        self.skin_gen = 0       # (reskin) bumped when every skin is due again: a skin started before is not counted
+        self.reskinning = set()     # (gx, gy) whose skin reskin asked for again: done for progress() meanwhile
+
+    def reskin(self):
+        """The skins' inputs changed, not the content (earthd Server.snow_roads_changed: the road skins' winter part):
+        every skin sent is built and sent again, nearest first as any tile; the content (buildings, bridges, props,
+        season-free) stays as the mod has it, and the mod swaps a skin in place, its old parts kept until the new ones
+        are made (roads.lua onSkin). Before (2026-11-28, Baltimore) a new tracker sent every tile's content again and
+        dropped the builds running. A skin building now (made with the old inputs) is sent but stays due."""
+        self.reskinning |= self.skins
+        self.skins = set()
+        self.skin_gen += 1
 
     def redo_all(self):
         """Every geotile sent is asked for again, content and skin (earthd Connection.stale_swap: they were an
@@ -15574,7 +15644,10 @@ class GeoTracker:
         retry. near_m: only those within it of the car (the catch-up boost: the ground under the car, not SEND_M's
         far edge, where a tile is always on its way while driving)."""
         fast.require(551, "tracker_progress")
-        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, self.skins,
+        # (a skin reskin asked for again counts as there: the mod shows the old one until it comes; no catch-up boost
+        # or loading line for a winter look change)
+        skins = self.skins | self.reskinning if self.reskinning else self.skins
+        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, skins,
                                          getattr(self, "car_m", None), near_m)
 
     def ready_tiles(self, frame, x, y, r):
@@ -15583,7 +15656,15 @@ class GeoTracker:
         Before (2026-10-29) the signs waited until every road geotile round the car was in, which while driving it
         seldom was: signs came only once the car slowed down or stopped, one tile at a time, right next to it."""
         fast.require(551, "road_ready")
-        return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        held = self.reskinning
+        if not held:
+            return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        skins = self.skins                  # (a skin reskin asked for again: the mod has its old one, still ready)
+        self.skins = skins | held
+        try:
+            return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        finally:
+            self.skins = skins
 
     def again(self, keys):
         """The sent geotiles among keys built again (content and this anchor's skin) at the next pose and sent again
@@ -15630,6 +15711,7 @@ class GeoTracker:
                 del self.frames[old]
             self.skins, self.retry, self.fails, self.started, self.stuck_said = set(), {}, {}, {}, set()
             self.need = {}
+            self.reskinning = set()
             self.stats["anchors"] += 1
         if self.pool is None:
             from runtimeprofiler import TileJobs
@@ -15646,8 +15728,8 @@ class GeoTracker:
             if hasattr(getattr(conn, "s", None), "matslots"):
                 job = functools.partial(staging.prepare_shapes, conn.s, "roads", True, aid, k, job)
             fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
-            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
-                                  self._built(conn, a, kk, f, c, sk, m))
+            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make, g=self.skin_gen:
+                                  self._built(conn, a, kk, f, c, sk, m, g))
 
         def stuck():
             for k in list(self.building):    # (a snapshot: a tile's done callback or a start can change it meanwhile)
@@ -15662,6 +15744,7 @@ class GeoTracker:
             self.sent.discard(k)
             self.skins.discard(k)
             self.skin_h.pop(k, None)
+            self.reskinning.discard(k)
             self.redo.discard(k)
             self.info.pop(k, None)
             self.shown.pop(k, None)
@@ -15676,7 +15759,7 @@ class GeoTracker:
         fast._ef.road_geo(self, conn, aid, frame, (x, y), velocity, tuple(view) if view else None, foci, tree,
                           ground_busy, now, start, stuck, drop_tile)
 
-    def _built(self, conn, aid, key, fut, content, skin, make):
+    def _built(self, conn, aid, key, fut, content, skin, make, gen=None):
         import geotiles
         if self.futs.get(key) is fut:
             self.building.discard(key)
@@ -15782,7 +15865,9 @@ class GeoTracker:
                     m["slots"] = slots
             return m
         if skin and sk is not None:
-            self.skins.add(key)
+            if gen is None or gen == getattr(self, "skin_gen", 0):
+                self.skins.add(key)         # (else started before a reskin: made with the old inputs, still due)
+                getattr(self, "reskinning", set()).discard(key)
             self.stats["skins"] += 1
             if self.swap is not None:
                 self.swap_staged += 1
