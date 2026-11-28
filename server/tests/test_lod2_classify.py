@@ -168,6 +168,65 @@ class BuilderTest(unittest.TestCase):
         from lxml import etree
         self.assertIsNone(self.B.row(etree.fromstring(self.gml("30")), 3301, False))
 
+    def german(self, code, roof_faces):
+        """An AdV building (a LoD2 tile of a German state): typed surfaces, easting first, its own roofType."""
+        e0, n0 = 400000.0, 5297000.0
+
+        def surface(kind, rings):
+            return "".join(
+                f"<bldg:boundedBy><bldg:{kind}><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>"
+                "<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>"
+                + " ".join(f"{e0 + x} {n0 + y} {z + 300}" for x, y, z in r + [r[0]])
+                + "</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon></gml:surfaceMember></gml:MultiSurface>"
+                f"</bldg:lod2MultiSurface></bldg:{kind}></bldg:boundedBy>" for r in rings)
+        return (f'<bldg:Building xmlns:bldg="http://www.opengis.net/citygml/building/2.0" '
+                f'xmlns:gml="http://www.opengis.net/gml"><bldg:roofType>{code}</bldg:roofType>'
+                f'<bldg:measuredHeight uom="m">9.0</bldg:measuredHeight>'
+                + surface("GroundSurface", [[(0, 0, 0), (0, 8, 0), (10, 8, 0), (10, 0, 0)]])
+                + surface("RoofSurface", roof_faces) + "</bldg:Building>")
+
+    def test_a_mixed_or_other_roof_type_gets_its_shape_from_the_faces(self):
+        """roofType 5000 (mixed) and 9999 (other) name no shape: the game drew a predicted roof (flat on a large
+        building) where the faces show a plain gable (2026-11-27: 640 of 826 "mixed" roofs on four LGL tiles)."""
+        from lxml import etree
+        gable = [[(x, y, z + 6) for x, y, z in r] for r in gabled()]
+        for code in ("5000", "9999"):
+            r = self.B.row(etree.fromstring(self.german(code, gable)), 25832, False)
+            self.assertEqual(r["roof"], str(C.GABLED), code)
+            self.assertAlmostEqual(r["zt"] - r["zr"], 3.0, 2)
+        r = self.B.row(etree.fromstring(self.german("3200", gable)), 25832, False)
+        self.assertEqual(r["roof"], "3200")                 # (a shape the model names stays the model's)
+
+    def test_a_mixed_roof_the_faces_say_nothing_clear_about_stays_mixed(self):
+        from lxml import etree
+        upright = [[(0, 0, 6), (10, 0, 6), (10, 0, 9)]]     # (upright only: no shape)
+        r = self.B.row(etree.fromstring(self.german("5000", upright)), 25832, False)
+        self.assertEqual(r["roof"], "5000")
+        self.assertAlmostEqual(r["zt"] - r["zr"], 3.0, 2)  # (its roof height as before: the faces' span)
+
+    def test_a_shapeless_roof_with_one_level_face_stays_shapeless(self):
+        """A 9999 block with one level roof face is not a measured flat roof (2026-11-27: 95 % of them have a
+        whole-metre height; a house drawn with its predicted gable turned flat): it keeps its code."""
+        from lxml import etree
+        level = [[(0, 0, 9), (0, 8, 9), (10, 8, 9), (10, 0, 9)]]
+        for code in ("5000", "9999"):
+            r = self.B.row(etree.fromstring(self.german(code, level)), 25832, False)
+            self.assertEqual(r["roof"], code)
+            self.assertAlmostEqual(r["zt"] - r["zr"], 0.0, 2)
+        r = self.B.row(etree.fromstring(self.german("", level)), 25832, False)
+        self.assertEqual(r["roof"], str(C.FLAT))            # (no roofType at all: the faces still say flat)
+
+    def test_validate_leaves_the_models_shapeless_codes_be(self):
+        from lxml import etree
+        gable = [[(x, y, z + 6) for x, y, z in r] for r in gabled()]
+        self.B.BLIND = True
+        try:
+            r = self.B.row(etree.fromstring(self.german("5000", gable)), 25832, False)
+        finally:
+            self.B.BLIND = False
+        self.assertEqual(r["roof"], "5000")
+        self.assertEqual(r["blind"], C.GABLED)
+
     def test_a_point_inside_a_u_shaped_footprint(self):
         u = np.array([(0, 0), (30, 0), (30, 20), (20, 20), (20, 5), (10, 5), (10, 20), (0, 20)], float)
         x, y, _ = self.B._point_in(u)
