@@ -468,7 +468,7 @@
    }
   },
   "ground": {
-   "doc": "the modding API's ground heights past the terrain block (api.groundHeight 1.13, ground.lua's 16 m lattice corners; earthd ground: the DEM at the zoom of the far tile over each point)",
+   "doc": "the modding API's ground heights past the terrain block (api.groundHeight 1.13, ground.lua's 16 m lattice corners; earthd ground: the DEM at a zoom set by each point's distance from the origin; a bad coordinate false for that point only)",
    "fields": {
     "id": {"type": "int"},
     "anchorId": {"type": "int"},

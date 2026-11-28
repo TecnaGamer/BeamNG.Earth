@@ -224,7 +224,7 @@ Events, as game hooks (any extension defining the function gets it) and as `api.
 | `onBeamNGEarthRouteArrived` | `routeArrived` | `{lat, lon, name}`: the GPS destination reached |
 | `onBeamNGEarthWaypointReached` | `waypointReached` | `{lat, lon, name, left}`: a GPS waypoint passed (1.2), `left` still ahead |
 | `onBeamNGEarthContentChanged` | `contentChanged` | `{kinds, x0, y0, x1, y1, lat0, lon0, lat1, lon1, changes}` (1.12): the streamed world changed; at most once every 3 s (see "The streamed world") |
-| `onBeamNGEarthRebased` | `rebased` | `{lat, lon, oldLat, oldLon, anchorId, purpose, distance}` (1.7): the world's origin moved to `lat, lon` from `oldLat, oldLon` (nil at the first one), in the frame that moved the world. `purpose` is `'rebase'` (driving on), `'teleport'`, or another of the mod's own moves. `distance` (1.13) is the metres between the two origins. Every game coordinate an add-on kept is stale: move it with `fromOldFrame` (1.13), or convert again with `toGame` |
+| `onBeamNGEarthRebased` | `rebased` | `{lat, lon, oldLat, oldLon, anchorId, purpose, distance}` (1.7): the world's origin moved to `lat, lon` from `oldLat, oldLon` (nil at the first one), in the frame that moved the world. `purpose` is `'rebase'` (driving on), `'teleport'`, or another of the mod's own moves. `distance` (1.13) is the straight-line (chord) distance in metres between the two origins, through the earth for a long teleport, not the distance along the ground. Every game coordinate an add-on kept is stale: move it with `fromOldFrame` (1.13), or convert again with `toGame` |
 
 ### Places (1.4)
 
@@ -417,7 +417,7 @@ Boulder, Colorado, where the land is 1,550 to 2,950 m up within 24 km):
 
 - `kind` is `'terrain'` on the terrain block: what vehicles drive on, the same answer as `getTerrainHeight` there.
 - `'land'` past it: the land's height as the far field draws it (the app's elevation data at the resolution of the
-  far tile over the point; under water the ground under it). Nothing collides there.
+  distance from the origin, the far field's own scale; under water the ground under it). Nothing collides there.
 - `nil` off BeamNG.Earth's level, while it is not known yet, where there is no elevation data, or when a mod asks
   for too many new points at once.
 
@@ -426,8 +426,20 @@ where they collide). Past the block the app is asked for the corners of a 16 m l
 answer is blended between them, so a moving point gets a smooth height and the same point the same answer. A point
 asked for the first time answers nil (and `getTerrainHeight` the stock answer) until the app has answered, usually a
 frame or a few later; ask again then. Once known, a call costs a table lookup; the corners are kept until the origin
-moves. About 2,000 new corners a second are asked at most; past that a call answers nil without asking, so a mod
-that wants a whole map at once gets it over a few seconds. The game pays nothing for the heights: they come from the
+moves. A corner with no height (no elevation data there, or the app could not read it) is not asked again for 30 s.
+About 2,000 new corners a second are asked at most, and 8,192 wait to be sent at most; past that a call answers nil
+without asking, so a mod that wants a whole map at once gets it over a few seconds.
+
+```lua
+-- a storm's ground: ask every frame until it is known, keep the last answer meanwhile
+local function updateGround(storm)
+  local api = rawget(_G, 'beamngEarth_api')
+  if not (api and api.has('groundHeight')) then return end
+  local z, kind = api.groundHeight(storm.x, storm.y)
+  if z then storm.z, storm.solid = z, kind == 'terrain' end   -- nil: not known yet, ask again next frame
+end
+```
+ The game pays nothing for the heights: they come from the
 app, not from rays through the drawn scene (those cost up to 50 ms the first time they cross a mesh). It costs
 nothing until something calls it.
 
@@ -463,8 +475,10 @@ end
 - `fromOldFrameDir` turns a direction (a velocity, a heading's vector) the way the frame turned. That is about 0.01
   degree for 1 km driven, so headings barely change while driving.
 - A teleport takes the player somewhere else, but the world stays where it is. Something that belongs to the world
-  (weather, a storm, a parked prop) keeps its place, now `info.distance` metres or more away: let it go when that is
-  past your range, rather than moving it along with the player. Something that belongs to the player (a follow
+  (weather, a storm, a parked prop) keeps its real place. After a teleport farther than your range (`info.distance`
+  more than your mod's reach, or any `purpose == 'teleport'` of more than a few km), drop it rather than move it:
+  `fromOldFrame` would put it hundreds of km away in the new frame, where nothing is drawn and the game's float
+  coordinates lose precision. Never move it along with the player. Something that belongs to the player (a follow
   camera, a trailer target) moves with the player instead.
 - Between a rebase's two frames (`rebasing()` true) the vehicles are already moved and the event has not come: leave
   kept positions alone until it comes.

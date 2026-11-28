@@ -17,7 +17,7 @@
 --   onBeamNGEarthAddonOptions(info)   an add-on's options were saved on its Options tab: info.id, info.values
 --   onBeamNGEarthRebased(info)        the world's origin moved (1.7, has('rebase')): info.lat / lon the new origin,
 --                                     oldLat / oldLon the one before (nil at the first), anchorId, purpose, distance
---                                     (1.13: m between the origins); api.fromOldFrame(x, y, z) moves a kept point
+--                                     (1.13: m between the origins, the straight chord); api.fromOldFrame moves a kept point
 --   onBeamNGEarthContentChanged(info) the streamed world changed (1.12, has('contentChanged')): buildings, roads,
 --                                     colliders, the road graph or the town came or went since the last one; at
 --                                     most once every CONTENT_GAP_S (info: kinds, x0 / y0 / x1 / y1, below)

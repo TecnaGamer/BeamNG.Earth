@@ -522,34 +522,37 @@ class EarthdTownsTest(unittest.TestCase):
 
 
 class EarthdGroundTest(unittest.TestCase):
-    """earthd's 'ground' (the mod's ground.lua: api.groundHeight and getTerrainHeight past the terrain block, 1.13):
-    the land's height at plane points of the anchor's frame, z in that frame (the earth's curve in it); the DEM read at
-    the zoom of the far tile drawn over a point (the one it was made from), else at a zoom for its distance; no
-    elevation: null; bad requests and unknown anchors answered with why."""
+    """earthd's 'ground' (the mod's ground.lua: api.groundHeight, getTerrainHeight and getSurfaceHeightBelow past the
+    terrain block, 1.13): the land's height at plane points of the anchor's frame, z in that frame (the earth's curve
+    in it); the DEM zoom set by the point's distance alone (not by which far tiles are loaded); no elevation, and a bad
+    coordinate, false for that point only; bad requests (not a list, odd, too long) answered before any conversion;
+    at most GROUND_TASKS at once per connection."""
 
-    def run_ground(self, msg, sent_tiles=(), hm=1600.0, active=1):
+    def run_ground(self, msg, hm=1600.0, conn_out=None, dem_wait=None):
         import earthd
-        import farfield
         import geodesy
         sent, asked = [], []
 
         class FakeDem:
             def sample(self, lat, lon, zoom):
+                if dem_wait is not None:
+                    dem_wait()
                 asked.append((len(lat), int(zoom)))
                 lat = np.asarray(lat)
                 return np.where(lat > LAT + 1, np.nan, hm + 0.0 * lat)
 
         async def run():
             from concurrent.futures import ThreadPoolExecutor
-            pool = ThreadPoolExecutor(1)
-            anchor = earthd.Anchor(id=1, lat=LAT, lon=LON, frame=geodesy.EnuFrame(LAT, LON), hm_zoom=15,
-                                   zooms={1: 14, 2: 13})
-            layout = types.SimpleNamespace(min_level=-1, spacing=lambda level: farfield.level_size(level) / 64)
-            s = types.SimpleNamespace(ui_pool=pool, anchors={1: anchor}, dem=FakeDem(), layout=layout)
-            conn = types.SimpleNamespace(s=s, send=sent.append, active=active, sent={k: object() for k in sent_tiles})
+            pool = ThreadPoolExecutor(8)
+            anchor = earthd.Anchor(id=1, lat=LAT, lon=LON, frame=geodesy.EnuFrame(LAT, LON), hm_zoom=15)
+            s = types.SimpleNamespace(ui_pool=pool, anchors={1: anchor}, dem=FakeDem())
+            conn = types.SimpleNamespace(s=s, send=sent.append, active=1, sent={})
             conn._ground_heights = lambda *a: earthd.Connection._ground_heights(conn, *a)
+            if conn_out is not None:
+                conn_out.append(conn)
             try:
-                await earthd.Connection.ground(conn, msg)
+                msgs = msg if isinstance(msg, list) else [msg]
+                await asyncio.gather(*(earthd.Connection.ground(conn, m) for m in msgs))
             finally:
                 pool.shutdown()
         asyncio.run(run())
@@ -558,7 +561,7 @@ class EarthdGroundTest(unittest.TestCase):
     def test_heights_in_the_frame(self):
         import geodesy
         pts = [0.0, 0.0, 2000.0, 300.0, 15000.0, -9000.0]
-        sent, asked = self.run_ground({"id": 4, "anchorId": 1, "pts": pts}, sent_tiles=("1_3_0",))
+        sent, asked = self.run_ground({"id": 4, "anchorId": 1, "pts": pts})
         out = sent[0]
         self.assertEqual((out["type"], out["id"], out["anchorId"]), ("ground_result", 4, 1))
         f = geodesy.EnuFrame(LAT, LON)
@@ -567,15 +570,25 @@ class EarthdGroundTest(unittest.TestCase):
             _, _, want = f.geodetic_to_enu(lat, lon, 1600.0)
             self.assertAlmostEqual(out["z"][k], float(want), delta=0.01)
         self.assertLess(out["z"][2], out["z"][0] - 20)       # (17.5 km off: the earth's curve, 24 m down)
-        zooms = sorted(z for _, z in asked)
-        self.assertIn(14, zooms)                              # (2000, 300) under the L1 tile 1_3_0: its zoom
         self.assertEqual(sum(n for n, _ in asked), 3)
+        zs = sorted({z for _, z in asked})
+        self.assertEqual(len(zs), 3)                           # (by distance: 0 m, 2 km and 17.5 km each their own)
+        self.assertLessEqual(zs[-1], 15)                       # (never finer than the terrain's zoom)
 
-    def test_no_elevation_is_null(self):
-        sent, _ = self.run_ground({"id": 5, "anchorId": 1, "pts": [0.0, 200000.0]})  # (1.8 deg north: the fake has none)
-        self.assertEqual(sent[0]["z"], [False])
+    def test_zoom_by_distance_only(self):
+        # (the same point, the same zoom and height, whatever far tiles the connection has sent)
+        _, asked1 = self.run_ground({"id": 1, "anchorId": 1, "pts": [5000.0, 0.0]})
+        _, asked2 = self.run_ground({"id": 1, "anchorId": 1, "pts": [5000.0, 0.0]})
+        self.assertEqual(asked1, asked2)
 
-    def test_says_why(self):
+    def test_bad_points_only_spoil_themselves(self):
+        sent, _ = self.run_ground({"id": 5, "anchorId": 1,
+                                   "pts": [0.0, 200000.0, 10.0, 10.0, float("nan"), 0, 3e7, 0, "x", 1, True, 2]})
+        self.assertEqual(sent[0]["z"][0], False)              # (1.8 deg north: the fake has no elevation there)
+        self.assertIsInstance(sent[0]["z"][1], float)
+        self.assertEqual(sent[0]["z"][2:], [False, False, False, False])
+
+    def test_says_why_before_converting(self):
         import earthd
         sent, asked = self.run_ground({"id": 6, "anchorId": 9, "pts": [0, 0]})
         self.assertEqual(sent[0]["error"], "no such anchor")
@@ -583,11 +596,29 @@ class EarthdGroundTest(unittest.TestCase):
         self.assertEqual(sent[0]["error"], "bad points")
         sent, _ = self.run_ground({"id": 8, "anchorId": 1, "pts": [0.0] * (2 * earthd.GROUND_POINTS_MAX + 2)})
         self.assertEqual(sent[0]["error"], "bad points")
-        sent, _ = self.run_ground({"id": 9, "anchorId": 1, "pts": "x"})
+        sent, _ = self.run_ground({"id": 9, "anchorId": 1, "pts": "0123"})   # (a string: not taken as 4 points)
         self.assertEqual(sent[0]["error"], "bad request")
-        sent, _ = self.run_ground({"id": 10, "anchorId": 1, "pts": [float("nan"), 0]})
-        self.assertEqual(sent[0]["error"], "bad points")
+        sent, _ = self.run_ground({"id": 10, "anchorId": 1})
+        self.assertEqual(sent[0]["error"], "bad request")
         self.assertEqual(asked, [])
+
+    def test_tasks_capped_per_connection(self):
+        import threading
+        import time
+        import earthd
+        lock, running, peak = threading.Lock(), [0], [0]
+
+        def wait():
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(0.05)
+            with lock:
+                running[0] -= 1
+        msgs = [{"id": k, "anchorId": 1, "pts": [100.0 * k, 0.0]} for k in range(12)]
+        sent, _ = self.run_ground(msgs, dem_wait=wait)
+        self.assertEqual(len(sent), 12)
+        self.assertLessEqual(peak[0], earthd.GROUND_TASKS)
 
 
 if __name__ == "__main__":

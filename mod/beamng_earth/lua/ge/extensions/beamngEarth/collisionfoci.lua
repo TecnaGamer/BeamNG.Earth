@@ -107,10 +107,13 @@ end
 M.PROP_JBEAMS = { spikestrip = true }
 M.PROP_TYPE = 'prop'
 local propType = {}     -- jbeam -> true / false: its info.json's Type, read once
-function M._infoType(name)           -- (tests: replaced) the model's info.json Type, or nil
-  if type(jsonReadFile) ~= 'function' then return nil end
+-- (tests: replaced) the model's info.json Type ('' when it names none) and whether the file was read: a failed read
+-- (no file, not mounted yet, a parse error) is not kept, so the model is looked at again next time
+function M._infoType(name)
+  if type(jsonReadFile) ~= 'function' then return nil, false end
   local ok, info = pcall(jsonReadFile, '/vehicles/' .. name .. '/info.json')
-  return ok and type(info) == 'table' and type(info.Type) == 'string' and info.Type or nil
+  if not (ok and type(info) == 'table') then return nil, false end
+  return type(info.Type) == 'string' and info.Type or '', true
 end
 function M.isProp(o)
   local ok, name = pcall(function() return o.getJBeamFilename and o:getJBeamFilename() end)
@@ -118,9 +121,9 @@ function M.isProp(o)
   if M.PROP_JBEAMS[name] then return true end
   local known = propType[name]
   if known == nil then
-    local t = M._infoType(name)
+    local t, read = M._infoType(name)
     known = type(t) == 'string' and t:lower() == M.PROP_TYPE
-    propType[name] = known
+    if read then propType[name] = known end
   end
   return known
 end
@@ -159,10 +162,15 @@ function M.vehicles()
   local floats = ms and ms.isFloating
   for i = 0, be:getObjectCount() - 1 do
     local o = be:getObject(i)
-    if o and o.getPosition and not (floats and floats(o:getId())) and not M.isWalker(o) and not M.isProp(o) then
+    local occupied = false
+    local keep = o and o.getPosition and not (floats and floats(o:getId())) and not M.isWalker(o)
+    if keep then
+      occupied = localplayers.controlled(o:getId(), o, controlled)
+      keep = occupied or not M.isProp(o)       -- (a prop someone drives is their car)
+    end
+    if keep then
       local id = o:getId()
       local p = o:getPosition()
-      local occupied = localplayers.controlled(id, o, controlled)
       -- (our bus at a bus station is parked: as a 'player' car it got a ground island of its own and farcars.lua
       -- saved and deleted it 2.5 km away, so every station spawned a new one, a ~1 s frame: busparked.lua)
       if not occupied and buses and buses.isOurs(id) then parked[id] = true end

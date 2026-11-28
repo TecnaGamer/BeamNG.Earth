@@ -11,7 +11,8 @@
 --
 -- What: height(x, y) in the current anchor's game coordinates:
 --   inside the block's collidable box: the terrain's own height (TerrainBlock:getHeight, what the stock query answers);
---   past it: the land's height from the app (earthd 'ground': the DEM at the zoom of the far tile drawn there), on a
+--   past it: the land's height from the app (earthd 'ground': the DEM at a zoom set by the point's distance from
+--   the origin alone, so a corner's height never depends on which far tiles had streamed in), on a
 --   world-locked CELL m lattice, blended between a cell's four corners (bilinear), so a point moving across the land
 --   gets a smooth height and the same point the same answer.
 -- A corner not known yet is asked for (batched, sent from core.lua's update while any wait: flush) and the call answers
@@ -35,6 +36,9 @@ M.IN_FLIGHT = 4           -- requests waiting for an answer at most
 M.WAIT_S = 5              -- s: a request not answered by then is given up (its corners asked again when needed)
 M.ASK_PER_S = 2000        -- corners asked a second at most ...
 M.ASK_BURST = 2000        -- ... and at once
+M.MAX_QUEUE = 8192        -- corners waiting to be sent at most: past it a new one is not asked (nil)
+M.FAIL_S = 30             -- s: a corner with no height (an error answer, no elevation there) is asked again after
+                          -- this, not before (an offline DEM tile asked 4 times a second, each one a fetch)
 M.EDGE_M = 0.5            -- m inside the block's collidable box still counts as the block
 
 local lattice = require('beamngEarth/lattice')
@@ -42,15 +46,15 @@ local lattice = require('beamngEarth/lattice')
 local floor, min = math.floor, math.min
 
 local corners, cornerCount, cacheAnchor = {}, 0, nil   -- key -> z (number) or false (no height there)
+local failedAt = {}        -- key -> when it came back with no height (false in corners until FAIL_S after)
 local waiting = {}         -- key -> true: asked (queued or sent)
-local queue = {}           -- { key, x, y } not sent yet
+local queue, qHead, qTail = {}, 1, 0   -- { key, x, y } not sent yet: queue[qHead .. qTail]
 local requests, nextId = {}, 0      -- id -> { keys, at, anchorId }
 local inFlight = 0
 local allowance, allowanceAt = M.ASK_BURST, nil
 local clock = 0
-local stats = { calls = 0, terrain = 0, land = 0, waits = 0, none = 0, asked = 0, answered = 0, capped = 0,
-  requests = 0, lost = 0, drops = 0 }
-local orig, wrapper, wrappedTable = nil, nil, nil
+local stats = { calls = 0, terrain = 0, land = 0, waits = 0, none = 0, asked = 0, answered = 0, failed = 0,
+  capped = 0, requests = 0, lost = 0, drops = 0 }
 M.dirty = false           -- corners queued: core.lua calls flush
 
 local function coreState()
@@ -74,9 +78,11 @@ end
 
 local function key(i, j) return (i + 1048576) * 2097152 + (j + 1048576) end
 
+local function qLen() return qTail - qHead + 1 end
+
 local function forget(aid)
-  corners, cornerCount, cacheAnchor = {}, 0, aid
-  waiting, queue, requests, inFlight = {}, {}, {}, 0
+  corners, cornerCount, cacheAnchor, failedAt = {}, 0, aid, {}
+  waiting, queue, qHead, qTail, requests, inFlight = {}, {}, 1, 0, {}, 0
   M.dirty = false
 end
 
@@ -95,13 +101,17 @@ end
 local function corner(i, j)
   local k = key(i, j)
   local z = corners[k]
+  if z == false and now() - (failedAt[k] or 0) > M.FAIL_S then
+    corners[k], failedAt[k], cornerCount, z = nil, nil, cornerCount - 1, nil      -- (asked again)
+  end
   if z ~= nil then return z end
   if waiting[k] then return nil end
   local n = net()
   if not (n and n.isConnected and n.isConnected()) then return nil end
-  if not mayAsk() then stats.capped = stats.capped + 1 return nil end
+  if qLen() >= M.MAX_QUEUE or not mayAsk() then stats.capped = stats.capped + 1 return nil end
   waiting[k] = true
-  queue[#queue + 1] = { k, i * M.CELL, j * M.CELL }
+  qTail = qTail + 1
+  queue[qTail] = { k, i * M.CELL, j * M.CELL }
   stats.asked = stats.asked + 1
   M.dirty = true
   return nil
@@ -165,25 +175,25 @@ function M.flush()
     end
   end
   local n = net()
-  if not (n and n.send and cacheAnchor) then M.dirty = #queue > 0 return end
-  while #queue > 0 and inFlight < M.IN_FLIGHT do
+  if not (n and n.send and cacheAnchor) then M.dirty = qLen() > 0 return end
+  while qLen() > 0 and inFlight < M.IN_FLIGHT do
     local keys, pts = {}, {}
-    local take = min(#queue, M.BATCH)
+    local take = min(qLen(), M.BATCH)
     for q = 1, take do
-      local e = queue[q]
+      local e = queue[qHead + q - 1]
+      queue[qHead + q - 1] = nil
       keys[q] = e[1]
       pts[2 * q - 1], pts[2 * q] = e[2], e[3]
     end
-    local rest = {}
-    for q = take + 1, #queue do rest[#rest + 1] = queue[q] end
-    queue = rest
+    qHead = qHead + take
+    if qHead > qTail then queue, qHead, qTail = {}, 1, 0 end      -- (drained: a fresh table)
     nextId = nextId + 1
     requests[nextId] = { keys = keys, at = t, anchorId = cacheAnchor }
     inFlight = inFlight + 1
     stats.requests = stats.requests + 1
     n.send({ type = 'ground', id = nextId, anchorId = cacheAnchor, pts = pts })
   end
-  M.dirty = #queue > 0 or next(requests) ~= nil
+  M.dirty = qLen() > 0 or next(requests) ~= nil
 end
 
 -- (core.lua) the app's ground_result {id, anchorId, z = {m or nil...}, error?}
@@ -191,39 +201,84 @@ function M.onResult(msg)
   local r = type(msg) == 'table' and requests[msg.id]
   if not r then return end
   requests[msg.id], inFlight = nil, inFlight - 1
-  M.dirty = #queue > 0 or next(requests) ~= nil
+  M.dirty = qLen() > 0 or next(requests) ~= nil
   if r.anchorId ~= cacheAnchor or msg.anchorId ~= cacheAnchor then return end    -- (a frame since gone)
   local z = type(msg.z) == 'table' and msg.z or {}
-  local failed = type(msg.error) == 'string'
+  local failed = type(msg.error) == 'string'      -- (the whole request: no height for any, until FAIL_S)
+  local t = now()
   for q, k in ipairs(r.keys) do
     waiting[k] = nil
-    if not failed then
-      if cornerCount >= M.MAX_CORNERS then
-        corners, cornerCount, stats.drops = {}, 0, stats.drops + 1
-      end
-      local v = tonumber(z[q])
-      if corners[k] == nil then cornerCount = cornerCount + 1 end
-      corners[k] = (v and v == v) and v or false
+    if cornerCount >= M.MAX_CORNERS then
+      corners, cornerCount, failedAt, stats.drops = {}, 0, {}, stats.drops + 1
+    end
+    local v = not failed and tonumber(z[q]) or nil
+    if corners[k] == nil then cornerCount = cornerCount + 1 end
+    if v and v == v then
+      corners[k], failedAt[k] = v, nil
       stats.answered = stats.answered + 1
+    else
+      corners[k], failedAt[k] = false, t
+      stats.failed = stats.failed + 1
     end
   end
 end
 
+-- The two wraps below keep their install state in a global (TERRAIN_KEY / SURFACE_KEY), not in this module: a hot
+-- reload of the module (extensions.reload, the Add-ons page) finds its layer there and turns it on again instead of
+-- stacking a second one that nothing would ever take off. A layer turned off (active false) is a plain pass-through,
+-- so one left under another mod's wrap costs nothing and changes nothing. Each layer reaches this module through
+-- package.loaded, so after a reload it asks the new one.
+M.TERRAIN_KEY, M.SURFACE_KEY = '__bne_terrain_wrap', '__bne_surface_wrap'
+local function current() return package.loaded['beamngEarth/ground'] or M end
+
+-- (in a layer, under pcall) the land past the block at a point, or nil: off our level, on the block, not known
+local function landAt(x, y)
+  local st = coreState()
+  if not (st and st.inOurLevel and not onBlock(st, x, y)) then return nil end
+  return current().height(x, y)
+end
+
 -- core_terrain.getTerrainHeight on our level: the terrain's own answer on the block, the land's height past it (where
--- the stock query answers the block's floor), the stock answer where none is known yet. Each install wraps the
--- function it found (base), so a chain with another mod's wrap never calls round in a loop.
-local function makeWrapper(base)
+-- the stock query answers the block's floor), the stock answer where none is known yet.
+local function terrainLayer(s)
   return function(point)
-    local x, y = point and tonumber(point.x), point and tonumber(point.y)
-    if x and y then
-      local st = coreState()
-      if st and st.inOurLevel and not onBlock(st, x, y) then
-        local h = M.height(x, y)
-        if h then return h end
-      end
+    if s.active then
+      local ok, h = pcall(function()
+        local x, y = tonumber(point.x), tonumber(point.y)
+        return x and y and landAt(x, y) or nil
+      end)
+      if ok and type(h) == 'number' then return h end
     end
-    return base(point)
+    return s.base(point)
   end
+end
+
+function M.setTerrain(ours)
+  local ct = rawget(_G, 'core_terrain')
+  local s = rawget(_G, M.TERRAIN_KEY)
+  if ours then
+    if not (ct and type(ct.getTerrainHeight) == 'function') then return false end
+    -- (our layer still there, on top or under another mod's wrap: on again, no second one)
+    if s and s.table == ct and ct.getTerrainHeight ~= s.base then s.active = true return true end
+    s = { table = ct, base = ct.getTerrainHeight, active = true }
+    s.wrap = terrainLayer(s)
+    ct.getTerrainHeight = s.wrap
+    rawset(_G, M.TERRAIN_KEY, s)
+    return true
+  end
+  if s then
+    s.active = false
+    if s.table.getTerrainHeight == s.wrap then
+      s.table.getTerrainHeight = s.base
+      rawset(_G, M.TERRAIN_KEY, nil)
+    end
+  end
+  return false
+end
+
+function M.wrapped()
+  local s = rawget(_G, M.TERRAIN_KEY)
+  return s ~= nil and s.active == true and s.table == rawget(_G, 'core_terrain')
 end
 
 -- be:getSurfaceHeightBelow on our level (SURFACE_WRAP). Past the block and the colliders the physics has a flat
@@ -231,24 +286,24 @@ end
 -- below it, castRayStatic hits it), so a mod standing something on "the surface below" put it there, 1.6 km under
 -- Boulder's land: the AWS mod's storms. Where it answers exactly 0 for a point over the land past the block, the land's
 -- height (M.height) is answered instead, once known; everywhere else (the block, the colliders, under the land, off
--- our level) its own answer, unchanged. The method lives in the BeamEngine binding's metatable (__index is a C
--- function there): the wrap is an __index in front of it that hands out this one method and passes every other key
--- to the original at once. Off with SURFACE_WRAP = false.
+-- our level) its own answer, unchanged; any error in our part gives the engine's answer. The method lives in the
+-- BeamEngine binding's metatable (__index is a C function there): the layer is an __index in front of it that hands
+-- out this one method of `be` and passes every other key straight on. Installed at our level's start, not on a mod's
+-- first ask: the mods it is for (AWS) never call our API, and a first use of getSurfaceHeightBelow cannot be seen
+-- without the layer. Its cost was measured in game (2026-11-27, Windows): any other be: method 0.097 us with it, 0.099
+-- us without; getSurfaceHeightBelow on the block 0.60 / 0.60 us, past it 1.1 / 0.43 us. Off with SURFACE_WRAP = false.
 M.SURFACE_WRAP = true
-local beMt, beIndex, beWrapIndex = nil, nil, nil
--- (per install, over the method it found: a wrap another mod put in front of ours keeps working after ours is off)
-local function makeSurface(base)
+local function surfaceLayer(s)
   return function(self, p, ...)
-    local h = base(self, p, ...)
-    if h == 0 and type(p) ~= 'nil' then
-      local okP, x, y, z = pcall(function() return tonumber(p.x), tonumber(p.y), tonumber(p.z) end)
-      if okP and x and y and z then
-        local st = coreState()
-        if st and st.inOurLevel and not onBlock(st, x, y) then
-          local land = M.height(x, y)
-          if land and land <= z then return land end
-        end
-      end
+    local h = s.base(self, p, ...)
+    if h == 0 and s.active then
+      local ok, land = pcall(function()
+        local x, y, z = tonumber(p.x), tonumber(p.y), tonumber(p.z)
+        if not (x and y and z) then return nil end
+        local l = landAt(x, y)
+        return (l and l <= z) and l or nil
+      end)
+      if ok and type(land) == 'number' then return land end
     end
     return h
   end
@@ -256,59 +311,53 @@ end
 
 function M.setSurface(ours)
   local b = rawget(_G, 'be')
+  local s = rawget(_G, M.SURFACE_KEY)
   if ours then
-    if beWrapIndex then return true end
     if not (M.SURFACE_WRAP and b) then return false end
     local okM, mt = pcall(getmetatable, b)
     if not (okM and type(mt) == 'table' and type(mt.__index) == 'function') then return false end
+    if s and s.mt == mt and rawequal(s.obj, b) and mt.__index ~= s.idx then s.active = true return true end
     local idx = mt.__index
     local okF, f = pcall(idx, b, 'getSurfaceHeightBelow')
     if not (okF and type(f) == 'function') then return false end
-    local surface = makeSurface(f)
+    s = { mt = mt, idx = idx, obj = b, base = f, active = true }
+    s.surface = surfaceLayer(s)
     -- (only this object's lookup of this one key: the metatable may be shared with other bound classes)
-    local wrap = function(t, k)
-      if k == 'getSurfaceHeightBelow' and rawequal(t, b) then return surface end
+    s.wrap = function(t, k)
+      if k == 'getSurfaceHeightBelow' and s.active and rawequal(t, s.obj) then return s.surface end
       return idx(t, k)
     end
-    local okS = pcall(function() mt.__index = wrap end)
-    if not okS then return false end
-    beMt, beIndex, beWrapIndex = mt, idx, wrap
+    if not pcall(function() mt.__index = s.wrap end) then return false end
+    rawset(_G, M.SURFACE_KEY, s)
     return true
   end
-  if beMt and beMt.__index == beWrapIndex then pcall(function() beMt.__index = beIndex end) end
-  beMt, beIndex, beWrapIndex = nil, nil, nil
+  if s then
+    s.active = false
+    if s.mt.__index == s.wrap then
+      pcall(function() s.mt.__index = s.idx end)
+      rawset(_G, M.SURFACE_KEY, nil)
+    end
+  end
   return false
 end
-function M.surfaceWrapped() return beWrapIndex ~= nil and beMt ~= nil and beMt.__index == beWrapIndex end
+
+function M.surfaceWrapped()
+  local s = rawget(_G, M.SURFACE_KEY)
+  return s ~= nil and s.active == true
+end
 
 -- Our level in play (core.lua onLevelStart): core_terrain.getTerrainHeight answers the land past the block, and
--- be:getSurfaceHeightBelow its plane's 0 there; false (another level, the level's end): the stock functions back. A
--- wrap another mod put over ours since is left alone (ours under it falls back to the function it wrapped off our
--- level).
+-- be:getSurfaceHeightBelow its plane's 0 there; false (another level, the level's end, unload): the stock functions
+-- back, or our layers turned off where another mod's wrap now sits over them.
 function M.setLevel(ours)
   M.setSurface(ours)
-  local ct = rawget(_G, 'core_terrain')
-  if ours then
-    if not (ct and type(ct.getTerrainHeight) == 'function') then return false end
-    if wrappedTable == ct and ct.getTerrainHeight == wrapper then return true end
-    orig, wrappedTable = ct.getTerrainHeight, ct
-    wrapper = makeWrapper(orig)
-    ct.getTerrainHeight = wrapper
-    return true
-  end
-  if wrappedTable and wrappedTable.getTerrainHeight == wrapper then wrappedTable.getTerrainHeight = orig end
-  orig, wrapper, wrappedTable = nil, nil, nil
-  forget(nil)
-  return false
-end
-
-function M.wrapped()
-  local ct = rawget(_G, 'core_terrain')
-  return ct ~= nil and wrapper ~= nil and ct.getTerrainHeight == wrapper
+  local ok = M.setTerrain(ours)
+  if not ours then forget(nil) end
+  return ok
 end
 
 function M.stats()
-  local out = { corners = cornerCount, queued = #queue, inFlight = inFlight }
+  local out = { corners = cornerCount, queued = qLen(), inFlight = inFlight }
   for k, v in pairs(stats) do out[k] = v end
   return out
 end

@@ -70,10 +70,10 @@ do
     return { getId = function() return id end, getPosition = function() return { x = x, y = 0, z = 0 } end,
       getJBeamFilename = function() return jbeam end }
   end
-  local types = { aws_debris = 'Prop', cones = 'prop', pickup = 'Car', etk800 = 'Car', mystery = nil }
+  local types = { aws_debris = 'Prop', cones = 'prop', pickup = 'Car', etk800 = 'Car', mystery = '' }
   local reads = {}
   local oldInfo = cf._infoType
-  cf._infoType = function(name) reads[name] = (reads[name] or 0) + 1 return types[name] end
+  cf._infoType = function(name) reads[name] = (reads[name] or 0) + 1 return types[name], types[name] ~= nil end
   cf._resetPropTypes()
   local objs = { veh(1, 0, 'pickup'), veh(2, 3000, 'aws_debris'), veh(3, 3100, 'aws_debris'), veh(4, 50, 'etk800'),
     veh(5, 70, 'cones'), veh(6, 900, 'mystery') }
@@ -87,6 +87,17 @@ do
   T.check(reads.aws_debris == 1 and reads.pickup == 1 and reads.mystery == 1, 'each model\'s info read once')
   T.check(cf.compute(cf.vehicles(), 1, 0, 0)[1].id == 4 and #cf.compute(cf.vehicles(), 1, 0, 0) == 2,
     'no island round the debris')
+  -- a prop the local player drives is their car; a failed info read is asked again (only good reads kept)
+  local lp = require('beamngEarth/localplayers')
+  local oldControlled = lp.controlled
+  lp.controlled = function(id) return id == 5 end
+  ids = {}
+  for _, v in ipairs(cf.vehicles()) do ids[#ids + 1] = v.id end
+  T.check(#ids == 4 and ids[3] == 5, 'a prop someone drives: kept as their car: ' .. table.concat(ids, ','))
+  lp.controlled = oldControlled
+  objs = { veh(7, 100, 'unmounted') }
+  cf.vehicles(); cf.vehicles()
+  T.check(reads.unmounted == 2, 'a failed info read: looked at again, not kept')
   be = oldBe
   cf._infoType = oldInfo
   cf._resetPropTypes()

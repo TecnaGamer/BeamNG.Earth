@@ -42,7 +42,8 @@ local function answer(aid, err)
       local x, y = m.pts[2 * q - 1], m.pts[2 * q]
       z[q] = not noLand[x .. ',' .. y] and land(x, y) or false       -- (false: no elevation there)
     end
-    g.onResult({ type = 'ground_result', id = m.id, anchorId = aid or m.anchorId, z = err and {} or z, error = err })
+    (package.loaded['beamngEarth/ground'] or g).onResult({ type = 'ground_result', id = m.id, anchorId = aid or m.anchorId,
+      z = err and {} or z, error = err })
   end
   return #reqs
 end
@@ -103,7 +104,12 @@ g.height(-5000, 7000); g.flush(); answer()
 T.check(g.height(-5000, 7000) == nil and core_terrain.getTerrainHeight(vec3(-5000, 7000, 0)) == ZBASE,
   'no elevation at a corner: nil, the stock answer')
 g.height(9000, 9000); g.flush(); answer(nil, 'OSError')
-T.check(g.height(9000, 9000) == nil and g.dirty, 'an error answer: asked again')
+local r0 = g.stats().requests
+for _ = 1, 50 do g.height(9000, 9000); g.flush() end
+T.check(g.height(9000, 9000) == nil and #sent == 0 and g.stats().requests == r0,
+  'an error answer: no height, and not asked again at once (an offline DEM tile: no request a frame)')
+clock = clock + g.FAIL_S + 1
+T.check(g.height(9000, 9000) == nil and g.dirty, 'FAIL_S later: asked again')
 g.flush(); answer()
 T.check(g.height(9000, 9000) ~= nil, 'then known')
 
@@ -233,5 +239,81 @@ T.check(kind == 'terrain', 'api.groundHeight on the block: terrain')
 T.check(api.groundHeight('x', nil) == nil, 'api.groundHeight: bad coordinates, nil')
 T.check(api._groundWrapped() == true and type(api._groundStats()) == 'table', 'probes: wrapped, stats')
 g._reset()
+
+-- 15. the review's points (2026-11-27): the queue's cap; a long queue sent in order by its head (no copies); an error
+-- in our part of a wrap never reaches the caller; repeated level starts and a hot reload of the module stack no
+-- second layer; a layer left under another mod's wrap is a plain pass-through
+do
+  local physics = function(self, p) if p.z < 0 then return -1e20 end return 0 end
+  local idx = function(t, k) if k == 'getSurfaceHeightBelow' then return physics end end
+  local mt = { __index = idx }
+  local oldBe = rawget(_G, 'be')
+  be = setmetatable({}, mt)
+  g._reset()
+  clock = clock + 100
+  g.setLevel(true)
+  -- the cap: past MAX_QUEUE corners waiting, a new one is not asked
+  local cap, burst, perS, inF = g.MAX_QUEUE, g.ASK_BURST, g.ASK_PER_S, g.IN_FLIGHT
+  g.MAX_QUEUE, g.ASK_BURST, g.ASK_PER_S, g.IN_FLIGHT = 100, 1e9, 1e9, 1
+  g._reset(); g.setLevel(true)
+  for k = 1, 200 do g.height(-30000 - k * 40, 30000) end
+  T.check(g.stats().queued == 100 and g.stats().capped > 0, 'MAX_QUEUE: 100 corners waiting at most, the rest not asked')
+  -- the head: sent in order, 512 a time, nothing copied
+  g.MAX_QUEUE = 20000
+  g._reset(); g.setLevel(true)
+  for k = 1, 3000 do g.height(-30000 - k * 40, 31000) end
+  local first = nil
+  local sentKeys = 0
+  while g.stats().queued > 0 do
+    g.flush()
+    first = first or sent[1].pts[1]
+    sentKeys = sentKeys + #sent[#sent].pts / 2
+    answer()
+  end
+  T.check(sentKeys == 12000 and first == math.floor((-30000 - 40) / 16) * 16, 'a long queue sent whole, in order: ' .. sentKeys)
+  g.MAX_QUEUE, g.ASK_BURST, g.ASK_PER_S, g.IN_FLIGHT = cap, burst, perS, inF
+
+  -- an error in our part (a broken block record) gives the engine's answer, never an error
+  st.block = { cx = 'broken', cy = 0 }
+  local okS, h = pcall(function() return be:getSurfaceHeightBelow(vec3(2000, 300, 3000)) end)
+  local okT, h2 = pcall(function() return core_terrain.getTerrainHeight(vec3(2000, 300, 0)) end)
+  T.check(okS and h == 0 and okT and h2 == ZBASE, 'an error in our part: the engine\'s answers, no error')
+  st.block = { cx = 0, cy = 0 }
+
+  -- level after level: one layer each, the stock functions back at the end
+  for _ = 1, 5 do g.setLevel(true); g.setLevel(false) end
+  T.check(mt.__index == idx and core_terrain.getTerrainHeight == stock, 'five level loads: no layer left, none stacked')
+
+  -- a hot reload of the module while our level runs: the new module finds the old layers, adds none
+  g.setLevel(true)
+  local layerT, layerS = core_terrain.getTerrainHeight, mt.__index
+  package.loaded['beamngEarth/ground'] = nil
+  local g2 = require('beamngEarth/ground')
+  g2._now, g2._net = g._now, g._net
+  g2.setLevel(true)
+  T.check(core_terrain.getTerrainHeight == layerT and mt.__index == layerS, 'a hot reload: the same layers, none stacked')
+  g2.height(2000, 300); g2.flush(); answer()
+  T.near(core_terrain.getTerrainHeight(vec3(2000, 300, 0)), land(2000, 300), 1e-9, 'the old layer asks the new module')
+  g2.setLevel(false)
+  T.check(mt.__index == idx and core_terrain.getTerrainHeight == stock, 'the reloaded module takes the old layers off')
+
+  -- under another mod's wrap: our layer turned off is a plain pass-through, and on again next level, not doubled
+  g2.setLevel(true)
+  local ourIdx = mt.__index
+  local theirIdx = function(t, k) return ourIdx(t, k) end
+  mt.__index = theirIdx
+  g2.setLevel(false)
+  T.check(mt.__index == theirIdx and be:getSurfaceHeightBelow(vec3(2000, 300, 3000)) == 0, 'under their wrap, off: a pass-through')
+  T.check(not g2.surfaceWrapped(), 'off')
+  g2.setLevel(true)
+  T.check(mt.__index == theirIdx and g2.surfaceWrapped(), 'on again under theirs: no second layer')
+  g2.height(2000, 300); g2.flush(); answer()
+  T.near(be:getSurfaceHeightBelow(vec3(2000, 300, 3000)), land(2000, 300), 1e-9, 'and working through theirs')
+  g2._reset()
+  mt.__index = idx
+  rawset(_G, g2.SURFACE_KEY, nil)
+  package.loaded['beamngEarth/ground'] = g
+  be = oldBe
+end
 
 T.done('test_ground')
