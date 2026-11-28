@@ -36,14 +36,32 @@ def test_a_faster_road_has_the_gentler_laws_and_costs_more_to_move():
     net, sm, lw = _lay([_m("mw", _line(0, 0, 500, 0), cls="motorway", kmh=110),
                         _m("st", _line(0, 300, 500, 300), cls="residential", kmh=30)])
     mw, st = _p(net, "mw"), _p(net, "st")
-    assert lw.grade[mw] < lw.grade[st] and lw.R[mw] > lw.R[st]
+    assert lw.grade[sm.of(mw)].max() < lw.grade[sm.of(st)].min() and lw.R[sm.of(mw)].min() > lw.R[sm.of(st)].max()
     # (a metre of road a metre off its terrain: its width times (speed / REF_KMH)^2)
     per_m = {p: lw.w[sm.of(p)][1:-1] / sm.h[p] for p in (mw, st)}
     assert np.allclose(per_m[mw], 8.0 * (110 / laws.REF_KMH) ** 2)
     assert np.allclose(per_m[st], 8.0 * (30 / laws.REF_KMH) ** 2)
     # (a major road's curve no tighter than a car drives it at its class's driving speed)
     v = laws.DRIVE_KMH["motorway"] / 3.6
-    assert lw.R[mw] >= v * v / (laws.DRIVE_LIFT_G * 9.81) - 1e-9
+    assert lw.R[sm.of(mw)].min() >= v * v / (laws.DRIVE_LIFT_G * 9.81) - 1e-9
+
+
+def test_a_link_going_on_into_its_motorway_keeps_its_own_laws():
+    # (Pregerson's HOV connector chained into the Century Freeway: one path, the link's stretch held to the freeway's
+    # 6.5 % and 844 m curves, its block with no answer)
+    net, sm, lw = _lay([_m("link", _line(0, 0, 300, 0), cls="motorway_link"),
+                        _m("mw", _line(300, 0, 900, 0), cls="motorway", kmh=110)])
+    (p,) = range(len(net.paths))
+    x = sm.xy[sm.of(p), 0]
+    link, mw = x < 299.0, x > 301.0
+    keys = [str(m.key) for m in net.members]
+    want_link = laws.law_of(net.members[keys.index("link")])
+    want_mw = laws.law_of(net.members[keys.index("mw")])
+    assert want_link[0] > want_mw[0]
+    assert np.allclose(lw.grade[sm.of(p)][link], want_link[0]) and np.allclose(lw.grade[sm.of(p)][mw], want_mw[0])
+    assert np.allclose(lw.R[sm.of(p)][link], want_link[1]) and np.allclose(lw.R[sm.of(p)][mw], want_mw[1])
+    gl = lw.glim[sm.of(p)][:-1]
+    assert np.allclose(gl[x[:-1] < 298.0], want_link[0]) and np.allclose(gl[x[:-1] > 301.0], want_mw[0])
 
 
 def test_a_track_in_a_city_bends_more_and_is_slower():
@@ -52,7 +70,8 @@ def test_a_track_in_a_city_bends_more_and_is_slower():
                        + [_m("open", _line(5000, 0, 5400, 0), "rail")])
     c, o = _p(net, "city"), _p(net, "open")
     assert lw.urban[c] and not lw.urban[o]
-    assert lw.R[c] < lw.R[o] and lw.grade[c] > lw.grade[o] and lw.kmh[c] < lw.kmh[o]
+    assert lw.R[sm.of(c)].max() < lw.R[sm.of(o)].min() and lw.grade[sm.of(c)].min() > lw.grade[sm.of(o)].max()
+    assert lw.kmh[sm.of(c)].max() < lw.kmh[sm.of(o)].min()
 
 
 def test_a_deck_and_a_tunnel_cost_nothing_to_move():
@@ -83,7 +102,7 @@ def test_a_road_may_follow_ground_steeper_than_its_grade():
                        lambda xy: 10.0 + 0.2 * xy[:, 0])                   # (a 20 % slope under a motorway)
     p = _p(net, "a")
     gl = lw.glim[sm.of(p)][:-1]
-    assert lw.grade[p] < 0.1 and np.allclose(gl, 0.2)
+    assert lw.grade[sm.of(p)].max() < 0.1 and np.allclose(gl, 0.2)
 
 
 def test_the_chain_is_what_the_solve_reads():

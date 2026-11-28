@@ -76,7 +76,7 @@ def pose(network, samples, laws):
     for p in range(len(network.paths)):
         ch = laws.chain(samples, p)
         if samples.h[p] < MIN_STEP_M:
-            ch["R"] = 0.0
+            ch["R"] = np.zeros(len(ch["t"]))
         chains.append(ch)
     pr = Problem(chains, names=[name(network, path) for path in network.paths])
 

@@ -2,11 +2,13 @@
 
     lay(network, samples, ground) -> Laws
 
-Per path, its grading law, which no answer goes past: the steepest grade and the tightest vertical curve of its class
-and speed (gradeshapes.max_grade, curve_radius: AASHTO's grades plus the game's, v^2 / a; a major road's curve no
-tighter than a car drives it at its class's driving speed, drive_ceiling). A road lying on ground steeper than its
-grade follows that ground: the terrain's own grade round each segment, where both its samples lie on the terrain, is
-allowed there.
+Per sample, the grading law of the member it lies on, which no answer goes past: the steepest grade and the tightest
+vertical curve of its class and speed (gradeshapes.max_grade, curve_radius: AASHTO's grades plus the game's, v^2 / a;
+a major road's curve no tighter than a car drives it at its class's driving speed, drive_radius). Each member keeps
+its own along a path of several: a link going on into its motorway is a link up to where it joins it (Pregerson's HOV
+connector, chained into the Century Freeway, climbed under the freeway's 844 m curves, its block with no answer). A
+road lying on ground steeper than its grade follows that ground: the terrain's own grade round each segment, where
+both its samples lie on the terrain, is allowed there.
 
 Per sample, its earthwork: the terrain it lies on (its smoothed ground) and what a metre off it costs, its length times
 its carriageway's width times (its speed / REF_KMH)^2, so the faster line moves least. A deck, a rail deck and a tunnel
@@ -42,9 +44,9 @@ EARTH_KINDS = ("ground", "rail")
 
 @dataclass
 class Laws:
-    """Per path (P,): grade, R (its vertical curve's least radius, m), kmh, urban (a track in a city; False for roads).
-    Per sample (N,): t (its terrain), w (what a metre off it costs; 0: nothing), glim (the grade allowed from it to the
-    next sample of its path; 0 at a path's last)."""
+    """Per path (P,): urban (a track in a city; False for roads). Per sample (N,), by the member it lies on: grade (its
+    steepest), R (its vertical curve's least radius, m), kmh; t (its terrain), w (what a metre off it costs; 0:
+    nothing), glim (the grade allowed from it to the next sample of its path; 0 at a path's last)."""
     grade: np.ndarray
     R: np.ndarray
     kmh: np.ndarray
@@ -55,11 +57,11 @@ class Laws:
 
     def chain(self, samples, p):
         """Path p's law as the solve reads it: t, w, xy (its samples' places), ds (m between its samples), glim (per
-        segment), R, step."""
+        segment), R (per sample), step."""
         sl = samples.of(p)
         ds = np.maximum(np.diff(samples.s[sl]), 1e-3)
         return dict(t=self.t[sl], w=self.w[sl], xy=samples.xy[sl], ds=ds, glim=self.glim[sl][:len(ds)],
-                    R=float(self.R[p]), step=float(samples.h[p]))
+                    R=self.R[sl].copy(), step=float(samples.h[p]))
 
 
 def road_length_near(network, xy, r=URBAN_R_M):
@@ -100,27 +102,24 @@ def member_law(m, urban=False):
     return float(_gsh.max_grade(m)), float(_gsh.curve_radius(m)), float(_gsh.speed(m))
 
 
-def drive_radius(network, path):
-    """The vertical curve radius (m) a major road's path is driven over at its fastest class's driving speed (DRIVE_KMH,
+def drive_radius(m):
+    """The vertical curve radius (m) a major road's member m is driven over at its class's driving speed (DRIVE_KMH,
     not its limit: a car drives a city's 50 km/h secondary at 80; a link as its road: Suedtiroler Platz's secondary links,
     9 m decks, rose 2 m to a crest at 22 %); None for others (a street, a track)."""
-    best = None
-    for i in path.members():
-        m = network.members[i]
-        if _network.family(m.kind) != "road":
-            continue
-        v = DRIVE_KMH.get(str(m.cls or "").replace("_link", ""))     # (a link driven as its road: drivability's)
-        if v is not None and (best is None or v > best):
-            best = v
-    if best is None:
+    if _network.family(m.kind) != "road":
         return None
-    v = best / 3.6
+    v = DRIVE_KMH.get(str(m.cls or "").replace("_link", ""))     # (a link driven as its road: drivability's)
+    if v is None:
+        return None
+    v = v / 3.6
     return v * v / (DRIVE_LIFT_G * 9.81)
 
 
-def path_law(network, path, urban=False):
-    """member_law of the path's fastest member (its strictest)."""
-    return max((member_law(network.members[i], urban) for i in path.members()), key=lambda law: law[2])
+def law_of(m, urban=False):
+    """(grade, vertical curve radius m, km/h) member m is held to: member_law's, its curve no tighter than drive_radius."""
+    grade, rad, kmh = member_law(m, urban)
+    dr = drive_radius(m)
+    return grade, (rad if dr is None else max(rad, dr)), kmh
 
 
 def stacked(network, samples):
@@ -141,7 +140,8 @@ def stacked(network, samples):
 def lay(network, samples, ground):
     """The Laws of the network's paths (step 1) over their samples (step 3) and smoothed ground (step 4)."""
     P, N = len(network.paths), len(samples)
-    grade, R, kmh, urban = np.zeros(P), np.zeros(P), np.zeros(P), np.zeros(P, bool)
+    urban = np.zeros(P, bool)
+    grade, R, kmh = np.zeros(N), np.zeros(N), np.zeros(N)
     t = np.asarray(ground, np.float64).copy()
     w, glim = np.zeros(N), np.zeros(N)
     kind = np.array([m.kind for m in network.members], dtype=object)
@@ -153,23 +153,25 @@ def lay(network, samples, ground):
         urban[rail] = road_length_near(network, mids) >= URBAN_ROADS_M
     earth = np.isin(kind[samples.member], EARTH_KINDS) & ~stacked(network, samples)
     for p, path in enumerate(network.paths):
-        grade[p], rad, kmh[p] = path_law(network, path, bool(urban[p]))
-        dr = drive_radius(network, path)
-        R[p] = rad if dr is None else max(rad, dr)
         sl = samples.of(p)
+        mem = samples.member[sl]
+        law = {int(i): law_of(network.members[int(i)], bool(urban[p])) for i in np.unique(mem)}
+        grade[sl], R[sl], kmh[sl] = (np.array([law[int(i)][k] for i in mem]) for k in range(3))
         ds = np.diff(samples.s[sl])
         span = np.r_[ds, 0.0] / 2 + np.r_[0.0, ds] / 2 if len(ds) else np.ones(1)   # (m of the path each sample stands for)
         on = earth[sl]
-        w[sl] = np.where(on, span * 2.0 * half[samples.member[sl]] * (kmh[p] / REF_KMH) ** 2, 0.0)
+        w[sl] = np.where(on, span * 2.0 * half[mem] * (kmh[sl] / REF_KMH) ** 2, 0.0)
         n = sl.stop - sl.start
         if n < 2:
             continue
-        # (the terrain's own grade round each segment, where both its samples lie on the terrain)
+        # (the terrain's own grade round each segment, where both its samples lie on the terrain; a segment across a
+        # joint of two members, the joint inside it, the grade of either)
         s, g = samples.s[sl], t[sl]
         k = np.arange(n - 1)
         i0, i1 = np.maximum(0, k - GROUND_GRADE_WIN), np.minimum(n - 1, k + 1 + GROUND_GRADE_WIN)
         own = np.abs(g[i1] - g[i0]) / np.maximum(s[i1] - s[i0], 1e-3)
-        glim[sl.start:sl.stop - 1] = np.maximum(grade[p], np.where(on[:-1] & on[1:], own, 0.0))
+        seg = np.maximum(grade[sl][:-1], grade[sl][1:])
+        glim[sl.start:sl.stop - 1] = np.maximum(seg, np.where(on[:-1] & on[1:], own, 0.0))
     return Laws(grade, R, kmh, urban, t, w, glim)
 
 
