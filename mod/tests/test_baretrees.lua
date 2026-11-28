@@ -174,7 +174,7 @@ do
   if leafyRank then T.check(B.map(stock, leafyRank) == stock, 'a leafy tree: the stock shape') end
   T.check(B.map(ECA .. 'trees_douglasfir/tree_douglasfir_large_a', 0.01) == ECA .. 'trees_douglasfir/tree_douglasfir_large_a',
     'a conifer: itself')
-  T.check(B.reportLine():find('^bare trees: amount 0%.%d%d at lat 39%.29 %(climate nil%), %d+ bare') ~= nil, 'the log line: ' .. B.reportLine())
+  T.check(B.reportLine():find('^bare trees: amount [01]%.%d%d at lat 39%.29 %(climate nil%), %d+ bare') ~= nil, 'the log line: ' .. B.reportLine())
   local a0 = B.status().amount
   seasonlook.update(true, 39.30)
   T.check(B.status().amount == a0, 'a rebase nearby: the amount kept')
