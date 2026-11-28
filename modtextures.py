@@ -25,7 +25,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 SOURCES = os.path.join(ROOT, "mod", "texture_sources")
 MANIFEST = os.path.join(SOURCES, "textures.json")
 STAMP = ".bne_textures.json"
-NATIVE = 645                    # the earthfast version with texdds (645: its "coverage" derive, the twig cards' mips)
+NATIVE = 648                    # the earthfast version with texdds (648: its "coverage" derive, the twig cards' mips)
 
 
 class TexturesError(RuntimeError):

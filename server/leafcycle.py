@@ -15,7 +15,7 @@ import os
 import fast
 
 ON = os.environ.get("BNE_LEAF_CYCLE", "").strip().lower() in ("on", "1", "true", "yes")
-NATIVE = 645                # earthfast: phenology leaf_calendar
+NATIVE = 648                # earthfast: phenology leaf_calendar
 VERSION = 1                 # leaf.v: the field's layout
 
 

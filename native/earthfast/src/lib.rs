@@ -7852,8 +7852,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
     // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
     // tunnels' and the roads' branches)
-    // 645: phenology::leaf_calendar (the trees' leaf cycle at a place); texdds derive "coverage:REF[:SCALE]" (the winter
+    // 648 (645-647 are taken by the snow S1, power plant and air traffic branches): phenology::leaf_calendar (the trees' leaf cycle at a place); texdds derive "coverage:REF[:SCALE]" (the winter
     // twig cards' opacity mips keep their drawn share: no LOD pop)
-    m.add("VERSION", 645)?;
+    m.add("VERSION", 648)?;
     Ok(())
 }
