@@ -136,6 +136,199 @@ class RegionStyleTest(unittest.TestCase):
             self.assertIsNone(h.pitch)
 
 
+class NewZealandStyleTest(unittest.TestCase):
+    """New Zealand (2026-11-27: two storeys where there is one, colours not its own)."""
+    WELLINGTON = (-41.31, 174.78)
+
+    def plans(self, w=10, d=15, neighbours=0, n=400, at=None, where=WELLINGTON, **kw):
+        return [bld.plan(rect(0, 0, w, d), dict({"class": "", "seed_id": f"b{i}"}, **(at or {})), neighbours, *where,
+                         **kw) for i in range(n)]
+
+    def single(self, specs):
+        return sum(s.floors == 1 for s in specs) / len(specs)
+
+    def test_region(self):
+        for lat, lon in ((-36.85, 174.76), (-41.29, 174.78), (-43.53, 172.62), (-46.41, 168.35), (-35.1, 173.3)):
+            self.assertEqual(bld.region_style(lat, lon).name, "new_zealand", (lat, lon))
+        for lat, lon in ((-33.87, 151.21), (-42.88, 147.33), (-37.81, 144.96)):
+            self.assertEqual(bld.region_style(lat, lon).name, "oceania", (lat, lon))
+
+    def test_homes_mostly_one_storey(self):
+        # free-standing, joined to neighbours, with a joined garage (over 260 m2), narrow, in a fuller suburb
+        for kw in ({}, {"neighbours": 2}, {"w": 16, "d": 20}, {"w": 6, "d": 16, "neighbours": 1},
+                   {"town": True}, {"dense": True, "cover": 0.40}):
+            specs = self.plans(**kw)
+            self.assertEqual({s.floors for s in specs}, {1, 2}, kw)
+            self.assertAlmostEqual(self.single(specs), bld.NZ_ONE_STOREY, delta=0.07, msg=kw)
+
+    def test_map_data_wins(self):
+        self.assertEqual({s.floors for s in self.plans(at={"num_floors": 3}, n=20)}, {3})
+        # a mapped height is the top of the roof: a pitched roof's rise comes off it, so 2 or 3 storeys of walls
+        self.assertLessEqual({s.floors for s in self.plans(at={"height": 9.0}, n=40)}, {2, 3})
+        self.assertEqual({s.floors for s in self.plans(at={"height": 3.5}, n=40)}, {1})
+
+    def test_town_centre(self):
+        centre = {"dense": True, "cover": 0.60, "neighbours": 2}
+        self.assertTrue(all(s.floors >= 2 for s in self.plans(w=8, d=15, **centre)), "a centre's blocks: as before")
+        houses = self.plans(at={"class": "house"}, **centre)
+        self.assertAlmostEqual(self.single(houses), bld.NZ_ONE_STOREY, delta=0.07, msg="a mapped house is a home")
+
+    def test_not_homes(self):
+        for kw in ({"at": {"class": "apartments"}}, {"at": {"class": "office"}}, {"at": {"subtype": "residential"},
+                   "w": 25, "d": 30}):
+            specs = self.plans(**kw)
+            self.assertLess(self.single(specs), 0.4, kw)
+
+    def test_roofs(self):
+        specs = self.plans(neighbours=1, n=1000)
+        flat = sum(s.roof == "flat" for s in specs) / len(specs)
+        self.assertLess(flat, 0.09, "a house with a joined garage keeps a pitched roof")
+        pitched = [bld.LOOKS[s.roof_mat] for s in specs if s.roof != "flat"]
+        tiles = sum(m == bld.ROOF_TILES for m, _ in pitched) / len(pitched)
+        self.assertEqual({m for m, _ in pitched}, {bld.ROOF_CORRUGATED, bld.ROOF_TILES}, "no metallic zinc: glare")
+        self.assertLess(tiles, 0.06)
+        steel = bld.plan(rect(0, 0, 10, 15), {"class": "house", "roof_material": "metal"}, 0, *self.WELLINGTON)
+        self.assertEqual(bld.LOOKS[steel.roof_mat][0], bld.ROOF_CORRUGATED)
+        mapped = bld.plan(rect(0, 0, 10, 15), {"class": "house", "roof_color": "#2040c0"}, 0, *self.WELLINGTON)
+        self.assertGreater(bld.LOOKS[mapped.roof_mat][1][2], 0.7, "a mapped colour wins")
+
+    def test_roof_colour_mix(self):
+        # the measured mix: mostly white, grey and charcoal; little red, green or terracotta
+        pitched = [bld.LOOKS[s.roof_mat] for s in self.plans(n=3000) if s.roof != "flat"]
+
+        def share(want):
+            return sum(want(m, c) for m, c in pitched) / len(pitched)
+        steel = bld.ROOF_CORRUGATED
+        self.assertAlmostEqual(share(lambda m, c: m == steel and max(c) - min(c) <= 0.05), 0.85, delta=0.03)
+        self.assertAlmostEqual(share(lambda m, c: m == steel and c[2] - c[0] > 0.1), 0.052, delta=0.02, msg="blue")
+        self.assertAlmostEqual(share(lambda m, c: m == steel and c[0] - c[2] > 0.1), 0.059, delta=0.02,
+                               msg="red, terracotta and brown steel")
+        self.assertAlmostEqual(sum(w for w, _m, _c in bld.NZ_ROOF_PAINTS), 1.0, places=3)
+
+    def test_low_buildings(self):
+        for at, w, d, one in (({}, 25, 30, 0.75), ({}, 40, 40, 0.75), ({"class": "retail"}, 10, 15, 0.75),
+                              ({"class": "school"}, 20, 40, 0.9)):
+            specs = self.plans(w=w, d=d, at=at, neighbours=1, cover=0.3)
+            self.assertEqual({s.floors for s in specs}, {1, 2}, at)
+            self.assertAlmostEqual(self.single(specs), one, delta=0.07, msg=(at, w, d))
+        works = self.plans(w=60, d=120, at={"class": "warehouse"}, n=20, cover=0.3)
+        self.assertEqual({s.floors for s in works}, {1})
+        self.assertTrue(all(5.0 < s.height < 7.0 for s in works), "a tall single storey")
+        school = self.plans(w=30, d=50, at={"class": "school"}, n=20, cover=0.3)
+        self.assertTrue(all(s.windows is not False for s in school), "no blank big-box walls")
+
+    def test_low_rule_limits(self):
+        big = {"w": 25, "d": 30}
+        for at in ({"num_floors": 4}, {"height": 14.0}):
+            self.assertTrue(all(s.floors >= 3 for s in self.plans(at=at, n=20, cover=0.3, **big)), "map data wins")
+        for kw in ({"at": {"class": "apartments"}}, {"at": {"subtype": "residential"}}, {"cover": 0.6, "dense": True},
+                   {"where": (-33.87, 151.21)}):
+            specs = self.plans(**dict({"cover": 0.3}, **big, **kw))
+            self.assertLess(self.single(specs), 0.4, kw)
+
+    def test_walls(self):
+        self.assertAlmostEqual(sum(w for w, _c in bld.NZ_WALL_PAINTS), 1.0, places=3)
+        paints = {c for _w, c in bld.NZ_WALL_PAINTS}
+        specs = self.plans(neighbours=1, n=1000)
+        walls = [bld.LOOKS[s.wall] for s in specs if s.wall]
+        self.assertGreater(len(walls) / len(specs), 0.75)
+        self.assertEqual({m for m, _ in walls}, {bld.SIDING, bld.STUCCO})
+        self.assertTrue({c for _, c in walls} <= paints)
+        # as seen: weatherboard 66 %, plaster 18 %, brick 16 %
+        shares = [sum(m == kind for m, _ in walls) / len(specs) for kind in (bld.SIDING, bld.STUCCO)]
+        shares.append(sum(s.band == bld.BAND_BRICK for s in specs) / len(specs))
+        for share, seen in zip(shares, (0.66, 0.18, 0.16)):
+            self.assertAlmostEqual(share, seen, delta=0.05)
+        sheds = self.plans(w=4, d=6, n=100)
+        self.assertTrue({bld.LOOKS[s.facade][1] for s in sheds} <= paints)
+
+    def test_eaves(self):
+        """Most pitched-roof houses have eaves of about 0.75-1 m."""
+        specs = self.plans(at={"class": "house"}, n=1000)
+        pitched = [s for s in specs if s.roof != "flat"]
+        wide = [s for s in pitched if s.eave]
+        self.assertAlmostEqual(len(wide) / len(pitched), 0.9, delta=0.04)
+        self.assertTrue(all(0.75 <= s.eave <= 1.0 for s in wide))
+        self.assertGreater(max(s.eave for s in wide) - min(s.eave for s in wide), 0.2)
+        self.assertFalse([s for s in specs if s.roof == "flat" and s.eave])
+        for kw in ({"w": 4, "d": 6}, {"w": 25, "d": 30}, {"at": {"class": "retail"}},
+                   {"where": (-33.87, 151.21), "at": {"class": "house"}}):
+            self.assertFalse([s for s in self.plans(n=60, **kw) if s.eave], kw)
+
+    def eaved(self, ring, roof, eave=0.9, lite=False, **want):
+        """The roof's vertices of a house on ring, drawn with and without wide eaves."""
+        for k in range(400):
+            s = bld.plan(ring, {"class": "house", "seed_id": f"e{k}", "roof_shape": roof}, 0, *self.WELLINGTON)
+            if s.eave and all(getattr(s, n) == v for n, v in want.items()):
+                break
+        else:
+            self.fail(f"no such house: {roof} {want}")
+        s.eave = eave
+        mesh = bld.Mesh()
+        bld._roof(mesh, s, s.ring, 3.0, bld._Looks(s.seed), lite)
+        P, _uv, tris, mat, _c = mesh.arrays()
+        return s, np.asarray(P), np.asarray(tris), np.asarray(mat)
+
+    def check_eaves(self, ring, roof, **want):
+        s, P, T, M = self.eaved(ring, roof, **want)
+        walls = bld.drawn_ring(s)
+        lo, hi = walls.min(0), walls.max(0)
+        self.assertTrue(np.all(P[:, :2].min(0) < lo - 0.85) and np.all(P[:, :2].max(0) > hi + 0.85), "0.9 m out")
+        self.assertTrue(np.all(P[:, :2].min(0) > lo - 0.9 * bld.EAVE_MITRE) and np.all(P[:, :2].max(0) < hi + 2.3))
+        self.assertLess(P[:, 2].min(), 3.0 - 0.15, "the eave drops with the slope (a lean-to: 12 degrees)")
+        self.assertGreater(P[:, 2].min(), 3.0 - 0.9 * 1.2)
+        self.check_faces(P, T, M)
+
+    def check_faces(self, P, T, M):
+        """A soffit facing down, the roof facing up (steep faces, the walls, left out)."""
+        soffit = bld._Looks(0)[bld.SOFFIT_MAT][0]       # (its white look's material; walls are left out as steep)
+        a, b, c = (P[T[:, i]] for i in range(3))
+        nz = np.cross(b - a, c - a)[:, 2]
+        area = np.linalg.norm(np.cross(b - a, c - a), axis=1)
+        under = (M == soffit) & (area > 1e-6) & (np.abs(nz) > 0.3 * area)
+        self.assertTrue(under.any(), "a soffit")
+        self.assertTrue(np.all(nz[under] < 0), "facing down")
+        roofm = (M != soffit) & (area > 1e-6) & (np.abs(nz) > 0.3 * area)
+        self.assertTrue(np.all(nz[roofm] > 0), "the roof facing up")
+
+    def test_eaves_on_box_roofs(self):
+        for roof in ("gabled", "hipped", "half-hipped", "pyramidal", "skillion"):
+            with self.subTest(roof=roof):
+                self.check_eaves(rect(0, 0, 8, 12), roof, hf=False)
+        _s, _P, _T, M = self.eaved(rect(0, 0, 8, 12), "hipped", lite=True)
+        self.assertNotIn(bld._Looks(0)[bld.SOFFIT_MAT][0], M.tolist(), "far meshes: no soffit")
+
+    def test_eaves_on_outline_roofs(self):
+        ell = np.array([(0, 0), (14, 0), (14, 7), (7, 7), (7, 13), (0, 13)], np.float64)
+        for roof in ("hipped", "gabled"):
+            for skel in (True, False):
+                with self.subTest(roof=roof, skel=skel):
+                    for k in range(400):
+                        s = bld.plan(ell, {"class": "house", "seed_id": f"e{k}", "roof_shape": roof}, 0,
+                                     *self.WELLINGTON)
+                        if s.eave:
+                            break
+                    self.assertTrue(s.hf, "an L-shaped house's roof is on its outline")
+                    s.eave, s.skel = 0.9, skel
+                    mesh, looks = bld.Mesh(), bld._Looks(s.seed)
+                    if skel:
+                        self.assertTrue(bld._skel_roof(mesh, s, ell, 3.0, looks[s.roof_mat], looks[s.facade],
+                                                       looks[bld.SOFFIT_MAT]))
+                    else:
+                        bld._hf_roof(mesh, s, ell, 3.0, looks[s.roof_mat], looks[s.facade], looks[bld.SOFFIT_MAT])
+                    P, _uv, T, M, _c = (np.asarray(a) if i != 4 else a for i, a in enumerate(mesh.arrays()))
+                    np.testing.assert_allclose(P[:, :2].min(0), (-0.9, -0.9), atol=0.05)
+                    np.testing.assert_allclose(P[:, :2].max(0), (14.9, 13.9), atol=0.05)
+                    self.check_faces(P, T, M)
+
+    def test_elsewhere_unchanged(self):
+        self.assertEqual([k for k, s in bld.STYLES.items()
+                          if s.one_storey or s.wall_paints or s.roof_paints or s.eaves],
+                         ["new_zealand"])
+        sydney = self.plans(where=(-33.87, 151.21))
+        self.assertLess(self.single(sydney), 0.4)
+
+
 class PlanTest(unittest.TestCase):
     def test_hut_above_the_tree_line_is_stone(self):
         # the user, 2026-10-14: Mount Whitney's stone summit shelter was a plain grey box

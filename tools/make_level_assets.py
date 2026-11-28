@@ -226,13 +226,17 @@ LOOKS = {
     # macro (the photo there is the crowns' dark: the macro's linear-light offsets weigh most on dark ground)
     "bngEarthGroundForest": ("forest/t_forest_ground_02/t_forest_ground_02", 1, "forest/t_macro_forest/t_macro_forest", 8,
                              0.2, (0.08, 0.05)),
+    # New Zealand's bush floor (server/surface.py BUSH): the forest floor's look under its ferns
+    "bngEarthGroundBush": ("forest/t_forest_ground_02/t_forest_ground_02", 1, "forest/t_macro_forest/t_macro_forest", 8,
+                           0.2, (0.08, 0.05)),
     "bngEarthGroundDryGrass": ("grass/t_dirt_dry_grass/t_dirt_dry_grass", 1,
                                "grass/macro_dry_grass_02/t_macro_dry_grass_02", 8, 0.25, (0.12, 0.08)),
     "bngEarthGroundCrop": ("soil/dirt_crumbly/t_dirt_crumbly", 1, "soil/macro_holes/t_macro_holes", 8, 0.25, (0.12, 0.08)),
     "bngEarthGroundSand": ("sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 16, 0.25, (0.12, 0.08)),
 }
 NEW_GROUND = (("bngEarthGroundForest", "GRASS", 70), ("bngEarthGroundDryGrass", "GRASS", 71),
-              ("bngEarthGroundCrop", "DIRT", 72), ("bngEarthGroundSand", "SAND", 73))
+              ("bngEarthGroundCrop", "DIRT", 72), ("bngEarthGroundSand", "SAND", 73),
+              ("bngEarthGroundBush", "DIRT", 74))
 SURFACES = {}
 for i, name in enumerate(("bngEarthGroundAsphalt", "bngEarthGroundGrass", "bngEarthGroundDusty", "bngEarthGroundLoose",
                           "bngEarthGroundRock", "bngEarthGroundSnow", "bngEarthGroundMud", "bngEarthGroundLawn")):

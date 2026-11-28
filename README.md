@@ -757,6 +757,9 @@ The repository contains only code; all map data is downloaded at runtime and cac
   Traffic add-on (with permission); close-up jet sound from Pixabay.
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).
+- New Zealand building colours: roof colour proportions sampled from LINZ aerial imagery (CC BY 4.0, Toitū Te Whenua
+  Land Information New Zealand); building colour proportions derived from street-level imagery on Mapillary
+  (https://www.mapillary.com).
 Each source's terms apply to the downloaded data; the in-game window shows the attribution line.
 The full list of data sources, services, libraries, tools and references, with licences and the
 credit each one asks for, is in [CREDITS.md](CREDITS.md). [SOURCES.md](SOURCES.md) explains what each source does in

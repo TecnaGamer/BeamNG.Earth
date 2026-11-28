@@ -42,7 +42,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 30          #(the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 32          #(the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -54,7 +54,7 @@ VERSION = 30          #(the cached cells hold their groups: 14 for the regional 
                       # 29: the far clumps kept off the carriageways, CLUMP_ROAD_MARGIN_M; 30: the vineyards' rows
                       # down the slope, _row_axis, carried on to the field's edge and roads by single rows,
                       # _row_fill, a group's outer rows inside the field and off the roads too, the groups end to
-                      # end on a slope, _row_cos)
+                      # end on a slope, _row_cos; 32: New Zealand's own mix of trees and bushes, nz_groups)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -68,7 +68,8 @@ KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
           "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
-          "eucalyptus_clump", "poplar", "creosote", "vine_row")
+          "eucalyptus_clump", "poplar", "creosote", "vine_row", "nz_broadleaf", "nz_evergreen", "nz_pine", "nz_palm",
+          "nz_shrub_north", "nz_shrub_south", "nz_broadleaf_clump")
 # the mapped natural features' groups (natural.py, BNE_NATURAL_*: in the tiles' group lists only while a switch is on,
 # groups_list): species of mapped trees, the rock faces along mapped cliffs, the bare winter broadleaves
 BASE_GROUPS = GROUPS
@@ -80,7 +81,8 @@ GROUPS = BASE_GROUPS + NATURAL_GROUPS
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
- G_POPLAR, G_CREOSOTE, G_VINE_ROW) = range(26)
+ G_POPLAR, G_CREOSOTE, G_VINE_ROW, G_NZ_BROADLEAF, G_NZ_EVERGREEN, G_NZ_PINE, G_NZ_PALM, G_NZ_SHRUB_NORTH,
+ G_NZ_SHRUB_SOUTH, G_NZ_BROADLEAF_CLUMP) = range(33)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -89,7 +91,9 @@ GROUPS = BASE_GROUPS + NATURAL_GROUPS
 # beyond its near ring (trees.lua CLUMP_M) and the square's trees, flagged by a negative scale, only within it: a far
 # forest tile of ~900 single trees becomes ~150 clumps. Other groups (palms, junipers, tropical trees) stay single.
 CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_DECIDUOUS: G_DECIDUOUS_CLUMP,
-            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP}
+            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP,
+            G_NZ_BROADLEAF: G_NZ_BROADLEAF_CLUMP, G_NZ_EVERGREEN: G_MEDITERRANEAN_CLUMP,   # (holm oaks' own filler)
+            G_NZ_PINE: G_CONIFER_CLUMP}
 CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
 CLUMP_CELL_M = 18.0
 CLUMP_MIN = 3
@@ -266,6 +270,49 @@ def _leaf_groups(group, code, lat):
         np.ascontiguousarray(np.broadcast_to(np.asarray(lat, np.float64), (n,))), G_DECIDUOUS, G_HOLM_OAK,
         [G_DECIDUOUS, G_POPLAR, G_OAK_WEST], [G_LEAFOFF_N, G_LEAFOFF_S], bool(natural.SEASON),
         natural.TROPICS_LAT), np.uint8)
+
+
+# New Zealand's trees (2026-11-27: the eastern US's oaks, aspens and firs are not native there, and Jungle Rock
+# Island's plants suit its north but not its south): stock shapes, mixed by latitude (trees.lua's nz_* groups): tropical
+# broadleaves (Jungle Rock) in the north giving way to dark evergreens (Italy's holm and cork oaks, standing in for the
+# southern beeches), radiata pine (West Coast USA's) and, low down, a few palms (for the nikau, gone before the middle of
+# the South Island). Towns keep some European trees, more in the south. A first mix, to be tuned by eye.
+NZ_BOX = (-47.6, 166.0, -34.0, 179.0)       # south, west, north, east (buildings.region_style's)
+NZ_TREES = (G_NZ_BROADLEAF, G_NZ_EVERGREEN, G_NZ_PINE, G_NZ_PALM)
+NZ_MIX_LAT = (36.0, 39.5, 42.5, 43.5, 45.5)             # degrees south; between them in proportion
+NZ_MIX = ((0.65, 0.12, 0.15, 0.08), (0.45, 0.35, 0.15, 0.05), (0.20, 0.60, 0.18, 0.02), (0.15, 0.67, 0.18, 0.00),
+          (0.05, 0.75, 0.20, 0.00))                     # the shares of NZ_TREES at each
+NZ_NORTH_SOUTH = (36.0, 45.5)
+NZ_TOWN_DECIDUOUS = (0.10, 0.35)    # built-up land's European trees, north and south
+NZ_PALM_MAX_M = 300.0               # palms stand on ground under this
+
+
+def nz_groups(group, lat, lon, lcls, u, town_u):
+    """The groups of New Zealand's items (inside NZ_BOX; elsewhere unchanged) from regional()'s: its trees by NZ_MIX
+    at their latitude, built-up land's partly left European; its bushes the north's or the south's (a share falling
+    southward). Desert bushes and rocks, which regional() gives dry-looking land north of 42, are New Zealand's scrub
+    and stone. u, town_u: two hashed [0, 1) per item. Pure."""
+    group = np.asarray(group, np.uint8)
+    n = len(group)
+    lat, lon = (np.broadcast_to(np.asarray(a, np.float64), (n,)) for a in (lat, lon))
+    out = group.copy()
+    nz = _in_box(lat, lon, NZ_BOX)
+    if not nz.any():
+        return out
+    alat = np.abs(lat)
+    mix = np.column_stack([dnp.interp(alat, NZ_MIX_LAT, [m[k] for m in NZ_MIX]) for k in range(len(NZ_TREES))])
+    tree = nz & ((group == G_DECIDUOUS) | (group == G_CONIFER))
+    town = tree & (np.asarray(lcls) == WC["built"]) \
+        & (np.asarray(town_u) < dnp.interp(alat, NZ_NORTH_SOUTH, NZ_TOWN_DECIDUOUS))
+    pick = np.minimum((np.asarray(u)[:, None] >= np.cumsum(mix, axis=1)).sum(1), len(NZ_TREES) - 1)
+    out[tree] = np.asarray(NZ_TREES, np.uint8)[pick[tree]]
+    out[town] = G_DECIDUOUS
+    shrub = nz & ((group == G_SHRUB) | (group == G_DESERT_SHRUB))
+    north = np.asarray(u) < dnp.interp(alat, NZ_NORTH_SOUTH, (1.0, 0.0))
+    out[shrub & north] = G_NZ_SHRUB_NORTH
+    out[shrub & ~north] = G_NZ_SHRUB_SOUTH
+    out[nz & (group == G_DESERT_ROCK)] = G_ROCK
+    return out
 
 
 def _in_box(lat, lon, box):
@@ -617,6 +664,7 @@ class Vegetation:
                          riparian=None if near_water is None else near_water[jj, ii])
         if code is not None:
             group = _leaf_groups(group, code, tlat)
+        group = self._nz(group, tlat, tlon, lcls, _hash01(gx, gy, 41), _hash01(gx, gy, 42))
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
@@ -860,11 +908,28 @@ class Vegetation:
         GI, GJ, lon, lat, cls = GI[forest], GJ[forest], lon[forest], lat[forest], cls[forest]
         size = 1.2 + 1.8 * _hash01(GI, GJ, 24)
         n = len(lon)
+        group = regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25))
+        u_nz = _hash01(GI, GJ, 41)
         return Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
-                     np.full(n, KIND_BUSH, np.uint8),
-                     regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25)),
+                     np.full(n, KIND_BUSH, np.uint8), nz_groups(group, lat, lon, cls, u_nz, u_nz),
                      _hash01(GI, GJ, 26).astype(np.float32), (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
                      (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32))
+
+    def _nz(self, group, lat, lon, lcls, u, town_u):
+        """nz_groups, with its palms on high ground (NZ_PALM_MAX_M, from the DEM) made dark evergreens. A DEM that
+        cannot answer: the cell is not kept (as _slope)."""
+        out = nz_groups(group, lat, lon, lcls, u, town_u)
+        palm = np.flatnonzero(out == G_NZ_PALM)
+        if len(palm) and self.dem is not None:
+            try:
+                z = np.asarray(self.dem.sample(np.asarray(lat)[palm], np.asarray(lon)[palm], ROCK_SLOPE_ZOOM),
+                               np.float64)
+            except Exception as e:          # (offline, no tile)
+                log.debug("vegetation: no height for palms: %s", e)
+                self._tl.dem_failed = True
+                return out
+            out[palm[z > NZ_PALM_MAX_M]] = G_NZ_EVERGREEN
+        return out
 
     def _slope(self, px, py):
         """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side
@@ -967,10 +1032,13 @@ class Vegetation:
         sel = rock | bush
         n = int(sel.sum())
         size = 0.4 + 1.6 * dnp.sq(_hash01(GI[sel], GJ[sel], 14))
+        group = regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
+                         _hash01(GI[sel], GJ[sel], 18)) if n else None
+        if n:
+            u_nz = _hash01(GI[sel], GJ[sel], 41)
+            group = nz_groups(group, lat[sel], lon[sel], cls[sel], u_nz, u_nz)
         return Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
-                     np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8),
-                     regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
-                              _hash01(GI[sel], GJ[sel], 18)),
+                     np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8), group,
                      _hash01(GI[sel], GJ[sel], 15).astype(np.float32),
                      (_hash01(GI[sel], GJ[sel], 16) * 360.0).astype(np.float32),
                      (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
@@ -1733,6 +1801,8 @@ def farm_foliage(feats, chm, blocked, bounds=None):
         lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
     group = np.full(len(lon), G_SHRUB, np.uint8)
     group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
+    u_nz = (np.asarray(u, np.float64) * 7919.0) % 1.0
+    group = nz_groups(group, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u_nz, u_nz)
     return Items(lon, lat, height, (0.4 * height).astype(np.float32),
                  np.full(len(lon), KIND_BUSH, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
 

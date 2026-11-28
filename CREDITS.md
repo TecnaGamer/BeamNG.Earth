@@ -152,6 +152,8 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 | USGS 3DEP lidar point clouds | U.S. Geological Survey | building heights/roofs and canopy in the US | public domain | "USGS 3DEP" | planned |
 | LiDAR HD | IGN France | buildings, canopy heights | Etalab Open Licence 2.0 | "IGN - LiDAR HD" | planned |
 | Mapillary street-level imagery | Mapillary (Meta) | tuning the city generator against real photos | CC BY-SA 4.0, free API token | "Street-level imagery: Mapillary" | planned (reference) |
+| LINZ aerial imagery (`s3://nz-imagery`, read once while developing; not downloaded by the game) | Toitū Te Whenua Land Information New Zealand | New Zealand's roof colour proportions (`NZ_ROOF_PAINTS`): 5,359 roofs in nine towns; only the proportions and median colours are in the code | CC BY 4.0 | "LINZ aerial imagery (CC BY 4.0)" | in use (2026-11-27) |
+| Mapillary street-level imagery (viewed once while developing; no photos kept or distributed) | Mapillary (Meta) | New Zealand's wall colour and material proportions (`NZ_WALL_PAINTS`, `NZ_HOUSE_WALLS`, `NZ_HOUSE_BRICK`): noted by eye for 260 houses in nine towns' suburbs (colours from the 220 not brick) | photos CC BY-SA 4.0; viewing through the API for this use confirmed by Mapillary support (2026-11) | "Building colour proportions derived from street-level imagery on Mapillary (https://www.mapillary.com)" | in use (2026-11-28) |
 
 ## Software and libraries
 

@@ -155,7 +155,7 @@ GROUND_RGB = {
     "bngEarthGroundMud": (96, 88, 72), "bngEarthGroundCobble": (116, 110, 102), "bngEarthGroundLawn": (88, 112, 62),
     "bngEarthGroundGolfRough": (86, 108, 58), "bngEarthGroundGolfFairway": (96, 128, 66),
     "bngEarthGroundGolfGreen": (100, 136, 70), "bngEarthGroundGolfBunker": (214, 200, 160),
-    "beamngEarthDirt": (126, 118, 102),
+    "bngEarthGroundBush": (62, 70, 42), "beamngEarthDirt": (126, 118, 102),
 }
 DIRT_BY_CLIMATE = {"A": (86, 104, 62), "B": (170, 148, 112), "C": (100, 108, 72), "D": (98, 104, 74), "E": (220, 224, 228)}
 GROUND_SHADE = 0.6          # the slope shading's strength (1: plain Lambert)

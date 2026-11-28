@@ -43,11 +43,16 @@ function M.enginePatch(on)
 end
 
 local HIROCHI, WCUSA = '/levels/hirochi_raceway/', '/levels/west_coast_usa/'
+local JRI = '/levels/jungle_rock_island/'
 M.SOURCES = {
   hirochi = { materials = HIROCHI .. 'art/shapes/groundcover/main.materials.json',
               items = HIROCHI .. 'main/MissionGroup/vegetation/terrain_grass/items.level.json' },
   wcusa = { materials = WCUSA .. 'art/groundcover/main.materials.json',
             items = WCUSA .. 'main/MissionGroup/vegetation/items.level.json' },
+  hirochi_floor = { materials = HIROCHI .. 'art/shapes/groundcover/main.materials.json',
+            items = HIROCHI .. 'main/MissionGroup/vegetation/terrain_forest_floor/items.level.json' },
+  jri = { materials = JRI .. 'art/shapes/groundcover/main.materials.json',
+            items = JRI .. 'main/MissionGroup/Level_objects/vegetation/items.level.json' },
 }
 -- stock GroundCover (source, src name) -> our layer, element share; `name` (default src) names our
 -- object, for a stock definition used on two layers; `fields` override stock fields. The shares keep
@@ -70,6 +75,12 @@ M.DEFS = {
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_forest', layer = 'bngEarthGroundForest', share = 0.08 },
   { source = 'wcusa', src = 'grass_dry_1', name = 'grass_dry_1_dry', layer = 'bngEarthGroundDryGrass', share = 0.2 },
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_dry', layer = 'bngEarthGroundDryGrass', share = 0.06 },
+  -- New Zealand's bush floor (server/surface.py BUSH): thick undergrowth and no grass under the trees: Jungle Rock
+  -- Island's undergrowth, shrubs and frond plants, Hirochi's ferns; ~63k elements (twice that cost frames)
+  { source = 'jri', src = 'forest_plants', layer = 'bngEarthGroundBush', share = 0.04 },
+  { source = 'jri', src = 'Forest_bushes', layer = 'bngEarthGroundBush', share = 0.06 },
+  { source = 'jri', src = 'Forest_bushes2', layer = 'bngEarthGroundBush', share = 0.12 },
+  { source = 'hirochi_floor', src = 'fern1', layer = 'bngEarthGroundBush', share = 0.08 },
 }
 M.PREFIX = 'bngEarthGC_'
 -- set on every object after the stock fields (see the header)
@@ -91,7 +102,7 @@ M.RADIUS_FIELDS = { radius = true, dissolveRadius = true }
 local created = {}        -- object names we made
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
 local defsCache = {}      -- source -> stock definitions by name (read once per level)
-local loadedMaterials = {} -- source -> true
+local loadedMaterials = {} -- materials file -> true
 local lastError = nil
 
 local SKIP = { name = true, class = true, persistentId = true, __parent = true, position = true, Types = true,
@@ -167,9 +178,10 @@ function M.ensure()
     local defs = defsCache
     for _, d in ipairs(M.DEFS) do
       if not defs[d.source] then
-        if not loadedMaterials[d.source] then
-          loadJsonMaterialsFile(M.SOURCES[d.source].materials)
-          loadedMaterials[d.source] = true
+        local file = M.SOURCES[d.source].materials       -- (two sources may share a materials file)
+        if not loadedMaterials[file] then
+          loadJsonMaterialsFile(file)
+          loadedMaterials[file] = true
         end
         local e
         defs[d.source], e = readDefs(d.source)

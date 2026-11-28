@@ -66,7 +66,12 @@ MANSARD_INSET_M = 1.2           # how far the lower slope comes in, at most
 GAMBREL_PITCHES = (55.0, 25.0)  # a barn's: the same, on two sides only
 GAMBREL_BREAK = 0.55            # the slope breaks this far out from the ridge (of the half width)
 HALF_HIP = 0.35                 # the share of a half-hipped roof's height the small hips at its ends take
-EAVE_M = 0.35               # m a pitched roof overhangs its walls
+EAVE_M = 0.35               # m a pitched roof overhangs its walls (a region's houses may overhang more: Style.eaves)
+SOFFIT_MAT = "bne_bld_fac_white"    # the underside of a wide eave (Spec.eave), painted white
+SOFFIT_UV = ((0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999))    # (a plain corner of its sheet)
+SOFFIT_DOWN_M = 0.02        # m the soffit lies under the roof's own face
+EAVE_MITRE = 2.5            # an eave's outer corner reaches this many widths from the wall's corner at most
+EAVE_ROOFS = ("gabled", "hipped", "half-hipped", "pyramidal", "skillion")   # the roofs wide eaves are drawn on
 CORNICE_OUT_M = 0.28        # a flat roof's cornice: how far it stands out, its depth below and above the eave
 CORNICE_DOWN_M = 0.45
 CORNICE_UP_M = 0.2
@@ -94,6 +99,10 @@ ROOF_SLATE = "bne_bld_roof_slate"
 # tinted orange. Its repeat is ROOF_TILES_UV_M (about four tiles across), not the other roofs' ROOF_UV_M
 ROOF_TILES = "bne_bld_roof_tiles"
 ROOF_TILES_UV_M = 1.2
+# painted corrugated steel (New Zealand's roofs): the stock corrugated wall sheet, its ribs running up the slope (the
+# roofs' v), matte: the zinc cladding of ROOF_METAL has a metallic map, and a pale roof mirrors the sun
+ROOF_CORRUGATED = "bne_bld_roof_corrugated"
+ROOF_CORRUGATED_UV_M = 0.9      # m per repeat of its texture (about four ribs: a 0.2 m pitch)
 # an office tower's street floor: a lobby of glass doors (the stock corporate facade sheet,
 # assets/materials/trim/metal/m_facade_corporate: its lower half, the asset survey 2026-11-10), not a shopfront
 LOBBY = "bne_bld_lobby"
@@ -110,7 +119,7 @@ CINDER = "bne_bld_cinder"
 # scales these materials' vertices
 OWN_UV_M = {ROOF_TILES: (ROOF_TILES_UV_M, ROOF_UV_M), ROOF_SLATE_ROUND: (1.2, ROOF_UV_M),
             ROOF_SLATE_DARK: (1.6, ROOF_UV_M), ROOF_WOOD: (0.9, ROOF_UV_M), STONE_RUBBLE: (2.4, SIDING_UV_M),
-            CINDER: (2.8, SIDING_UV_M)}
+            CINDER: (2.8, SIDING_UV_M), ROOF_CORRUGATED: (ROOF_CORRUGATED_UV_M, ROOF_UV_M)}
 LOBBY_BAND = (0.004, 0.496, 6.8)      # its rows (v, Collada: the sheet's lower half) and m per repeat (three bays)
 LOBBY_NOT = {"retail", "supermarket", "kiosk", "restaurant", "commercial"}
 ROOF_SHINGLE = "bne_bld_roof_shingle"
@@ -143,7 +152,7 @@ MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, 
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
              LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES, LOBBY, ROOF_SLATE_ROUND,
                                                                   ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER,
-                                                                  SKY_WALL_DAY)
+                                                                  SKY_WALL_DAY, ROOF_CORRUGATED)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -170,6 +179,8 @@ ROOF_TINTS = {               # per roof material: the colours a building's roof 
     ROOF_SHINGLE: ((0.75, 0.72, 0.70), (0.55, 0.50, 0.48), (0.70, 0.56, 0.48), (0.62, 0.66, 0.72),
                    (0.95, 0.52, 0.36), (0.78, 0.40, 0.30), (0.42, 0.43, 0.46), (0.36, 0.42, 0.52)),
     ROOF_METAL: ((0.85, 0.86, 0.88), (0.55, 0.57, 0.60), (0.45, 0.58, 0.48), (0.62, 0.30, 0.26), (0.40, 0.42, 0.48)),
+    ROOF_CORRUGATED: ((0.80, 0.82, 0.84), (0.52, 0.54, 0.57), (0.42, 0.55, 0.45), (0.62, 0.28, 0.24),
+                      (0.36, 0.38, 0.44)),
     # the texture is terracotta already: as it is, weathered paler / darker, a redder brown
     ROOF_TILES: ((1.0, 1.0, 1.0), (1.0, 0.95, 0.9), (0.86, 0.84, 0.82), (0.92, 0.82, 0.76), (0.75, 0.72, 0.70)),
     ROOF_SLATE_ROUND: ((1.0, 1.0, 1.0), (0.80, 0.80, 0.82), (0.62, 0.62, 0.64)),           # blue-grey, grey, dark
@@ -363,7 +374,7 @@ ROOF_TEX_MEAN = {"bne_bld_roof_flat": (0.432, 0.431, 0.430), "bne_bld_roof_slate
                  "bne_bld_roof_shingle": (0.585, 0.577, 0.571), "bne_bld_roof_metal": (0.64, 0.64, 0.64),
                  "bne_bld_panel": (0.815, 0.815, 0.815), "bne_bld_roof_tiles": (0.625, 0.465, 0.361),
                  "bne_bld_roof_slate_round": (0.473, 0.484, 0.522), "bne_bld_roof_slate_dark": (0.157, 0.155, 0.136),
-                 "bne_bld_roof_wood": (0.897, 0.889, 0.886)}
+                 "bne_bld_roof_wood": (0.897, 0.889, 0.886), "bne_bld_roof_corrugated": (0.841, 0.841, 0.841)}
 # a flat roof brighter in the photo than the asphalt roof's texture can show (a white membrane: 0.9 in the photo, the
 # asphalt texture's 0.43 at most) takes the precast concrete's plain light texture instead
 ROOF_BRIGHT_MAT = "bne_bld_panel"
@@ -850,7 +861,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "eave")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -868,15 +879,24 @@ class Style:
     walls; wood: siding walls are stained wood (WOOD_TINTS, barns too); barn_red: the share of barns painted barn red
     (the US's and Scandinavia's; elsewhere their siding colours: a Lauterbrunnen garage row came out a 150 m red
     wall, 2026-10-15); attached: low attached buildings (terraces, old town
-    blocks) with a pitched roof (the US: flat; Amsterdam's canal houses, Europe's old towns: gables).
+    blocks) with a pitched roof (the US: flat; Amsterdam's canal houses, Europe's old towns: gables); one_storey:
+    the share of homes (plan's `home`) drawn single storey (None: no home rules, the generic storey guesses);
+    core: with one_storey, the tile coverage above which a tile is a town centre, where only mapped houses are homes;
+    wall_paints: [(weight, (r, g, b))] the plain walls' tints (None: wall_tints); roof_paints: [(weight, roof
+    material, (r, g, b))] the tints of unmapped pitched roofs (None: roofs); eaves: (share of pitched-roof houses
+    with wide eaves, least width m, most width m) (None: every roof EAVE_M); house_brick: the share of detached houses
+    in brick (None: 0.35 of brick).
     Coarse boxes by region until a facade-material map; the US ones keep their earlier behaviour."""
 
     def __init__(self, name, brick, walls, porch, flat, hipped, roofs, pitch=None, paint=0.3, wall_tints=None,
-                 wood=False, attached=0.0, barn_red=0.0, stone=0.0):
+                 wood=False, attached=0.0, barn_red=0.0, stone=0.0, one_storey=None, core=1.0, wall_paints=None,
+                 roof_paints=None, eaves=None, house_brick=None):
         self.name, self.brick, self.walls, self.porch, self.flat = name, brick, walls, porch, flat
         self.barn_red, self.stone = barn_red, stone
         self.hipped, self.roofs, self.pitch, self.paint, self.wall_tints = hipped, roofs, pitch, paint, wall_tints
         self.wood, self.attached = wood, attached
+        self.one_storey, self.core, self.wall_paints, self.roof_paints = one_storey, core, wall_paints, roof_paints
+        self.eaves, self.house_brick = eaves, house_brick
 
 
 _US_ROOFS = ((ROOF_SLATE, (0, 1, 2, 3)), (ROOF_SHINGLE, (0, 1, 2, 3)))
@@ -885,6 +905,74 @@ _FISH = (ROOF_SLATE_ROUND, (0, 1, 2))
 _COURSES = (ROOF_SLATE_DARK, (0, 1, 2))
 _SHAKES = (ROOF_WOOD, (0, 1, 2, 3))
 _DARK = (ROOF_SLATE, (7, 8, 9))
+# New Zealand (2026-11-27: the generic guesses drew two storeys where there is one, in colours not its own). Its homes
+# are mostly one storey: the 2023 Census has 57.1 % of dwellings as separate houses of one storey and 20.4 % of two or
+# more (74 % of separate houses single), and LINZ's 1 m lidar of Wellington puts 75 % of its house-sized buildings under
+# 4 m to the eaves. The generic guess drew 20-31 % of them single (five areas).
+NZ_ONE_STOREY = 0.75
+NZ_CORE_COVERAGE = 0.45     # (Wellington's suburbs cover 0.25-0.40 of a tile, its centre 0.4-0.7)
+HOME_CLASSES = {"", "residential", "house", "detached", "semidetached_house", "bungalow"}
+HOME_MAX_M2 = 400.0         # an unclassed footprint up to this may be a home (a house with its garage joined on)
+# most of its houses with pitched roofs have eaves of about 0.75-1 m
+NZ_EAVES = (0.9, 0.75, 1.0)     # Style.eaves
+# roofs, as measured (2026-11-27): 5,359 roofs' colours in nine towns (Wellington, Auckland, Hamilton, Tauranga,
+# Napier, Palmerston North, Nelson, Christchurch, Invercargill) from LINZ's aerial photos (CC BY 4.0): white 21.3 %,
+# grey 28.7 %, charcoal 35.1 %, blue 5.2 %, terracotta and brown 5.7 %, red 3.2 %, green 0.8 %. The steel's tints are
+# 0.95 of the photos' median colours (a darker and a lighter half for the commonest): 0.8 of the photo's colour over the
+# corrugated texture's mean (drawn at the photo's own colour, roofs read pale in the game). (weight, material, tint)
+NZ_ROOF_PAINTS = (
+    (0.176, ROOF_CORRUGATED, (0.32, 0.35, 0.35)), (0.175, ROOF_CORRUGATED, (0.43, 0.45, 0.45)),     # charcoal
+    (0.144, ROOF_CORRUGATED, (0.49, 0.52, 0.52)), (0.143, ROOF_CORRUGATED, (0.61, 0.63, 0.62)),     # grey
+    (0.213, ROOF_CORRUGATED, (0.76, 0.79, 0.78)),                                                    # white
+    (0.026, ROOF_CORRUGATED, (0.32, 0.42, 0.47)), (0.026, ROOF_CORRUGATED, (0.47, 0.57, 0.62)),     # blue
+    (0.027, ROOF_CORRUGATED, (0.68, 0.52, 0.46)), (0.030, ROOF_TILES, (0.80, 0.77, 0.74)),          # terracotta, brown
+    (0.032, ROOF_CORRUGATED, (0.65, 0.44, 0.43)),                                                    # red
+    (0.008, ROOF_CORRUGATED, (0.44, 0.59, 0.50)),                                                    # green
+)
+# walls, as seen (2026-11-28): the colour noted by eye for 220 houses' walls other than brick, in Mapillary street
+# photos (https://www.mapillary.com) of suburbs in the same nine towns, each town weighted roughly by its population.
+# Only these proportions are kept; the tints are this generator's own for each named colour. (weight, tint)
+NZ_WALL_PAINTS = (
+    (0.250, (0.93, 0.89, 0.79)),    # cream
+    (0.199, (0.96, 0.95, 0.92)),    # white
+    (0.127, (0.80, 0.75, 0.66)),    # beige, tan
+    (0.096, (0.52, 0.60, 0.50)),    # green
+    (0.072, (0.52, 0.60, 0.68)),    # blue
+    (0.068, (0.82, 0.82, 0.80)),    # light grey
+    (0.059, (0.66, 0.68, 0.70)),    # mid grey
+    (0.057, (0.55, 0.43, 0.34)),    # brown
+    (0.041, (0.90, 0.79, 0.50)),    # yellow
+    (0.020, (0.42, 0.44, 0.46)),    # charcoal
+    (0.011, (0.62, 0.34, 0.29)),    # red
+)
+
+
+# materials, as seen in the same photos (260 houses, towns weighted as above): weatherboard 66 %, plaster 18 %,
+# brick 16 %
+NZ_HOUSE_BRICK = 0.16                                   # Style.house_brick
+NZ_HOUSE_WALLS = ((SIDING, 0.78), (STUCCO, 0.22))       # Style.walls: of the houses not brick
+
+# the other buildings outside town centres, mapped as none of these or one of NZ_LOW_CLASSES: Wellington's lidar puts
+# the walls of 67 % of its suburbs' 400-900 m2 ones under 5.5 m (57 % of 900-2500 m2, 48 % larger, 85 % of schools'),
+# where the generic guess drew 77-88 % of those over 400 m2 with two storeys or more
+NZ_LOW_CLASSES = {"", "commercial", "retail", "supermarket", "kiosk", "restaurant", "civic", "service", "school",
+                  "kindergarten", "industrial", "warehouse", "manufacture", "factory"}
+NZ_SCHOOL_CLASSES = {"school", "kindergarten"}
+NZ_LOW_ONE_STOREY, NZ_SCHOOL_ONE_STOREY = 0.75, 0.9     # (a tall single storey reads as two in the lidar)
+NZ_LOW_FLOOR_M = ((900.0, 3.6), (2500.0, 4.5), (math.inf, 5.5))     # (up to this area m2, a single storey's height m)
+NZ_LOW_UPPER_FLOOR_M = 3.5      # each storey of a two-storey one
+
+
+def weighted(entries, u):
+    """The entry of [(weight, ...)] that u (0..1) falls in."""
+    x = u * sum(e[0] for e in entries)
+    for e in entries:
+        x -= e[0]
+        if x < 0.0:
+            return e
+    return entries[-1]
+
+
 STYLES = {
     "us_east": Style("us_east", 0.75, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
     "us_south": Style("us_south", 0.35, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
@@ -910,6 +998,11 @@ STYLES = {
                        wall_tints=(0, 1, 6, 5), attached=0.3),
     "oceania": Style("oceania", 0.55, ((STUCCO, 0.5), (SIDING, 0.3)), 0.25, 0.05, 0.7, (_CLAY, (ROOF_METAL, (0, 1, 4))),
                      pitch=24.0, paint=0.1),
+    # New Zealand: single-storey weatherboard and plaster houses, some brick, painted steel roofs (NZ_* above)
+    "new_zealand": Style("new_zealand", 0.2, NZ_HOUSE_WALLS, 0.25, 0.05, 0.7,
+                         ((ROOF_CORRUGATED, (0, 1, 4)),), pitch=24.0, paint=0.0, one_storey=NZ_ONE_STOREY,
+                         core=NZ_CORE_COVERAGE, wall_paints=NZ_WALL_PAINTS, roof_paints=NZ_ROOF_PAINTS,
+                         eaves=NZ_EAVES, house_brick=NZ_HOUSE_BRICK),
     # South Asia (India, Pakistan, Bangladesh, Sri Lanka, Nepal): a concrete frame and brick under plaster, flat terrace
     # roofs, pastel and whitewashed walls, metal roofs on sheds (OmdevShastri, PR #146)
     "south_asia": Style("south_asia", 0.08, ((STUCCO, 0.92),), 0.0, 0.94, 0.2, (_CLAY, (ROOF_METAL, (0, 1, 3))),
@@ -944,7 +1037,9 @@ def region_style(lat, lon):
         return STYLES["mediterranean"]
     if 20.0 <= lat <= 46.0 and 100.0 <= lon <= 146.0:           # China, Korea, Japan, Taiwan
         return STYLES["east_asia"]
-    if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # Australia, New Zealand
+    if -47.6 <= lat <= -34.0 and 166.0 <= lon <= 179.0:         # New Zealand (both main islands and Stewart Island)
+        return STYLES["new_zealand"]
+    if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # Australia (and the Pacific islands in the box)
         return STYLES["oceania"]
     if 6.0 <= lat <= 37.5 and 68.0 <= lon <= 92.5:              # South Asia (not Myanmar, east of 92.5)
         return STYLES["south_asia"]
@@ -1028,12 +1123,13 @@ def _landmark_token(spec):
 
 @profile_step('Building plan')
 def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, dense=False, west_town=False,
-         alpine=False):
+         alpine=False, cover=None):
     """The Spec of a footprint (local ring (n, 2) in metres, counter-clockwise) from its Overture attributes
     (dict: class, height, num_floors, min_height, roof_shape, roof_height; garage: a mapped multi-storey car park
     covers it, garage_rings) and the number of buildings
     sharing a wall with it. Height and roof are predicted when not given. west_town: a small town of the
-    arid West (district_town): single-storey main streets and ranch houses."""
+    arid West (district_town): single-storey main streets and ranch houses. cover: the share of the tile its
+    footprints cover (None: dense says whether it is a town centre, for a region's home rules: Style.core)."""
     if attrs.get("landmark"):           # (landmarks.py: its own model, no prediction)
         return landmark_spec(ring, attrs["landmark"])
     area = _area2(ring) / 2
@@ -1066,9 +1162,19 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     garage = (cls in ("parking", "parking_garage") and area >= GARAGE_MIN_M2) or "parking garage" in name or (
         "garage" in name and area > 800) or (bool(attrs.get("garage")) and cls in GARAGE_TAG_CLASSES)
     narrow = hw < 4.2 and hl > 2.2 * hw                 # a row house: ~4-8 m wide, deep
+    # a home where the region has rules for them (Style.one_storey: New Zealand): a mapped house, or outside town
+    # centres a plain footprint of a house's size, joined to a neighbour (its garage, the house next door) or not
+    centre = cover > style.core if cover is not None else dense
+    home = style.one_storey is not None and not (part or garage or church or terminal) and cls in HOME_CLASSES \
+        and str(attrs.get("subtype") or "") in ("", "residential") \
+        and 40 <= area <= HOME_MAX_M2 and (cls in HOUSE_CLASSES or not centre) \
+        and not (attrs.get("_land") == "industrial" and cls in INDUSTRIAL_LAND_CLASSES)
+    # the same region's other low buildings (shops, schools, sheds of industry): outside town centres, one or two storeys
+    low = style.one_storey is not None and not (home or part or garage or church or terminal or centre) \
+        and cls in NZ_LOW_CLASSES and str(attrs.get("subtype") or "") != "residential" and area >= 40
     # in a dense core small buildings are row houses even where the footprints leave gaps (Fells Point)
-    row = cls in ROW_CLASSES or (not west_town and not part and ((narrow and (neighbours >= 1 or dense)) or (
-        dense and area < 260 and cls not in SHOP_CLASSES)))
+    row = cls in ROW_CLASSES or (not west_town and not part and not home and (
+        (narrow and (neighbours >= 1 or dense)) or (dense and area < 260 and cls not in SHOP_CLASSES)))
     shed = (cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)
     shop = cls in SHOP_CLASSES
     industrial = cls in INDUSTRIAL_CLASSES or (area > 2500 and cls in ("", "commercial"))
@@ -1199,6 +1305,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if h is None and nf is None:
         if shed:
             nf = 1
+        elif home:                  # (its own hash: the seed below also picks the roof's shape and the walls)
+            nf = 1 if _hash01(seed, "storeys") < style.one_storey else 2
+        elif low:
+            share = NZ_SCHOOL_ONE_STOREY if cls in NZ_SCHOOL_CLASSES else NZ_LOW_ONE_STOREY
+            nf = 1 if cls in INDUSTRIAL_CLASSES or _hash01(seed, "storeys") < share else 2
+            floor_h = next(m for a_, m in NZ_LOW_FLOOR_M if area <= a_) if nf == 1 else NZ_LOW_UPPER_FLOOR_M
         elif row:
             nf = 2 if seed < 0.25 else (3 if seed < 0.85 else 4)
         elif west_town and not industrial and cls != "apartments":
@@ -1241,6 +1353,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 ("gabled" if seed < 1.0 - style.hipped else "hipped")
         elif church and neighbours == 0:
             roof = "gabled"
+        elif home:                  # (pitched, joined to a neighbour too: a house with its garage)
+            roof = "flat" if _hash01(seed, "flat roof") < style.flat else \
+                ("gabled" if seed < 1.0 - style.hipped else "hipped")
         elif neighbours >= 1:
             # attached: flat in the US (a pitched roof would show its gable to the neighbour); old European towns
             # are gabled (the ridge on the long axis: a narrow deep house shows its gable to the street)
@@ -1367,8 +1482,11 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             band = (BAND_OFFICE if seed < 0.5 else BAND_OFFICE2) if tall else BAND_PANEL
         else:
             u_brick = _hash01(seed, "brick")
-            detached = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not row and neighbours == 0
-            brick = u_brick < brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0) * ERA_BRICK.get(ep, 1.0)
+            detached = home or ((cls in HOUSE_CLASSES or (area < 260 and not shop)) and not row and neighbours == 0)
+            share = brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0)
+            if detached and not row and style.house_brick is not None:
+                share = style.house_brick
+            brick = u_brick < share * ERA_BRICK.get(ep, 1.0)
             if brick:
                 band = BAND_BRICK
                 facade = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)]
@@ -1388,6 +1506,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     house = (cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)) and not row and not shed \
         and not part \
         and neighbours == 0 and area < 300         # a long "residential" block is not a house (Fells Point)
+    house = house or (home and not shed)
     if house and band is not BAND_BRICK and nf <= 3:
         # detached houses: siding in the East and South, stucco in the West; windows laid over the wall
         u = _hash01(seed, "wall")
@@ -1399,7 +1518,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 break
         if kind is not None:
             tints = style.wall_tints
-            if style.wood and kind == SIDING:   # chalets: stained wood
+            if style.wall_paints:
+                wall = custom_look(kind, weighted(style.wall_paints, _hash01(seed, "wc"))[1])
+            elif style.wood and kind == SIDING:   # chalets: stained wood
                 wall = f"{SIDING}|w{int(_hash01(seed, 'wc') * len(WOOD_TINTS))}"
             elif tints is not None:
                 tints = [t for t in tints if t < len(WALL_TINTS[kind]) - (BARN_REDS if kind == SIDING else 0)] or [0]
@@ -1491,7 +1612,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         facade, band, plain = FACADE_TINTS[3], BAND_PANEL, False
     windows = True
     if not (shed or barn or row or house or terminal or garage or church) and nf <= 2 and roof == "flat" \
-            and (area >= BIG_BOX_M2 or industrial) \
+            and (area >= BIG_BOX_M2 or industrial) and not (low and cls in NZ_SCHOOL_CLASSES) \
             and cls not in HOUSE_CLASSES and cls != "apartments":
         kind = METALWALL if industrial else PANEL
         wall = f"{kind}|{int(_hash01(seed, 'wc') * len(WALL_TINTS[kind]))}"
@@ -1508,7 +1629,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if dome_walls:
         roof_mat = dome_look(facade, band)
     elif rmat in ("metal", "tin", "steel", "zinc", "corrugated_iron", "sheet"):
-        roof_mat = f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_METAL]))}"
+        if style.roof_paints:           # (the region's painted steel)
+            steels = [e for e in style.roof_paints if e[1] != ROOF_TILES]
+            _w, mat, tint = weighted(steels, _hash01(seed, "roof"))
+            roof_mat = custom_look(mat, tint)
+        else:
+            roof_mat = f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_METAL]))}"
     elif rmat == "copper":
         roof_mat = custom_look(ROOF_METAL, COLOR_NAMES["copper"])
     elif rmat in ("tile", "tiles", "roof_tiles", "clay", "terracotta"):
@@ -1536,6 +1662,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         roof_mat = custom_look(ROOF_METAL, (0.10, 0.14, 0.28))
     elif roof == "flat" and not (barn or shed) and _gen_ground_on() and parse_color(attrs.get("roof_color")) is None:
         roof_mat = membrane_look(seed, style)       # (no photo to read the roof's colour from: genground)
+    elif style.roof_paints and roof != "flat" and not part:     # (the region's roof colours, sheds' too)
+        _w, mat, tint = weighted(style.roof_paints, _hash01(seed, "roof"))
+        roof_mat = custom_look(mat, tint)
     elif roof == "flat" or barn or shed:
         roof_mat = ROOF_FLAT if roof == "flat" else ROOF_METAL
         roof_mat = f"{roof_mat}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[roof_mat]))}"
@@ -1568,11 +1697,13 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             facade = f"{SIDING}|{len(tints) - 1 - int(_hash01(seed, 'red') * 2)}"
         elif style.wood:
             facade = f"{SIDING}|w{int(_hash01(seed, 'wc') * len(WOOD_TINTS))}"
+        elif style.wall_paints:         # (the region's paints on its garages and sheds too)
+            facade = custom_look(SIDING, weighted(style.wall_paints, _hash01(seed, "wc"))[1])
         else:
             facade = f"{SIDING}|{int(_hash01(seed, 'sc') * (len(tints) - 2))}"
     # a front porch (the photos of Lancaster, Ocean City, Frederick, Moab: most houses have one): pitched-roof
     # houses, a regional share; doors() puts it on the front door's wall
-    porch = (house and roof != "flat" and not barn and not shed and area < 300
+    porch = (house and neighbours == 0 and roof != "flat" and not barn and not shed and area < 300
              and _hash01(seed, "porch") < style.porch)
     if porch:   # pitched roofs draw the walls on the oriented box: an L-shaped house's door wall can be inside it
         _, _, hl, hw = oriented_box(ring)
@@ -1586,6 +1717,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             hm = float("nan")
         h = hm if math.isfinite(hm) and 2.0 <= hm <= 30.0 else CANOPY_H.get(cls, 3.0)
         nf, floor_h = 1, h
+    eave = None
+    if style.eaves and (home or cls in HOUSE_CLASSES) and roof in EAVE_ROOFS and not (shed or barn or part) \
+            and _hash01(seed, "eaves") < style.eaves[0]:
+        eave = style.eaves[1] + (style.eaves[2] - style.eaves[1]) * _hash01(seed, "eave width")
     spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=(church and area < 2500 and roof not in DOME_ROOFS and not part
@@ -1600,7 +1735,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 pitch=math.degrees(dmath.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
                 else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
                 across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")), hf=hf, skel=skel,
-                skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")))
+                skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")), eave=eave)
     if skel:
         spec.pitch = skel_pitch
     return francehouses.adapt(spec, attrs, lat, lon)
@@ -1952,6 +2087,9 @@ def _porch(m, spec, base, mat_idx):
     D = PORCH_DEPTH_M
     _box(m, c + out * (D / 2), d, w / 2, D / 2, base - 0.3, base + PORCH_DECK_M, white)              # deck
     top = base + PORCH_DECK_M + PORCH_H_M
+    if spec.eave:       # (its roof under the eave's edge, not through it)
+        edge_z = base + float(spec.height or 0.0) - spec.eave * dmath.tan(math.radians(roof_pitch(spec)))
+        top = min(top, edge_z - 0.25)
     for t in (-w / 2 + 0.15, 0.0, w / 2 - 0.15):                                                   # posts
         _box(m, c + d * t + out * (D - 0.15), d, 0.08, 0.08, base + PORCH_DECK_M, top, white)
     roof = mat_idx[spec.roof_mat] if spec.roof_mat else white
@@ -2396,21 +2534,74 @@ def eave_ring(ring, d):
     return out
 
 
-def _skel_roof(m, spec, ring, z_eave, rm, fac):
+def _soffit(m, inner, outer, mat):
+    """The underside of an overhang between two matching runs of 3D points, inner at the walls and outer at the roof's
+    edge, both counter-clockwise seen from above: a strip facing down, SOFFIT_DOWN_M under the roof's own face."""
+    n = len(inner)
+    low = lambda p: (p[0], p[1], p[2] - SOFFIT_DOWN_M)
+    for i in range(n):
+        j = (i + 1) % n
+        m.quad(low(inner[i]), low(inner[j]), low(outer[j]), low(outer[i]), *SOFFIT_UV, mat)
+
+
+def _outline_eaves(m, spec, pts, z_eave, k, rm, soffit):
+    """Wide eaves round a roof drawn on its own outline (a skeleton's or a heightfield's, which end at the walls): pts,
+    the walls' tops (x, y, z) in order, counter-clockwise from above. Each point is moved spec.eave out (a mitred
+    corner); one at the eave line drops with the roof's slope k, one above it (a gable's apex) stays level, so a
+    gable's edge becomes its overhanging verge."""
+    p = []
+    for q in pts:       # (the same corner twice: a segment's end and the next one's start)
+        if not p or math.hypot(q[0] - p[-1][0], q[1] - p[-1][1]) > 0.02:
+            p.append(q)
+    if len(p) > 1 and math.hypot(p[0][0] - p[-1][0], p[0][1] - p[-1][1]) <= 0.02:
+        p.pop()
+    n = len(p)
+    if n < 3:
+        return
+    xy = np.array([(q[0], q[1]) for q in p], np.float64)
+    d = np.roll(xy, -1, axis=0) - xy
+    d /= np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    out = np.column_stack([d[:, 1], -d[:, 0]])          # (each edge's outward normal)
+    e = float(spec.eave)
+    outer = []
+    for i in range(n):
+        a, b = out[i - 1], out[i]
+        v = (a + b) * e / max(1.0 + float(a[0] * b[0] + a[1] * b[1]), 0.05)
+        length = math.hypot(v[0], v[1])
+        if length > EAVE_MITRE * e:
+            v *= EAVE_MITRE * e / length
+        z = p[i][2]
+        outer.append((float(xy[i, 0] + v[0]), float(xy[i, 1] + v[1]), z - e * k if z - z_eave < 0.05 else z))
+    run = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        seg = math.hypot(*(xy[j] - xy[i]))
+        u0, u1, v1 = run / ROOF_UV_M, (run + seg) / ROOF_UV_M, e * math.sqrt(1.0 + k * k) / ROOF_UV_M
+        m.quad(p[i], outer[i], outer[j], p[j], (u0, v1), (u0, 0.0), (u1, 0.0), (u1, v1), rm)
+        run += seg
+    if soffit is not None:
+        _soffit(m, p, outer, soffit)
+
+
+def _skel_roof(m, spec, ring, z_eave, rm, fac, soffit=None):
     """A skeleton roof (Spec.skel) over ring and Spec.holes; False when the skeleton failed (the caller's other roof). A
     gabled one's hip ends are gables (the skeleton's gable: each end's top moved onto its wall, the wall in the
-    facade's plain colour, as a box house's gable). A hipped one overhangs its walls by EAVE_M as the box roofs do
-    (eave_ring: the slopes carried on down and out to an eave line EAVE_M outside the walls, the same top)."""
+    facade's plain colour, as a box house's gable). A hipped one overhangs its walls by EAVE_M, or a house's own wide
+    eaves (Spec.eave), as the box roofs do (eave_ring: the slopes carried on down and out to an eave line outside the
+    walls, the same top). Wide eaves a gabled one or one eave_ring cannot take gets from _outline_eaves; soffit, their
+    underside's material (None: not drawn, nor the eaves _outline_eaves adds)."""
     fast.require(180, "skeleton_roof")
     k = dmath.tan(math.radians(roof_pitch(spec)))
     holes = [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in spec.holes or ()]
-    eave = eave_ring(ring, EAVE_M) if spec.roof in SKEL_EAVE_FORMS else None
+    d = spec.eave or EAVE_M
+    eave = eave_ring(ring, d) if spec.roof in SKEL_EAVE_FORMS else None
     tri = grad = gab = ()
     if eave is not None:
-        drop = EAVE_M * k
+        drop = d * k
         tri, grad, gab = fast._ef.skeleton_roof(
             np.ascontiguousarray(eave), holes, float(k), float(z_eave - drop),
             float(spec.skel_cap + drop) if spec.skel_cap else 0.0, False)
+    overhung = bool(len(grad))
     if not len(grad):       # (no eaves, or the skeleton failed on the eave line: the roof on the walls, as before)
         tri, grad, gab = fast._ef.skeleton_roof(
             np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), holes, float(k), float(z_eave),
@@ -2426,6 +2617,28 @@ def _skel_roof(m, spec, ring, z_eave, rm, fac):
                                                                            np.float64), (ng, 1)), fac)
     tri = np.ascontiguousarray(np.asarray(tri, np.float64)[:3 * len(grad), :3])
     m.tris(tri, fast._ef.skeleton_roof_uv(tri, np.ascontiguousarray(grad, np.float64), float(ROOF_UV_M)), rm)
+    if spec.eave and soffit is not None:
+        r = np.asarray(ring, np.float64)[:, :2]
+        if len(r) > 3 and np.allclose(r[0], r[-1]):
+            r = r[:-1]
+        if _area2(r) < 0:
+            r = r[::-1]
+        if overhung:            # (the roof already reaches its eave line: the underside only)
+            _soffit(m, [(float(x), float(y), float(z_eave)) for x, y in r],
+                    [(float(x), float(y), float(z_eave - d * k)) for x, y in eave_ring(r, d)], soffit)
+            return True
+        gables = np.asarray(gab, np.float64)[:3 * ng, :3].reshape(ng, 3, 3) if ng else np.zeros((0, 3, 3))
+        pts = []
+        for i in range(len(r)):
+            a, b = r[i], r[(i + 1) % len(r)]
+            pts.append((float(a[0]), float(a[1]), float(z_eave)))
+            for t in gables:        # (a gable on this edge: its apex between the edge's ends)
+                on = [any(math.hypot(*(c[:2] - q)) < 0.05 for c in t) for q in (a, b)]
+                if all(on):
+                    top = t[int(np.argmax(t[:, 2]))]
+                    pts.append((float(top[0]), float(top[1]), float(top[2])))
+                    break
+        _outline_eaves(m, spec, pts, z_eave, k, rm, soffit)
     return True
 
 
@@ -2462,8 +2675,9 @@ def skillion_rise(spec, ring):
     return k * (t - t.min())
 
 
-def _hf_roof(m, spec, ring, z_eave, rm, fac):
-    """A heightfield roof (Spec.hf) over ring and the walls' tops up to it (fast.heightfield_roof): no overhang."""
+def _hf_roof(m, spec, ring, z_eave, rm, fac, soffit=None):
+    """A heightfield roof (Spec.hf) over ring and the walls' tops up to it (fast.heightfield_roof): no overhang but a
+    house's wide eaves (Spec.eave, soffit their underside's material; None: not drawn)."""
     fast.require(176, "heightfield_roof")
     r = np.asarray(ring, np.float64)[:, :2]
     if len(r) > 3 and np.allclose(r[0], r[-1]):
@@ -2507,6 +2721,9 @@ def _hf_roof(m, spec, ring, z_eave, rm, fac):
         if (za - z_eave > 0.02 or zb - z_eave > 0.02) and not (tall and max(za, zb) - z_eave >= SLOPE_WALL_RISE_M):
             m.quad((ax, ay, z_eave), (bx, by, z_eave), (bx, by, zb), (ax, ay, za),
                    (0, 0.995), (0.02, 0.995), (0.02, 0.999), (0, 0.999), fac)
+    if spec.eave and soffit is not None:
+        pts = [q for ax, ay, za, bx, by, zb in walls.tolist() for q in ((ax, ay, za), (bx, by, zb))]
+        _outline_eaves(m, spec, pts, z_eave, k, rm, soffit)
 
 
 # The walls above a tall building's sloped roof in floors of its window sheet (streets.gl study 2026-11-11, proposal 3:
@@ -2604,8 +2821,62 @@ CHIMNEY_OVER_M = 0.9                # m over the ridge
 CHIMNEY_MAX_M2 = 400.0              # footprints larger than this (blocks, halls): none
 
 
+def _box_eaves(m, spec, c, u, hl, hw, z_eave, e, fac, soffit):
+    """What a box roof's wide eaves (e m) need beside the roof earthfast.bld_roof drew on its oriented box (c, u, hl,
+    hw, as given to it): a gable's wall carried up to just under the ridge (the kernel's own top sinks with the eave's
+    width, e * 0.2, a slit under a wide one), and the soffit (its material; None: none, the far meshes)."""
+    if getattr(spec, "across", False):
+        u, hl, hw = np.array([-u[1], u[0]]), hw, hl
+    v = np.array([-u[1], u[0]])
+    hl2, hw2 = hl + e, hw + e
+    tan = dmath.tan(math.radians(roof_pitch(spec)))
+    ze = z_eave - e * tan
+    rise = hw2 * tan
+    zr = ze + rise
+
+    def at(s, t, z):
+        p = c + u * s + v * t
+        return (float(p[0]), float(p[1]), float(z))
+    if spec.roof == "skillion":
+        rh = getattr(spec, "roof_h", None)
+        k = rh / (2.0 * max(hw, 0.5)) if rh else dmath.tan(math.radians(SKILLION_PITCH))
+        hi = getattr(spec, "hi", None) or (1.0 if spec.seed < 0.5 else -1.0)
+
+        def z(t):
+            return z_eave + (hi * t + hw) * k
+        if soffit is not None:
+            corners = ((-1, -1), (1, -1), (1, 1), (-1, 1))
+            _soffit(m, [at(si * hl, ti * hw, z(ti * hw)) for si, ti in corners],
+                    [at(si * hl2, ti * hw2, z(ti * hw2)) for si, ti in corners], soffit)
+        return
+    end = []        # (where the roof's edge rises over the eave line at both ends: t, its height at the wall, the edge)
+    if spec.roof == "gabled":
+        old, new = zr - e * 0.2, zr - EAVE_M * 0.2
+        for sgn in (-1, 1):
+            a, b = at(sgn * hl, -sgn * hw, z_eave), at(sgn * hl, sgn * hw, z_eave)
+            lo, top = at(sgn * hl, 0.0, old), at(sgn * hl, 0.0, new)
+            for tri in ((a, lo, top), (lo, b, top)):
+                m.tri(*tri, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
+        end = [(0.0, zr, zr)]
+    elif spec.roof == "half-hipped":
+        tw = hw2 * HALF_HIP
+        zc = zr - rise * HALF_HIP
+        top = zc + e * rise / hw2
+        end = [(-tw, top, zc), (tw, top, zc)]
+    if soffit is None:
+        return
+    sides = [[(at(si * hl, ti * hw, z_eave), at(si * hl2, ti * hw2, ze))] for si, ti in
+             ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    for sgn, i in ((1, 1), (-1, 3)):            # (the +s end after its corner (+,-), the -s end after (-,+))
+        sides[i] += [(at(sgn * hl, sgn * t, zi), at(sgn * hl2, sgn * t, zo)) for t, zi, zo in end]
+    run = [q for side in sides for q in side]
+    _soffit(m, [q[0] for q in run], [q[1] for q in run], soffit)
+
+
 def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     rm = mat_idx[spec.roof_mat]
+    soffit = mat_idx[SOFFIT_MAT] if spec.eave and not lite else None    # (wide eaves are seen from below)
+    e = spec.eave or EAVE_M
     if spec.roof in DOME_ROOFS:
         _c, _u, _hl, hw = oriented_box(ring)
         _dome(m, ring, z_eave, hw * dmath.tan(math.radians(roof_pitch(spec))), rm, spec.roof, lite)
@@ -2616,13 +2887,13 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
             return
         _bld.bld_lid(m, np.asarray(ring, np.float64), float(z_eave), float(ROOF_UV_M), False, rm)
         return
-    if getattr(spec, "skel", False) and _skel_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade]):
+    if getattr(spec, "skel", False) and _skel_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade], soffit):
         return
     if getattr(spec, "holes", None) and spec.roof != "flat":      # (the skeleton failed over a yard: a flat lid)
         _holed_lid(m, ring, spec.holes, z_eave, rm)
         return
     if getattr(spec, "hf", False) and spec.roof in HF_FORMS:
-        _hf_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade])
+        _hf_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade], soffit)
         return
     # the box-frame forms on the drawn ring's oriented box (the ridge along its long axis, or across it): skillion,
     # round (barrel), gambrel, mansard, pyramidal, half-hipped, gabled (its gable walls), anything else hipped; a
@@ -2636,9 +2907,11 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
                   bool(getattr(spec, "across", False)), float(z_eave), float(roof_pitch(spec)),
                   float(rh) if rh else None, float(hi), bool(lite), rm, mat_idx[spec.facade], repr(spec.seed),
                   spec.cls not in SHED_CLASSES and spec.cls not in BARN_CLASSES, float(spec.floors or 1),
-                  [float(v) for v in (EAVE_M, ROOF_UV_M, SKILLION_PITCH, ROUND_RISE, ROUND_SEGS, *GAMBREL_PITCHES,
+                  [float(v) for v in (e, ROOF_UV_M, SKILLION_PITCH, ROUND_RISE, ROUND_SEGS, *GAMBREL_PITCHES,
                                       GAMBREL_BREAK, *MANSARD_PITCHES, MANSARD_INSET_M, HALF_HIP, CHIMNEY_SHARE,
                                       *CHIMNEY_HALF_M, CHIMNEY_OVER_M, CHIMNEY_MAX_M2, 0.0)])
+    if spec.eave:
+        _box_eaves(m, spec, c, u, hl, hw, float(z_eave), e, mat_idx[spec.facade], soffit)
 
 
 # The engine draws a shape's mesh with 16-bit indices: past 65,535 vertices they wrap and triangles join far-apart
@@ -5389,7 +5662,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = dict(at, _fr_location=(hlat, hlon), _fr_altitude=float(np.nanmean(g_all[i0:i1])),
                       _fr_part=look is not None or mh > .5, _fr_neighbours=int(sh),
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
-        spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
+        spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine, cover)
         spec.min_h = mh
         # (a building drawn from its parts (the map's, New York's 3-D model's): its tank on its topmost part, the
         # building's storeys from its whole height; without, the setbacks took New York's tanks away)
@@ -7126,7 +7399,8 @@ MAT_MEAN = {"bne_bld_facade": (0.679, 0.676, 0.683), "bne_bld_shop": (0.669, 0.6
             "bne_bld_marble": (0.978, 0.978, 0.978), "bne_bld_brick": (0.717, 0.569, 0.513),
             "bne_bld_roof_tiles": (0.625, 0.465, 0.361), "bne_bld_roof_slate_round": (0.473, 0.484, 0.522),
             "bne_bld_roof_slate_dark": (0.157, 0.155, 0.136), "bne_bld_roof_wood": (0.897, 0.889, 0.886),
-            "bne_bld_stone_rubble": (0.649, 0.608, 0.541), "bne_bld_cinder": (0.63, 0.627, 0.621)}
+            "bne_bld_stone_rubble": (0.649, 0.608, 0.541), "bne_bld_cinder": (0.63, 0.627, 0.621),
+            "bne_bld_roof_corrugated": (0.841, 0.841, 0.841)}
 SKY_UV = (0.5, 0.5)
 # the skyline walls' windows (tools/build_sky_windows.py: SKY_WIN_BAYS x SKY_WIN_FLOORS of them in its map), lit at
 # night (nightlights.lua; the user, 2026-10-27: "extend the street and window lights as far as the buildings render")

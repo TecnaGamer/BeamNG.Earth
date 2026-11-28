@@ -36,12 +36,12 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- density settings (rescale: QUALITY_LEVELS' clump).
 M.CLUMP_M = 200
 M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = true, mediterranean_clump = true,
-  eucalyptus_clump = true }
+  eucalyptus_clump = true, nz_broadleaf_clump = true }
 -- small props only near the player (2026-10-14, Fells Point at street level: ~10 ms a frame for the Forest
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, slope_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, nz_shrub_north = 250, nz_shrub_south = 250, desert_shrub = 250, rock = 400, desert_rock = 400, slope_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -117,7 +117,7 @@ M.BEHIND_HYST_M = 30
 -- ahead) ride the next rebuild, as before: a deadline for each of them doubled a Steam Deck drive's rebuilds (52 against
 -- 23-27 in Fells Point at 45 mph).
 M.CLOSE_M = 120
-M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { tuft = true, fern = true, nz_shrub_north = true, nz_shrub_south = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -346,6 +346,43 @@ M.CATALOG = {
     { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
     { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/holm_oak', 12.9 },
     { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+  },
+  -- New Zealand's trees (server vegetation.nz_groups: mixed by latitude): heights from the shapes' bounds (their .dae
+  -- meshes, 2026-11-27). Tropical broadleaves (Jungle Rock Island's), dark evergreens (Italy's holm and cork oaks),
+  -- radiata pine (West Coast USA's), palms; the north's and the south's bushes (Hirochi's ferns in both)
+  nz_broadleaf = {
+    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tiny', 6.1 },
+    { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 18.5 },
+    { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall_02', 26.8 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall', 32.3 },
+  },
+  nz_evergreen = {
+    { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 }, { IT .. 'trees/trees_italy/holm_oak_bush_huge', 7.2 },
+    { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 }, { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 },
+    { IT .. 'trees/trees_italy/holm_oak', 12.9 }, { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+  },
+  nz_pine = {
+    { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 }, { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 },
+    { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 }, { WCA .. 'trees/trees_conifer/pine_radiata_weathered', 13.2 },
+  },
+  nz_palm = {
+    { JRI .. 'trees/trees_palm/palm_small', 8.9 }, { JRI .. 'trees/trees_palm/palm_short', 9.1 },
+    { JRI .. 'trees/trees_palm/palm_medium', 18.0 }, { JRI .. 'trees/trees_palm/palm_tall', 25.3 },
+  },
+  nz_shrub_north = {
+    { HIR .. 'groundcover/lush_ferns_02_a', 0.62 }, { HIR .. 'groundcover/lush_ferns_02_b', 0.75 },
+    { HIR .. 'groundcover/lush_ferns_01_a', 1.0 }, { HIR .. 'groundcover/lush_ferns_01_b', 1.49 },
+    { JRI .. 'trees/bush_tropical_1/tro_tree_1_bush_large', 3.3 }, { JRI .. 'trees/bush_tropical_1/tro_bush_small', 3.9 },
+  },
+  nz_shrub_south = {
+    { HIR .. 'groundcover/lush_ferns_02_a', 0.62 }, { HIR .. 'groundcover/lush_ferns_02_b', 0.75 },
+    { HIR .. 'groundcover/lush_ferns_01_a', 1.0 }, { HIR .. 'groundcover/lush_ferns_01_b', 1.49 },
+    { IT .. 'trees/trees_italy/fluffy_bush', 2.5 }, { IT .. 'trees/trees_italy/cork_oak_bush_medium', 3.0 },
+    { IT .. 'trees/trees_italy/holm_oak_bush', 5.9 },
+  },
+  nz_broadleaf_clump = {
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_04', 24.2 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_02', 29.9 },
   },
   -- Far clumps (server vegetation.CLUMP_OF, GitHub #1074): one item for a forest square's 4-8 trees, shown only
   -- beyond CLUMP_M (FAR_ONLY) where those trees are not (rows with a negative scale). The stock maps' own forest

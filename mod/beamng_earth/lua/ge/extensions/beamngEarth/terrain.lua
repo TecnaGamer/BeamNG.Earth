@@ -163,6 +163,8 @@ M.LOOKS = {
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 32),
   -- forest floor, dry grass, crop soil, beach sand (server/surface.py FOREST .. SAND)
   bngEarthGroundForest = look('forest/t_forest_ground_02/t_forest_ground_02', 2, 'forest/t_macro_forest/t_macro_forest', 16, 0.2, 0.08, 0.05),
+  -- (New Zealand's bush floor, server/surface.py BUSH: the forest floor's look)
+  bngEarthGroundBush = look('forest/t_forest_ground_02/t_forest_ground_02', 2, 'forest/t_macro_forest/t_macro_forest', 16, 0.2, 0.08, 0.05),
   bngEarthGroundDryGrass = look('grass/t_dirt_dry_grass/t_dirt_dry_grass', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16),
   bngEarthGroundCrop = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_holes/t_macro_holes', 16),
   bngEarthGroundSand = look('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 32),

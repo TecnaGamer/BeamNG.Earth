@@ -1052,6 +1052,87 @@
     "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
     "heightMacroTexSize": 32
   },
+  "bngEarthGroundBush": {
+    "name": "bngEarthGroundBush",
+    "internalName": "bngEarthGroundBush",
+    "class": "TerrainMaterial",
+    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c74",
+    "groundmodelName": "DIRT",
+    "detailDistances": [
+      0,
+      0,
+      50,
+      80
+    ],
+    "macroDistances": [
+      0,
+      0,
+      100,
+      200
+    ],
+    "macroDistAtten": [
+      0,
+      1
+    ],
+    "baseColorDetailStrength": [
+      0.2,
+      0.08
+    ],
+    "normalDetailStrength": [
+      1,
+      0.3
+    ],
+    "roughnessDetailStrength": [
+      1,
+      0.4
+    ],
+    "aoDetailStrength": [
+      0.8,
+      0.2
+    ],
+    "baseColorMacroStrength": [
+      0.08,
+      0.05
+    ],
+    "normalMacroStrength": [
+      0.5,
+      0.3
+    ],
+    "roughnessMacroStrength": [
+      0,
+      0.8
+    ],
+    "baseColorBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_b.png",
+    "baseColorBaseTexSize": 256,
+    "baseColorDetailTex": "/temp/beamngEarth/terraintex/bne_rc_forest__t_forest_ground_02__t_forest_ground_02_b.png",
+    "baseColorDetailTexSize": 2,
+    "baseColorMacroTex": "/temp/beamngEarth/terraintex/bne_rc_forest__t_macro_forest__t_macro_forest_b.png",
+    "baseColorMacroTexSize": 16,
+    "normalBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_nm.png",
+    "normalBaseTexSize": 256,
+    "normalDetailTex": "/assets/materials/terrain/forest/t_forest_ground_02/t_forest_ground_02_nm.png",
+    "normalDetailTexSize": 2,
+    "normalMacroTex": "/assets/materials/terrain/forest/t_macro_forest/t_macro_forest_nm.png",
+    "normalMacroTexSize": 16,
+    "roughnessBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_r.png",
+    "roughnessBaseTexSize": 256,
+    "roughnessDetailTex": "/assets/materials/terrain/forest/t_forest_ground_02/t_forest_ground_02_r.png",
+    "roughnessDetailTexSize": 2,
+    "roughnessMacroTex": "/assets/materials/terrain/forest/t_macro_forest/t_macro_forest_r.png",
+    "roughnessMacroTexSize": 16,
+    "aoBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png",
+    "aoBaseTexSize": 256,
+    "aoDetailTex": "/assets/materials/terrain/forest/t_forest_ground_02/t_forest_ground_02_ao.png",
+    "aoDetailTexSize": 2,
+    "aoMacroTex": "/assets/materials/terrain/forest/t_macro_forest/t_macro_forest_ao.png",
+    "aoMacroTexSize": 16,
+    "heightBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_h.png",
+    "heightBaseTexSize": 256,
+    "heightDetailTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightDetailTexSize": 2,
+    "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightMacroTexSize": 16
+  },
   "bngEarthGroundGolfRough": {
     "name": "bngEarthGroundGolfRough",
     "internalName": "bngEarthGroundGolfRough",
