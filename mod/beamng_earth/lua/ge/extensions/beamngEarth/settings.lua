@@ -953,6 +953,7 @@ end
 
 function M.uiSet(key, v) return M.set(key, v) end
 
+
 -- Kept apart from the settings exported by uiState and multiplayer. An empty profile token selects road rules.
 local mapillaryFile = '/settings/beamngearth-mapillary.json'
 function M.uiMapillaryStatus()
