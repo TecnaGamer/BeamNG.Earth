@@ -118,7 +118,9 @@ class _Cell:
                 "rail_bridges": [_line(100, 0, 200, 0)], "rail_bridge_ids": ["t1"], "rail_bridge_levels": [1.0]}
 
     def _cell_nodes(self, _k):
-        return {"t1": (frozenset({"n0", "n1", "n2"}), (("n0", 0.0, 0.0), ("n1", 100.0, 0.0), ("n2", 200.0, 0.0)))}
+        line = _line(0, 0, 200, 0)
+        return {"t1": (frozenset({"n0", "n1", "n2"}), (("n0", 0.0, 0.0), ("n1", 100.0, 0.0), ("n2", 200.0, 0.0)),
+                       (0.0, 100.0, 200.0), line, line[:, 0].copy())}
 
     def _shape_tunnels(self, _k):
         return []
@@ -127,7 +129,26 @@ class _Cell:
 def test_a_cells_tracks_carry_their_map_nodes():
     # (a track meets a road where the map joins them, as a road meets a road: without its nodes it was read as joined
     # wherever a point of each lay within 5 cm, Yokohama's rail deck to the street under it)
-    ms = grading._Planner._shape_members(_Cell(), "k")
-    assert sorted(m.kind for m in ms) == ["rail", "rail_deck"]
-    for m in ms:
-        assert m.nodes == frozenset({"n0", "n1", "n2"}) and len(m.node_xy) == 3
+    # (each piece the nodes on its own stretch: the ground 0..100 m, the deck 100..200 m, both the one they meet at)
+    ms = {m.kind: m for m in grading._Planner._shape_members(_Cell(), "k")}
+    assert sorted(ms) == ["rail", "rail_deck"]
+    assert ms["rail"].nodes == frozenset({"n0", "n1"}) and len(ms["rail"].node_xy) == 2
+    assert ms["rail_deck"].nodes == frozenset({"n1", "n2"}) and len(ms["rail_deck"].node_xy) == 2
+
+
+class _LinkCell(_Cell):
+    """A cell with a motorway and a motorway link on the ground (the link's ground part: ground_link)."""
+
+    def _cell_enu(self, _k):
+        return {"ground": [(_line(0, 0, 100, 0), 5.0, "motorway"), (_line(0, 10, 100, 10), 3.0, "motorway")],
+                "ground_ids": [("m", 0, 1.0, 1.0), ("l", 0, 1.0, 1.0)], "ground_link": [False, True], "bridges": []}
+
+    def _cell_nodes(self, _k):
+        return {}
+
+
+def test_a_links_ground_part_is_a_link():
+    # (Pregerson's HOV connector: its ground part read as a motorway, held to a motorway's 934 m curves and 6.5 %
+    # where its deck had a link's; its block had no answer)
+    ms = {str(m.key[0]): m for m in grading._Planner._shape_members(_LinkCell(), "k")}
+    assert ms["m"].cls == "motorway" and ms["l"].cls == "motorway_link"

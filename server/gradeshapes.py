@@ -596,7 +596,10 @@ def _end_meets(net, e, se, o, so, crossed):
     one = _road_of(me) == _road_of(mo)
     if _over(me, mo) is None:
         return one or _mapped_at(net, e, se, o)
-    mapped = one or _mapped_at(net, e, se, o)
+    # (at two levels, two parts of one road meet end to end, as two decks of it do, never one's end on the other's
+    # middle: Pregerson's HOV connector loops over its own start on its level-2 deck; its ground part's start, under
+    # the deck's middle, was joined to the deck there, the deck held at the ground 12.7 m under it)
+    mapped = (one and min(so, net.L[o] - so) <= JOIN_M) or _mapped_at(net, e, se, o)
     if mo.kind not in STRUCTURES or me.kind not in STRUCTURES or min(so, net.L[o] - so) <= JOIN_M:
         return mapped
     if me.kind == mo.kind == "deck" and not crossed and not one and mapped:

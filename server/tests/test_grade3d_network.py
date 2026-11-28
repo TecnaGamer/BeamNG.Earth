@@ -313,3 +313,20 @@ def test_a_bridge_starting_just_before_a_deck_it_crosses_is_the_one_over_it():
           _part("r", "deck", _line(-100, 0, 100, 0, 101), 1.0, [("r0", -100, 0), ("r1", 100, 0)])]
     net = network.build(ms)
     assert [sorted(float(net.members[k].level) for k in (i, j)) for i, _si, j, _sj, _q in net.crossings] == [[1.0, 2.0]]
+
+
+def test_a_road_looping_over_its_own_start_is_over_it_not_joined_to_it():
+    # (Pregerson's HOV connector: its ground part starts at (0, 0) and the same road's level-2 deck passes over that
+    # point. The ground part's start under the deck's middle was joined to the deck there: held at the ground's height
+    # and 6.35 m over it at once)
+    ms = [_part("h", "ground", _line(0, 0, 200, 0, 101), 0.0, [("h0", 0, 0), ("h1", 200, 0)]),
+          _part("h", "deck", np.array([[200.0, 0.0], [200.0, 100.0], [0.0, 100.0], [0.0, -100.0]]), 2.0,
+                [("h1", 200, 0), ("h2", 0, -100)])]
+    net = network.build(ms)
+    g, d = (next(k for k, m in enumerate(net.members) if m.kind == kind) for kind in ("ground", "deck"))
+    near_start = [(i, j) for i, si, j, sj in net.joins if {i, j} == {g, d}
+                  and min(si if i == g else sj, net.net.L[g] - (si if i == g else sj)) < 1.0
+                  and abs((sj if i == g else si) - 300.0) < 5.0]
+    assert near_start == []
+    assert any({i, j} == {g, d} and _gsh._over(net.members[i], net.members[j]) is not None
+               for i, _si, j, _sj, _q in net.crossings)

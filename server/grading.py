@@ -1272,6 +1272,25 @@ def _point_along(line, d):
     return np.array([float(line[-1][0]), float(line[-1][1])])
 
 
+def _piece_nodes(nodes, fid, piece):
+    """(map nodes, where each lies) of the piece of road feature fid along line piece (its deck, a ground part, a
+    tunnel), from _cell_nodes' nodes: the feature's nodes on the stretch the piece covers, (None, None) without them.
+    Each piece had all its feature's: Pregerson's HOV connector loops over its own start on its level-2 deck, and
+    the deck, holding the node its ground part starts at, was joined there to the ground 12.7 m under it."""
+    got = nodes.get(str(fid))
+    if got is None:
+        return None, None
+    _ids, at, s_at, line, s = got
+    piece = np.asarray(piece, np.float64)[:, :2]
+    if len(piece) < 2 or len(line) < 2:
+        return None, None
+    a, b = sorted(float(_gsh.proj(line, s, p)[0]) for p in (piece[0], piece[-1]))
+    keep = [n for n, sa in enumerate(s_at) if a - _gsh.NODE_EPS_M <= sa <= b + _gsh.NODE_EPS_M]
+    if not keep:
+        return None, None
+    return frozenset(at[n][0] for n in keep), tuple(at[n] for n in keep)
+
+
 def _signs_of(line, limits):
     """A ground road's height limit for the shapes (gradeshapes Member.limit): q -> the limit its signs hold at a
     crossing q (roads.road_sign_at, the dips' own reading: one rule for both), or None where no sign's range comes
@@ -3480,10 +3499,15 @@ class _Planner:
         out = []
         gk = c.get("ground_kmh") or [None] * len(c["ground"])
         lims = c.get("height_limits") or []
-        for (line, half, cls), gid, kmh in zip(c["ground"], c.get("ground_ids", []), gk):
+        # (a link's ground part a link, as its deck and tunnel are: held to its road's laws, Pregerson's HOV connector
+        # climbed onto its level-2 deck at a motorway's 934 m curves and 6.5 %, not a link's 278 m and 10 %, and its
+        # block had no answer)
+        gl = c.get("ground_link") or [False] * len(c["ground"])
+        for (line, half, cls), gid, kmh, lk in zip(c["ground"], c.get("ground_ids", []), gk, gl):
             line = np.asarray(line, np.float64)[:, :2]
-            ids, at = nodes.get(str(gid[0]), (None, None))
-            out.append(_gsh.Member((str(gid[0]), "ground", str(gid[1])), line, "ground", cls, kmh, 0.0, float(half),
+            ids, at = _piece_nodes(nodes, gid[0], line)
+            out.append(_gsh.Member((str(gid[0]), "ground", str(gid[1])), line, "ground",
+                                   cls + "_link" if lk and cls is not None else cls, kmh, 0.0, float(half),
                                    _signs_of(line, lims), ids, node_xy=at))
         nb = len(c["bridges"])
         for line, cls, fid, lv, h, kmh in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
@@ -3491,7 +3515,7 @@ class _Planner:
                                               c.get("bridge_half", [4.0] * nb), c.get("bridge_kmh") or [None] * nb):
             line = np.asarray(line, np.float64)[:, :2]
             mid = line[len(line) // 2]
-            ids, at = nodes.get(str(fid), (None, None))
+            ids, at = _piece_nodes(nodes, fid, line)
             # (held: the deck the underpasses never raise, the road under dug instead (_over_mapped_underpass); the
             # shapes raising it as an overpass over that road's ground as well cleared it twice, Popoli's 15 m)
             out.append(_gsh.Member((str(fid), "deck", int(round(mid[0])), int(round(mid[1]))), line, "deck",
@@ -3514,7 +3538,7 @@ class _Planner:
                 # wherever a point of each lay within 5 cm, and the 3D solve's lines are read every 2 m: Yokohama's
                 # rail deck ending by a street it bridges, two such points 4.6 cm apart, was joined to the street and
                 # held 5.83 m over it at once, its block left with no roads)
-                ids, at = nodes.get(str(fid), (None, None))
+                ids, at = _piece_nodes(nodes, fid, line)
                 out.append(_gsh.Member(key, line, kind, "rail", None, float(lvs[n]) if lvs is not None else 0.0, 2.0,
                                        None, ids, node_xy=at))
         out += self._shape_tunnels(k)
@@ -3552,7 +3576,7 @@ class _Planner:
                     e, n_, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
                     line = np.stack([np.asarray(e, np.float64), np.asarray(n_, np.float64)], axis=1)
                     mid = line[len(line) // 2]
-                    ids, at = self._cell_nodes(k).get(str(f.ids[i]), (None, None))
+                    ids, at = _piece_nodes(self._cell_nodes(k), f.ids[i], line)
                     # (its half the carriageway's and the shoulder's, as a ground road's (_cell_enu) and its open
                     # section's plan: the carriageway's alone held the A23's street clear of the asphalt and not the
                     # shoulders, and the deck over it ended 1.4 m inside the trench its plan cut, a 5.9 m step)
@@ -3710,7 +3734,9 @@ class _Planner:
 
     def _cell_nodes(self, k):
         """{road feature id: (its map nodes (a frozenset of connector ids), where each lies ((id, x, y) frame ENU, at its
-        place along the road's line))} of cell k's roads, {} without the map's connectors; made once per cell."""
+        place along the road's line), each one's arc length along that line, the line (k, 2), its arc lengths)} of cell
+        k's roads, {} without the map's connectors; made once per cell. A piece of the road takes its own
+        (_piece_nodes)."""
         memo = self.__dict__.setdefault("_cell_nodes_memo", {})
         with self.lock:
             got = memo.get(str(k))
@@ -3733,7 +3759,7 @@ class _Planner:
                 at = [float(tab.start[r]) * float(s[-1]) for r in rows]
                 out[fid] = (frozenset(str(tab.value[r]) for r in rows),
                             tuple((str(tab.value[r]), float(np.interp(a, s, line[:, 0])), float(np.interp(a, s, line[:, 1])))
-                                  for r, a in zip(rows, at)))
+                                  for r, a in zip(rows, at)), tuple(at), line, s)
         with self.lock:
             if len(memo) > 256:
                 memo.clear()

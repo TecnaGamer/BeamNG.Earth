@@ -9,7 +9,7 @@ import gradeshapes as _gsh
 
 from . import artifacts, cache
 
-FORMAT = 7     # 7: two roads joined where the map joins them, a way's decks at two levels two decks, a tunnel's height limit (#129); 6: a track's map nodes, as a road's (#117); 5: a tunnel member's half the carriageway's and the shoulder's, as a ground road's (#119)
+FORMAT = 8     # 8: a link's ground part a link, a piece of a road its own stretch's map nodes (#133); 7: two roads joined where the map joins them, a way's decks at two levels two decks, a tunnel's height limit (#129); 6: a track's map nodes, as a road's (#117); 5: a tunnel member's half the carriageway's and the shoulder's, as a ground road's (#119)
 LAWS = (("gradeshapes", ["JOIN_M", "CROSS_END_M", "MERGE_DEG", "NODE_M", "NODE_EPS_M"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 1

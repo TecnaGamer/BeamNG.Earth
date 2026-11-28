@@ -121,17 +121,22 @@ def program(chains, couplings, why):
     w = np.concatenate([np.asarray(c["w"], np.float64) for c in chains]) if chains else np.zeros(0)
     cost = np.flatnonzero(w > 0)
     m = len(cost)
-    # (the curves' samples: every inner sample of a path with a vertical curve)
+    # (the curves' samples: every inner sample of a path whose member has a vertical curve, at its member's radius)
     mid, a_ds, b_ds, rad, p_of = [], [], [], [], []
     for p, c in enumerate(chains):
         k = len(c["t"])
-        if k >= 3 and c["R"] > 0:
-            ds = np.asarray(c["ds"], np.float64)
-            mid.append(off[p] + np.arange(1, k - 1))
-            a_ds.append(ds[:-1])
-            b_ds.append(ds[1:])
-            rad.append(np.full(k - 2, float(c["R"])))
-            p_of.append(np.full(k - 2, p))
+        if k < 3:
+            continue
+        r = np.asarray(c["R"], np.float64)[1:-1]
+        on = np.flatnonzero(r > 0)
+        if not len(on):
+            continue
+        ds = np.asarray(c["ds"], np.float64)
+        mid.append(off[p] + 1 + on)
+        a_ds.append(ds[:-1][on])
+        b_ds.append(ds[1:][on])
+        rad.append(r[on])
+        p_of.append(np.full(len(on), p))
     mid = np.concatenate(mid) if mid else np.zeros(0, np.int64)
     a_ds = np.concatenate(a_ds) if a_ds else np.zeros(0)
     b_ds = np.concatenate(b_ds) if b_ds else np.zeros(0)
@@ -276,7 +281,8 @@ def _named(chains, couplings, why, names, core):
         else:
             c = chains[g[1]]
             xy = np.asarray(c["xy"])
-            law = ("grade %.3f" % float(np.min(c["glim"]))) if g[0] == "grade" else ("vertical curve %.0f m" % c["R"])
+            law = ("grade %.3f" % float(np.min(c["glim"]))) if g[0] == "grade" else \
+                ("vertical curve %.0f m" % float(np.max(c["R"])))
             out.append("%s of [%s], (%.1f, %.1f) to (%.1f, %.1f)" % (law, names[g[1]], xy[0, 0], xy[0, 1], xy[-1, 0],
                                                                        xy[-1, 1]))
     return out
@@ -328,8 +334,10 @@ def measure(problem, z):
             ds = np.asarray(c["ds"])
             g = np.diff(zp) / ds
             gx.append(float(max(0.0, (np.abs(g) - np.asarray(c["glim"])).max())))
-            if len(zp) >= 3 and c["R"] > 0:
-                cx.append(float(max(0.0, (np.abs(np.diff(g)) - (ds[:-1] + ds[1:]) / 2.0 / c["R"]).max())))
+            r = np.asarray(c["R"], np.float64)[1:-1]
+            if len(zp) >= 3 and (r > 0).any():
+                on = r > 0
+                cx.append(float(max(0.0, (np.abs(np.diff(g)) - (ds[:-1] + ds[1:]) / 2.0 / np.where(on, r, 1.0))[on].max())))
     moved = np.concatenate(moved) if moved else np.zeros(1)
     gap, short, n_short = 0.0, 0.0, 0
     for c, (what, _k) in zip(problem.couplings, problem.why):
@@ -433,7 +441,7 @@ def solve_block(problem, b):
     chains = []
     for p, a, e in b.runs:
         ch = dict(problem.chains[p])
-        for key in ("t", "w", "xy"):
+        for key in ("t", "w", "xy", "R"):
             ch[key] = np.asarray(ch[key])[a:e + 1]
         for key in ("ds", "glim"):
             ch[key] = np.asarray(ch[key])[a:e]
