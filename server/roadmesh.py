@@ -802,7 +802,7 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
     owners, groups, lefts, rights, zs, lens, own_in, targets = {}, {}, [], [], [], [], [], []
     oid, gid, sh, bks, pes = [], [], [], [], []
     for n, ((left, right, v, m, layer, z), c) in enumerate(list(rb) + list(context)):
-        if z is None:
+        if z is None or layer not in (None, "base"):
             continue
         if coplanar:        # (P3e: each row's cross slope, and whether its first / last row is its part's own end)
             bk = _bank_rows(c, len(left))
@@ -846,7 +846,7 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
         # each other at one height, 500 m2 of lanes with two owners; a legacy tunnel floor stays out as before)
         ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("surface_ref")
                                                     or (c.get("tunnel") and not c.get("rec")))
-                       for (r, c) in list(rb) + list(context) if r[5] is not None], bool)
+                       for (r, c) in list(rb) + list(context) if r[5] is not None and r[4] in (None, "base")], bool)
         if ok.any():
             pick = np.flatnonzero(ok)
             remap = np.full(len(ok), -1, np.int64)
@@ -880,7 +880,7 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
     out = []
     at = 0
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
-        if z is None:
+        if z is None or layer not in (None, "base"):
             out.append(((left, right, v, m, layer, z), c))
             continue
         k = len(left)
