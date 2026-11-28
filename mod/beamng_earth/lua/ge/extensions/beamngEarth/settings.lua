@@ -118,6 +118,10 @@ M.SCHEMA = {
   -- the grip follows the weather shown (wet, damp roads) and aquaplaning in its puddles and heavy rain (the user,
   -- 2026-11-26: "yes, plus deep-water aquaplaning")
   weatherWetGrip = { kind = 'bool', default = true, label = 'Wet roads' },
+  -- the puddle plan R1 (~/bnge-tests/puddles/PLAN_FINAL.md, D10: off until the in-game review): puddles that look like
+  -- water (the sky mirrored) and fill by how much it rained (wetstate.lua's one wet state, also the wet look's and the
+  -- grip's), no rain film under cover
+  weatherPuddleLook = { kind = 'bool', default = false, label = 'New puddle look' },
   -- the weather sounds: the mod's pre-recorded files, or played live by the world server (native/weathersynth;
   -- liveaudio.lua), which falls back to the files by itself when the live sound fails (the user, 2026-11-25)
   weatherSoundSource = { kind = 'enum', default = 'prerecorded', values = { 'prerecorded', 'live' }, label = 'Weather sounds' },
@@ -206,6 +210,7 @@ M.SCHEMA = {
   expStaleRevisit = { kind = 'bool', default = false, label = 'Show the older world while rebuilding' },
   expWinter = { kind = 'bool', default = false, label = 'Winter' },
   expWetRoads = { kind = 'bool', default = false, label = 'Wet roads' },
+  expPuddlesV2 = { kind = 'bool', default = false, label = 'New puddles (server)' },
   expLeafCycle = { kind = 'bool', default = false, label = 'Leaf cycle' },
   -- in Germany: the German right-of-way signs and markings at junctions, 30-zone signs and traffic that gives way
   -- accordingly (server designs.py; the message german_junctions)
@@ -269,7 +274,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'weatherStormLight',
-  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherWetGrip', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'weatherWindSound', 'realClouds',
+  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherWetGrip', 'weatherPuddleLook', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'weatherWindSound', 'realClouds',
   'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
@@ -280,7 +285,8 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
   'expWearStrips', 'expGradeGuard', 'expTerrainBumps', 'expRoadFollow', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
-  'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads', 'expLeafCycle' }
+  'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads', 'expPuddlesV2',
+  'expLeafCycle' }
 
 -- Stored but not on the settings page
 M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true }
@@ -674,6 +680,7 @@ M.APPLY = {
   weatherStreaks = function(v) local w = ext('beamngEarth_weather') if w and w.setStreaks then w.setStreaks(v) end end,
   weatherWetLook = function(v) local w = ext('beamngEarth_weather') if w and w.setWetLook then w.setWetLook(v) end end,
   weatherWetGrip = function(v) local w = ext('beamngEarth_weather') if w and w.setWetGrip then w.setWetGrip(v) end end,
+  weatherPuddleLook = function(v) local w = ext('beamngEarth_weather') if w and w.setPuddleLook then w.setPuddleLook(v) end end,
   weatherSoundSource = function(v) require('beamngEarth/liveaudio').setMode(v) end,
   weatherThunderSound = function(v)
     require('beamngEarth/liveaudio').setThunderSet(v)

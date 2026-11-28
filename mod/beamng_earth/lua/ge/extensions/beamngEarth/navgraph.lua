@@ -556,6 +556,74 @@ local function setRules()
   end
 end
 
+-- An apply whose clipped graph is the one in the game's map already is skipped (the 2026-11-27 mod-compatibility
+-- study): each map.reset fires onNavgraphReloaded to every extension (core_trafficSignals reloads its signals, mods
+-- drop their caches of the graph and plan again) and costs a ~40 ms frame of its own. A new server graph every
+-- ~400 m keeps the nodes of the old one (their names are their map ids, server navgraph.short_ids: the same road point
+-- has the same name in every graph), and a block that moved little keeps its clip: then nothing changed for the AI.
+-- Never skipped: a foreign reset (ours undone), a moved graph (a rebase: every position changed anyway).
+M.SKIP_SAME = true
+local snap = nil        -- the clipped graph in the game's map: M.snapshotNodes of its nodes, its anchor, signals, rules
+
+-- Pure: a light copy of a clipped node table (toNodes' nodes, taken before map.reset makes their links single sided):
+-- each node's position, radius, link count and links (the edge tables themselves, which map.reset keeps).
+function M.snapshotNodes(nodes)
+  local s, n = {}, 0
+  for name, t in pairs(nodes) do
+    local links, nl = {}, 0
+    for other, e in pairs(t.links) do links[other] = e; nl = nl + 1 end
+    s[name] = { t.pos.x, t.pos.y, t.pos.z, t.radius, nl, links }
+    n = n + 1
+  end
+  return { nodes = s, n = n }
+end
+
+local EDGE_FIELDS = { 'drivability', 'oneWay', 'speedLimit', 'inNode', 'outNode', 'inRadius', 'outRadius', 'posted',
+  'rough', 'rumble', 'lanes' }
+
+-- Pure: is the clipped node table `nodes` the snapshot's graph (the same names with the same positions, radii and
+-- edges)? Its counts too: { shared (names in both), moved (of those, changed), added, removed }.
+function M.compareNodes(nodes, s)
+  local shared, moved, added = 0, 0, 0
+  for name, t in pairs(nodes) do
+    local o = s.nodes[name]
+    if not o then added = added + 1
+    else
+      shared = shared + 1
+      local same = t.pos.x == o[1] and t.pos.y == o[2] and t.pos.z == o[3] and t.radius == o[4]
+      if same then
+        local nl = 0
+        for other, e in pairs(t.links) do
+          nl = nl + 1
+          local oe = o[6][other]
+          if not oe then same = false break end
+          if oe ~= e then
+            for _, f in ipairs(EDGE_FIELDS) do if e[f] ~= oe[f] then same = false break end end
+            if not same then break end
+          end
+        end
+        if same and nl ~= o[5] then same = false end
+      end
+      if not same then moved = moved + 1 end
+    end
+  end
+  local removed = s.n - shared
+  return added == 0 and removed == 0 and moved == 0, { shared = shared, moved = moved, added = added, removed = removed }
+end
+
+-- Pure: plain decoded JSON values a and b the same (the graphs' signal lists)?
+function M.sameValue(a, b, depth)
+  if a == b then return true end
+  if type(a) ~= 'table' or type(b) ~= 'table' or (depth or 0) > 6 then return false end
+  for k, v in pairs(a) do if not M.sameValue(v, b[k], (depth or 0) + 1) then return false end end
+  for k in pairs(b) do if a[k] == nil then return false end end
+  return true
+end
+
+local function rulesKey()
+  return tostring(M.rules.rightHandDrive) .. tostring(M.rules.turnOnRed) .. M.SIGNAL_TYPE
+end
+
 -- pre: toNodes' results built ahead (buildNodes), else made here
 local function apply(b, pre, moved)
   setRules()
@@ -581,6 +649,9 @@ local function apply(b, pre, moved)
   local tG = wall()
   local keep = okG and gps.beforeGraph and gps.beforeGraph(mOld and mOld.nodes) or nil
   stats.gpsMs = wall() - tG
+  local tS = wall()
+  local newSnap = M.SKIP_SAME and M.snapshotNodes(nodes) or nil      -- (before the reset turns its links)
+  stats.snapMs = wall() - tS
   local t0 = wall()
   ours = true
   local ok, err = pcall(map.reset, nodes)
@@ -589,8 +660,13 @@ local function apply(b, pre, moved)
   path.getPathLevelInfo = orig
   if not ok then
     log('E', 'beamngEarth', 'navgraph: map.reset: ' .. tostring(err))
+    snap = nil
     return false
   end
+  if newSnap then
+    newSnap.signals, newSnap.rules = graph.signals, rulesKey()
+  end
+  snap = newSnap
   stats.resetMs = wall() - t0
   local m = map.getMap()
   if persistent and persistent ~= m.nodes then
@@ -613,7 +689,25 @@ local function apply(b, pre, moved)
   stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, wall() - t0, nn, ne
   stats.applyMs = wall() - tN
   stats.cuts = #cl
+  -- (add-ons: the road graph changed, api contentChanged; its box the block's)
+  local api = rawget(_G, 'beamngEarth_api')
+  if api and api._contentChanged then
+    pcall(api._contentChanged, 'graph', b and b[4] and { b[1], b[2], 0, b[3], b[4], 0 } or nil)
+  end
   return true
+end
+
+-- Pure-ish: is the clipped graph pre (toNodes' results) the one in the game's map for anchor aid (snap)? The rules
+-- set for it first (setRules), as an apply would.
+local function sameAsApplied(pre, aid)
+  if not (M.SKIP_SAME and snap and snap.anchor == aid and pre and pre[1]) then return false end
+  setRules()
+  if snap.rules ~= rulesKey() then return false end
+  if snap.signals ~= graph.signals and not M.sameValue(snap.signals, graph.signals) then return false end
+  local tC = wall()
+  local same, counts = M.compareNodes(pre[1], snap)
+  stats.compareMs, stats.compare = wall() - tC, counts
+  return same
 end
 
 -- The vehicle Lua that hands a vehicle the signals (a serialized table). A traffic car keeps the junction it
@@ -1061,6 +1155,92 @@ function M.regionalGroupParams(cc, getSetting)
   return params, region
 end
 
+-- The police cars of the region (the level's police.vehGroup.json, levelinfo.syncRegion): the game's own police group
+-- (trafficUtils createPoliceGroup: police configs, the country's first where the game knows it, mods as the traffic's
+-- setting) with the Region filter a stock level's info.json gives it; nil outside the regions. Not gated by smart
+-- selections: the game reads the file only with them on (or a mod that asks for it), and a file of the region does no
+-- harm without them.
+M.POLICE_GROUP_SIZE = 10
+function M.policeGroupParams(cc, getSetting)
+  local region = M.regionOf(cc)
+  if not region then return nil end
+  local allMods = getSetting and getSetting('trafficAllowMods') and true or false
+  local params = { filters = { Type = { car = 1, truck = 0.6 }, Region = { [region] = 1, default = 1 },
+    ['Config Type'] = { police = 1 } }, country = M.COUNTRY_NAMES[string.upper(cc)] or 'default', maxYear = 0,
+    minPop = 0, allConfigs = true, allMods = allMods, modelPopPower = 1, configPopPower = 1 }
+  if allMods then params.filters.Type.automation = 1 end
+  if params.country ~= 'default' then params.filters.Country = { [params.country] = 100, other = 0.1 } end
+  return params, region
+end
+
+-- The level's region files follow the graph's country (levelinfo.syncRegion: info.json's region and country word, the
+-- police group), written once per change of region, country or the traffic's mods setting; nothing before the first
+-- graph with rules. A write is ~0.3 s on a Steam Deck (the police group made, two files, the game's level list
+-- rebuilt; in game 2026-11-27): only at a loading moment (M.regionWriteOk): the session's first, a teleport or an
+-- anchor still loading (core's pending, the ground not ready), the 3D map open, or the car stopped REGION_STOP_S. A
+-- border crossed while driving only marks it pending (M.regionPending) until then.
+M.REGION_STOP_S = 3.0
+M.REGION_STOP_MS = 0.5
+M.regionPending = false
+local stoppedSince = nil
+
+-- Pure: may the region files be written now? o: { first, loading, mapOpen, stoppedS }.
+function M.regionWriteOk(o)
+  return o.first == true or o.loading == true or o.mapOpen == true or (o.stoppedS or 0) >= M.REGION_STOP_S
+end
+
+-- The moment as regionWriteOk reads it (t: os.clock seconds).
+local function regionMoment(t, first)
+  local o = { first = first }
+  local c = rawget(_G, 'beamngEarth_core')
+  local st = c and c._state and c._state()
+  if st and st.pending ~= nil then o.loading = true end
+  if c and c.groundReady then
+    local ok, ready = pcall(c.groundReady)
+    if ok and ready == false then o.loading = true end
+  end
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then o.mapOpen = true end
+  local veh = getPlayerVehicle and getPlayerVehicle(0)
+  local v = veh and veh.getVelocity and veh:getVelocity()
+  local sp = v and math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) or 0
+  if sp < M.REGION_STOP_MS then
+    stoppedSince = stoppedSince or t
+    o.stoppedS = t - stoppedSince
+  else
+    stoppedSince = nil
+  end
+  return o
+end
+
+local function syncLevelRegion(t)
+  local cc = graph and graph.rules and graph.rules.country
+  if type(cc) ~= 'string' or cc == '' then return false end
+  local st = rawget(_G, 'settings')
+  local get = st and st.getValue and function(k) return st.getValue(k) end or nil
+  local params, region = M.policeGroupParams(cc, get)
+  local li = require('beamngEarth/levelinfo')
+  local due, first = li.regionDue(region, cc, params and params.allMods)
+  local moment = regionMoment(t or os.clock(), first)
+  if not due then M.regionPending = false return false end
+  if not M.regionWriteOk(moment) then M.regionPending = true return false end
+  M.regionPending = false
+  local make = params and function()
+    if not core_multiSpawn and extensions and extensions.load then pcall(extensions.load, 'core_multiSpawn') end
+    if not (core_multiSpawn and core_multiSpawn.createGroup) then return nil end
+    return core_multiSpawn.createGroup(M.POLICE_GROUP_SIZE, params)
+  end or nil
+  local sw = stopwatch.new()
+  local did = li.syncRegion(region, cc, make, params and params.allMods)
+  if did then
+    stats.regionMs = sw()
+    log('I', 'beamngEarth', string.format('level region: %s (%s): info.json and police group written in %.1f ms',
+      tostring(region), tostring(cc), stats.regionMs))
+  end
+  return did
+end
+M._syncLevelRegion = function(t) return syncLevelRegion(t) end     -- (tests)
+
 local function regionalGroup()
   local st = rawget(_G, 'settings')
   local cc = graph and graph.rules and graph.rules.country
@@ -1078,6 +1258,7 @@ local function regionalGroup()
 end
 
 local function setupTraffic(gt, c)
+  pcall(syncLevelRegion, os.clock())   -- (the police group the setup reads, the region its own group filters by)
   local okG, group = pcall(regionalGroup)
   local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1,
     { police = c.police, vehGroup = okG and group or nil })
@@ -1097,8 +1278,10 @@ end
 M.REGION_CHECK_S = 2.0
 local regionCheckAt = 0
 local function checkRegion(t)
-  if t < regionCheckAt or not started or not M.trafficRegionKey then return end
+  if t < regionCheckAt then return end
   regionCheckAt = t + M.REGION_CHECK_S
+  pcall(syncLevelRegion, t)       -- (with traffic off too: the level's files are every mod's)
+  if not started or not M.trafficRegionKey then return end
   local want = M.regionOf(graph and graph.rules and graph.rules.country) or 'none'
   if want == M.trafficRegionKey then return end
   local c = M.choice
@@ -1493,11 +1676,20 @@ function M.update(aid, b, gov)
   end
   prep = nil
   lastApply = t
+  local forced = foreign or urgent
   dirty, foreign = false, false
   local moved = urgent
   urgent = false
   local sw = stopwatch.new()
-  local okA = apply(b, pre, moved)
+  local okA
+  if not forced and sameAsApplied(pre, aid) then
+    stats.skips = (stats.skips or 0) + 1      -- (the map has this graph: no reset, no onNavgraphReloaded)
+    cuts = pre[4]
+    okA = true
+  else
+    okA = apply(b, pre, moved)
+    if okA and snap then snap.anchor = aid end
+  end
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
   if okA then
     applied = { anchor = aid, serial = graph.serial, box = b and { b[1], b[2], b[3], b[4] } or {} }
@@ -1543,6 +1735,8 @@ function M.status()
            launches = stats.launches, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
+           skips = stats.skips or 0, compareMs = stats.compareMs, compare = stats.compare, snapMs = stats.snapMs,
+           regionMs = stats.regionMs,
            traffic = gameplay_traffic and gameplay_traffic.getState() or nil, trafficAdaptive = M.trafficStatus() }
 end
 
@@ -1569,6 +1763,8 @@ function M.reset()
   launchCount, launchWait, lastLaunchScan, junctionNodes, junctionOf = {}, {}, -math.huge, nil, nil
   overtake.reset()
   pendingSignals = nil
+  snap = nil
+  stoppedSince, M.regionPending = nil, false
   stillSince = {}
   seenAt = {}
   lastTeleport = {}

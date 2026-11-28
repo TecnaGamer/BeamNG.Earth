@@ -491,4 +491,78 @@ do
   T.check(places.parseLatLon('https://www.openstreetmap.org/way/167488546') == nil, 'a link without a point')
   T.check(places.parseMapLink('41.66214 -72.76497') == nil, 'plain numbers are not a link')
 end
+-- the level's region (2026-11-27 mod-compatibility study): info.json's region and the country word the game's traffic
+-- reads, and the region's police.vehGroup.json; written only when the region, country or mods setting changes (each
+-- write is a file event and a rebuilt level list), the police group made only then; none outside the regions; another
+-- mod's police file left alone
+do
+  li._reset()
+  local P = li.POLICE_PATH
+  local saved = { jsonEncodePretty = rawget(_G, 'jsonEncodePretty'), jsonEncode = rawget(_G, 'jsonEncode'),
+    readFile = readFile, writeFile = writeFile, FS = FS }
+  local disk, nwrites, removed = {}, 0, 0
+  jsonEncode = function(t) return 'J' .. tostring(t.region) .. '|' .. tostring(t.country) .. '|' .. tostring(t.bngEarth) end
+  jsonEncodePretty = nil
+  readFile = function(p) return disk[p] end
+  writeFile = function(p, text) disk[p] = text; nwrites = nwrites + 1; return true end
+  local stamps = {}
+  local jr = jsonReadFile
+  jsonReadFile = function(p)
+    if p == P and disk[P] then return { data = {}, bngEarth = stamps[P] } end
+    if p == li.PATH and disk[p] then
+      local r, c = disk[p]:match('^J([^|]*)|([^|]*)|')
+      return { region = r ~= 'nil' and r or nil, country = c }
+    end
+    return jr(p)
+  end
+  FS = { fileExists = function(_, p) return disk[p] ~= nil end,
+         removeFile = function(_, p) disk[p] = nil; removed = removed + 1 end }
+  local made = 0
+  local function police() made = made + 1 return { { model = 'fullsize', config = 'police' } } end
+  li.write(l2)                                     -- (places.lua's write at load: info.json without a region)
+  local w0 = nwrites
+  T.check(li.syncRegion('northAmerica', 'us', police, false), 'region: the first region written')
+  T.check(nwrites == w0 + 2 and made == 1 and disk[li.PATH]:find('northAmerica|Every country %(USA%)')
+    and disk[P]:find('northAmerica|USA'), 'region: info.json (region, "Every country (USA)") and the police group')
+  stamps[P] = 'northAmerica|USA'
+  T.check(not li.syncRegion('northAmerica', 'US', police, false) and nwrites == w0 + 2 and made == 1,
+    'region: the same region again: nothing written, no group made')
+  T.check(li.syncRegion('northAmerica', 'CA', police, false) and made == 2 and disk[li.PATH]:find('|Every country|'),
+    'region: another country of the region the game has no word for: the plain text, the group again')
+  T.check(li.syncRegion('europe', 'DE', police, false) and disk[li.PATH]:find('europe|Every country %(Germany%)')
+    and disk[P]:find('europe|Germany'), 'region: a teleport to Germany')
+  local w1 = nwrites
+  T.check(li.syncRegion('europe', 'DE', police, true) and nwrites == w1 + 1 and disk[P]:find('|mods'),
+    'region: the mods setting changed: the police group only (info.json the same)')
+  T.check(li.syncRegion(nil, 'BR', nil, false) and disk[P] == nil and removed == 1
+    and disk[li.PATH]:find('^Jnil|Every country|'), 'region: none: our police file goes, info.json without a region')
+  T.check(li.regionWrites == 5, 'region: one write per change: ' .. li.regionWrites)
+  -- a police file some other mod put there (no bngEarth stamp): never written over or removed
+  li._reset()
+  li.write(l2)
+  disk[P], stamps[P] = 'theirs', nil
+  li.syncRegion('asiaPacific', 'JP', police, false)
+  T.check(disk[P] == 'theirs' and disk[li.PATH]:find('asiaPacific|Every country %(Japan%)'),
+    'region: another mod\'s police file left alone, info.json still written')
+  li.syncRegion(nil, 'BR', nil, false)
+  T.check(disk[P] == 'theirs', 'region: ... and not removed')
+  -- a session that starts where the last one ended: nothing written at all (the files on disk are of that region),
+  -- not even at the level start's write before the graph says where we are
+  li._reset()
+  disk[P], stamps[P] = nil, nil
+  li.write(l2)
+  li.syncRegion('asiaPacific', 'JP', police, false)
+  stamps[P] = 'asiaPacific|Japan'
+  li._reset()           -- (a new session: nothing in memory)
+  local w2, m2 = nwrites, made
+  T.check(not li.write(l2) and nwrites == w2, 'region: the level start keeps the file\'s region: no write')
+  T.check(not li.syncRegion('asiaPacific', 'JP', police, false) and nwrites == w2 and made == m2,
+    'region: the same as on disk: no write, no group made')
+  T.check(li.syncRegion('europe', 'IT', police, false) and disk[li.PATH]:find('europe|Every country %(Italy%)'),
+    'region: and a new one written')
+  jsonReadFile = jr
+  for k, v in pairs(saved) do _G[k] = v end
+  li._reset()
+end
+
 T.done('test_places')

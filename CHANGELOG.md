@@ -5,6 +5,13 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased
 
 ### Added
+- **Mod compatibility**: other mods now get more of the map data a stock map gives them. The level's police
+  vehicles (`police.vehGroup.json`) and info.json's region and country follow the region you are in, so the game's
+  police and traffic pick cars of that region. Buildings sit in a `Buildings` group as on the stock maps. The
+  modding API 1.12 adds a notice when the streamed world changes (`onBeamNGEarthContentChanged`), the buildings
+  loaded round a point, the towns round a point and whether the collision round a point is in (docs/ADDONS.md).
+  The AI road graph is no longer applied again when it has not changed, which should reduce the hitches and the
+  reloads that mods listening for it went through.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
@@ -47,6 +54,13 @@ What changed in each release of BeamNG.Earth, newest first.
 - **Puddles**: in rain, water collects in the low points of roads, along the kerbs and in the wheel ruts of worn
   roads: mirror-like water that reflects the sky and the street. They grow as it keeps raining and shrink as the road
   dries.
+- **New puddle look (Experimental, Weather page, off by default)**: puddles that look like still water mirroring the grey
+  sky (dark at night), wet streets that reflect an overcast sky rather than a sunny one, and puddles that fill by how much it has rained: a drizzle only
+  wets the road, an hour of heavy rain fills them, and the deep ones stay for hours after. The roads' wetness and grip
+  follow the same water, the same on every computer; in multiplayer with the host's real weather everyone sees the
+  same puddles, also players who join later. No water film on the road in tunnels and under bridges. With **New
+  puddles (server)** on the Experimental page, the world server sends the last day of real rain, so you arrive after
+  a wet morning to puddles.
 - **Wet roads**: roads lose grip in the rain you see, also with the winter road conditions off: a little when damp,
   more when wet (stopping from 50 mph takes about 129 ft instead of 108 ft), and they stay slippery while they dry.
   At speed, deep water in the puddles and the water on the road in heavy rain can make the tyres aquaplane (in deep

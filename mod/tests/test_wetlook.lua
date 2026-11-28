@@ -151,4 +151,80 @@ do
   package.loaded['beamngEarth/winter'] = nil
 end
 
+-- the new puddle look (the puddle plan R1, setting weatherPuddleLook: M.v2): the wet state is wetstate.lua's, the puddle
+-- material becomes dark water mirroring a sky cubemap, its steps one a check, the material's own values back when off
+do
+  local WS = require('beamngEarth/wetstate')
+  local now = 1764200000
+  WS.clock = function() return now end
+  local pm = scenetree.findObject(W.PUDDLE_MAT)
+  pm:setField('baseColorFactor', 0, '0.36 0.39 0.44 1')
+  pm:setField('roughnessFactor', 0, '0.06')
+  pm:setField('cubemap', 0, '')
+  local li = S.newObject('LevelInfo')
+  li:registerObject('theLevelInfo')
+  li:setField('globalEnviromentMap', 0, 'BNG_Sky_01_cubemap')
+  local cube = S.newObject('CubemapData')
+  cube:registerObject('bne_wetsky_overcast_city')
+  local shown = nil
+  package.loaded['beamngEarth/roads'] = { setPuddles = function(on) shown = on end }
+  local gripGot = {}
+  package.loaded['beamngEarth/winter'] = { setShown = function(c) gripGot[#gripGot + 1] = tostring(c) end }
+  W.reset()
+  W.setV2(true)
+  check(W.v2 and pm.fields.baseColorFactor == '0.36 0.39 0.44 1', 'on: nothing written before a check')
+  local storm = { rainMmH = 15, code = 95, tempC = 17, cover = { low = 100, mid = 100 } }
+  local calls = 0
+  local function src() calls = calls + 1; return { msg = storm, src = 'preset', key = 'storm@1', tC = 17 } end
+  W.update(W.CHECK_S, 15, true, true, src)
+  check(calls == 1 and pm.fields.baseColorFactor == W.V2_LOOK.base and pm.fields.roughnessFactor == W.V2_LOOK.rough
+    and pm.fields.cubemap == 'bne_wetsky_overcast_city', 'the storm: dark water mirroring the overcast sky ('
+    .. tostring(pm.fields.cubemap) .. ')')
+  check(shown == true and pm.fields.alphaRef == tostring(W.puddleRefV2(1)) and W.wetness() == WS.wTarget(15000) / 1000
+    and W.grip() == 'wet', 'a preset starts soaked: grip wet, the puddles from the first step')
+  for _ = 1, 30 do W.update(0.016, 15, true, true, src) end
+  check(calls == 1, 'between checks: the weather not asked again')
+  for _ = 1, 20 do W.update(W.CHECK_S, 15, true, true, src) end
+  check(pm.fields.alphaRef == tostring(W.V2_REF[2]) and W.puddleRefShown() == W.V2_REF[2], 'a step a check: full')
+  local writes = W.writes
+  for _ = 1, 10 do W.update(W.CHECK_S, 15, true, true, src) end
+  check(W.writes == writes, 'steady: no material writes')
+  -- the weather turns dry and sunny: the steps fall one a check as the water goes, the cubemap follows the sky
+  storm = { rainMmH = 0, code = 0, tempC = 20, cover = { low = 0, mid = 0 } }
+  local clear = S.newObject('CubemapData')
+  clear:registerObject('bne_wetsky_clear_city')
+  now = now + 14 * 3600
+  W.update(W.CHECK_S, 0, true, true, src)
+  check(pm.fields.cubemap == 'bne_wetsky_clear_city' and tonumber(pm.fields.alphaRef) > W.V2_REF[2], 'drying in sun: the clear sky, smaller')
+  check(li.fields.globalEnviromentMap == 'bne_wetsky_clear_city', 'the level\'s environment map: ours while wet')
+  -- off: the material's own values back, the old steps
+  W.setV2(false)
+  check(pm.fields.baseColorFactor == '0.36 0.39 0.44 1' and pm.fields.roughnessFactor == '0.06' and pm.fields.cubemap == ''
+    and tonumber(pm.fields.alphaRef) == W.puddleRef(math.min(W.PUDDLE_STEPS, 11)), 'off: the old look back')
+  check(WS.state() == nil, 'off: no wet state kept')
+  check(li.fields.globalEnviromentMap == 'BNG_Sky_01_cubemap', 'off: the level\'s own environment map back')
+  -- frozen: no water drawn
+  W.reset()
+  W.setV2(true)
+  storm = { rainMmH = 15, code = 95, tempC = 17 }
+  package.loaded['beamngEarth/winter'] = { setShown = function() end,
+    _state = function() return { roads = { {}, {}, { 'packed' } } }, 2 end }
+  for _ = 1, 5 do W.update(W.CHECK_S, 15, true, true, src) end
+  check(pm.fields.alphaRef == '255' or W.puddleRefShown() == 255, 'packed snow: no water steps')
+  -- the wet look off, the grip on: the state runs for the grip, no puddles
+  package.loaded['beamngEarth/winter'] = { setShown = function() end }
+  W.reset()
+  W.update(W.CHECK_S, 15, false, true, src)
+  check(W.grip() == 'wet' and W.puddleRefShown() == 255, 'grip only: wet, no puddles')
+  W.update(W.CHECK_S, 15, false, false, src)
+  check(WS.state() == nil and W.wetness() == 0, 'both off: nothing kept')
+  W.setV2(false)
+  package.loaded['beamngEarth/roads'] = nil
+  package.loaded['beamngEarth/winter'] = nil
+end
+check(W.puddleRefV2(0, 12) == 255 and W.puddleRefV2(1, 12) == W.V2_REF[1] and W.puddleRefV2(12, 12) == W.V2_REF[2],
+  'new steps: thresholds')
+check(W.skyCube({ rainMmH = 1 }, true) == 'bne_wetsky_overcast_city' and W.skyCube({ cover = { low = 10 } }, false)
+  == 'bne_wetsky_clear_open', 'the sky mirrored')
+
 T.done('test_wetlook')

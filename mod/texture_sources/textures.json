@@ -1225,6 +1225,126 @@
    "format": "BC7",
    "role": "color"
   },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_0.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_0.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_1.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_1.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_2.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_2.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_3.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_3.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_4.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_4.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_5.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_5.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_0.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_0.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_1.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_1.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_2.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_2.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_3.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_3.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_4.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_4.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_5.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_5.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_0.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_0.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_1.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_1.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_2.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_2.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_3.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_3.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_4.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_4.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_5.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_5.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_0.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_0.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_1.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_1.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_2.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_2.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_3.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_3.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_4.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_4.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_5.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_5.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
   "levels/beamng_earth/art/weather/bngEarth_bolt.data.dds": {
    "source": "levels/beamng_earth/art/weather/bngEarth_bolt.data.webp",
    "format": "BC4",

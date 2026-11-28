@@ -457,6 +457,16 @@
     "cachedOnly": {"type": "bool", "doc": "only the cells on disk, a wide radius then allowed (places.py)"}
    }
   },
+  "towns": {
+   "doc": "the modding API's towns round a point (api.lua towns; placenames.py labels, the regions on disk only)",
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "radius": {"type": "num", "optional": true},
+    "limit": {"type": "num", "optional": true}
+   }
+  },
   "map_focus": {
    "doc": "the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)",
    "fields": {
@@ -769,6 +779,15 @@
     "buildings": {"type": "list", "optional": true},
     "next": {"type": "str", "optional": true},
     "truncated": {"type": "bool", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "towns_result": {
+   "doc": "... the modding API's towns (placenames.labels rows [name, lat, lon, class, population, dist m], the largest first)",
+   "fields": {
+    "id": {"type": "int"},
+    "towns": {"type": "list"},
+    "complete": {"type": "bool"},
     "error": {"type": "str", "optional": true}
    }
   },

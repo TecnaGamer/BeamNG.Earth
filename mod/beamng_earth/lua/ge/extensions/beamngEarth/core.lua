@@ -1758,6 +1758,9 @@ local function onMessage(msg)
   elseif t == 'places_result' then           -- the modding API's places (api.lua; server places.py)
     local api = rawget(_G, 'beamngEarth_api')
     if api and api._onPlaces then api._onPlaces(msg) end
+  elseif t == 'towns_result' then            -- the modding API's towns (api.lua; server placenames.py)
+    local api = rawget(_G, 'beamngEarth_api')
+    if api and api._onTowns then api._onTowns(msg) end
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
     pcall(places.syncLevel)
   elseif t == 'random_place_result' then
