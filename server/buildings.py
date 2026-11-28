@@ -1258,7 +1258,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 roof = "gabled" if seed < 1.0 - style.hipped else "hipped"
         else:
             roof = "flat"
-    across, hi = ridge_frame(ring, roof, attrs.get("roof_orientation"), attrs.get("roof_direction"))
+    across, hi = ridge_frame(ring, roof, attrs.get("roof_orientation"), attrs.get("roof_direction"),
+                             attrs.get("roof_ridge"))
     shw = hl if across else hw                      # (the half span the roof's slopes cover)
     # pitched roofs only on near-rectangular footprints (a church's nave keeps its gable beside a tower or an apse)
     # (a mapped dome follows its own outline: round parts and the largest domes keep it; a sliver or a dome over
@@ -2567,12 +2568,16 @@ def mapped_pitch(roof, shw, roof_height):
     return min(max(math.degrees(dmath.atan2(rh, float(shw))), MAPPED_PITCH[0]), top)
 
 
-def ridge_frame(ring, roof, orientation, direction):
+def ridge_frame(ring, roof, orientation, direction, ridge=None):
     """(across, hi) for a pitched roof on ring's oriented box: across: the ridge runs across the long axis (the map's
     roof:orientation=across, 72 % of the 40 k mapped; or a roof:direction, the way its slopes face, along the long
     axis); hi: a lean-to's high side (+1 / -1 along the box's width once turned, opposite where its slope faces), None:
     unknown (the seed's). Overture's roof_direction is OSM's roof:direction (compass degrees the slope faces) whatever
-    its schema text says (checked on mapped skillions, 2026-11-10)."""
+    its schema text says (checked on mapped skillions, 2026-11-10).
+    ridge: the measured ridge's azimuth (degrees from north, lod2roofs' roof_ridge), used when the map gives neither:
+    across when it runs nearer the box's short axis. Without it every unmapped roof's ridge ran along the long axis;
+    on an LGL LoD2 tile in Baden-Wuerttemberg 641 of 2174 pitched roofs run across theirs (151 of 690 plain
+    rectangles of one part, 2026-11-27)."""
     if roof == "flat" or roof in DOME_ROOFS:
         return False, None
     across = str(orientation or "").lower() == "across"
@@ -2581,6 +2586,19 @@ def ridge_frame(ring, roof, orientation, direction):
         d = float(direction)
     except (TypeError, ValueError):
         d = float("nan")
+    try:
+        r = float(ridge)
+    except (TypeError, ValueError):
+        r = float("nan")
+    mapped = str(orientation or "").strip().lower() in ("across", "along")
+    if not mapped and not math.isfinite(d) and math.isfinite(r):
+        try:
+            _c, u, _hl, _hw = oriented_box(ring)
+        except ValueError:
+            return across, None
+        rv = np.array([dmath.sin(math.radians(r)), dmath.cos(math.radians(r))])     # (east, north)
+        v = np.array([-u[1], u[0]])
+        return abs(float(dnp.matmul(rv, v))) > abs(float(dnp.matmul(rv, u))), None
     if math.isfinite(d):
         try:
             _c, u, _hl, _hw = oriented_box(ring)

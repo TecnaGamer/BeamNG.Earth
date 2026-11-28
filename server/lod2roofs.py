@@ -3,7 +3,7 @@
 Overture and OSM rarely know a building's roof, so buildings.plan predicts it. Where a country publishes its buildings
 as LoD2 models, tools/build_lod2_roofs.py reads them once and keeps one small record per building: where it stands, the
 roof shape as an AdV roofType code (read from the model, or from the roof faces by tools/lod2_classify.py where the
-model has none), the measured height and the height of the roof itself. The records are served as shards of a z10 tile
+model has none), the measured height, the height of the roof itself and the way its ridge runs. The records are served as shards of a z10 tile
 (~25 km), one folder per country, <PAGES>/<folder>/<x>/<y>.npz (SOURCES), and fetched like the other shards of
 BeamNG.Earth-data (railtags.py). Nothing is parsed while playing.
 
@@ -38,6 +38,11 @@ ON = os.environ.get("BNE_LOD2_ROOFS", "on") != "off"
 ZOOM = 10
 RETRY_S = 3600                  # unreachable: asked again after this long
 CELL_M = 32.0                   # the grid a tile's records are looked up in
+NO_RIDGE = 255                  # a shard's ridge for none (a flat roof, a pyramid, a shard built before the ridge was kept)
+# Several records in one footprint (a terrace, a farmhouse and its barn under one map outline): the tallest names the
+# building, its ridge only when every record's ridge runs within this of it (degrees). A cross wing's or a barn's
+# ridge would turn the whole outline's roof.
+RIDGE_AGREE_DEG = 30.0
 
 # A country's shards: its folder on the site (and in the cache), the box nothing outside of asks for one (south, west,
 # north, east), and its credit (credits.FEATURES). A folder per country: each is built and published on its own, and
@@ -206,9 +211,14 @@ def decode(body):
         return {}
     try:
         with np.load(io.BytesIO(body), allow_pickle=False) as z:
-            return {"lat": z["lat"].astype(np.float64) / 1e6, "lon": z["lon"].astype(np.float64) / 1e6,
-                    "code": z["code"].astype(np.int32), "height": z["height"].astype(np.float32) / 10.0,
-                    "roof": z["roof"].astype(np.float32) / 10.0}
+            out = {"lat": z["lat"].astype(np.float64) / 1e6, "lon": z["lon"].astype(np.float64) / 1e6,
+                   "code": z["code"].astype(np.int32), "height": z["height"].astype(np.float32) / 10.0,
+                   "roof": z["roof"].astype(np.float32) / 10.0}
+            # the ridge's azimuth (whole degrees 0..179 from grid north, NO_RIDGE none); a shard built before it was
+            # kept has none: every roof's ridge then follows the footprint, as before
+            r = z["ridge"].astype(np.float32) if "ridge" in z.files else np.full(len(out["lat"]), NO_RIDGE, np.float32)
+            out["ridge"] = np.where(r < 180, r, np.nan).astype(np.float32)
+            return out
     except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as e:   # (EOFError: empty, BadZipFile: cut short)
         log.warning("lod2 shard unreadable: %s", e)
         return {}
@@ -218,7 +228,7 @@ class Records:
     """A tile's records in its frame, found by the footprint they stand in."""
 
     def __init__(self, frame, shards, x0, y0, x1, y1):
-        e, n, code, height, roof = [], [], [], [], []
+        e, n, code, height, roof, ridge = [], [], [], [], [], []
         for s in shards:
             k = (s["lat"] > -90.0)
             ee, nn, _ = frame.geodetic_to_enu(s["lat"][k], s["lon"][k], 0.0)
@@ -228,8 +238,10 @@ class Records:
             code.append(s["code"][k][keep])
             height.append(s["height"][k][keep])
             roof.append(s["roof"][k][keep])
+            ridge.append(s["ridge"][k][keep] if "ridge" in s else np.full(int(keep.sum()), np.nan, np.float32))
         self.e, self.n = np.concatenate(e), np.concatenate(n)
         self.code, self.height, self.roof = np.concatenate(code), np.concatenate(height), np.concatenate(roof)
+        self.ridge = np.concatenate(ridge)
         self.grid = {}
         for i, key in enumerate(zip((self.e // CELL_M).astype(np.int64).tolist(),
                                     (self.n // CELL_M).astype(np.int64).tolist())):
@@ -243,24 +255,40 @@ class Records:
                 out += self.grid.get((gx, gy), ())
         return out
 
+    def inside(self, e, n):
+        """The indices of the records standing in the ring (e, n) (an empty array: none)."""
+        idx = self.near(e, n)
+        if not idx:
+            return np.zeros(0, np.int64)
+        ii = np.array(idx)
+        return ii[Path(np.stack([e, n], 1)).contains_points(np.stack([self.e[ii], self.n[ii]], 1))]
+
     def find(self, e, n):
         """The index of the largest-roofed record standing in the ring (e, n), or None. Parts of one building are
         records of their own: the tallest says what the building is."""
-        idx = self.near(e, n)
-        if not idx:
+        ii = self.inside(e, n)
+        if not len(ii):
             return None
-        ii = np.array(idx)
-        inside = Path(np.stack([e, n], 1)).contains_points(np.stack([self.e[ii], self.n[ii]], 1))
-        if not inside.any():
-            return None
-        ii = ii[inside]
         return int(ii[np.argmax(self.height[ii])])
+
+    def ridge_of(self, ii, i):
+        """The ridge (degrees 0..180 from grid north) record i gives the footprint its records ii stand in, or None:
+        it has none, or another record's ridge there runs more than RIDGE_AGREE_DEG off it."""
+        az = float(self.ridge[i])
+        if not np.isfinite(az):
+            return None
+        for j in ii:
+            other = float(self.ridge[j])
+            if np.isfinite(other) and abs((other - az + 90.0) % 180.0 - 90.0) > RIDGE_AGREE_DEG:
+                return None
+        return az
 
     def fill(self, at, e, n):
         """at (a building's attributes) with what the measured record adds; the map's own values stay."""
-        i = self.find(e, n)
-        if i is None:
+        ii = self.inside(e, n)
+        if not len(ii):
             return at
+        i = int(ii[np.argmax(self.height[ii])])
         shape = SHAPES.get(int(self.code[i]))
         if shape and not at.get("roof_shape"):
             at["roof_shape"] = shape
@@ -268,6 +296,9 @@ class Records:
                 at["roof_height"] = float(self.roof[i])
         if self.height[i] > 0 and not _known(at.get("height")):
             at["height"] = float(self.height[i])
+        az = self.ridge_of(ii, i)
+        if az is not None:          # (buildings.ridge_frame: a mapped roof:orientation or roof:direction still wins)
+            at["roof_ridge"] = az
         return at
 
 
