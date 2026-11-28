@@ -95,6 +95,11 @@ What changed in each release of BeamNG.Earth, newest first.
 
 ### Changed
 - Retired the Experimental "Road surface from aerial photos" setting (`BNE_PHOTO_SURFACE`). Roads should look the same as they do by default, and an old setting or variable is now ignored.
+- **Ground photos use less of the world server's CPU**: their texture levels are now made with whole-number maths
+  (about a third of the CPU they took before), and on machines with a graphics card the photo encoding should cost the
+  server less. The ground photos of places you visited before are made once more on your next visit, then kept again.
+  On a Steam Deck the server now uses the graphics chip only while you are parked or a teleport is loading, which
+  may reduce the frame drops while driving.
 - **BeamMP hosting:** the releases no longer carry the Windows and Linux host bundles with BeamMP's own server program
   inside. Get the server from BeamMP's own releases and add `BeamNG.Earth-BeamMP-Server-<version>.zip` (the mod and
   the server plugin). The Docker image is unchanged.
