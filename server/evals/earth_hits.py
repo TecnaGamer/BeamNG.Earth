@@ -26,9 +26,8 @@ def build(j, a):
     os.makedirs(out, exist_ok=True)
     cmd = [sys.executable, os.path.join(HERE, "earth_view.py"), "--earth", a.earth, "--out", out, "--name", "view", "--dump",
            "--views", a.views] + ee.junction_args(j)
-    for flag in ("reuse", "online"):
-        if getattr(a, flag):
-            cmd.append("--" + flag)
+    if a.reuse:
+        cmd.append("--reuse")
     env = dict(os.environ, BNGE_PLANCACHE="off", BNGE_BLOCKCACHE="off", BNE_LIDAR_GAPS_WAIT=ee.LIDAR_WAIT_S)
     t = time.time()
     with open(os.path.join(out, "view.log"), "w", encoding="utf-8") as f:
@@ -64,7 +63,6 @@ def main(argv=None):
     ap.add_argument("--views", default="overview,top,SW")
     ap.add_argument("--jobs", type=int, default=3, help="junctions built at once")
     ap.add_argument("--reuse", action="store_true")
-    ap.add_argument("--online", action="store_true")
     a = ap.parse_args(argv)
     with open(a.set, encoding="utf-8") as f:
         js = json.load(f)["junctions"]

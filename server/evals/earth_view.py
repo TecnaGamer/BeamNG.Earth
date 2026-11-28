@@ -1468,7 +1468,9 @@ def earth_state(a, log):
         a.q = earth_writers.log_quantum(a.server_log, a.aid) or 1 / 32
         log(f"height quantum {a.q:g} m (the server log's)")
     if getattr(blockworker, "_s", None) is None:
-        blockworker._s = blockworker._State(a.cache, not a.online, True, True, True, True, airports=not a.no_airports,
+        # (online: what the cache lacks is fetched, as the game does. Offline, a terrain tile a change newly read
+        # failed the build: Compiegne's DEM 15/16643/11199, 2026-11-28)
+        blockworker._s = blockworker._State(a.cache, False, True, True, True, True, airports=not a.no_airports,
                                             sea=not a.no_sea)
         blockworker._s.anchor(a.aid, *a.anchor)
     return blockworker
@@ -1656,7 +1658,6 @@ def main():
     ap.add_argument("--q", type=float, help="the anchor's height quantum (default: the server log's, else 1/32)")
     ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "beamng-earth"))
     ap.add_argument("--server-log", default=os.path.join(os.environ.get("LOCALAPPDATA", ""), "beamng-earth", "logs", "server.log"))
-    ap.add_argument("--online", action="store_true", help="fetch the map data the cache lacks")
     ap.add_argument("--no-airports", action="store_true")
     ap.add_argument("--no-sea", action="store_true")
     a = ap.parse_args(joined_pairs(sys.argv[1:]))

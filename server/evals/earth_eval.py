@@ -30,8 +30,8 @@ hitting, meshes cutting) and an after side's build at its first infeasible syste
 junction at a time; with --history <json> the junctions red last time run first, the quickest first. --before-from <a former run's out> takes the before sides from
 that run as they are (an upstream capture made once: python server/evals/earth_eval.py --before <upstream tree> --after <tree>
 --out <capture> --labels upstream,latest; then each run --before-from <capture>, only the after tree built), and
-server/evals/eval_page.py makes one page of a run. --reuse draws from the data a former run left (no build), --online
-fetches the map data the cache lacks (a junction never built before needs it).
+server/evals/eval_page.py makes one page of a run. --reuse draws from the data a former run left (no build). A build
+fetches the map data the cache lacks, as the game does.
 """
 import argparse
 import json
@@ -112,7 +112,7 @@ def build_side(j, side, tree, a, log):
            "--label-prefix", f"{getattr(a, 'labels', SIDES)[SIDES.index(side)]}: ", "--image", a.image, "--views", a.views] + junction_args(j)
     if side == "after":         # (the overview marks the ground that moved since before)
         cmd += ["--compare-data", os.path.join(side_dir(a, j["name"], "before"), "data")]
-    for flag in ("reuse", "online", "no_buildings"):
+    for flag in ("reuse", "no_buildings"):
         if getattr(a, flag):
             cmd.append("--" + flag.replace("_", "-"))
     if a.cache:
@@ -500,7 +500,6 @@ def main(argv=None):
                     "comparison), or before,after")
     ap.add_argument("--jobs", type=int, default=1, help="junctions built at once (each side its own process)")
     ap.add_argument("--labels", default="before,after", help="the two sides' names on the views, e.g. upstream,latest")
-    ap.add_argument("--online", action="store_true", help="fetch the map data the cache lacks")
     ap.add_argument("--no-buildings", action="store_true")
     ap.add_argument("--cache", help="Earth's map data cache (earth_view's default otherwise)")
     ap.add_argument("--fail-fast", action="store_true", help="stop at the first red junction (exit 1), one junction at a "

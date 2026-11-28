@@ -362,7 +362,6 @@ def main():
     ap.add_argument("--earthrally", help="an EarthRally checkout: --rally runs its tools/rally_grader.py")
     ap.add_argument("--no-airports", action="store_true")
     ap.add_argument("--no-sea", action="store_true")
-    ap.add_argument("--online", action="store_true")
     ap.add_argument("--out", default="earth-writers")
     a = ap.parse_args()
     if a.rally and not a.earthrally:
@@ -388,7 +387,7 @@ def main():
     fast._ef  # noqa: B018  (loaded)
 
     os.makedirs(a.out, exist_ok=True)
-    blockworker._s = blockworker._State(a.cache, not a.online, True, True, True, True,
+    blockworker._s = blockworker._State(a.cache, False, True, True, True, True,       # (what the cache lacks fetched)
                                         airports=not a.no_airports, sea=not a.no_sea)
     S = blockworker._s
     lat0, lon0 = a.anchor

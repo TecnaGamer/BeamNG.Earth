@@ -95,7 +95,6 @@ def main():
     ap.add_argument("--probe", action="append", type=parse_pair, default=[], help="x,y to report (repeatable)")
     ap.add_argument("--no-airports", action="store_true")
     ap.add_argument("--no-sea", action="store_true")
-    ap.add_argument("--online", action="store_true", help="fetch what the cache lacks")
     ap.add_argument("--core", type=float, default=4.0, help="m either side of the stage line counted as its core")
     ap.add_argument("--side", type=float, default=12.0, help="m either side of the stage line profiled")
     ap.add_argument("--top", type=int, default=8, help="plans drawn in plans.png")
@@ -112,7 +111,7 @@ def main():
     import roads as roadsmod
 
     os.makedirs(a.out, exist_ok=True)
-    blockworker._s = blockworker._State(a.cache, not a.online, True, True, True, False,
+    blockworker._s = blockworker._State(a.cache, False, True, True, True, False,      # (what the cache lacks fetched)
                                         airports=not a.no_airports, sea=not a.no_sea)
     S = blockworker._s
     lat0, lon0 = a.anchor
