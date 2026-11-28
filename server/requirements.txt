@@ -6,6 +6,7 @@ duckdb>=1.5,<2      # GEOMETRY and ST_AsWKB in core: no extension is installed o
                     # the remote GeoParquet through rangeread.NetfetchFS fail now and then on a first visit ("ZSTD
                     # Decompression failure", "don't know what type"): road tags and water missing; 1.5.5 and 1.6.0
                     # shipped 2.0.0 (released 2026-10-21), 1.5.4 1.5.6 (cold-cache server tests, 2026-10-23)
+mapbox-vector-tile>=2.2,<3  # optional Mapillary utility-pole tiles
 fsspec              # DuckDB reads the remote files through rangeread.NetfetchFS
 certifi             # the packaged app's CA certificates where the system has none it finds (launcher.py)
 

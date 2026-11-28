@@ -42,6 +42,7 @@ import heightmap
 import l0roads
 import mapdata as mapdatamod
 import mappedpoles
+import polishpoles
 import netfetch
 import plancache
 import roadwidth as roadwidthmod
@@ -1495,6 +1496,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
     k = revisit.key("roads", *revisit.frame_parts(lat, lon), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _md_versions(bool(buildings)), float(buried), lamp_region, country, *cliff_settings.cache_parts,
+                    *polishpoles.cache_parts(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)),
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
                     *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(roadsmod.ROADS_IN_GROUND),
                     *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
@@ -2597,6 +2599,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions(bool(buildings)) if md is None else md, float(buried), lamp_region, country,
                        GEO_SKIN_MARGIN_M, *cliff_settings.cache_parts,
+                       *polishpoles.cache_parts(tile.frame, tile.box),
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
                        bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
                        # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)

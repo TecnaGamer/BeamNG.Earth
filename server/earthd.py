@@ -3627,6 +3627,13 @@ class Server:
             import powerlines
             powerlines.tile_lines(anchor.frame, tx, ty, self.mapdata, elev, props, wires,
                                   clearance=clearance[0] if clearance else None)    # high-voltage lines
+            import mappedpoles
+            import polishpoles
+            pole_box = roadsmod.tile_bbox(tx, ty)
+            if self.mapdata is not None and mappedpoles.EVERYWHERE and polishpoles.bounds(anchor.frame, pole_box, 260.):
+                layers = mappedpoles._layers(self.mapdata, anchor.frame, tx, ty, mappedpoles.EVERYWHERE_MAX_SPAN_M + 5.)
+                mappedpoles.place(anchor.frame, pole_box, layers, elev, props, wires, None, everywhere=True,
+                                  clearance=clearance[0] if clearance else None, only_poland=True)
             import fences
             try:
                 props.extend(fences.rows(anchor.frame, infra_fn, box, elev, decks=[

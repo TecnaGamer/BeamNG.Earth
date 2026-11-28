@@ -20,6 +20,7 @@ import dnp
 
 import citylamps
 import designsigns
+import polishpoles
 import poleprofiles
 
 # class: (spacing m along one side, both sides staggered: a lamp every half that along the road). Measured (the user,
@@ -1268,6 +1269,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     de_ctl: Germany's junction signs (junction_props). mapped_lamps: the rows of the mapped street lamps on and near the
     tile (worldprops.tile_props' lamps): the tile's own drawn as mapped (where the local posts stand, the default ones
     become those), and a road with MAPPED_ALONG_MIN of them along it guesses no lamps (lit=no)."""
+    near_poland = pole_frame is not None and polishpoles.bounds(pole_frame, box, 100.) is not None
     pole_at = poleprofiles.selector(pole_profile, pole_frame)
     kit_at = poleprofiles.kit_selector(pole_profile, pole_frame)
     spacing_of = lamp_spacing(region, dense=not town)
@@ -1365,6 +1367,14 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
                     pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                             round(yaw, 1), 1.0, pole_style.height, 0.0]
+                    if near_poland and polishpoles.at_position(pole_frame, *q):
+                        station = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
+                        if _owns(box, *q) and lamp_ok(fid) and pole_lamp(spec.cls, station, region):
+                            rows.append([G_LAMP, *pole[1:4], round(_yaw(-out[0], -out[1]), 1), 1., LAMP_H[G_LAMP], 0.])
+                        if wires is not None and len(run_poles) > 1:
+                            wires.extend(_own_spans(run_poles, box))
+                        run_poles = []
+                        continue
                     if not clearance.clear(pole):
                         if wires is not None and len(run_poles) > 1:
                             wires.extend(_own_spans(run_poles, box))
@@ -1479,6 +1489,13 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
             pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                     round(yaw, 1), 1.0, pole_style.height, 0.0]
+            if near_poland and polishpoles.at_position(pole_frame, *q):
+                if inside and drawn and pole_lamp(spec.cls, k, region):
+                    rows.append([G_LAMP, *pole[1:4], round(_yaw(-n[0], -n[1]), 1), 1., LAMP_H[G_LAMP], 0.])
+                if len(run) > 1 and wires is not None:
+                    wires.extend(_own_spans(run, box))
+                run = []
+                continue
             if not clearance.clear(pole):
                 if len(run) > 1 and wires is not None:
                     wires.extend(_own_spans(run, box))

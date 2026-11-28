@@ -42,7 +42,7 @@
       v-for="item in rows"
       :key="item.id"
       class="earth-row"
-      :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors' || consentAsk === item.id"
+      :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors' || item.type === 'mapillary' || consentAsk === item.id"
       @mouseenter="setHelp(item)"
       @focusin="setHelp(item)"
     >
@@ -68,6 +68,7 @@
         :modelValue="config[item.id] === true"
         @update:modelValue="val => onSwitchChange(item, val)"
       />
+      <MapillaryToken v-else-if="item.type === 'mapillary'" />
       <BngSlider
         v-else-if="item.type === 'float'"
         :min="item.min"
@@ -162,6 +163,7 @@ import {
   consentAsk, acceptConsent, cancelConsent,
 } from "./earthSettingsStore.js"
 import { CONTRIBUTORS } from "./contributors.js"
+import MapillaryToken from "./MapillaryToken.vue"
 import EarthAddons from "./EarthAddons.vue"
 
 const props = defineProps({
