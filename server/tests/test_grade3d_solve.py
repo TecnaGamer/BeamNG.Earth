@@ -106,29 +106,32 @@ def test_a_road_ending_near_a_tunnels_middle_is_not_joined_to_it():
     assert any(w == "clear" for w, _k in pr.why)
 
 
+def _under_then_over():
+    # (a level-2 deck, and a road mapped under it at level 1 that turns and comes back over it at level 3 20 m on: the
+    # two never joined, the road would climb 12.7 m in 40 m. Two decks joined to each other too near their one crossing
+    # are a joint, layers' "joined"; this is no single crossing's joint: two clearances that cannot both hold)
+    return [_m("mid", _line(-300, 0, 300, 0, 61), "deck", level=2.0),
+            _m("lo", np.array([[-10.0, -300.0], [-10.0, 10.0], [10.0, 10.0]]), "deck", level=1.0),
+            _m("hi", _line(10, 10, 10, -300, 63), "deck", level=3.0)]
+
+
 def test_a_contradiction_is_named_not_eased():
-    # (two decks mapped as crossing one level apart, and a link 14 m long joining them 10 m from the crossing: no
-    # answer holds the clearance within the link's grade)
-    ms = [_m("hi", _line(-300, 0, 300, 0, 61), "deck", level=2.0), _m("lo", _line(0, -300, 0, 300, 61), "deck", level=1.0),
-          _m("link", _line(0, 10, 10, 0, 4))]
-    _net, _sm, _lw, pr = _pose(ms)
+    _net, _sm, _lw, pr = _pose(_under_then_over())
     with pytest.raises(solve.NotSolved) as e:
         solve.solve(pr)
     msg = str(e.value)
-    assert "clearance" in msg and "hi deck" in msg and "lo deck" in msg, msg
+    assert "clearance" in msg and "mid deck" in msg and ("lo deck" in msg or "hi deck" in msg), msg
 
 
 def test_a_contradiction_is_named_by_what_lies_round_it():
     # (the same contradiction with a city's streets and bridges 5 km off, which hold: the search reads round the
     # conflict first, and names only what contradicts)
     far = [m._replace(line=m.line + np.array([5000.0, 5000.0])) for m in _grid_with_bridges()]
-    ms = [_m("hi", _line(-300, 0, 300, 0, 61), "deck", level=2.0), _m("lo", _line(0, -300, 0, 300, 61), "deck", level=1.0),
-          _m("link", _line(0, 10, 10, 0, 4))] + far
-    _net, _sm, _lw, pr = _pose(ms)
+    _net, _sm, _lw, pr = _pose(_under_then_over() + far)
     with pytest.raises(solve.NotSolved) as e:
         solve.solve(pr)
     named = str(e.value).split("\n")[1:]
-    assert named and all("hi deck" in ln or "lo deck" in ln or "link" in ln for ln in named), named
+    assert named and all("mid deck" in ln or "lo deck" in ln or "hi deck" in ln for ln in named), named
 
 
 def _hilly(xy):
