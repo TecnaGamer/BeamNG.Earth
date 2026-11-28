@@ -4,6 +4,7 @@ Usage: python tools/build_polish_poles.py OT_BUWT_P.parquet border.gml [mapillar
 Build dependencies: pyarrow, pyproj, shapely, numpy. See SOURCES.md for source URLs.
 """
 import json
+import zipfile
 from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
@@ -47,7 +48,7 @@ def build(poles, border, *mapillary_exports):
                 cells[f"{x},{y}"] = True
             elif country.intersects(square):
                 start = len(offsets)-1
-                for part in shapely.get_parts(country.intersection(square)):
+                for part in shapely.get_parts(shapely.normalize(country.intersection(square))):
                     if part.geom_type == "Polygon":
                         for ring in (part.exterior, *part.interiors):
                             vertices.extend(ring.coords)
@@ -64,8 +65,21 @@ def build(poles, border, *mapillary_exports):
             if shapely.contains_xy(country, lon, lat):
                 observed.append((lat, lon))
     observed = np.unique(np.rint(np.asarray(observed).reshape(-1, 2)*1e7).astype("<i4"), axis=0)
-    np.savez_compressed(OUT, poles=coords, mapillary=observed, cells=json.dumps(cells), offsets=offsets,
-                        border=np.rint(np.asarray(vertices)*1e7).astype("<i4"))
+    # Canonical NPY v1 members in an uncompressed ZIP (DEFLATE bytes differ
+    # between zlib builds). Fix OS, timestamp, permissions and member order.
+    cells_text = json.dumps(cells, sort_keys=True, separators=(",", ":"))
+    arrays = dict(poles=coords, mapillary=observed, offsets=np.asarray(offsets, dtype="<i8"),
+                  cells=np.asarray(cells_text, dtype=f"<U{len(cells_text)}"),
+                  border=np.rint(np.asarray(vertices)*1e7).astype("<i4"))
+    with zipfile.ZipFile(OUT, "w") as archive:
+        for name, array in sorted(arrays.items()):
+            info = zipfile.ZipInfo(name + ".npy", (1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = 0o600 << 16
+            with archive.open(info, "w") as entry:
+                np.lib.format.write_array(entry, np.ascontiguousarray(array).reshape(array.shape),
+                                          version=(1, 0), allow_pickle=False)
+
 
 
 if __name__ == "__main__":

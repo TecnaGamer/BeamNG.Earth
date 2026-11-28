@@ -1,5 +1,11 @@
 """Read triangulated utility poles from Mapillary's zoom-14 point-feature tiles."""
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
+import hashlib
+import struct
+import tempfile
+import time
 import os
 import json
 import re
@@ -38,7 +44,6 @@ def enabled():
     return bool(token())
 
 
-@lru_cache(maxsize=256)
 def _tile(cell):
     import mapbox_vector_tile
     from google.protobuf.message import DecodeError
@@ -63,13 +68,89 @@ def _tile(cell):
     return tuple(points)
 
 
-def points(extent):
+# Pin the inputs of nested content and skin builds together. Disk probes on the
+# server thread only inspect the cache; a cache miss is fetched by a road worker.
+_job = ContextVar("mapillary_pole_cells", default=None)
+MAX_AGE = 7 * 86400
+COORD = struct.Struct("<dd")
+
+
+@contextmanager
+def build_inputs():
+    if _job.get() is not None:
+        yield
+        return
+    reset = _job.set({})
+    try:
+        yield
+    finally:
+        _job.reset(reset)
+
+
+def _cell_points(cell, fetch):
+    root = netfetch.SHARED_DIR
+    path = Path(root) / "mapillary-poles-v1" / str(cell.x) / f"{cell.y}.bin" if root else None
+    if path:
+        try:
+            if time.time() - path.stat().st_mtime < MAX_AGE:
+                return tuple(COORD.iter_unpack(path.read_bytes()))
+        except (OSError, struct.error):
+            pass
+    if not fetch:
+        return None
+    try:
+        result = tuple(sorted(set(_tile(cell))))
+    except OSError:
+        return None
+    if path:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as f:
+                name = Path(f.name)
+                try:
+                    f.write(b"".join(COORD.pack(*point) for point in result))
+                except OSError:
+                    f.close()
+                    name.unlink(missing_ok=True)
+                    raise
+            try:
+                os.replace(name, path)
+            finally:
+                name.unlink(missing_ok=True)
+        except OSError:
+            pass  # The job still holds the exact observations used for this tile.
+    return result
+
+
+def observations(extent, *, fetch):
     south, west, north, east = extent
     positions = set()
+    complete = True
+    pinned = _job.get()
     for cell in mapcells.cells_for_bbox(*extent, z=14):
-        try:
-            positions.update((lon, lat) for lon, lat in _tile(cell) if west <= lon <= east and south <= lat <= north)
-        except OSError:
-            revisit.fault()
-            break
-    return sorted(positions)
+        if pinned is not None:
+            if cell not in pinned:
+                pinned[cell] = _cell_points(cell, fetch)
+            rows = pinned[cell]
+        else:
+            rows = _cell_points(cell, fetch)
+        if rows is None:
+            complete = False
+        else:
+            positions.update((lon, lat) for lon, lat in rows if west <= lon <= east and south <= lat <= north)
+    return sorted(positions), complete
+
+
+def signature(extent):
+    rows, complete = observations(extent, fetch=_job.get() is not None)
+    digest = hashlib.sha256()
+    for point in rows:
+        digest.update(COORD.pack(*point))
+    return ("mapillary-poles-v2", complete, digest.hexdigest())
+
+
+def points(extent):
+    rows, complete = observations(extent, fetch=True)
+    if not complete:
+        revisit.fault()
+    return rows

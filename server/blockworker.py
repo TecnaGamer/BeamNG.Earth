@@ -43,6 +43,7 @@ import l0roads
 import mapdata as mapdatamod
 import mappedpoles
 import polishpoles
+import mapillarypoles
 import netfetch
 import plancache
 import roadwidth as roadwidthmod
@@ -1483,6 +1484,7 @@ def _radar_key():
     return (() if sig is None else (sig,)) + droprails.key()
 
 
+@mapillarypoles.build_inputs()
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                        gas_stations, buried, lamp_region, country=None, pole_profile=None, de_junctions=False, towns_on=False, wear=None):
     import revisit
@@ -1496,7 +1498,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
     k = revisit.key("roads", *revisit.frame_parts(lat, lon), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _md_versions(bool(buildings)), float(buried), lamp_region, country, *cliff_settings.cache_parts,
-                    *polishpoles.cache_parts(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)),
+                    *polishpoles.cache_parts(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty), buildings),
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
                     *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(roadsmod.ROADS_IN_GROUND),
                     *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
@@ -2599,7 +2601,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions(bool(buildings)) if md is None else md, float(buried), lamp_region, country,
                        GEO_SKIN_MARGIN_M, *cliff_settings.cache_parts,
-                       *polishpoles.cache_parts(tile.frame, tile.box),
+                       *polishpoles.cache_parts(tile.frame, tile.box, buildings),
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
                        bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
                        # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)
@@ -2608,6 +2610,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
                        *deck_key, bool(de_junctions), *de)     # (the German junction parts last)
 
 
+@mapillarypoles.build_inputs()
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
                  country=None, scratch_vfs="/x", pole_profile=None, wait_gaps=False, de_junctions=False, towns_on=False, wear=None):
     """Saved areas' world phase (areas.py, the user 2026-10-29: "pre generate along a route or area"): geotile (gx, gy)'s
@@ -2660,6 +2663,7 @@ def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q, wear=None):
                        float(heightmapmod.SQUARE), *snowroad.skin_key(wear))
 
 
+@mapillarypoles.build_inputs()
 def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings, left_hand,
                       mph, q, gas_stations, buried=0.0, lamp_region=None, country=None, pole_profile=None,
                       de_junctions=False, towns_on=False, wear=None):
@@ -2696,6 +2700,7 @@ def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, 
 
 
 @profile_step('Road geometry')
+@mapillarypoles.build_inputs()
 def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried, lamp_region,
                  country, pole_profile=None, de_junctions=False, towns_on=False, wear=None):
     """Geotile (gx, gy)'s content (_write_geo_content), from the revisit cache (kind "roadsg": its key, settings and
@@ -3359,6 +3364,7 @@ def _geo_near(gx, gy, lat, lon):
         return False
 
 
+@mapillarypoles.build_inputs()
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
               gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None,
               de_junctions=False, towns_on=False, wear=None):

@@ -18,6 +18,11 @@ from test_mapped_poles import infrastructure, line, pole
 
 
 class PolishPolesTest(unittest.TestCase):
+    def setUp(self):
+        mock = patch("mapillarypoles.enabled", return_value=False)
+        mock.start()
+        self.addCleanup(mock.stop)
+
     def test_border_and_roadside_guesses(self):
         self.assertTrue(polishpoles.inside(52.35, 14.56))    # Słubice
         self.assertFalse(polishpoles.inside(52.34, 14.54))   # Frankfurt (Oder)

@@ -185,16 +185,25 @@ OSM object centers and Wikidata coordinates identify the destination, not a veri
 
 The bundled snapshot uses the Polish Head Office of Geodesy and Cartography (GUGiK)
 national BDOT10k point layer and the State Register of Boundaries (PRG), retrieved
-2026-11-21. It contains 154,662 distinct active power-support coordinates. The
+2026-11-28. It contains 154,651 distinct active power-support coordinates. The
 existing Overture infrastructure layer supplies OpenStreetMap support points and
 overhead lines. Coverage and survey dates vary. The standalone BDOT10k model is
 a visual approximation of a tall support; the inventory does not specify its mesh.
 
 - [BDOT10k OT_BUWT_P GeoParquet](https://opendata.geoportal.gov.pl/bdot10k/schemat2021/GeoParquet/OT_BUWT_P.parquet)
-  SHA-256 `cb128201840c3efd5fac25af878e63cd648d6a02495d9fa32ffee6eb135f4082`.
+  SHA-256 `b08dc7810c8c2e0757f9c9b057fd0dc20db02cfbaa738ce92c7d8ed1c9e18949`.
 - [PRG country boundary GML](https://mapy.geoportal.gov.pl/wss/service/PZGIK/PRG/WFS/AdministrativeBoundaries?service=WFS&version=1.0.0&request=GetFeature&typeName=ms:A00_Granice_panstwa&srsName=EPSG:4326)
   SHA-256 `3105f246136f4b69448054c257278c4c4151c48e0bcfa0af5684616eda130a08`.
   The service returned EPSG:2180 in the GML geometry.
+
+For the distributed snapshot, use the two inputs with the SHA-256 digests above; the agency updates its URLs in place.
+Exact copies of the retrieved files are available as [Parquet](https://raw.githubusercontent.com/Maverick568/BeamNG.Earth/d1263f6c6dad6607e757b3244aa7cba4459b0caa/OT_BUWT_P.parquet) and [GML](https://raw.githubusercontent.com/Maverick568/BeamNG.Earth/d1263f6c6dad6607e757b3244aa7cba4459b0caa/border.gml).
+The reference build uses NumPy 2.5.4, PyArrow 26.0.1, pyproj 3.8.0 (PROJ 9.8.1)
+and Shapely 2.2.0 (GEOS 3.14.1). Point arrays are sorted and unique, rings are
+normalized before quantization, indices are little-endian int64 and coordinates
+are little-endian int32. The NPZ uses sorted, uncompressed NPY v1 members with
+fixed ZIP metadata. With no optional exports its SHA-256 is
+`623f11e97541bce5009781633acb96242a2e1c69f02f672ea244bb0e02cb1315`.
 
 Rebuild with `python tools/build_polish_poles.py OT_BUWT_P.parquet border.gml`.
 The builder also accepts optional [Mapillary point-feature GeoJSON exports](https://help.mapillary.com/hc/en-us/articles/4407521157138-Downloading-map-data-via-the-Mapillary-web-app)
@@ -208,3 +217,14 @@ restart the world server to supplement the bundled points with triangulated util
 from [Mapillary point-feature tiles](https://github.com/mapillary/api-demo).
 The token is stored locally in the game's user folder under
 `settings/beamngearth-mapillary.json`. The Polish road-sign and power-pole features share this setting. Disable Mapillary in the same row to override an environment or launcher token.
+
+The road content key includes the bundled survey digest and, when live poles are
+enabled, a format version, completeness flag and SHA-256 of the sorted unique
+coordinates in the tile's support search area. Skin keys inherit the content key.
+One worker job pins its source cells across key calculation and placement. A
+main-process cache probe only reads previously downloaded cells. Successful
+cells can be reused for seven days. Missing cells are retried on a later build.
+
+Point tiles use the project's netfetch policy for `tiles.mapillary.com`: 2 requests
+per second, burst 2, at most 2 concurrent requests, shared worker admission and a
+5,000-request daily hard cap per fetcher. Requests carry the token in an authorization header.

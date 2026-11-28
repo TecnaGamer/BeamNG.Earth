@@ -447,7 +447,7 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
     import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     box = roads.tile_bbox(tx, ty)
-    extent = polishpoles.bounds(frame, box, NEAR_M + 10.)
+    extent = polishpoles.bounds(frame, box, polishpoles.LIVE_MARGIN)
     cells = roads.cells_of_tile(frame, tx, ty, margin=MAX_SPAN_M / 4)
     lines, poles, seen = [], [], set()
     plan, memo = {}, {}             # (BNE_POWER_YARDS: each line ring's runs to lay out; the classes' support cells)

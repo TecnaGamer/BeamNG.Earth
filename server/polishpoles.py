@@ -19,10 +19,16 @@ def _signature():
     return "pl-poles-v1-" + hashlib.sha256(SNAPSHOT.read_bytes()).hexdigest()[:16]
 
 
-def cache_parts(frame, box):
-    if not bounds(frame, box, 2100.):
+LIVE_MARGIN = 2060.0  # powerlines.NEAR_M plus its 10 m matching margin
+
+
+def cache_parts(frame, box, buildings=True):
+    extent = bounds(frame, box, LIVE_MARGIN)
+    if not extent:
         return ()
-    return (_signature(), "mapillary-live-v1") if mapillarypoles.enabled() else (_signature(),)
+    if buildings and mapillarypoles.enabled():
+        return (_signature(), *mapillarypoles.signature(extent))
+    return (_signature(),)
 
 
 @lru_cache(maxsize=1)
@@ -97,7 +103,12 @@ def _osm_supports(layer):
 
 
 class Supports:
-    """Tile-local evidence. OSM point geometry takes precedence in overlapping surveys."""
+    """Tile-local evidence. OSM point geometry takes precedence in overlapping surveys.
+
+    Projection, polygon containment and span layout already use earthfast. Keep
+    source precedence and OSM feature identity here with the layer records.
+    The grid checks only nine buckets per match and compares squared distances.
+    """
 
     def __init__(self, frame, extent, layers):
         self.frame = frame
@@ -168,7 +179,7 @@ class Supports:
                 px, py, _ = self.frame.geodetic_to_enu(lat, lon, 0.)
                 # A low-voltage pole belongs to mappedpoles unless that stage defers
                 # to a high-line vertex (its MATCH_M).
-                if tower or key in self.survey or math.hypot(px-x, py-y) <= 1.5:
+                if tower or key in self.survey or (px-x)**2 + (py-y)**2 <= 1.5**2:
                     east[i], north[i] = x, y
                     confirmed[x, y] = key
                     self.standalone.add(key)
