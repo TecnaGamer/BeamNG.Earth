@@ -64,7 +64,7 @@ NAME_TABLES = {("revisit", "PLAN_NEUTRAL"), ("revisit", "NOT_SWITCHES"), ("exper
                ("experimental", "IDS"), ("bakepack", "CELL_SCOPED")}
 # The Experimental switches the planning does read (each changes plans or facts): the guard must see every one
 PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARES", "BNE_EU_ROAD_DETAILS",
-              "BNE_FR_ROADS", "BNE_GRADE_GUARD", "BNE_HRDEM_NEAR", "BNE_LIDARBC", "BNE_PHOTO_SURFACE",
+              "BNE_FR_ROADS", "BNE_GRADE_GUARD", "BNE_HRDEM_NEAR", "BNE_LIDARBC",
               "BNE_RAIL_CURVES", "BNE_RAIL_TUNNELS", "BNE_RAIL_XING", "BNE_SUBSEA_RELAX", "BNE_TERRAIN_BUMPS",
               "BNE_TUNNEL_LIDS",
               # (grading.FOLLOW_ON: the plans' profiles)
@@ -83,9 +83,8 @@ NOT_LISTED = {
     "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "
                       "earthd.Server._base_in) stores into the server's own state and drives the photo pipeline whose "
-                      "products feed planning inputs (roadsurf's verdicts measured from photos on the disk), and it "
-                      "turns BNE_PHOTO_SURFACE's verdicts off (photosurface.ON: the road specs): not provable by this "
-                      "guard",
+                      "products feed planning inputs (roadsurf's verdicts measured from photos on the disk): not "
+                      "provable by this guard",
     "BNE_FR_HOUSES": "comes only with BNE_FR_ROADS and BNE_EU_ROAD_DETAILS (the EU scenery setting), which the plans "
                      "read; its gated code also stores into its callers' objects (buildings.tile_buildings)",
     "BNE_STALE_REVISIT": "no build switch at all (revisit.NOT_SWITCHES)",
@@ -93,6 +92,11 @@ NOT_LISTED = {
                   "on the ground photos is keyed by its specs in the items it changes (snowcover.key_parts: far "
                   "textures, base photos), never in plans or facts; nothing the planning reaches imports snowcover",
     "BNE_WET_ROADS": "no build switch at all (revisit.NOT_SWITCHES): a live snowstate message only (snow.py)",
+    "BNE_LEAF_CYCLE": "no build switch at all (revisit.NOT_SWITCHES): a field of the anchor_ready message only "
+                      "(leafcycle.py); only earthd's anchor reply imports leafcycle, nothing the planning reaches",
+    "BNE_PUDDLES": "the puddle plan: R1 only adds the rain history to the live weather message (weather.PUDDLES_V2); "
+                   "R2 on will change the skins' puddle geometry (roadwear), so it stays keyed and is not proven "
+                   "plan-neutral",
     "BNE_TUNNEL_ROAD_OVER": "road tiles' tunnel entrances only (portals.fit: the headwall's top under a road crossing "
                             "over the mouth); not yet proven plan-neutral both ways, so it stays keyed with the "
                             "Revamped roads setting",

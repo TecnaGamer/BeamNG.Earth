@@ -170,7 +170,13 @@ def too_low():
         if not _state.get("tooLow"):
             return ""
         set_gb = _state["setting"]
+        limit, eff = floored(_state["limit"]), float(_state.get("eff") or 0.0)
     which = f"Max RAM ({set_gb:g} GB)" if set_gb else "Max RAM (Auto)"
+    if limit and eff and eff < 0.9 * limit:
+        # (the PC itself short of free memory: ram_effective_mb held the server under its setting, so raising Max RAM
+        # changes nothing; players at Auto and 32 GB were told to raise it, 2026-11-27)
+        return (f"memory: this PC is low on free memory, so the server is held to {eff / 1024:.1f} GB of its "
+                f"{which} and the world loads slowly (close other programs, or lower the game's graphics settings)")
     return f"memory: {which} is too low for this place, the world loads slowly (raise it in the settings)"
 
 

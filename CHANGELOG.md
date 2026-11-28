@@ -5,6 +5,22 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased
 
 ### Added
+- **Mod compatibility**: other mods now get more of the map data a stock map gives them. The level's police
+  vehicles (`police.vehGroup.json`) and info.json's region and country follow the region you are in, so the game's
+  police and traffic pick cars of that region. Buildings sit in a `Buildings` group as on the stock maps. The
+  modding API 1.12 adds a notice when the streamed world changes (`onBeamNGEarthContentChanged`), the buildings
+  loaded round a point, the towns round a point and whether the collision round a point is in (docs/ADDONS.md).
+  The AI road graph is no longer applied again when it has not changed, which should reduce the hitches and the
+  reloads that mods listening for it went through.
+- **Live air traffic** (off by default; Settings, Air traffic): the real aircraft around you from live ADS-B data,
+  built in from devo343's Live Air Traffic add-on (no separate window or program to run). Aircraft models with airline
+  colours, lights, contrails that follow the real weather, engine sounds, labels, a follow camera and a seat view, and
+  the aircraft on the 2D and 3D maps (click one to set the GPS). Turning it on first says what is sent and to whom:
+  only your approximate area, about every 15 seconds while you are in the world. Labels are off by default
+  (Ctrl+Alt+K turns them on: the nearest few aircraft and the one you look at, never parked ones). If devo343's own
+  Live Air Traffic add-on is still on, a notice offers to switch it off (otherwise every aircraft shows twice). Keys:
+  Ctrl+Alt+A on / off, Ctrl+Alt+K labels, Ctrl+Alt+C contrails, Ctrl+Alt+I what is that plane, Ctrl+Alt+S sounds,
+  Ctrl+Alt+F follow.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
@@ -21,7 +37,13 @@ What changed in each release of BeamNG.Earth, newest first.
   tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
   young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green. Each tree has one
   look at every distance (bare, autumn-coloured or green), and towns in hot deserts (such as Phoenix) and the tropics
-  keep most of their trees green through the winter.
+  keep most of their trees green through the winter. Reduced the bare trees' popping between their detail levels:
+  their twigs keep the same density from near to far, so a crown no longer thins out and then turns into a dark solid
+  mass at a distance.
+- **Leaf cycle (Experimental, with Winter).** Broadleaf trees follow the real date at the place: in autumn they colour
+  and lose their leaves over several weeks, one tree at a time, and in spring they leaf out the same way. The dates
+  follow the latitude, the height and the climate (maritime places keep their leaves longer, the far north loses them
+  sooner).
 - **BeamMP**: `G.WEATHER` takes the new presets and `real-host` (everyone gets the live weather where the
   longest-joined player is). `real` (each player's own weather) stays the default.
 - **Lightning and thunder** in thunderstorms (the real ones where the weather data has them, and the Thunderstorm and
@@ -41,6 +63,13 @@ What changed in each release of BeamNG.Earth, newest first.
 - **Puddles**: in rain, water collects in the low points of roads, along the kerbs and in the wheel ruts of worn
   roads: mirror-like water that reflects the sky and the street. They grow as it keeps raining and shrink as the road
   dries.
+- **New puddle look (Experimental, Weather page, off by default)**: puddles that look like still water mirroring the grey
+  sky (dark at night), wet streets that reflect an overcast sky rather than a sunny one, and puddles that fill by how much it has rained: a drizzle only
+  wets the road, an hour of heavy rain fills them, and the deep ones stay for hours after. The roads' wetness and grip
+  follow the same water, the same on every computer; in multiplayer with the host's real weather everyone sees the
+  same puddles, also players who join later. No water film on the road in tunnels and under bridges. With **New
+  puddles (server)** on the Experimental page, the world server sends the last day of real rain, so you arrive after
+  a wet morning to puddles.
 - **Wet roads**: roads lose grip in the rain you see, also with the winter road conditions off: a little when damp,
   more when wet (stopping from 50 mph takes about 129 ft instead of 108 ft), and they stay slippery while they dry.
   At speed, deep water in the puddles and the water on the road in heavy rain can make the tyres aquaplane (in deep
@@ -59,10 +88,14 @@ What changed in each release of BeamNG.Earth, newest first.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed
-- Reduced the chance of a city taking minutes to load with the Experimental "Road surface from aerial photos" and
-  "Generated ground" both on (downtown Baltimore took about 10 minutes for its first ground and road tiles). The road surfaces now read no aerial photo while the generated ground is on, as roofs already did; before,
-  the roads waited for photos that never came, and everything built from them was made again over and over and never
-  kept.
+- Winter (Experimental): reduced lag and buildings briefly disappearing after a teleport or a weather update. A place
+  with no snow on its roads no longer sends every road tile again, and a change of snow on the roads now sends only
+  the road surfaces, not the buildings. A change in the snow state now re-renders only the distant ground it actually
+  changes, instead of every distant tile.
+- Wet roads: the whole road should no longer switch between wet and dry when you turn onto another kind of street.
+  It now stays as wet as the wettest street nearby, and as the road dries over the hour the wet look fades over
+  minutes instead of switching at once. After a teleport the road should no longer keep the last place's wetness:
+  it shows the new place's at once.
 - Reduced the chance of the game's terrain texture cache (`temp/art/terrainmaterialcache` in BeamNG's user folder)
   filling up with old ground photos: they now go with their session, and a one-time clean-up at the next start removes
   the ones earlier versions left behind (several GB on long-time test machines).
@@ -83,11 +116,28 @@ What changed in each release of BeamNG.Earth, newest first.
 - Reduced the chance of streets staying dry in a rain preset with Winter on where the real weather is dry.
 - Reduced the chance of the world stopping loading with Revamped roads (Experimental) on: after driving a while, the
   ground ahead could fail to build again and again.
+- Reduced the chance of snow from a previous place showing after a teleport (with Winter on): the snow on the ground
+  now belongs to the place it was worked out for, a new place shows none until its own weather is in, and that comes
+  within seconds instead of up to 5 minutes when the first try is busy.
+- Reduced the chance of snow showing where it has not really snowed (with Winter on): mountains no longer turn white
+  from their climate alone (mapped glaciers and ice stay), and the snow worked out for the heights above a place's own
+  ground no longer whitens higher mountains in view.
 
 ### Changed
+- Painting roads, car parks and pads into the ground photos should take less time and memory (about half the time
+  per photo on a four-core server share; the pictures are the same).
+- Retired the Experimental "Road surface from aerial photos" setting (`BNE_PHOTO_SURFACE`). Roads should look the same as they do by default, and an old setting or variable is now ignored.
+- **Ground photos use less of the world server's CPU**: their texture levels are now made with whole-number maths
+  (about a third of the CPU they took before), and on machines with a graphics card the photo encoding should cost the
+  server less. The ground photos of places you visited before are made once more on your next visit, then kept again.
+  On a Steam Deck the server now uses the graphics chip only while you are parked or a teleport is loading, which
+  may reduce the frame drops while driving.
 - **BeamMP hosting:** the releases no longer carry the Windows and Linux host bundles with BeamMP's own server program
   inside. Get the server from BeamMP's own releases and add `BeamNG.Earth-BeamMP-Server-<version>.zip` (the mod and
   the server plugin). The Docker image is unchanged.
+- Terrain blocks should be built a little faster on machines with several cores: more of the ground's per-point work
+  (elevation, positions, water depth, land cover and the server's maths) is split over the world server's few threads,
+  with the same ground as before.
 
 ## 1.10.1 beta (2026-11-15)
 

@@ -67,7 +67,6 @@ FEATURES = (
     ("expRoughDirt", {"BNE_DIRT_BUMP": "1", "BNE_DIRT_BANK": "0.015"}, None),   # grading.DIRT_ROUGH / DIRT_BANK_M
     ("expWearStrips", {"BNE_WEAR_STRIPS": "on"}, None),                   # roadwear.STRIPS_ON
     ("expGradeGuard", {"BNE_GRADE_GUARD": "on"}, None),                   # grading.GUARD_ON
-    ("expPhotoSurface", {"BNE_PHOTO_SURFACE": "1"}, None),                # photosurface.ON
     ("expTerrainBumps", {"BNE_TERRAIN_BUMPS": "on"}, None),               # grading.TERRAIN_BUMPS_ON
     ("expRoadFollow", {"BNE_ROAD_FOLLOW": "on"}, None),                   # grading.FOLLOW_ON
     ("expCliffWalls", {"BNE_CLIFF_WALLS": "on"}, None),                   # roads.CLIFF_WALLS_ON
@@ -85,6 +84,9 @@ FEATURES = (
     ("expStaleRevisit", {"BNE_STALE_REVISIT": "on"}, None),               # revisit.STALE_ON (not a key: NOT_SWITCHES)
     ("expWinter", {"BNE_WINTER": "on"}, None),                            # snow.WINTER / snowcover.ON (not a key)
     ("expWetRoads", {"BNE_WET_ROADS": "on"}, None),                       # snow.WET_ROADS: rain's wet roads (not a key)
+    # the puddle plan (R1: the rain history in the weather message, weather.PUDDLES_V2; R2 on: the new puddle geometry)
+    ("expPuddlesV2", {"BNE_PUDDLES": "v2"}, None),                        # weather.PUDDLES_V2, roadwear.PUDDLES
+    ("expLeafCycle", {"BNE_LEAF_CYCLE": "on"}, "expWinter"),              # leafcycle.ON: the trees' leaf cycle (not a key)
 )
 IDS = tuple(f[0] for f in FEATURES)
 # A setting that counts only in a file of this version or newer (settings.lua M.VERSION): the Road signs switch was on

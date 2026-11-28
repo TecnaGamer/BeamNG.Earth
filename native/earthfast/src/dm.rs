@@ -117,13 +117,14 @@ pub fn dm_vec<'py>(py: Python<'py>, op: u8, x: PyReadonlyArray1<'py, f64>, y: Op
     -> PyResult<Bound<'py, PyArray1<f64>>> {
     let x = x.as_slice()?;
     let out: Vec<f64> = match (unary(op), binary(op), y) {
-        (Some(f), _, None) => py.detach(|| x.iter().map(|&v| f(v)).collect()),
+        // (over par's threads for long arrays: each value from its own operands, the same bits on any number)
+        (Some(f), _, None) => py.detach(|| crate::par::map(x.len(), |i| f(x[i]))),
         (_, Some(f), Some(y)) => {
             let y = y.as_slice()?;
             if y.len() != x.len() {
                 return Err(PyValueError::new_err("dm_vec: x and y differ in length"));
             }
-            py.detach(|| x.iter().zip(y).map(|(&a, &b)| f(a, b)).collect())
+            py.detach(|| crate::par::map(x.len(), |i| f(x[i], y[i])))
         }
         _ => return Err(PyValueError::new_err(format!("dm_vec: op {op} with the wrong number of operands"))),
     };

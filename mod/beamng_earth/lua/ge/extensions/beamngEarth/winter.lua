@@ -225,6 +225,25 @@ function M.mergeShown(row, cond)
   return out
 end
 
+-- Pure: the row of plow class c (0..4) among rows P0..P4 (a snowstate's roads or bridges) that the slots and the wet
+-- look follow. Snow, slush, frost and ice stay the class's own (plowing and salting differ by class, and W3 draws them
+-- per class). A wet-film condition (dry / damp / wet / salt_wet, WET_RANK) is the wettest wet-film row of any class,
+-- the same on every class: the terrain's carriageways are ONE layer and the wet look is the whole scene's, so taking
+-- the class under the car flipped the entire road between wet and dry at each turn onto another kind of street
+-- (Baltimore, 2026-11-28: P0-P2 dry, P3-P4 wet an hour after rain; snow.rs dries busier roads faster).
+function M.stableRow(list, c)
+  if type(list) ~= 'table' then return nil end
+  local own = list[(tonumber(c) or 2) + 1]
+  if type(own) ~= 'table' or not M.WET_RANK[own[1]] then return own end
+  local best = own                -- (its own row while none is wetter: its own pavement temperature)
+  for i = 1, 5 do
+    local r = list[i]
+    local rk = type(r) == 'table' and M.WET_RANK[r[1]]
+    if rk and rk > M.WET_RANK[best[1]] then best = r end
+  end
+  return best
+end
+
 -- The road row the slots follow now: { road row, bridge row } of the class under the car, or the forced condition's.
 local function rows()
   if forced then
@@ -233,7 +252,8 @@ local function rows()
   end
   local road, deck = nil, nil
   if state and type(state.roads) == 'table' then
-    road, deck = state.roads[cls + 1], type(state.bridges) == 'table' and state.bridges[cls + 1] or nil
+    road = M.stableRow(state.roads, cls)
+    deck = type(state.bridges) == 'table' and M.stableRow(state.bridges, cls) or nil
   end
   if shown then
     road = M.mergeShown(road, shown)
@@ -451,9 +471,48 @@ local function hook(on)
   if not on then aggression(false) end
 end
 
+-- The place the states are for: a number that changes with the first state after a teleport (onTeleport: the
+-- server sends the destination's state after the new anchor, snow.py Tracker) and with one from more than PLACE_M
+-- away from the last one's site, not with the hourly states of one place (wetlook.lua: a new place's road wetness is
+-- shown at once, one place's changes over minutes).
+M.PLACE_M = 25000
+local place, placeAt, teleported = 0, nil, false
+function M.place() return place end
+
+-- core.lua: a teleport starts. The origin's state no longer holds (its wet road, its snow): the grip and the readout
+-- go back to stock (or the weather shown's) until the destination's state comes, which is then a new place (Codex on
+-- 17fb1d0e: a 5-25 km teleport's dry destination kept the origin's place and dried slowly from its wet road).
+function M.onTeleport()
+  teleported = true
+  if state == nil then return end
+  state = nil                     -- (W3's road materials keep their look until the destination's: winterroad.lua)
+  if shown or forced then
+    M.apply()                     -- (the weather shown's wet road or the forced condition stays)
+    refreshReadout()
+    return
+  end
+  M.restore()
+  readoutText = ''
+  hook(false)
+end
+
+-- Pure: is (lat, lon) more than m from at {lat, lon} (nil: yes)? Equirectangular, enough for tens of km.
+function M.farFrom(at, lat, lon, m)
+  lat, lon = tonumber(lat), tonumber(lon)
+  if not at or not lat or not lon then return true end
+  local k = 111320
+  local dx = (lon - at[2]) * k * math.cos(math.rad(0.5 * (lat + at[1])))
+  local dy = (lat - at[1]) * k
+  return dx * dx + dy * dy > m * m
+end
+
 -- core.lua: a snowstate from the server.
 function M.onState(msg)
   if type(msg) ~= 'table' or type(msg.roads) ~= 'table' then return end
+  if teleported or M.farFrom(placeAt, msg.lat, msg.lon, M.PLACE_M) then
+    place, teleported = place + 1, false
+    placeAt = (tonumber(msg.lat) and tonumber(msg.lon)) and { tonumber(msg.lat), tonumber(msg.lon) } or nil
+  end
   state, pendingSince = msg, nil
   hook(true)
   M.apply()
@@ -556,6 +615,7 @@ function M.reset()
   hook(false)
   state, forced, shown, pendingSince, readoutText = nil, nil, nil, nil, ''
   gmTable, gmProbe, cls, clsCand = nil, nil, 2, nil
+  placeAt = nil
 end
 
 function M._state() return state, cls, applied end     -- (tests)

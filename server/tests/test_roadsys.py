@@ -7,6 +7,7 @@ its bytes, and two squares agree inside their shared band."""
 import importlib
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -316,6 +317,45 @@ class SquareTest(unittest.TestCase):
         self.assertEqual(a, b)
 
 
+class CellsShortTableTest(unittest.TestCase):
+    def test_a_table_built_during_a_fault_faults_again_when_reused(self):
+        """_Cells.table kept a table built short (a read failed meanwhile) for good: a square solved later in a clean
+        scope was taken as complete (kept on disk). Now each use inside SHORT_TTL_S faults, then it is read again."""
+        import roadsys
+        import lanegraph
+        feats = type("F", (), {"_road_revision": 3, "__len__": lambda self: 1})()
+        calls = []
+        short = [True]
+
+        def lane_rows(key, cell_fn, memo):
+            calls.append(1)
+            if short[0]:
+                revisit.fault(lidar=True)
+            return {}, None
+
+        cc = roadsys._Cells(cell_fn=lambda k: feats)
+        with mock.patch.object(lanegraph, "_cell_lane_segments", lane_rows), \
+                mock.patch.object(roadsys, "_table", lambda key, f, rows: ("tab", len(calls))):
+            with revisit.scope() as b1:
+                first = cc.table("k")
+            self.assertFalse(b1.complete)
+            with revisit.scope() as b2:
+                again = cc.table("k")
+            self.assertFalse(b2.complete)           # (failed before: the cached table hid the fault)
+            self.assertEqual(again, first)
+            self.assertEqual(len(calls), 1)
+            short[0] = False
+            with mock.patch.object(roadsys.time, "monotonic", return_value=time.monotonic() + roadsys.SHORT_TTL_S + 1):
+                with revisit.scope() as b3:
+                    fresh = cc.table("k")
+            self.assertTrue(b3.complete)
+            self.assertEqual(len(calls), 2)
+            with revisit.scope() as b4:
+                self.assertEqual(cc.table("k"), fresh)
+            self.assertTrue(b4.complete)
+            self.assertEqual(len(calls), 2)
+
+
 class ChainEndsTest(unittest.TestCase):
     def test_an_end_on_another_deck_of_the_chain_is_no_abutment(self):
         """(M5) roadsys._ends_on_decks: a viaduct's two parts 1.8 m apart (past endmatch's JOIN_M): each end's
@@ -330,6 +370,105 @@ class ChainEndsTest(unittest.TestCase):
         got = roadsys._ends_on_decks(pts, ["a", "a", "b", "b"], decks)
         self.assertEqual(got.tolist(), [False, True, True, False])
         self.assertEqual(roadsys._half_width((None, a)), roadsys.DECK_HALF_MIN_M)
+
+
+class KeptEndsTest(unittest.TestCase):
+    """(M5 round 8, surface 12) A short chain keeps its profile's deck end where the plans' ground past it lies in a
+    hollow, and its approach is ramped to it: the kept end's approach read along its own map feature to the first
+    junction (approach_run), the decision (kept_ends: a 32 m trunk deck, its north end's ground 2 m under its profile
+    end, 60 m of approach free: kept, a 33.3 m ramp; the same with a junction 40 m on: not), and pins_near's ramp from
+    the deck end's height at its read point back to the plans' own at the ramp's length (ramp_dz)."""
+
+    def test_decision_and_ramp(self):
+        import roadsys
+        fast.require(roadsys.KEPT_KERNEL, "test")
+        part = (np.array([[0.0, 0.0], [0.0, -32.0]]), np.array([70.0, 69.7]))
+        prm = (roadsys.KEEP_SHORT_M, roadsys.KEEP_DZ_M, roadsys.RAMP_MIN_M, roadsys.RAMP_CLEAR_M, roadsys.RAMP_RIDE_A)
+        trunk = type("Spec", (), {"cls": "trunk", "link": False, "width": 10.0})()
+        g, v = roadsys._class_grade(trunk), roadsys._class_speed(trunk)
+        self.assertEqual(g, 0.06)
+        # (130 m free: the curve's limit at 60 mph, v sqrt(6 x 2 / a) = 54 m, over the grade's 33 m)
+        got = fast._ef.roadsys_kept_ends([part], [(68.0, 69.9)], [(130.0, 130.0)], [g], [v], prm)
+        self.assertAlmostEqual(got[0][0], v * (12.0 / roadsys.RAMP_RIDE_A) ** 0.5)
+        self.assertEqual(got[0][1], 0.0, "wholly kept")
+        self.assertTrue(np.isnan(got[0][2]), "0.2 m off: lifted as before")
+        got = fast._ef.roadsys_kept_ends([part], [(68.0, 69.9)], [(60.0, 60.0)], [g], [v], prm)
+        self.assertTrue(np.isnan(got[0][0]), "a junction 60 m on: 40 m of ramp take only part of it: not kept")
+        got = fast._ef.roadsys_kept_ends([part], [(68.0, 69.9)], [(35.0, 60.0)], [g], [v], prm)
+        self.assertTrue(np.isnan(got[0][0]), "no room before the junction")
+        dz = np.asarray(fast._ef.roadsys_ramp_dz(np.array([0.0, 10.0, 33.3, 40.0]), 2.0, 33.3))
+        self.assertEqual(dz[0], 2.0)
+        self.assertTrue(0.0 < dz[1] < 2.0 and dz[2] == 0.0 and dz[3] == 0.0, dz)
+
+    def test_approach_run_stops_at_the_first_junction(self):
+        import roadsys
+        fast.require(roadsys.KEPT_KERNEL, "test")
+        # the deck's feature goes on north from y = 0 to y = 100; another road joins it at y = 70
+        lines = [(np.array([[0.0, 0.0], [0.0, 100.0]]), [(0.0, 1), (70.0, 2), (100.0, 3)], [0.0]),
+                 (np.array([[0.0, 70.0], [60.0, 70.0]]), [(0.0, 2)], [])]
+        run, pts = fast._ef.roadsys_approach_run(lines, 0, 0.5, True, 170.0)
+        self.assertAlmostEqual(run, 69.5)
+        self.assertAlmostEqual(float(pts[-1][1]), 70.0)
+
+    def test_ramp_pins_come_whole_from_the_kept_ends(self):
+        import roadsys
+        fast.require(roadsys.KEPT_KERNEL, "test")
+        ll = np.column_stack((np.linspace(54.0, 54.0003, 18), np.full(18, 12.6)))
+        arc = np.linspace(0.0, 33.36, 18)
+        entry = (ll, arc, 2.0, 33.3, 5.0)
+        with mock.patch.object(roadsys, "_kept_near", lambda g0, h0, g1, h1, cell_fn: [entry]):
+            pins = roadsys._ramp_pins(53.9999, 12.5999, 54.0001, 12.6001, None, lambda la, lo: np.full(len(la), 68.0))
+        self.assertEqual(len(pins), 1)
+        pla, plo, dz, t, half, w, share = pins[0]
+        self.assertEqual(len(pla), 18)
+        self.assertEqual(float(dz[0]), 2.0)
+        self.assertEqual(float(dz[-1]), 0.0)
+        self.assertEqual(float(t[0]), 68.0)
+        self.assertEqual(half, 5.0)
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 12)
+
+
+class EmbankTest(unittest.TestCase):
+    """(M5 round 8, surface 14) A road's embankment in the surface model's ground (embankfield, earthfast embank_lift /
+    embank_along): the ground filter's cut given back where it is the road's own (0bff: filtered 68.4, raw 76.6 at
+    the road, 75.0 / 73.2 at 35 m beside: 8.2 m); nothing in a trough, beside a building, over lidar, for a cut deeper
+    than EMBANK_MAX_M; laid over the plans' ground within a road's half width and its taper only; and nothing at all
+    unless BNE_ROADSYS_EMBANK=on with BNE_ROADSYS=surface."""
+
+    def test_lift(self):
+        import embankfield as ef_
+        fast.require(ef_.EMBANK_KERNEL, "test")
+        prm = (ef_.EMBANK_MATCH_M, ef_.EMBANK_CUT_MIN, ef_.EMBANK_CREST_MIN, ef_.EMBANK_CREST_FULL, ef_.EMBANK_MAX_M)
+        a = lambda *v: np.array(v, np.float64)      # noqa: E731
+        got = np.asarray(fast._ef.embank_lift(a(68.4, 68.4, 68.4, 71.0, 99.0), a(68.4, 68.4, 68.4, 68.4, 99.0),
+                                              a(76.6, 70.0, 76.6, 76.6, 125.0), a(75.0, 75.0, 75.0, 75.0, 123.0),
+                                              a(73.2, 73.2, 73.2, 73.2, 123.5), np.array([0, 0, 1, 0, 0], bool), prm))
+        self.assertAlmostEqual(got[0], 8.2)
+        self.assertEqual(got[1:].tolist(), [0.0, 0.0, 0.0, 0.0], "trough, building, lidar, a 26 m cut")
+
+    def test_field_near_the_road_only(self):
+        import embankfield as ef_
+        import mapcells
+        fast.require(ef_.EMBANK_KERNEL, "test")
+        fld = ef_.Field(None, None, None)
+        line = (np.full(11, 54.0), np.linspace(12.6, 12.601, 11), np.full(11, 6.0), 5.0)
+        with mock.patch.object(ef_.Field, "_lines", lambda self, key: [line] if str(key) == str(mapcells.cell_of(54.0, 12.6005)) else []):
+            # (on the line, 10 m off (within the half width + taper), 40 m off)
+            la = np.array([54.0, 54.0 + 10.0 / 111320.0, 54.0 + 40.0 / 111320.0])
+            got = fld.apply(la, np.full(3, 12.6005), np.full(3, 70.0))
+        self.assertAlmostEqual(float(got[0]), 76.0, places=3)
+        self.assertTrue(70.0 < float(got[1]) < 76.0, got)
+        self.assertEqual(float(got[2]), 70.0, "away from the road: the ground as it was")
+
+    def test_off_by_default(self):
+        import embankfield as ef_
+        import roadsys
+        state = type("S", (), {"md": object(), "dem": type("D", (), {"sample_raw12": None})(), "widths": None})()
+        with mock.patch.object(ef_, "ON", False):
+            self.assertIsNone(ef_.of(state))
+        with mock.patch.object(ef_, "ON", True), mock.patch.object(roadsys, "SURFACE", False):
+            self.assertIsNone(ef_.of(state))
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 14)
 
 
 class StructureDepthTest(unittest.TestCase):

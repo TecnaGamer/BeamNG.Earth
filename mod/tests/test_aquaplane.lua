@@ -154,6 +154,18 @@ MPVehicleGE = nil
 for _ = 1, 400 do G.update(0.6, 255, 25, true) end
 near(G.film(), G.filmMm(25), 0.05, 'the film follows the rain')
 check(sent[#sent]:find('set(255, 2.1', 1, true), 'sent: the film alone')
+-- no film under cover (the puddle plan D14), with the new puddle look on only (coverCheck)
+package.loaded['beamngEarth/ambience'] = { shelterAt = function() return 'tunnel' end }
+G.update(0.6, 255, 25, true)
+check(G.film() > 2, 'the setting off: the film as before, even in a tunnel')
+G.coverCheck = true
+G.update(0.6, 255, 25, true)
+check(G.film() == 0 and G.coveredNow and sent[#sent]:find('set(255, 0, {})', 1, true), 'in a tunnel: no film')
+package.loaded['beamngEarth/ambience'] = { shelterAt = function() return nil end }
+for _ = 1, 400 do G.update(0.6, 255, 25, true) end
+near(G.film(), G.filmMm(25), 0.05, 'out in the open again: the film')
+G.coverCheck = nil
+package.loaded['beamngEarth/ambience'] = nil
 G.reset()
 check(sent[#sent]:find('set(255, 0, {})', 1, true) and G.film() == 0, 'reset: cleared')
 package.loaded['beamngEarth/roads'] = nil

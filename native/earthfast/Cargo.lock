@@ -444,6 +444,7 @@ dependencies = [
  "texture-compressor",
  "turbojpeg-sys",
  "wgpu",
+ "windows",
  "windows-sys",
  "zstd",
  "zune-jpeg",

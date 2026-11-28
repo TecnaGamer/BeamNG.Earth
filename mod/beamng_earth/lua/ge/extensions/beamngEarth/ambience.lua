@@ -505,6 +505,14 @@ M.RAIN_ROOF = 0.9        -- the roof drumming there
 -- ROOF_NEAR_M or closer, none from ROOF_FAR_M ("lightly in orbit").
 M.RAIN_CABIN_CAMS = { driver = true }
 M.RAIN_NEAR_CAMS = { onboard = true }
+-- (BeamNG 0.40 names the seat cameras 'occupant.<seat>' and the hood / bumper ones 'onboard.hood' ...: core/camera.lua;
+-- the user, 2026-11-26: "the rain sound doesn't change when the camera is inside the cabin")
+function M.camKind(n)
+  if type(n) ~= 'string' then return nil end
+  if M.RAIN_CABIN_CAMS[n] or n:find('^occupant%.') or n == 'onboard.driver' then return 'cabin' end
+  if M.RAIN_NEAR_CAMS[n] or n:find('^onboard%.') then return 'near' end
+  return nil
+end
 M.ROOF_ORBIT = 0.5
 M.ROOF_NEAR_M, M.ROOF_FAR_M = 4, 12
 M.RAIN_TRACK = 'amb_rain_medium'
@@ -647,8 +655,8 @@ end
 
 -- Pure: the plain roof's share outside for a camera mode and its distance d (m) to the car.
 function M.roofNearFor(camName, d)
-  if M.RAIN_CABIN_CAMS[camName] then return 0 end
-  if M.RAIN_NEAR_CAMS[camName] then return 1 end
+  if M.camKind(camName) == 'cabin' then return 0 end
+  if M.camKind(camName) == 'near' then return 1 end
   d = tonumber(d)
   if not d then return 0 end
   return M.ROOF_ORBIT * math.max(0, math.min(1, (M.ROOF_FAR_M - d) / (M.ROOF_FAR_M - M.ROOF_NEAR_M)))
@@ -843,14 +851,14 @@ end
 
 local function cabinCam()
   local n = camName()
-  return n and M.RAIN_CABIN_CAMS[n] or false
+  return M.camKind(n) == 'cabin'
 end
 
 -- The plain roof's share outside now (M.roofNearFor: the camera's mode and its distance to the player's car).
 local function roofNear()
   local n = camName()
-  if not n or M.RAIN_CABIN_CAMS[n] then return 0 end
-  if M.RAIN_NEAR_CAMS[n] then return 1 end
+  if not n or M.camKind(n) == 'cabin' then return 0 end
+  if M.camKind(n) == 'near' then return 1 end
   local cam = rawget(_G, 'core_camera')
   local p = cam and cam.getPosition and cam.getPosition()
   local veh = rawget(_G, 'be') and be.getPlayerVehicle and be:getPlayerVehicle(0)

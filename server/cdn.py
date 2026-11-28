@@ -40,6 +40,16 @@ supervisor decides it once per app session (overturepick.Pick: listed in Overtur
 build reads, one short deadline) and hands it to every server it starts (overturepick.RELEASE_ENV). The switch file
 is not signed: the most an edit of it can do is pick a release Overture lists, of a schema this build reads.
 
+"bnwt" ({"bnwt": {"enabled": true, "release": "2026-11-18.0"}}): the prepacked Overture input tiles (bnwt.py) read
+from the tile host in place of Overture's own tiles and parquet; the release the archives were built from, which must
+be the one this process reads (overture.effective: another, the sources as before). BNGE_BNWT_URL (a base URL, or
+"off") overrides it.
+
+"cip" ({"cip": {"enabled": true, "release": "2026-11-18.0", "build": "6f0baf33df92ef53"}}): architecture v2's compact
+per-cell inputs (cip.py) from the tile host; "build" (optional) names the build, else the release's latest.json does.
+A build made by other code (cip.code_inputs) is refused by the reader, as with BNE_V2_CIP=on. BNE_V2_CIP (on / off)
+and BNE_V2_CIP_BUILD override it.
+
 "dem" / "bngmt": Mapterhorn's z0-12 elevation tiles repacked (dem.MT_CDN_*, the data repo's dem workflow), the release
 the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overrides it.
 """
@@ -176,3 +186,38 @@ def lidarz_on(fetcher, cache_dir):
     if got:
         log.info("cdn: lidar road heights on")
     return got
+
+
+def _word_ok(v):
+    return isinstance(v, str) and bool(v) and "/" not in v and ".." not in v and v == v.strip()
+
+
+def bnwt_base(fetcher, cache_dir, release):
+    """The tile host's base URL when the switch turns the BNWT archives of this process's Overture release on
+    ({"bnwt": {"enabled": true, "release": ...}}), else None (the sources as before)."""
+    on = switch(fetcher, cache_dir).get("bnwt") or {}
+    if not isinstance(on, dict) or not on.get("enabled"):
+        return None
+    rel = on.get("release")
+    if not _word_ok(rel) or rel != release:
+        log.info("cdn: BNWT archives of %r not used (this process reads Overture %s)", rel, release)
+        return None
+    log.info("cdn: BNWT archives %s on (%s)", rel, CDN_BASE)
+    return CDN_BASE
+
+
+def cip_build(fetcher, cache_dir, release):
+    """(base URL, build or None) when the switch turns the CIP cells of this process's Overture release on
+    ({"cip": {"enabled": true, "release": ..., "build": ...}}), else None. No "build": the release's latest.json."""
+    on = switch(fetcher, cache_dir).get("cip") or {}
+    if not isinstance(on, dict) or not on.get("enabled"):
+        return None
+    rel, build = on.get("release"), on.get("build")
+    if not _word_ok(rel) or rel != release:
+        log.info("cdn: CIP cells of %r not used (this process reads Overture %s)", rel, release)
+        return None
+    if build is not None and not (_word_ok(build) and build.isalnum()):
+        log.info("cdn: CIP build %r not used", build)
+        return None
+    log.info("cdn: CIP cells %s on (%s%s)", rel, CDN_BASE, f", build {build}" if build else "")
+    return CDN_BASE, build

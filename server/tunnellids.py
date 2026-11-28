@@ -243,6 +243,7 @@ class Lids:
         self.md, self.raw = md, raw
         self.lock = threading.Lock()
         self.cells = OrderedDict()      # cell key -> (lat0, lon0, [lids in the cell's own metric frame])
+        self.key_locks = {}             # cell key -> the lock of its build
 
     def _feats(self, key):
         got = self.md.cell(key, layers=("roads",), kind="demand")
@@ -254,12 +255,20 @@ class Lids:
             if got is not None:
                 self.cells.move_to_end(key)
                 return got
-        try:
-            got = self._build(key)
-        except Exception as e:          # (no lids this time; asked again next time, not remembered)
-            import logging
-            logging.getLogger("earthd.tunnellids").debug("tunnel lids of %s: %s: %s", key, type(e).__name__, e)
-            return 0.0, 0.0, []
+        with self.lock:
+            kl = self.key_locks.setdefault(key, threading.Lock())
+        with kl:                        # (one build of a cell at a time: a second asker takes the first's)
+            with self.lock:
+                got = self.cells.get(key)
+                if got is not None:
+                    self.cells.move_to_end(key)
+                    return got
+            try:
+                got = self._build(key)
+            except Exception as e:      # (no lids this time; asked again next time, not remembered)
+                import logging
+                logging.getLogger("earthd.tunnellids").debug("tunnel lids of %s: %s: %s", key, type(e).__name__, e)
+                return 0.0, 0.0, []
         with self.lock:
             self.cells[key] = got
             while len(self.cells) > CELLS_KEPT:

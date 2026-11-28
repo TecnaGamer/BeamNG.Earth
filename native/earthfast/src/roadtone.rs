@@ -20,7 +20,7 @@ const TONE_COLS: usize = 9;
 const LIGHT_RAMP: f32 = 20.0;
 
 /// Box sums (radius r, clipped at the edges) of the planes v (n planes of h x w), by summed-area tables.
-fn box_sum(v: &[f32], h: usize, w: usize, r: usize) -> Vec<f32> {
+pub(crate) fn box_sum(v: &[f32], h: usize, w: usize, r: usize) -> Vec<f32> {
     let mut sat = vec![0f64; (h + 1) * (w + 1)];
     for j in 0..h {
         let mut row = 0f64;

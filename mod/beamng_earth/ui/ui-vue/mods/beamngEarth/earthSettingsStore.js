@@ -115,6 +115,7 @@ export const settingsSchema = [
       { id: "weatherSoundNow", type: "info", name: "Weather sounds now", desc: "Which weather sounds play now, and why the pre-recorded ones play when Live is chosen.", showIf: c => c.weatherMode !== "manual" },
       { id: "weatherWetLook", type: "bool", default: true, name: "Wet look", desc: "City streets, sidewalks, markings, bridges and buildings look darker and glossier while it rains and for a while after, drying slowly (with the winter road conditions on: the road condition). City streets change as new ground loads around you.", showIf: c => c.weatherMode !== "manual" },
       { id: "weatherWetGrip", type: "bool", default: true, name: "Wet roads", desc: "Roads lose grip in the rain shown, as real wet roads do: a little when damp, more when wet, and they stay slippery while they dry. At speed, standing water in the puddles and the water on the road in heavy rain can make the tyres aquaplane (from about 60 mph in deep water). Traffic drives a little more carefully on wet roads. Off: the roads keep their dry grip in any weather.", showIf: c => c.weatherMode !== "manual" },
+      { id: "weatherPuddleLook", type: "bool", default: false, name: "New puddle look", desc: "Experimental. Puddles look like still water mirroring the grey sky (dark at night), the wet streets reflect an overcast sky instead of a sunny one, and the puddles fill by how much it has rained: a drizzle only wets the road, an hour of heavy rain fills them, and the deep ones last for hours after. The roads' wetness and grip follow the same water. In multiplayer with the host's real weather everyone sees the same puddles. No water film in tunnels and under bridges. With New puddles (server) under Experimental, puddles also start from the real rain of the last day.", showIf: c => c.weatherMode !== "manual" },
       { id: "weatherChange", type: "select", default: "60", name: "Changes take", desc: "How long the weather takes to change to a new state: a new real report, another preset or intensity. Instant: at once.", showIf: c => c.weatherMode !== "manual",
         options: [ { label: "Instant", value: "0" }, { label: "30 seconds", value: "30" }, { label: "1 minute (default)", value: "60" }, { label: "2 minutes", value: "120" } ] },
       { id: "realClouds", type: "bool", default: true, name: "Real clouds", desc: "With Real weather: the real cloud cover. Off: clear skies, the rest of the real weather stays.", showIf: c => c.weatherMode === "real" },
@@ -123,6 +124,39 @@ export const settingsSchema = [
       { id: "realPrecip", type: "bool", default: true, name: "Real rain and snow", desc: "With Real weather: the real rain, snow and hail. Off: dry.", showIf: c => c.weatherMode === "real" },
       { id: "fogLimit", type: "select", default: "0", name: "Thickest fog", desc: "Limits how thick the fog can get, for the real weather and the presets: the shortest distance you can always see. Real: as thick as it really is.", showIf: c => c.weatherMode !== "manual",
         options: [ { label: "Real", value: "0" }, { label: "650 ft (200 m)", value: "200" }, { label: "1/3 mile (500 m)", value: "500" }, { label: "1 mile (1.6 km)", value: "1600" } ] },
+    ],
+  },
+  {
+    // the live air traffic (lua/ge/extensions/beamngEarth/airtraffic.lua, server/airtraffic.py): devo343's Live Air
+    // Traffic add-on built in. Off by default; turning it on asks first (consent: what is sent and to whom)
+    name: "Air traffic",
+    intro: "Real aircraft in the sky around you, from live ADS-B data: models with liveries and lights, contrails, sounds and labels, and the aircraft on the maps. Based on devo343's Live Air Traffic add-on. Off by default.",
+    items: [
+      { id: "airTrafficNow", type: "info", name: "Now", desc: "What the live air traffic is doing: off, waiting for data, or how many aircraft and from which source." },
+      { id: "airTraffic", type: "bool", default: false, name: "Live air traffic", consent: true,
+        desc: "Shows the real aircraft around you while you are in the world. To find them, BeamNG.Earth sends your approximate area (a point on a grid about 17 miles / 28 km wide, never your exact position) about every 15 seconds to adsb.lol, or to airplanes.live or adsb.fi when adsb.lol is busy. Nothing is sent while this is off. Keys: Ctrl+Alt+A on / off, Ctrl+Alt+K labels, Ctrl+Alt+C contrails, Ctrl+Alt+I what is that plane, Ctrl+Alt+S sounds, Ctrl+Alt+F follow." },
+      { id: "airTrafficRoutes", type: "bool", default: false, name: "Flight routes", showIf: c => c.airTraffic === true,
+        desc: "Where each airline flight is going (for example ATL > JFK) in the labels and the map. Sends the flight numbers of the aircraft around you (not your position) to adsbdb.com, at most one every 2 seconds. Routes are kept in memory only, never saved." },
+      { id: "airTrafficRangeNm", type: "float", min: 10, max: 150, step: 5, default: 60, name: "Search radius (NM)", showIf: c => c.airTraffic === true,
+        desc: "How far around you aircraft are shown, in nautical miles (60 NM is about 69 miles / 111 km)." },
+      { id: "airTrafficLabels", type: "select", default: "off", name: "Labels", showIf: c => c.airTraffic === true,
+        desc: "Off by default. The text over the nearest few aircraft and the one you look at (never parked ones): full (flight, type, altitude, speed, route), the flight number only, or the aircraft type only. Ctrl+Alt+K turns them on and cycles them.",
+        options: [ { label: "Full", value: "full" }, { label: "Flight number", value: "flight" }, { label: "Aircraft type", value: "type" }, { label: "Off", value: "off" } ] },
+      { id: "airTrafficContrails", type: "bool", default: true, name: "Contrails", showIf: c => c.airTraffic === true,
+        desc: "Contrails behind jets above the level where their exhaust freezes, worked out from the real weather's temperature and pressure; they last longer when the air up there is humid (high cloud about). Hidden behind the cloud deck. The graphics preset sets how many are drawn." },
+      { id: "airTrafficSounds", type: "bool", default: true, name: "Aircraft sounds", showIf: c => c.airTraffic === true,
+        desc: "Engine sounds of the aircraft near enough to hear, delayed by the speed of sound, with Doppler. Synthesised by devo343's add-on; the close-up jet sound is from Pixabay." },
+      { id: "airTrafficVolume", type: "float", min: 0, max: 200, step: 5, default: 100, name: "Sound volume (%)", showIf: c => c.airTraffic === true && c.airTrafficSounds !== false,
+        desc: "The aircraft sounds' volume." },
+      { id: "airTrafficGround", type: "bool", default: true, name: "Aircraft on the ground", showIf: c => c.airTraffic === true,
+        desc: "Parked and taxiing aircraft at airports." },
+      { id: "airTrafficSizeBoost", type: "bool", default: true, name: "Enlarge distant aircraft", showIf: c => c.airTraffic === true,
+        desc: "Far-away aircraft drawn up to 2.5 times larger so they read as aircraft rather than specks." },
+      { id: "airTrafficMaxModels", type: "float", min: 0, max: 100, step: 1, default: 0, name: "Most aircraft models", showIf: c => c.airTraffic === true,
+        desc: "The most 3D aircraft at once, nearest first. 0: by the graphics preset (12 on Low, 20 on Medium, 40 on High, 60 on Ultra)." },
+      { id: "airTrafficMap", type: "bool", default: true, name: "Aircraft on the maps", showIf: c => c.airTraffic === true,
+        desc: "The aircraft on the 2D and 3D maps. Click one to set the GPS to where it is." },
+      { id: "airTrafficCredit", type: "text", name: "Data", desc: "The sources of the aircraft data (CREDITS.md)." },
     ],
   },
   {
@@ -157,8 +191,6 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expGradeGuard", type: "bool", default: false, name: "Road steepness limit", desc: "Experimental. Caps how steep each class of road may be (unless the ground itself is that steep), smoothing out spikes the elevation data puts in roads. Changes the height of every road.",
         note: RESTART_NOTE },
-      { id: "expPhotoSurface", type: "bool", default: false, name: "Road surface from aerial photos", desc: "Experimental. Roads whose map data has no surface are drawn paved, gravel or grass by the colour of the aerial photo along them, where a sharp regional photo source is available (such as Czechia). Otherwise such roads stay dirt as before.",
-        note: RESTART_NOTE },
       { id: "expTerrainBumps", type: "bool", default: false, name: "Rougher land off the roads", desc: "Experimental. Small bumps in the open land away from the roads, so fields and verges are not perfectly smooth. Costs some world building time.",
         note: RESTART_NOTE },
       { id: "expRoadFollow", type: "bool", default: false, name: "Roads follow the land", desc: "Experimental. Roads keep more of the real hills and dips in the ground under them instead of being smoothed flat. Best where the elevation comes from lidar (most of the US and much of Europe); on the coarse global elevation roads get bumpier. Motorways and trunk roads are unchanged.",
@@ -192,6 +224,10 @@ export const settingsSchema = [
       { id: "expWinter", type: "bool", default: false, name: "Winter", desc: "Experimental. Snow and ice from the real weather. Roads get slippery with snow, slush, frost or ice: grip follows the snow on the ground and the road's class (main roads are cleared and salted first, bridges freeze first); the road's condition shows in the status bar. Snow lies on the ground near and far, cut by the real terrain: lower on slopes facing away from the sun, none on cliffs, evergreen forests dark and bare ones brown, rivers open and lakes frozen after a cold spell, permanent snow on high mountains and the poles; the 3D grass thins under snow and deep snow gets its own ground texture. Broadleaf trees go bare tree by tree through late autumn (some oaks and young beeches keep their dead brown leaves), near and far; evergreens stay green. Streets look their winter state by class: main roads plowed to wet black lanes with slush at the edges, side streets packed white with wheel tracks, markings fading under snow, snowbanks along plowed roads, sidewalks shovelled or trampled, white bridge decks. Not yet: snowy roofs and snow on trees",
         note: RESTART_NOTE },
       { id: "expWetRoads", type: "bool", default: false, name: "Wet roads", desc: "Experimental. Rain leaves the roads wet for hours as they dry: less grip and tyre spray while they are wet (included in Winter grip).",
+        note: RESTART_NOTE },
+      { id: "expPuddlesV2", type: "bool", default: false, name: "New puddles (server)", desc: "Experimental. The world server sends the last day of real rain with the weather, so New puddle look (Weather page) starts with the puddles a wet morning left. Later versions add new puddle shapes and water along the kerbs. Places you visited are built again once with it.",
+        note: RESTART_NOTE },
+      { id: "expLeafCycle", type: "bool", default: false, name: "Leaf cycle", desc: "Experimental. Broadleaf trees follow the real date at the place: in autumn they colour and lose their leaves over several weeks, one tree at a time, and in spring they leaf out the same way. The dates follow the latitude, the height and the climate. Needs Winter.",
         note: RESTART_NOTE },
     ],
   },
@@ -307,10 +343,11 @@ export const settingsSchema = [
 
 // Each page's icon (the pause menu's side buttons take the icon's name, LayoutMenu's tabs the icon) and its button id
 // (the first keeps the old Mods-tab button's id: settings.lua M.BUTTON_ID, pageExists)
-export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Weather: "weather", Experimental: "test", Interface: "cogOutline",
+export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Weather: "weather", "Air traffic": "globe", Experimental: "test", Interface: "cogOutline",
   Multiplayer: "peopleOutline", Storage: "floppyDisk", "Add-ons": "puzzleModule", Feedback: "bug", About: "info",
   Developer: "code" }
-export const pageId = (name, i) => i === 0 ? "beamngEarth-settings" : "beamngEarth-settings-" + name.toLowerCase()
+// (a name with a space, "Air traffic": a dash in its id)
+export const pageId = (name, i) => i === 0 ? "beamngEarth-settings" : "beamngEarth-settings-" + name.toLowerCase().replace(/[^a-z0-9-]+/g, "-")
 
 // The quality presets' cards (settings.lua PRESETS: what each sets)
 export const qualityPresets = [
@@ -428,6 +465,8 @@ export function infoValue(item) {
   if (item.id === "credits") return s.credits || "-"
   if (item.id === "weather" || item.id === "weatherNow") return s.weather || "-"
   if (item.id === "gravity") return s.gravity || "-"
+  if (item.id === "airTrafficNow") return s.airTraffic || "Off"
+  if (item.id === "airTrafficCredit") return "Aircraft data: adsb.lol (ODbL), airplanes.live and adsb.fi (https://adsb.fi), live from their volunteer receivers. Flight routes: adsbdb.com. Aircraft models, sounds and the add-on's code: devo343 (Live Air Traffic). Close-up jet sound: Pixabay. If you can, support these networks by feeding them with an ADS-B receiver."
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
   if (item.id === "memoryUsage") return (s.memory && s.memory.line) || "-"
   return ""
@@ -543,9 +582,30 @@ export function onSliderChange(item, val) {
 }
 
 export function onSwitchChange(item, val) {
+  // a switch with a consent text (the live air traffic): turning it on asks first, in its row
+  if (item.consent && val === true && (config.value.airTrafficConsent || 0) < (status.value.airTrafficConsent || 1)) {
+    consentAsk.value = item.id
+    return
+  }
+  if (item.consent && val !== true) consentAsk.value = ""
   config.value[item.id] = val
   updateSetting(item.id)
 }
+
+// The consent box (consentAsk: the setting asking): Turn on records the consent version and turns it on (Lua side:
+// settings.uiAirTrafficConsent), Cancel leaves it off.
+export const consentAsk = ref("")
+export function acceptConsent() {
+  const v = status.value.airTrafficConsent || 1
+  consentAsk.value = ""
+  lastWriteAt = Date.now()
+  config.value.airTrafficConsent = v
+  config.value.airTraffic = true
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiAirTrafficConsent(${v}) or nil`, res => {
+    if (res && res.value !== undefined) config.value.airTraffic = res.value
+  })
+}
+export function cancelConsent() { consentAsk.value = "" }
 
 export function onDevChange(item, val) {
   dev.value.on[item.id] = val

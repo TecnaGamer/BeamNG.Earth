@@ -8,9 +8,25 @@
 //! CPU path (PIL's rotate with expand, bilinear, zero outside; the box and band sums; the lower medians), in float32:
 //! close to the CPU path's results, not bit-identical (the CPU path's sums are float64), and the same on one machine
 //! every time.
+//!
+//! The service (2026-11-27, ~/bnge-tests/reports/gpu_offload_research.md move 1):
+//! - one device per process, and in the server only its main process makes one (BNGE_GPU_OWNER, set by earthd's
+//!   main to its pid: the block and far-tile processes it starts keep the CPU paths; each device was ~0.1-0.4 s of
+//!   start and memory of its own);
+//! - every kernel's submissions short (encode_blocks' CHUNK_BLOCKS, seam_detect's SEAM_WG_PER_SUBMIT), each waited
+//!   for before the next, so the game's frames get the GPU between ours: some adapters preempt compute only at a
+//!   dispatch's or a DMA buffer's boundary (Windows: DXGI's ComputePreemptionGranularity, in describe());
+//! - the block encoders' buffers kept between calls (EncBufs), let go after ENC_IDLE_S unused;
+//! - per call its submissions, the time waited for them, the longest one, the bytes up and down (last(): the calling
+//!   thread's last call; totals(): the process's), for the server's log;
+//! - on a Steam Deck (deck(): a GPU-bound handheld, whose game pays for every dispatch in frames) the kernels run only
+//!   while the car is parked or a teleport loads (allowed(); note_pose from the server's pose handler).
 use crate::dm::Dm;
 
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use wgpu::util::DeviceExt;
 
@@ -18,15 +34,30 @@ pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pub name: String,
+    pub info: wgpu::AdapterInfo,
+    /// (graphics, compute) preemption granularity from DXGI (Windows; None elsewhere or unknown)
+    pub preempt: Option<(&'static str, &'static str)>,
     seam: Mutex<Option<SeamPipes>>,
 }
 
 static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
 
-/// The device (made on first use), or None where there is no usable GPU (BNGE_GPU=0 turns it off).
+/// Is the GPU off for this process: BNGE_GPU=0, or BNGE_GPU_OWNER names another process (earthd's main sets it to its
+/// own pid: the processes it starts inherit it and make no device).
+pub fn switched_off() -> bool {
+    if std::env::var("BNGE_GPU").map(|v| v == "0").unwrap_or(false) {
+        return true;
+    }
+    match std::env::var("BNGE_GPU_OWNER") {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse::<u32>().map(|p| p != std::process::id()).unwrap_or(true),
+        _ => false,
+    }
+}
+
+/// The device (made on first use), or None where there is no usable GPU (BNGE_GPU=0 turns it off; switched_off).
 pub fn get() -> Option<&'static Gpu> {
     GPU.get_or_init(|| {
-        if std::env::var("BNGE_GPU").map(|v| v == "0").unwrap_or(false) {
+        if switched_off() {
             return None;
         }
         // (a driver's panic must not take the server down: no GPU, the CPU paths)
@@ -66,7 +97,241 @@ async fn init() -> Option<Gpu> {
         })
         .await
         .ok()?;
-    Some(Gpu { device, queue, name: format!("{} ({:?})", info.name, info.backend), seam: Mutex::new(None) })
+    let preempt = dxgi_preemption(info.vendor, info.device);
+    Some(Gpu { device, queue, name: format!("{} ({:?})", info.name, info.backend), info, preempt,
+               seam: Mutex::new(None) })
+}
+
+/// One line about the adapter for the server's log: its name, backend, kind, driver, PCI ids, on Windows how finely it
+/// preempts graphics and compute work (DXGI; "DMA buffer" or "dispatch": a long dispatch of ours holds the GPU the
+/// game draws with until it ends), and the Steam Deck's gate.
+pub fn describe(g: &Gpu) -> String {
+    let i = &g.info;
+    let mut s = format!("{} ({:?}, {:?}), driver {}", i.name, i.backend, i.device_type,
+                        if i.driver.is_empty() { "?" } else { i.driver.as_str() });
+    if !i.driver_info.is_empty() {
+        s += &format!(" {}", i.driver_info);
+    }
+    s += &format!(", PCI {:04x}:{:04x}", i.vendor, i.device);
+    match g.preempt {
+        Some((gr, cs)) => s += &format!(", preemption: graphics at {gr}, compute at {cs}"),
+        None if cfg!(windows) => s += ", preemption: unknown (DXGI)",
+        None => {}
+    }
+    if deck() {
+        s += "; Steam Deck: kernels only while parked or loading";
+    }
+    s
+}
+
+/// DXGI's (graphics, compute) preemption granularity of the adapter with these PCI ids (Windows), whichever API wgpu
+/// uses on it (WDDM preempts per adapter).
+#[cfg(windows)]
+fn dxgi_preemption(vendor: u32, device: u32) -> Option<(&'static str, &'static str)> {
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter2, IDXGIFactory1};
+    // (DXGI_GRAPHICS_PREEMPTION_GRANULARITY: DMA buffer, primitive, triangle, pixel, instruction;
+    // DXGI_COMPUTE_PREEMPTION_GRANULARITY: DMA buffer, dispatch, thread group, thread, instruction)
+    let gname = |v: i32| ["DMA buffer", "primitive", "triangle", "pixel", "instruction"].get(v as usize).copied();
+    let cname = |v: i32| ["DMA buffer", "dispatch", "thread group", "thread", "instruction"].get(v as usize).copied();
+    // SAFETY: plain COM calls on the interfaces the factory hands out, each result checked
+    unsafe {
+        let f: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        for k in 0..16u32 {
+            let Ok(a) = f.EnumAdapters1(k) else { break };
+            let Ok(a2) = a.cast::<IDXGIAdapter2>() else { continue };
+            let Ok(d) = a2.GetDesc2() else { continue };
+            if d.VendorId == vendor && d.DeviceId == device {
+                return Some((gname(d.GraphicsPreemptionGranularity.0).unwrap_or("unknown"),
+                             cname(d.ComputePreemptionGranularity.0).unwrap_or("unknown")));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn dxgi_preemption(_vendor: u32, _device: u32) -> Option<(&'static str, &'static str)> {
+    None
+}
+
+// --- the Steam Deck's gate ------------------------------------------------------------------------------------------
+// Its game is GPU-bound (20-26 ms of GPU a frame on the Handheld preset): a dispatch of ours costs it frames while
+// driving. There the kernels run only while the car is parked (under PARK_V for park_s()) or a teleport loads; the
+// server's Python glue asks allowed() before each call and keeps the CPU path otherwise.
+
+/// m/s: slower than this the car is standing
+pub const PARK_V: f64 = 0.5;
+/// s standing before the car counts as parked (BNGE_GPU_PARK_S overrides it: tests)
+const PARK_S: f64 = 3.0;
+
+static EPOCH: OnceLock<Instant> = OnceLock::new();
+/// ms since EPOCH of the last pose that moved (u64::MAX: none yet)
+static LAST_MOVING_MS: AtomicU64 = AtomicU64::new(u64::MAX);
+/// the last pose was a teleport's, still loading
+static LOADING: AtomicBool = AtomicBool::new(false);
+
+fn now_ms() -> u64 {
+    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+fn park_s() -> f64 {
+    std::env::var("BNGE_GPU_PARK_S").ok().and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(PARK_S)
+}
+
+/// A pose from the game (host/pose.rs motion): the car's speed (m/s) and whether a teleport is loading. Two atomic
+/// stores at every pose; no device is made.
+pub fn note_pose(speed: f64, loading: bool) {
+    LOADING.store(loading, Ordering::Relaxed);
+    if !loading && !(speed < PARK_V) {      // (NaN counts as moving)
+        LAST_MOVING_MS.store(now_ms(), Ordering::Relaxed);
+    }
+}
+
+/// Seconds since the last moving pose (None: none yet).
+pub fn standing_s() -> Option<f64> {
+    let t = LAST_MOVING_MS.load(Ordering::Relaxed);
+    (t != u64::MAX).then(|| now_ms().saturating_sub(t) as f64 / 1000.0)
+}
+
+/// Is this a GPU-bound handheld (a Steam Deck: its APU in the adapter's name, or SteamOS)? BNGE_GPU_DECK=1 / 0
+/// overrides (tests, an A/B).
+pub fn deck() -> bool {
+    match std::env::var("BNGE_GPU_DECK").as_deref() {
+        Ok("1") => return true,
+        Ok("0") => return false,
+        _ => {}
+    }
+    static D: OnceLock<bool> = OnceLock::new();
+    *D.get_or_init(|| {
+        let by_name = |n: &str| {
+            let n = n.to_ascii_uppercase();
+            // (RADV names the APU VANGOGH; the drivers' names "AMD Custom GPU 0405" (LCD) and "0932" (OLED))
+            n.contains("VANGOGH") || n.contains("CUSTOM GPU 0405") || n.contains("CUSTOM GPU 0932")
+        };
+        if get().is_some_and(|g| by_name(&g.info.name) || by_name(&g.info.driver_info)) {
+            return true;
+        }
+        std::fs::read_to_string("/etc/os-release").map(|s| s.to_ascii_lowercase().contains("steamos")).unwrap_or(false)
+    })
+}
+
+/// May a kernel run on the GPU now? Off a Deck always; on one while a teleport loads, before the first moving pose,
+/// or once the car has stood park_s(). BNGE_GPU_DRIVING=1: always (an A/B).
+pub fn allowed() -> bool {
+    if !deck() || std::env::var("BNGE_GPU_DRIVING").map(|v| v == "1").unwrap_or(false) {
+        return true;
+    }
+    LOADING.load(Ordering::Relaxed) || standing_s().is_none_or(|s| s >= park_s())
+}
+
+// --- per-call accounting ------------------------------------------------------------------------------------------
+
+/// One kernel call's GPU side: its submissions, the time waited for them (the GPU's work and its queue), the longest
+/// one, the bytes uploaded and read back, the call's wall time, and whether it worked.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct CallStat {
+    pub kernel: &'static str,
+    pub submits: u32,
+    pub wait_s: f64,
+    pub max_submit_s: f64,
+    pub up_bytes: u64,
+    pub down_bytes: u64,
+    pub wall_s: f64,
+    pub ok: bool,
+}
+
+thread_local! {
+    static LAST: Cell<Option<CallStat>> = const { Cell::new(None) };
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Totals {
+    pub calls: u64,
+    pub fails: u64,
+    pub submits: u64,
+    pub wait_s: f64,
+    pub wall_s: f64,
+    pub max_submit_s: f64,
+    pub up_bytes: u64,
+    pub down_bytes: u64,
+}
+
+static TOTALS: Mutex<Vec<(&'static str, Totals)>> = Mutex::new(Vec::new());
+
+fn record(st: CallStat) {
+    LAST.with(|l| l.set(Some(st)));
+    let mut t = TOTALS.lock().unwrap_or_else(|e| e.into_inner());
+    let i = match t.iter().position(|(k, _)| *k == st.kernel) {
+        Some(i) => i,
+        None => {
+            t.push((st.kernel, Totals::default()));
+            t.len() - 1
+        }
+    };
+    let a = &mut t[i].1;
+    a.calls += 1;
+    a.fails += (!st.ok) as u64;
+    a.submits += st.submits as u64;
+    a.wait_s += st.wait_s;
+    a.wall_s += st.wall_s;
+    a.max_submit_s = a.max_submit_s.max(st.max_submit_s);
+    a.up_bytes += st.up_bytes;
+    a.down_bytes += st.down_bytes;
+}
+
+/// The calling thread's last kernel call (the Python glue reads it right after the call, on the same thread).
+pub fn last() -> Option<CallStat> {
+    LAST.with(|l| l.get())
+}
+
+/// The process's totals per kernel since its start (or the last reset).
+pub fn totals(reset: bool) -> Vec<(&'static str, Totals)> {
+    let mut t = TOTALS.lock().unwrap_or_else(|e| e.into_inner());
+    let out = t.clone();
+    if reset {
+        t.clear();
+    }
+    out
+}
+
+/// A kernel call with its accounting: f counts its submissions and bytes into the CallStat (submit_wait, read_back),
+/// this the wall time and the outcome.
+pub fn accounted<T>(kernel: &'static str, f: impl FnOnce(&mut CallStat) -> Result<T, String>) -> Result<T, String> {
+    let t0 = Instant::now();
+    let mut st = CallStat { kernel, ..Default::default() };
+    let r = f(&mut st);
+    st.wall_s = t0.elapsed().as_secs_f64();
+    st.ok = r.is_ok();
+    record(st);
+    r
+}
+
+/// Submits one command buffer and waits for it (each of ours short, the next only after it: see encode_blocks),
+/// counted in st.
+fn submit_wait(gpu: &Gpu, enc: wgpu::CommandEncoder, st: &mut CallStat) -> Result<(), String> {
+    let t0 = Instant::now();
+    let sub = gpu.queue.submit(Some(enc.finish()));
+    gpu.device.poll(wgpu::PollType::WaitForSubmissionIndex(sub)).map_err(|e| format!("poll: {e:?}"))?;
+    let dt = t0.elapsed().as_secs_f64();
+    st.submits += 1;
+    st.wait_s += dt;
+    st.max_submit_s = st.max_submit_s.max(dt);
+    Ok(())
+}
+
+/// The first n bytes of the mapped-readable buffer rb (filled by a submission already waited for) handed to take.
+fn read_back<T>(gpu: &Gpu, rb: &wgpu::Buffer, n: u64, st: &mut CallStat, take: impl FnOnce(&[u8]) -> T)
+                -> Result<T, String> {
+    let slice = rb.slice(..n);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+    gpu.device.poll(wgpu::PollType::Wait).map_err(|e| format!("poll: {e:?}"))?;
+    rx.recv().map_err(|e| format!("map: {e}"))?.map_err(|e| format!("map: {e:?}"))?;
+    let out = take(&slice.get_mapped_range());
+    rb.unmap();
+    st.down_bytes += n;
+    Ok(out)
 }
 
 // --- seam_detect -----------------------------------------------------------------------------------------------
@@ -78,7 +343,7 @@ struct P {
     full: f32, gate: f32, agree: f32, ang: f32,
     // forward: rotated pixel -> source (orig) coordinates; back: orig pixel (+ crop) -> rotated coordinates
     fa: f32, fb: f32, fc: f32, fd: f32, fe: f32, ff: f32, cx: f32, cy: f32,
-    ba: f32, bb: f32, bc: f32, bd: f32, be: f32, bf: f32, bw: f32, bh: f32,
+    ba: f32, bb: f32, bc: f32, bd: f32, be: f32, bf: f32, y0: u32, _pad: u32,
     offs: array<vec4<i32>, 2>,
 };
 @group(0) @binding(0) var<uniform> p: P;
@@ -116,7 +381,8 @@ fn pil_bilinear(base: u32, W: i32, H: i32, xin: f32, yin: f32, fromsrc: bool) ->
 }
 
 @compute @workgroup_size(16, 16)
-fn rotate(@builtin(global_invocation_id) g: vec3<u32>) {
+fn rotate(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = vec3<u32>(gid.x, gid.y + p.y0, gid.z);     // (this submission's rows: seam_detect's bands)
     if (g.x >= p.wr || g.y >= p.hr) { return; }
     let x = f32(g.x) + 0.5; let y = f32(g.y) + 0.5;
     let xs = p.fa * x + p.fb * y + p.fc;
@@ -128,7 +394,8 @@ fn rotate(@builtin(global_invocation_id) g: vec3<u32>) {
 }
 
 @compute @workgroup_size(16, 16)
-fn hsum(@builtin(global_invocation_id) g: vec3<u32>) {
+fn hsum(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = vec3<u32>(gid.x, gid.y + p.y0, gid.z);     // (this submission's rows: seam_detect's bands)
     if (g.x >= p.wr || g.y >= p.hr) { return; }
     let n = p.wr * p.hr;
     let x0 = max(i32(g.x) - p.half, 0); let x1 = min(i32(g.x) + p.half, i32(p.wr) - 1);
@@ -148,7 +415,8 @@ fn band(c: u32, x: u32, y0: i32, y1: i32) -> f32 {   // rows [y0, y1) clipped, o
 }
 
 @compute @workgroup_size(16, 16)
-fn bands(@builtin(global_invocation_id) g: vec3<u32>) {
+fn bands(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = vec3<u32>(gid.x, gid.y + p.y0, gid.z);     // (this submission's rows: seam_detect's bands)
     if (g.x >= p.wr || g.y >= p.hr) { return; }
     let n = p.wr * p.hr; let i = g.y * p.wr + g.x; let j = i32(g.y);
     let wb = band(0u, g.x, j + 1, j + p.depth + 1);
@@ -177,7 +445,8 @@ fn lower_median(v: array<f32, 8>, ok: array<bool, 8>, k: u32, nvalid: u32) -> f3
 }
 
 @compute @workgroup_size(16, 16)
-fn segs(@builtin(global_invocation_id) g: vec3<u32>) {
+fn segs(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = vec3<u32>(gid.x, gid.y + p.y0, gid.z);     // (this submission's rows: seam_detect's bands)
     if (g.x >= p.wr || g.y >= p.hr) { return; }
     let n = p.wr * p.hr; let i = g.y * p.wr + g.x;
     var oks: array<bool, 8>;
@@ -220,7 +489,8 @@ fn segs(@builtin(global_invocation_id) g: vec3<u32>) {
 }
 
 @compute @workgroup_size(16, 16)
-fn unrot(@builtin(global_invocation_id) g: vec3<u32>) {
+fn unrot(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = vec3<u32>(gid.x, gid.y + p.y0, gid.z);     // (this submission's rows: seam_detect's bands)
     if (g.x >= p.w || g.y >= p.h) { return; }
     let x = f32(g.x) + p.cx + 0.5; let y = f32(g.y) + p.cy + 0.5;    // (in the back-rotated image, cropped)
     let xs = p.ba * x + p.bb * y + p.bc;
@@ -244,7 +514,7 @@ struct SeamParams {
     half: i32, depth: i32, nseg: u32, min_valid: u32,
     full: f32, gate: f32, agree: f32, ang: f32,
     fa: f32, fb: f32, fc: f32, fd: f32, fe: f32, ff: f32, cx: f32, cy: f32,
-    ba: f32, bb: f32, bc: f32, bd: f32, be: f32, bf: f32, bw: f32, bh: f32,
+    ba: f32, bb: f32, bc: f32, bd: f32, be: f32, bf: f32, y0: u32, _pad: u32,
     offs: [i32; 8],
 }
 
@@ -309,98 +579,109 @@ fn pil_rotate(deg: f64, w: f64, h: f64) -> ([f64; 6], usize, usize) {
     (m, nw as usize, nh as usize)
 }
 
+/// Workgroups (16 x 16 invocations) per seam_detect submission at most: one of its five passes over a band of rows
+/// (a z12 region's 1086² rotated grid is ~4,600 workgroups a pass; all five passes of an angle were one submission,
+/// tens of ms of a small GPU's time held at once). ~1 ms of a mid-range GPU's time.
+const SEAM_WG_PER_SUBMIT: usize = 1024;
+
+/// The (first row, rows) bands of a pass over gw x gh invocations of 16 x 16, SEAM_WG_PER_SUBMIT workgroups each
+/// at most (whole workgroup rows; at least one).
+fn seam_bands(gw: usize, gh: usize) -> Vec<(u32, u32)> {
+    let (wx, wy) = (gw.div_ceil(16).max(1), gh.div_ceil(16));
+    let per = (SEAM_WG_PER_SUBMIT / wx).max(1);
+    (0..wy).step_by(per).map(|r| ((r * 16) as u32, (per.min(wy - r)) as u32)).collect()
+}
+
 /// colormatch.detect_seams' angle loop: src (7, h, w) float32 = [w, w*L_0 .. w*L_5]; returns (best, ang, D) as
-/// flat float32 (h*w, h*w, 3*h*w), or an error string.
+/// flat float32 (h*w, h*w, 3*h*w), or an error string. Each angle's five passes run one after another, each in bands
+/// of rows (seam_bands), one submission a band, each waited for (the same results as one submission: every pass
+/// reads only what the passes before it wrote).
 #[allow(clippy::too_many_arguments)]
 pub fn seam_detect(gpu: &Gpu, src: &[f32], h: usize, w: usize, n_ang: usize, half: i32, depth: i32, offs: &[i32],
                    full: f32, gate: f32, agree: f32, min_valid: u32) -> Result<Vec<f32>, String> {
     if offs.len() > 8 || src.len() != 7 * h * w {
         return Err("seam_detect: bad arguments".into());
     }
-    let d = &gpu.device;
-    // the largest rotated size over the angles (at 45 deg)
-    let (mut wr_max, mut hr_max) = (0usize, 0usize);
-    let geo: Vec<_> = (0..n_ang).map(|k| {
-        let deg = 180.0 * k as f64 / n_ang as f64;
-        let (fwd, wr, hr) = pil_rotate(deg, w as f64, h as f64);
-        let (back, w2, h2) = pil_rotate(-deg, wr as f64, hr as f64);
-        wr_max = wr_max.max(wr);
-        hr_max = hr_max.max(hr);
-        (deg, fwd, wr, hr, back, w2, h2)
-    }).collect();
-    let nr = wr_max * hr_max;
-    let buf = |label: &str, n: usize, usage: wgpu::BufferUsages| d.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label), size: (n * 4) as u64, usage, mapped_at_creation: false,
-    });
-    let st = wgpu::BufferUsages::STORAGE;
-    let srcb = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("src"), contents: bytemuck::cast_slice(src), usage: st,
-    });
-    let rot = buf("rot", 7 * nr, st);
-    let hs = buf("hs", 7 * nr, st);
-    let dseg = buf("dseg", 6 * nr, st);
-    let okb = buf("ok", nr, st);
-    let res = buf("res", 4 * nr, st);
-    let mut init_out = vec![0f32; 5 * h * w];
-    for v in init_out[..h * w].iter_mut() {
-        *v = 0.0; // best starts at 0: a score must exceed it (the CPU path's `score_o > best` from zeros)
-    }
-    let outb = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("out"), contents: bytemuck::cast_slice(&init_out), usage: st | wgpu::BufferUsages::COPY_SRC,
-    });
-    let pbuf = buf("params", std::mem::size_of::<SeamParams>() / 4, wgpu::BufferUsages::UNIFORM
-                   | wgpu::BufferUsages::COPY_DST);
-    let guard = seam_pipes(gpu);
-    let sp = guard.as_ref().unwrap();
-    let bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &sp.layout,
-        entries: &[&pbuf, &srcb, &rot, &hs, &dseg, &okb, &res, &outb].iter().enumerate()
-            .map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() })
-            .collect::<Vec<_>>(),
-    });
-    let mut o8 = [0i32; 8];
-    o8[..offs.len()].copy_from_slice(offs);
-    for (deg, fwd, wr, hr, back, w2, h2) in geo {
-        let pr = SeamParams {
-            w: w as u32, h: h as u32, wr: wr as u32, hr: hr as u32, half, depth, nseg: offs.len() as u32, min_valid,
-            full, gate, agree, ang: deg.to_radians() as f32,
-            fa: fwd[0] as f32, fb: fwd[1] as f32, fc: fwd[2] as f32, fd: fwd[3] as f32, fe: fwd[4] as f32,
-            ff: fwd[5] as f32,
-            cx: ((w2 - w) / 2) as f32, cy: ((h2 - h) / 2) as f32,
-            ba: back[0] as f32, bb: back[1] as f32, bc: back[2] as f32, bd: back[3] as f32, be: back[4] as f32,
-            bf: back[5] as f32, bw: w2 as f32, bh: h2 as f32,
-            offs: o8,
-        };
-        gpu.queue.write_buffer(&pbuf, 0, bytemuck::bytes_of(&pr));
-        let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-            pass.set_bind_group(0, &bg, &[]);
+    accounted("seam", |st| {
+        let d = &gpu.device;
+        // the largest rotated size over the angles (at 45 deg)
+        let (mut wr_max, mut hr_max) = (0usize, 0usize);
+        let geo: Vec<_> = (0..n_ang).map(|k| {
+            let deg = 180.0 * k as f64 / n_ang as f64;
+            let (fwd, wr, hr) = pil_rotate(deg, w as f64, h as f64);
+            let (back, w2, h2) = pil_rotate(-deg, wr as f64, hr as f64);
+            wr_max = wr_max.max(wr);
+            hr_max = hr_max.max(hr);
+            (deg, fwd, wr, hr, back, w2, h2)
+        }).collect();
+        let nr = wr_max * hr_max;
+        let buf = |label: &str, n: usize, usage: wgpu::BufferUsages| d.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label), size: (n * 4) as u64, usage, mapped_at_creation: false,
+        });
+        let stu = wgpu::BufferUsages::STORAGE;
+        let srcb = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("src"), contents: bytemuck::cast_slice(src), usage: stu,
+        });
+        let rot = buf("rot", 7 * nr, stu);
+        let hs = buf("hs", 7 * nr, stu);
+        let dseg = buf("dseg", 6 * nr, stu);
+        let okb = buf("ok", nr, stu);
+        let res = buf("res", 4 * nr, stu);
+        // (best starts at 0: a score must exceed it, the CPU path's `score_o > best` from zeros; wgpu zeroes a new
+        // buffer)
+        let outb = buf("out", 5 * h * w, stu | wgpu::BufferUsages::COPY_SRC);
+        st.up_bytes += (src.len() * 4) as u64;
+        let pbuf = buf("params", std::mem::size_of::<SeamParams>() / 4, wgpu::BufferUsages::UNIFORM
+                       | wgpu::BufferUsages::COPY_DST);
+        let guard = seam_pipes(gpu);
+        let sp = guard.as_ref().unwrap();
+        let bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &sp.layout,
+            entries: &[&pbuf, &srcb, &rot, &hs, &dseg, &okb, &res, &outb].iter().enumerate()
+                .map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() })
+                .collect::<Vec<_>>(),
+        });
+        let mut o8 = [0i32; 8];
+        o8[..offs.len()].copy_from_slice(offs);
+        for (deg, fwd, wr, hr, back, w2, h2) in geo {
+            let mut pr = SeamParams {
+                w: w as u32, h: h as u32, wr: wr as u32, hr: hr as u32, half, depth, nseg: offs.len() as u32,
+                min_valid, full, gate, agree, ang: deg.to_radians() as f32,
+                fa: fwd[0] as f32, fb: fwd[1] as f32, fc: fwd[2] as f32, fd: fwd[3] as f32, fe: fwd[4] as f32,
+                ff: fwd[5] as f32,
+                cx: ((w2 - w) / 2) as f32, cy: ((h2 - h) / 2) as f32,
+                ba: back[0] as f32, bb: back[1] as f32, bc: back[2] as f32, bd: back[3] as f32, be: back[4] as f32,
+                bf: back[5] as f32, y0: 0, _pad: 0,
+                offs: o8,
+            };
             for (i, pipe) in sp.pipes.iter().enumerate() {
                 let (gw, gh) = if i == 4 { (w, h) } else { (wr, hr) };
-                pass.set_pipeline(pipe);
-                pass.dispatch_workgroups(gw.div_ceil(16) as u32, gh.div_ceil(16) as u32, 1);
+                for (y0, rows) in seam_bands(gw, gh) {
+                    pr.y0 = y0;
+                    // (queued before the submission below, which reads it; the last one was waited for)
+                    gpu.queue.write_buffer(&pbuf, 0, bytemuck::bytes_of(&pr));
+                    let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                    {
+                        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: None, timestamp_writes: None,
+                        });
+                        pass.set_bind_group(0, &bg, &[]);
+                        pass.set_pipeline(pipe);
+                        pass.dispatch_workgroups(gw.div_ceil(16) as u32, rows, 1);
+                    }
+                    submit_wait(gpu, enc, st)?;
+                }
             }
         }
-        // one angle at a time on the GPU (all 36 queued at once held it for a region's whole pass; see encode_blocks)
-        let sub = gpu.queue.submit(Some(enc.finish()));
-        d.poll(wgpu::PollType::WaitForSubmissionIndex(sub)).map_err(|e| format!("poll: {e:?}"))?;
-    }
-    // read back
-    let n_out = 5 * h * w;
-    let rb = buf("readback", n_out, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
-    let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    enc.copy_buffer_to_buffer(&outb, 0, &rb, 0, (n_out * 4) as u64);
-    gpu.queue.submit(Some(enc.finish()));
-    let slice = rb.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-    d.poll(wgpu::PollType::Wait).map_err(|e| format!("poll: {e:?}"))?;
-    rx.recv().map_err(|e| format!("map: {e}"))?.map_err(|e| format!("map: {e:?}"))?;
-    let out = bytemuck::cast_slice::<u8, f32>(&slice.get_mapped_range()).to_vec();
-    rb.unmap();
-    Ok(out)
+        // read back
+        let n_out = (5 * h * w * 4) as u64;
+        let rb = buf("readback", 5 * h * w, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
+        let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        enc.copy_buffer_to_buffer(&outb, 0, &rb, 0, n_out);
+        submit_wait(gpu, enc, st)?;
+        read_back(gpu, &rb, n_out, st, |b| bytemuck::cast_slice::<u8, f32>(b).to_vec())
+    })
 }
 
 // --- bc1 -------------------------------------------------------------------------------------------------------
@@ -508,39 +789,122 @@ fn bc1(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
-pub struct Bc1Pipe {
+/// A block encoder's pipeline and its buffers, kept between calls (EncBufs).
+pub struct EncPipe {
     layout: wgpu::BindGroupLayout,
     pipe: wgpu::ComputePipeline,
+    bufs: Mutex<Option<EncBufs>>,
 }
 
-static BC1: OnceLock<Bc1Pipe> = OnceLock::new();
+/// A block encoder's buffers and their bind group: made again only when a call needs more than they hold (or under a
+/// quarter of it), let go ENC_IDLE_S after their last call (trim_idle). A new buffer was ~a third of a 4096² photo's
+/// GPU call in CPU (each one made, zeroed and bound again a call: research 2.2).
+struct EncBufs {
+    lv_cap: u64,
+    pix_cap: u64,
+    out_cap: u64,
+    lvb: wgpu::Buffer,
+    pixb: wgpu::Buffer,
+    outb: wgpu::Buffer,
+    nl: wgpu::Buffer,
+    rb: wgpu::Buffer,
+    bg: wgpu::BindGroup,
+    last: Instant,
+}
 
-fn bc1_pipe(gpu: &Gpu) -> &'static Bc1Pipe {
-    BC1.get_or_init(|| {
-        let d = &gpu.device;
-        let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("bc1"), source: wgpu::ShaderSource::Wgsl(BC1_WGSL.into()),
+/// s an encoder's buffers are kept after their last call (a 4096² photo's ~110 MB of GPU memory and its 22 MB
+/// readback; the photos come every few seconds while driving)
+const ENC_IDLE_S: u64 = 120;
+
+/// Capacities in steps of 1 MiB (a texture's few sizes reuse one set).
+fn round_cap(n: u64) -> u64 {
+    n.max(16).div_ceil(1 << 20) * (1 << 20)
+}
+
+impl EncBufs {
+    fn fits(&self, lv: u64, pix: u64, out: u64) -> bool {
+        lv <= self.lv_cap && pix <= self.pix_cap && out <= self.out_cap && self.pix_cap <= 4 * round_cap(pix)
+            && self.out_cap <= 4 * round_cap(out)
+    }
+
+    fn new(d: &wgpu::Device, layout: &wgpu::BindGroupLayout, lv: u64, pix: u64, out: u64) -> EncBufs {
+        let (lv_cap, pix_cap, out_cap) = (lv.max(256).next_power_of_two(), round_cap(pix), round_cap(out));
+        let st = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+        let mk = |label: &str, size: u64, usage: wgpu::BufferUsages| d.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label), size, usage, mapped_at_creation: false,
         });
-        let entry = |b: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
-            binding: b, visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None }, count: None,
-        };
-        let layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
-                       entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
-                       entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
-                       entry(3, wgpu::BufferBindingType::Uniform)],
+        let lvb = mk("levels", lv_cap, st);
+        let pixb = mk("pix", pix_cap, st);
+        let outb = mk("blocks", out_cap, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC);
+        let nl = mk("n", 16, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
+        let rb = mk("rb", out_cap, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
+        let bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None, layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: lvb.as_entire_binding() },
+                       wgpu::BindGroupEntry { binding: 1, resource: pixb.as_entire_binding() },
+                       wgpu::BindGroupEntry { binding: 2, resource: outb.as_entire_binding() },
+                       wgpu::BindGroupEntry { binding: 3, resource: nl.as_entire_binding() }],
         });
-        let pl = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None, bind_group_layouts: &[&layout], push_constant_ranges: &[],
+        EncBufs { lv_cap, pix_cap, out_cap, lvb, pixb, outb, nl, rb, bg, last: Instant::now() }
+    }
+}
+
+static BC1: OnceLock<EncPipe> = OnceLock::new();
+static BC7: OnceLock<EncPipe> = OnceLock::new();
+
+/// The block encoder of WGSL source src (entry point ep): its layout (levels, texels, blocks, uniform) and pipeline.
+fn enc_pipe(gpu: &Gpu, ep: &str, src: &str) -> EncPipe {
+    let d = &gpu.device;
+    let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(ep), source: wgpu::ShaderSource::Wgsl(src.into()),
+    });
+    let entry = |b: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
+        binding: b, visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None }, count: None,
+    };
+    let layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
+                   entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
+                   entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
+                   entry(3, wgpu::BufferBindingType::Uniform)],
+    });
+    let pl = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None, bind_group_layouts: &[&layout], push_constant_ranges: &[],
+    });
+    let pipe = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(ep), layout: Some(&pl), module: &module, entry_point: Some(ep),
+        compilation_options: Default::default(), cache: None,
+    });
+    start_trim();
+    EncPipe { layout, pipe, bufs: Mutex::new(None) }
+}
+
+/// Lets go of the encoders' buffers unused for ENC_IDLE_S (a thread of its own, made with the first encoder: every
+/// 30 s it takes each lock for a moment; no Python).
+fn start_trim() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        let _ = std::thread::Builder::new().name("earthfast-gpu-trim".into()).spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(30));
+            trim_idle(Duration::from_secs(ENC_IDLE_S));
         });
-        let pipe = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("bc1"), layout: Some(&pl), module: &module, entry_point: Some("bc1"),
-            compilation_options: Default::default(), cache: None,
-        });
-        Bc1Pipe { layout, pipe }
-    })
+    });
+}
+
+/// Drops the encoders' buffers whose last call is older than idle; the bytes kept after (tests, the log).
+pub fn trim_idle(idle: Duration) -> u64 {
+    let mut kept = 0;
+    for p in [&BC1, &BC7] {
+        if let Some(p) = p.get() {
+            let mut b = p.bufs.lock().unwrap_or_else(|e| e.into_inner());
+            if b.as_ref().is_some_and(|b| b.last.elapsed() >= idle) {
+                *b = None;
+            }
+            kept += b.as_ref().map_or(0, |b| b.lv_cap + b.pix_cap + 2 * b.out_cap);
+        }
+    }
+    kept
 }
 
 /// BC1 blocks of several RGB images at once (each (w, h, rgb bytes)): their blocks' bytes, one Vec per image.
@@ -553,8 +917,8 @@ pub fn bc1_encode(gpu: &Gpu, imgs: &[(usize, usize, &[u8])]) -> Result<Vec<Vec<u
         texels.push((w, h, rgb.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 0]).collect()));
     }
     let refs: Vec<(usize, usize, &[u8])> = texels.iter().map(|(w, h, b)| (*w, *h, b.as_slice())).collect();
-    let p = bc1_pipe(gpu);
-    encode_blocks(gpu, &p.layout, &p.pipe, &refs, 2)
+    let p = BC1.get_or_init(|| enc_pipe(gpu, "bc1", BC1_WGSL));
+    accounted("bc1", |st| encode_blocks(gpu, p, &refs, 2, st))
 }
 
 /// BC7 (mode 6) blocks of several RGBA images at once (each (w, h, rgba bytes)), one Vec per image: bc7_encode's
@@ -565,82 +929,81 @@ pub fn bc7_encode(gpu: &Gpu, imgs: &[(usize, usize, &[u8])]) -> Result<Vec<Vec<u
             return Err("bc7_encode: bad image".into());
         }
     }
-    let p = bc7_pipe(gpu);
-    encode_blocks(gpu, &p.layout, &p.pipe, imgs, 4)     // (RGBA8 bytes are the shader's packed u32 texels)
+    let p = BC7.get_or_init(|| enc_pipe(gpu, "bc7", BC7_WGSL));
+    // (RGBA8 bytes are the shader's packed u32 texels)
+    accounted("bc7", |st| encode_blocks(gpu, p, imgs, 4, st))
 }
 
-/// One dispatch of a block encoder over the images' 4 x 4 blocks (texels packed RGBA8 in u32): wpb u32 words a block.
 /// Blocks per GPU submission (encode_blocks): 512 workgroups of 64, a few ms of a mid-range GPU's time.
 const CHUNK_BLOCKS: u32 = 32768;
 
-fn encode_blocks(gpu: &Gpu, layout: &wgpu::BindGroupLayout, pipe: &wgpu::ComputePipeline,
-                 imgs: &[(usize, usize, &[u8])], wpb: u64) -> Result<Vec<Vec<u8>>, String> {
+/// A block encoder over the images' 4 x 4 blocks (texels packed RGBA8 in u32; wpb u32 words a block), in short
+/// submissions, into the encoder's kept buffers (EncBufs: one call at a time an encoder).
+fn encode_blocks(gpu: &Gpu, p: &EncPipe, imgs: &[(usize, usize, &[u8])], wpb: u64, st: &mut CallStat)
+                 -> Result<Vec<Vec<u8>>, String> {
     let d = &gpu.device;
     let mut levels: Vec<[u32; 8]> = Vec::new();
-    let mut pix: Vec<u8> = Vec::with_capacity(imgs.iter().map(|(_, _, t)| t.len()).sum());
-    let mut nblk = 0u32;
+    let (mut nblk, mut npix) = (0u32, 0u64);
     for (w, h, t) in imgs {          // (texels: 4 bytes each, RGBA8 = a little-endian u32)
         let (nbx, nby) = (w.div_ceil(4) as u32, h.div_ceil(4) as u32);
-        levels.push([*w as u32, *h as u32, (pix.len() / 4) as u32, nbx, nblk, nbx * nby, 0, 0]);
-        pix.extend_from_slice(t);
+        levels.push([*w as u32, *h as u32, (npix / 4) as u32, nbx, nblk, nbx * nby, 0, 0]);
+        npix += t.len() as u64;
         nblk += nbx * nby;
     }
-    let st = wgpu::BufferUsages::STORAGE;
-    let lvb = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("levels"), contents: bytemuck::cast_slice(&levels), usage: st,
-    });
-    let pixb = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("pix"), contents: &pix, usage: st,
-    });
+    let lv_bytes = (levels.len() * 32) as u64;
     let nb = (nblk as u64) * wpb * 4;
-    let outb = d.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("blocks"), size: nb, usage: st | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-    });
-    let nl = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("n"), contents: bytemuck::cast_slice(&[levels.len() as u32, 0, 0, 0]),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-    let bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None, layout,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: lvb.as_entire_binding() },
-                   wgpu::BindGroupEntry { binding: 1, resource: pixb.as_entire_binding() },
-                   wgpu::BindGroupEntry { binding: 2, resource: outb.as_entire_binding() },
-                   wgpu::BindGroupEntry { binding: 3, resource: nl.as_entire_binding() }],
-    });
-    let rb = d.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("rb"), size: nb, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let mut guard = p.bufs.lock().unwrap_or_else(|e| e.into_inner());
+    if !guard.as_ref().is_some_and(|b| b.fits(lv_bytes, npix, nb)) {
+        *guard = None;          // (the old ones let go first)
+        *guard = Some(EncBufs::new(d, &p.layout, lv_bytes, npix, nb));
+    }
+    let b = guard.as_mut().unwrap();
+    b.last = Instant::now();
+    let r = encode_into(gpu, p, b, imgs, &levels, npix, nblk, wpb, st);
+    if r.is_err() {
+        *guard = None;          // (a failed call's buffers may be left mapped or half written: made again)
+    }
+    r
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_into(gpu: &Gpu, p: &EncPipe, b: &EncBufs, imgs: &[(usize, usize, &[u8])], levels: &[[u32; 8]], npix: u64,
+               nblk: u32, wpb: u64, st: &mut CallStat) -> Result<Vec<Vec<u8>>, String> {
+    let d = &gpu.device;
+    let lv_bytes = (levels.len() * 32) as u64;
+    let nb = (nblk as u64) * wpb * 4;
+    // the texels straight into the kept buffer, image after image (no packed copy of them all here first)
+    gpu.queue.write_buffer(&b.lvb, 0, bytemuck::cast_slice(levels));
+    let mut off = 0u64;
+    for (_, _, t) in imgs {
+        gpu.queue.write_buffer(&b.pixb, off, t);
+        off += t.len() as u64;
+    }
+    st.up_bytes += npix + lv_bytes;
     // in short submissions, each waited for before the next: one dispatch of a 4096² photo's ~1.4M blocks held the GPU
     // the game draws with for tens of ms, which Windows often cannot preempt (the game froze, 1.6.0); between ours,
     // the game's frames get the GPU
     let mut base = 0u32;
     while base < nblk {
         let n = (nblk - base).min(CHUNK_BLOCKS);
-        gpu.queue.write_buffer(&nl, 0, bytemuck::cast_slice(&[levels.len() as u32, base, 0, 0]));
+        gpu.queue.write_buffer(&b.nl, 0, bytemuck::cast_slice(&[levels.len() as u32, base, 0, 0]));
         let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-            pass.set_pipeline(pipe);
-            pass.set_bind_group(0, &bg, &[]);
+            pass.set_pipeline(&p.pipe);
+            pass.set_bind_group(0, &b.bg, &[]);
             pass.dispatch_workgroups(n.div_ceil(64), 1, 1);
         }
-        let sub = gpu.queue.submit(Some(enc.finish()));
-        d.poll(wgpu::PollType::WaitForSubmissionIndex(sub)).map_err(|e| format!("poll: {e:?}"))?;
+        submit_wait(gpu, enc, st)?;
         base += n;
     }
     let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    enc.copy_buffer_to_buffer(&outb, 0, &rb, 0, nb);
-    let sub = gpu.queue.submit(Some(enc.finish()));
-    let slice = rb.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-    d.poll(wgpu::PollType::WaitForSubmissionIndex(sub)).map_err(|e| format!("poll: {e:?}"))?;
-    rx.recv().map_err(|e| format!("map: {e}"))?.map_err(|e| format!("map: {e:?}"))?;
-    let all = slice.get_mapped_range().to_vec();
-    rb.unmap();
+    enc.copy_buffer_to_buffer(&b.outb, 0, &b.rb, 0, nb);
+    submit_wait(gpu, enc, st)?;
     let bpb = (wpb * 4) as usize;
-    Ok(levels.iter().map(|l| all[(l[4] as usize) * bpb..((l[4] + l[5]) as usize) * bpb].to_vec()).collect())
+    read_back(gpu, &b.rb, nb, st, |all| {
+        levels.iter().map(|l| all[(l[4] as usize) * bpb..((l[4] + l[5]) as usize) * bpb].to_vec()).collect()
+    })
 }
 
 // --- bc7 -------------------------------------------------------------------------------------------------------
@@ -764,37 +1127,81 @@ fn bc7(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
-pub struct Bc7Pipe {
-    layout: wgpu::BindGroupLayout,
-    pipe: wgpu::ComputePipeline,
-}
 
-static BC7: OnceLock<Bc7Pipe> = OnceLock::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn bc7_pipe(gpu: &Gpu) -> &'static Bc7Pipe {
-    BC7.get_or_init(|| {
-        let d = &gpu.device;
-        let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("bc7"), source: wgpu::ShaderSource::Wgsl(BC7_WGSL.into()),
-        });
-        let entry = |b: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
-            binding: b, visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None }, count: None,
+    #[test]
+    fn seam_bands_cover_every_row_in_short_submissions() {
+        for (gw, gh) in [(1086usize, 1086usize), (768, 768), (16, 16), (5000, 3), (1, 1)] {
+            let b = seam_bands(gw, gh);
+            let wx = gw.div_ceil(16);
+            let mut next = 0u32;
+            for &(y0, rows) in &b {
+                assert_eq!(y0, next * 16, "contiguous whole workgroup rows");
+                assert!(rows >= 1 && (wx * rows as usize <= SEAM_WG_PER_SUBMIT || rows == 1), "{gw}x{gh}");
+                next += rows;
+            }
+            assert_eq!(next as usize, gh.div_ceil(16), "every row once");
+        }
+        assert!(seam_bands(1086, 1086).len() >= 5, "a region's pass is split");
+    }
+
+    #[test]
+    fn the_decks_gate() {
+        // (the one test that touches these switches and the gate's state)
+        std::env::set_var("BNGE_GPU_DECK", "0");
+        assert!(allowed(), "off a Deck: always");
+        std::env::set_var("BNGE_GPU_DECK", "1");
+        std::env::set_var("BNGE_GPU_PARK_S", "0.3");
+        note_pose(20.0, false);
+        assert!(!allowed(), "driving");
+        note_pose(0.0, false);
+        assert!(!allowed(), "just stopped: not parked yet");
+        note_pose(20.0, true);
+        assert!(allowed(), "a teleport loading");
+        note_pose(0.1, false);
+        assert!(!allowed(), "loaded, stood under park_s");
+        std::thread::sleep(Duration::from_millis(350));
+        note_pose(0.1, false);
+        assert!(allowed(), "parked");
+        note_pose(f64::NAN, false);
+        assert!(!allowed(), "a NaN speed counts as moving");
+        std::env::set_var("BNGE_GPU_DRIVING", "1");
+        assert!(allowed(), "the A/B switch");
+        std::env::remove_var("BNGE_GPU_DRIVING");
+        std::env::remove_var("BNGE_GPU_PARK_S");
+        std::env::remove_var("BNGE_GPU_DECK");
+    }
+
+    #[test]
+    fn kept_buffer_sizes() {
+        assert_eq!(round_cap(1), 1 << 20);
+        assert_eq!(round_cap((1 << 20) + 1), 2 << 20);
+    }
+
+    /// On a machine with a GPU: the kept buffers give the same blocks call after call, across a size change and a
+    /// trim (no GPU: nothing to check).
+    #[test]
+    fn bc7_on_the_gpu_with_kept_buffers() {
+        let Some(g) = get() else { return };
+        let img = |n: usize, seed: u32| -> Vec<u8> {
+            (0..n * n * 4).map(|i| ((i as u32).wrapping_mul(2654435761).wrapping_add(seed) >> 24) as u8).collect()
         };
-        let layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
-                       entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
-                       entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
-                       entry(3, wgpu::BufferBindingType::Uniform)],
-        });
-        let pl = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None, bind_group_layouts: &[&layout], push_constant_ranges: &[],
-        });
-        let pipe = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("bc7"), layout: Some(&pl), module: &module, entry_point: Some("bc7"),
-            compilation_options: Default::default(), cache: None,
-        });
-        Bc7Pipe { layout, pipe }
-    })
+        let (a, b) = (img(256, 1), img(64, 2));
+        let first = bc7_encode(g, &[(256, 256, &a), (64, 64, &b)]).unwrap();
+        assert_eq!(first[0].len(), 64 * 64 * 16);
+        assert_eq!(first[1].len(), 16 * 16 * 16);
+        let st = last().unwrap();
+        assert!(st.ok && st.submits >= 2 && st.up_bytes >= (a.len() + b.len()) as u64, "{st:?}");
+        assert_eq!(st.down_bytes, ((64 * 64 + 16 * 16) * 16) as u64);
+        let again = bc7_encode(g, &[(256, 256, &a), (64, 64, &b)]).unwrap();
+        assert_eq!(first, again, "the kept buffers: the same blocks");
+        let big = img(1024, 3);
+        let _ = bc7_encode(g, &[(1024, 1024, &big)]).unwrap();
+        trim_idle(Duration::ZERO);
+        let after = bc7_encode(g, &[(256, 256, &a), (64, 64, &b)]).unwrap();
+        assert_eq!(first, after, "after a larger call and a trim");
+    }
 }

@@ -17,8 +17,11 @@
 --   onBeamNGEarthAddonOptions(info)   an add-on's options were saved on its Options tab: info.id, info.values
 --   onBeamNGEarthRebased(info)        the world's origin moved (1.7, has('rebase')): info.lat / lon the new origin,
 --                                     oldLat / oldLon the one before (nil at the first), anchorId, purpose
--- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions', 'rebased'), which returns a
--- handle for api.off(handle).
+--   onBeamNGEarthContentChanged(info) the streamed world changed (1.12, has('contentChanged')): buildings, roads,
+--                                     colliders, the road graph or the town came or went since the last one; at
+--                                     most once every CONTENT_GAP_S (info: kinds, x0 / y0 / x1 / y1, below)
+-- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions', 'rebased', 'contentChanged'),
+-- which returns a handle for api.off(handle).
 --
 -- Options (1.1, has('options')): an add-on declares them in its beamngEarth_addon.json ({"options": [{"key": "port",
 -- "label": "Port", "type": "int", "default": 47700, "min": 1024, "max": 65535}]}, docs/ADDONS.md); the player sets them
@@ -31,15 +34,23 @@
 -- A wide search over what is already on disk (1.8, has('cachedPlaces')): opts.cachedOnly takes the map cells the app
 -- has and asks for no others, with no second answer, so opts.radius may go to 25 km; it must name opts.categories,
 -- and result.truncated says the reach was cut back to the app's cell cap.
+-- The streamed world for mods that scan the scene (1.12; the 2026-11-27 mod-compatibility study: a stock level has its
+-- buildings at load, ours come and go as the player drives, so a scan at the level's start finds none):
+-- onBeamNGEarthContentChanged says when to look again, loadedBuildings(x, y, r) are the buildings made round a point
+-- (game coordinates, at once, no request), towns(lat, lon, opts, callback) the towns and villages round a point (the
+-- app's own copy of Overture's divisions), collisionReady(x, y, r) whether the colliders round a point are in.
+-- (1.9 to 1.11 are held for open pull requests: #1232 and #1249 both claim 1.9, one of them 1.10 then; #1566 1.11)
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 8
+M.MAJOR, M.MINOR = 1, 12
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
-  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true }
+  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true,
+  contentChanged = true, loadedBuildings = true, towns = true, collisionReady = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
-  waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased' }
+  waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased',
+  contentChanged = 'onBeamNGEarthContentChanged' }
 
 local function core() return rawget(_G, 'beamngEarth_core') end
 local function state()
@@ -316,6 +327,70 @@ function M.rebasing()
   return st ~= nil and st.rebasing ~= nil
 end
 
+------------------------------------------------------------------------------------------
+-- the streamed world (1.12)
+
+-- The point an add-on asked about, or the player's (nil before the world is there).
+local function pointOr(x, y)
+  x, y = tonumber(x), tonumber(y)
+  if x and y then return x, y end
+  local st = state()
+  local pl = st and st.player
+  if pl and pl.x and pl.y then return pl.x, pl.y end
+  return nil
+end
+
+-- The buildings made round x, y (game coordinates; nil: the player) within radius m (default 300, at most 2000), at
+-- once from what is loaded (1.12, has('loadedBuildings')): { { x, y, z, top, height, sizeX, sizeY, dist }... } nearest
+-- first, at most limit (default 200, at most 2000): x, y its footprint box's centre, z its lowest ground, top its roof,
+-- height top - z, sizeX / sizeY the footprint box (game x / y), dist (m from the point to the box, 0 inside). A
+-- streamed tile's buildings are one mesh to the scene (TSStatic bld_*, in the Buildings group): these are the single
+-- ones in it. No outline or kind here: api.buildings has the map's footprints with their class. Not the open parking
+-- decks, the bridges or the landmark frames. Nil before the world is there or off our level. Each call walks the
+-- loaded tiles round the point (a few ms for a city's 2 km): ask after onBeamNGEarthContentChanged, not every frame.
+M.BUILDINGS_RADIUS_DEFAULT_M, M.BUILDINGS_RADIUS_MAX_M = 300, 2000
+M.BUILDINGS_LIMIT_DEFAULT, M.BUILDINGS_LIMIT_MAX = 200, 2000
+function M.loadedBuildings(x, y, radius, limit)
+  if not M.inWorld() then return nil end
+  x, y = pointOr(x, y)
+  local roads = mod('roads')
+  if not (x and roads and roads.buildingBoxesNear) then return nil end
+  local r = math.max(0, math.min(tonumber(radius) or M.BUILDINGS_RADIUS_DEFAULT_M, M.BUILDINGS_RADIUS_MAX_M))
+  local n = math.max(0, math.min(math.floor(tonumber(limit) or M.BUILDINGS_LIMIT_DEFAULT), M.BUILDINGS_LIMIT_MAX))
+  local ok, list = pcall(roads.buildingBoxesNear, x, y, r, {})
+  if not ok or type(list) ~= 'table' then return nil end
+  table.sort(list, function(a, b)
+    if a.dist ~= b.dist then return a.dist < b.dist end
+    if a.x ~= b.x then return a.x < b.x end
+    return a.y < b.y
+  end)
+  local out = {}
+  for i = 1, math.min(n, #list) do
+    local b = list[i]
+    out[i] = { x = b.x, y = b.y, z = b.z, top = b.top, height = b.top - b.z, sizeX = b.sizeX, sizeY = b.sizeY,
+      dist = b.dist }
+  end
+  return out
+end
+
+-- Are the colliders round x, y (game coordinates; nil: the player) within radius m (default 0) in (1.12,
+-- has('collisionReady'))? The road tiles' sidewalks, kerbs, decks, tunnels and buildings there are made and the
+-- physics has them: true; false while they are not (not streamed yet, waiting for a rebuild, or dropped far from the
+-- car: they come as the car comes near), nil off our level. A ray or ground-height probe (castRayStatic,
+-- getSurfaceHeightBelow) that missed a sidewalk where this says false may be asked again after the next
+-- onBeamNGEarthContentChanged with kinds.collision. The terrain block's ground is not in it (the road graph's nodes are
+-- all on it).
+function M.collisionReady(x, y, radius)
+  local st = state()
+  if not (st and st.inOurLevel and st.anchorId) then return nil end
+  x, y = pointOr(x, y)
+  local roads = mod('roads')
+  if not (x and roads and roads.readyAround) then return nil end
+  local ok, ready = pcall(roads.readyAround, st.anchorId, x, y, math.max(0, tonumber(radius) or 0))
+  if not ok then return nil end
+  return ready == true
+end
+
 -- A short message on the screen (the game's own messages), seconds (default 5).
 function M.notify(text, seconds)
   if type(text) ~= 'string' or text == '' then return false end
@@ -377,6 +452,31 @@ function M.places(lat, lon, opts, callback) return placesRequest(lat, lon, opts,
 -- levels nil where not mapped), within 500 m and at most 100.
 function M.buildings(lat, lon, opts, callback) return placesRequest(lat, lon, opts, callback, true) end
 
+------------------------------------------------------------------------------------------
+-- towns (1.12)
+
+-- The towns, villages and cities round lat, lon (1.12, has('towns')): the app's own copy of Overture's divisions (the
+-- status bar's town names, the 3D map's town labels). opts (optional): radius (m, default 20000, at most 150000),
+-- limit (default 50, at most 400). callback(result) once: { towns = { { name, lat, lon, class ('megacity', 'city',
+-- 'town', 'village', 'hamlet', or '' for a city's district), population (0 where not mapped), dist (m) }... } the
+-- largest first (classed towns ahead of districts, then by population), complete (every map region round the point
+-- was on disk: the app reads none it does not have for this, the status bar fetches the player's own), error }.
+-- Returns the request's id, or nil and why.
+function M.towns(lat, lon, opts, callback)
+  if type(opts) == 'function' and callback == nil then opts, callback = nil, opts end
+  lat, lon = tonumber(lat), tonumber(lon)
+  if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then return nil, 'bad coordinates' end
+  if type(callback) ~= 'function' then return nil, 'no callback' end
+  local net = mod('net')
+  if not (net and M.connected()) then return nil, 'Companion server not connected' end
+  opts = type(opts) == 'table' and opts or {}
+  placeReqId = placeReqId + 1
+  placeReqs[placeReqId] = { fn = callback, t = clock, towns = true }
+  net.send({ type = 'towns', id = placeReqId, lat = lat, lon = lon, radius = tonumber(opts.radius),
+    limit = tonumber(opts.limit) })
+  return placeReqId
+end
+
 local function placesCall(r, result)
   local ok, err = pcall(r.fn, result)
   if not ok and log then log('W', 'beamngEarth', 'api: a places callback failed: ' .. tostring(err)) end
@@ -385,7 +485,7 @@ end
 -- (ours: core.lua hands the app's places_result here)
 function M._onPlaces(msg)
   local r = type(msg) == 'table' and placeReqs[msg.id]
-  if not r then return end
+  if not r or r.towns then return end
   local result = { places = type(msg.places) == 'table' and msg.places or {}, complete = msg.complete == true,
     pending = msg.pending == true, next = type(msg.next) == 'string' and msg.next or nil,
     error = type(msg.error) == 'string' and msg.error or nil, truncated = msg.truncated == true,
@@ -394,8 +494,23 @@ function M._onPlaces(msg)
   placesCall(r, result)
 end
 
-local function placesTimeouts(dt)
-  clock = clock + (tonumber(dt) or 0)
+-- (ours: core.lua hands the app's towns_result here; rows [name, lat, lon, class, population, dist])
+function M._onTowns(msg)
+  local r = type(msg) == 'table' and placeReqs[msg.id]
+  if not (r and r.towns) then return end
+  placeReqs[msg.id] = nil
+  local towns = {}
+  for _, row in ipairs(type(msg.towns) == 'table' and msg.towns or {}) do
+    if type(row) == 'table' and type(row[1]) == 'string' and tonumber(row[2]) and tonumber(row[3]) then
+      towns[#towns + 1] = { name = row[1], lat = tonumber(row[2]), lon = tonumber(row[3]),
+        class = type(row[4]) == 'string' and row[4] or '', population = tonumber(row[5]) or 0, dist = tonumber(row[6]) }
+    end
+  end
+  placesCall(r, { towns = towns, complete = msg.complete == true,
+    error = type(msg.error) == 'string' and msg.error or nil })
+end
+
+local function placesTimeouts()
   local late = {}
   for id, r in pairs(placeReqs) do
     if clock - r.t > M.PLACES_TIMEOUT_S then late[#late + 1] = id end
@@ -405,7 +520,8 @@ local function placesTimeouts(dt)
   for _, id in ipairs(late) do
     local r = placeReqs[id]
     placeReqs[id] = nil
-    placesCall(r, { places = {}, complete = false, pending = false, error = 'timed out' })
+    placesCall(r, r.towns and { towns = {}, complete = false, error = 'timed out' }
+      or { places = {}, complete = false, pending = false, error = 'timed out' })
   end
 end
 
@@ -429,11 +545,57 @@ function M.addonOptions(id)
   return addons and type(addons.optionValues) == 'function' and addons.optionValues(id) or nil
 end
 
+-- The streamed world changed (1.12): what roads.lua, navgraph.lua and the status bar note, told at most every
+-- CONTENT_GAP_S as one onBeamNGEarthContentChanged(info): info.kinds = { buildings = true, roads = true, collision =
+-- true, graph = true, town = true } (those that changed: drawn buildings, drawn roads / sidewalks / decks / tunnels
+-- made or deleted; colliders put in effect; the road graph applied to the game's map; the status bar's town),
+-- x0, y0, x1, y1 (game coordinates: the box round the changed meshes, colliders and graph; nil when not known, e.g. a
+-- rebase came between, or only the town changed), changes (how many notes were merged), lat0 / lon0 / lat1 / lon1 (the
+-- box's corners). Only in our level; nothing pending when nothing changed.
+M.CONTENT_GAP_S = 3.0
+local content = { kinds = nil, box = nil, n = 0, lastAt = -math.huge, lost = false }
+M.contentHeard, M.lastContent = 0, nil
+
+function M._contentChanged(kind, b)
+  if type(kind) ~= 'string' then return end
+  local c = content
+  c.kinds = c.kinds or {}
+  c.kinds[kind] = true
+  c.n = c.n + 1
+  if type(b) == 'table' and tonumber(b[1]) and tonumber(b[2]) and tonumber(b[4]) and tonumber(b[5]) then
+    local x
+    if not c.box then c.box = { b[1], b[2], b[4], b[5] } else
+      x = c.box
+      x[1], x[2] = math.min(x[1], b[1]), math.min(x[2], b[2])
+      x[3], x[4] = math.max(x[3], b[4]), math.max(x[4], b[5])
+    end
+  end
+end
+
+local function fireContent()
+  local c = content
+  local info = { kinds = c.kinds, changes = c.n }
+  if c.box and not c.lost then
+    info.x0, info.y0, info.x1, info.y1 = c.box[1], c.box[2], c.box[3], c.box[4]
+    local la0, lo0 = M.toGeo(c.box[1], c.box[2])
+    local la1, lo1 = M.toGeo(c.box[3], c.box[4])
+    if la0 and la1 then
+      info.lat0, info.lon0 = math.min(la0, la1), math.min(lo0, lo1)
+      info.lat1, info.lon1 = math.max(la0, la1), math.max(lo0, lo1)
+    end
+  end
+  c.kinds, c.box, c.n, c.lost, c.lastAt = nil, nil, 0, false, clock
+  M.contentHeard = M.contentHeard + 1          -- (probes: how many were told, and the last)
+  M.lastContent = info
+  M._event('contentChanged', info)
+end
+
 -- (ours: the mod's modules say when something happens; gps.lua at arrival)
 function M._event(event, info)
   local hook = EVENTS[event]
   if not hook then return end
   info = type(info) == 'table' and info or {}
+  if event == 'rebased' and content.kinds then content.lost = true end     -- (the box is the old frame's)
   for _, l in pairs(listeners) do
     if l.event == event then
       local ok, err = pcall(l.fn, info)
@@ -446,9 +608,14 @@ end
 local wasReady, teleporting = false, false
 
 function M.onUpdate(dtReal)
-  if next(placeReqs) then placesTimeouts(dtReal) end
+  clock = clock + (tonumber(dtReal) or 0)
+  if next(placeReqs) then placesTimeouts() end
   local st = state()
   if not st then wasReady, teleporting = false, false return end
+  if content.kinds then
+    if not st.inOurLevel then content.kinds, content.box, content.n = nil, nil, 0
+    elseif clock - content.lastAt >= M.CONTENT_GAP_S then fireContent() end
+  end
   if st.pending and st.pending.purpose == 'teleport' then teleporting = true end
   local ready = M.ready()
   if ready and not wasReady then
@@ -460,6 +627,9 @@ function M.onUpdate(dtReal)
   wasReady = ready
 end
 
-function M._reset() listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0 end
+function M._reset()
+  listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0
+  content = { kinds = nil, box = nil, n = 0, lastAt = -math.huge, lost = false }
+end
 
 return M

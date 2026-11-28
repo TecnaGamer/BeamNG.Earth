@@ -38,7 +38,6 @@ import fast
 import junctions
 import mapcells
 import mapgeom
-import photosurface
 import racedig
 import roadmesh
 import roadsurf
@@ -2001,39 +2000,9 @@ def _surface_rules():
 
 
 def _surface_value(feats, i):
-    """Feature i's surface value: the map's (_map_surface_value), else, for a road the map says nothing about, what the
-    regional photo's colour says (photosurface.py, BNE_PHOTO_SURFACE=1: "asphalt" for a road that is grey like it, "grass"
-    for a lane as green as its verges, "gravel" for a pale neutral one)."""
-    v = _map_surface_value(feats, i)
-    if v is None and photosurface.ON:
-        v = _photo_surface(feats).get(i)
-    return v
-
-
-def _photo_surface(feats):
-    """{feature index: "asphalt", "grass" or "gravel"} of feats' roads the photo says are paved, grass lanes or gravel, remembered on feats. A candidate whose photo
-    tile is not on the disk yet is not known: the verdicts stand for FACTS_SHORT_S s and revisit.fault says nothing
-    built from them is kept (the specs' disk cache included: PR #634's idiom), so they are made again once it is."""
-    st = feats.__dict__
-    got = st.get("_photo_surface")
-    if got is not None and (got[1] is None or time.monotonic() < got[1]):
-        if got[1] is not None:
-            import revisit
-            revisit.fault()
-        return got[0]
-    if st.get("_photo_busy"):           # (asked again from inside its own making: the map's value alone)
-        return {}
-    st["_photo_busy"] = True
-    try:
-        v, missing = photosurface.verdicts(feats, lambda i: _map_surface_value(feats, i))
-    finally:
-        st["_photo_busy"] = False
-    v = {i: {"paved": "asphalt"}.get(k, k) for i, k in v.items()}     # ("grass" and "gravel" are surface values as they are)
-    if missing:
-        import revisit
-        revisit.fault()
-    st["_photo_surface"] = (v, time.monotonic() + FACTS_SHORT_S if missing else None)
-    return v
+    """Feature i's surface value: the map's (_map_surface_value). (The regional photo's colour once filled in a road the
+    map says nothing about, BNE_PHOTO_SURFACE, retired 2026-11-26: roadsurf.py's aerial verdict does that.)"""
+    return _map_surface_value(feats, i)
 
 
 def _map_surface_value(feats, i):
@@ -2474,7 +2443,7 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
         keep = True             # (specs made while a download failed are not remembered: asked again, PR #634)
         import germanroads
         extra = (widths is not None, bool(left_hand)) + ((franceroads.VERSION,) if franceroads.ON else ()) + (
-            (photosurface.TAG,) if photosurface.ON else ()) + ((europewalks.VERSION,) if europewalks.enabled() else ()) + (
+            ()) + ((europewalks.VERSION,) if europewalks.enabled() else ()) + (
             (germanroads.VERSION,) if germanroads.ON else ()) + roadsurf.layer_tags(feats)
         cid = feats.__dict__.get("_bnge_cell")
         # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
@@ -3983,7 +3952,7 @@ def _raw_flat(feats):
 def _spec_inputs(feats):
     """A layer's columns as the spec kernels read them (earthfast.RoadRules): geometry, class codes, the rules' and
     OpenStreetMap's values, lane evidence, surface kinds (surface_kind of each class and surface value), the sidewalk
-    tag, Sweden's and the European tests; kept on feats (not with BNE_PHOTO_SURFACE: its verdicts expire)."""
+    tag, Sweden's and the European tests; kept on feats."""
     st = feats.__dict__
     got = st.get("_spec_inputs")
     if got is not None:
@@ -4018,15 +3987,9 @@ def _spec_inputs(feats):
         r = ring_radius(feats, i)
         if r is not None:
             radius[i] = r
-    # surfaces: the map's value (BNE_PHOTO_SURFACE: the photo's for a road the map says nothing of), its kind by
+    # surfaces: the map's value, its kind by
     # surface_kind and its token by surface_token, each pair worked out once
-    import photosurface
-    vals = _map_surface_values(feats)
-    if photosurface.ON:         # (earthfast roadnet::verdicts: the photo asked only where an eligible road has none)
-        fast.require(392, "photo_values")
-        vals = fast._ef.photo_values(vals, np.ascontiguousarray(elig, bool), lambda: _photo_surface(feats))
-    else:
-        vals = list(vals)
+    vals = list(_map_surface_values(feats))
     good = sc["good"]
     name = sc["name"]
     # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
@@ -4059,8 +4022,7 @@ def _spec_inputs(feats):
             "region": _width_regions(feats)}
     got = {"geo": (ll, co, ro, po), "cols": cols, "built": [k in BUILT for k in _KINDS], "names": names, "pos": pos,
            "tokens": tokens}
-    if not photosurface.ON:
-        st["_spec_inputs"] = got
+    st["_spec_inputs"] = got
     return got
 
 
@@ -9516,12 +9478,16 @@ class BridgeProfiles:
                 prof = None
             if prof is not None:
                 dd = self.__dict__.setdefault("depth", {})
+                kk = self.__dict__.setdefault("kept", {})
                 for k in comp:
                     v = shaped[k]
                     shaped[k] = (v[0], v[1], np.asarray(prof["deck_z"][k], np.float64), v[3])
                     # (M3: drawn with the depth its floors were solved with: its structure's, roadsys._deck_depth)
                     if prof.get("depth", {}).get(k) is not None:
                         dd[k] = float(prof["depth"][k])
+                    # (M5 round 8: the ends the chain kept at its profile's heights, their approaches' ramps:
+                    # roadsys._keep_ends, read by roadsys.pins_near through ChainView.kept_of_part)
+                    kk[k] = tuple(prof.get("kept", {}).get(k, ()))
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read
@@ -11009,6 +10975,50 @@ class ChainView:
         ceiling's boxes asked a short chain again every PROFILE_RETRY_S, M5 r5)."""
         return self._parts(cells_feats, box, part_ids=True, retry=False)
 
+    def parts_published_short(self, cells_feats, box, max_m):
+        """parts_published of the parts of max_m or less alone (their mapped line's length): only their chains solved
+        (roadsys._kept_near: a deck end kept at its profile is one of a short chain's, so the ramps never ask the long
+        viaducts' chains solved; asking every chain near each grading query cost the wide corpus +15 % CPU, railramp
+        +51 %)."""
+        x0, y0, x1, y1 = box
+        by = {}
+        for feats in cells_feats:
+            if feats is None or len(feats) == 0:
+                continue
+            bs = self.specs_of(feats)
+            cand = []
+            for i in range(len(feats)):
+                if bs[i] is None:
+                    continue
+                fid = str(feats.ids[i])
+                for j, ring in _keyed(self.keys_of, self.parts_of, feats, i):
+                    ll = np.asarray(ring, np.float64)
+                    if len(ll) < 2:
+                        continue
+                    c = dmath.cos(math.radians(float(ll[0, 1])))
+                    seg = dnp.hypot(np.diff(ll[:, 0]) * c, np.diff(ll[:, 1])) * 111320.0
+                    if float(np.sum(seg)) <= max_m:
+                        cand.append((fid, j, ring, i))
+            if not cand:
+                continue
+            bb = mapgeom.enu_bounds(feats, self.frame, [c[2] for c in cand]).tolist()
+            for (fid, j, ring, i), (emin, emax, nmin, nmax) in zip(cand, bb):
+                if emax < x0 - NEAR_M or emin > x1 + NEAR_M or nmax < y0 - NEAR_M or nmin > y1 + NEAR_M:
+                    continue
+                st = self.cs.store_at(float(ring[0][1]), float(ring[0][0]))
+                todo = by.setdefault(st.region, (st, []))[1]
+                if all(t[0] != (fid, j) for t in todo):
+                    todo.append(((fid, j), feats, i))
+        out = []
+        for _r, (st, todo) in sorted(by.items()):
+            if self.prefer is not None:
+                pst = self.prefer.store(st.region)
+                solved = [t for t in todo if pst._has(t[0])]
+                out += self._map(pst, pst.parts_todo(solved, solved_only=True, part_ids=True, retry=False))
+                todo = [t for t in todo if t not in solved]
+            out += self._map(st, st.parts_todo(todo, part_ids=True, retry=False))
+        return out
+
     def parts_shaped(self, cells_feats, box):
         """parts() with each part's shape (roadshape, BNE_ROADSHAPE=decks; None without one) as a sixth field, from
         the store its line comes from and mapped as that line is."""
@@ -11107,6 +11117,16 @@ class ChainView:
             if d is not None:
                 return float(d)
         return None
+
+    def kept_of_part(self, key):
+        """(M5 round 8) The ends part key's chain solve kept at its profile's heights: ((end, ramp line [(lat, lon)], its
+        arc m, dz at its read point, ramp m, half width), ...) (roadsys._keep_ends); () when none or not solved here."""
+        for st in self._stores():
+            with st.lock:
+                got = st.__dict__.get("kept", {}).get(key)
+            if got is not None:
+                return got
+        return ()
 
     def depth_of(self, fid):
         ds = []
@@ -11640,13 +11660,14 @@ class _Segs:
         self.lo = np.minimum(self.a, self.b)
         self.hi = np.maximum(self.a, self.b)
 
-    def near(self, pts, gap, skip=None):
-        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). Pure."""
+    def near(self, pts, gap, skip=None, bounds=None):
+        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). bounds: the points'
+        (min, max) per axis when the caller has them (the same values pts.min(0), pts.max(0) give). Pure."""
         import fast
         pts = np.ascontiguousarray(np.asarray(pts, np.float64))
         if not len(pts) or not len(self.h):
             return np.zeros(len(pts), bool)
-        lo, hi = pts.min(0), pts.max(0)
+        lo, hi = (pts.min(0), pts.max(0)) if bounds is None else bounds
         r = self.h + gap
         keep = (self.hi[:, 0] + r >= lo[0]) & (self.hi[:, 1] + r >= lo[1]) & (self.lo[:, 0] - r <= hi[0]) & \
             (self.lo[:, 1] - r <= hi[1])
@@ -11660,11 +11681,11 @@ class _Segs:
                                                         np.ascontiguousarray(r[keep])), bool)
 
 
-def _on_carriageways(pts, others, gap):
+def _on_carriageways(pts, others, gap, bounds=None):
     """Which points (k, 2) lie on a carriageway of others {fid: (centreline (m, 2), half width)} or a _Segs of them
-    (+ gap). Pure."""
+    (+ gap). bounds: the points' (min, max) when the caller has them (_Segs.near). Pure."""
     segs = others if isinstance(others, _Segs) else _Segs(others)
-    return segs.near(pts, gap)
+    return segs.near(pts, gap, bounds=bounds)
 
 
 def _clear_depth(base, out, depth, others, own):
@@ -15577,6 +15598,18 @@ class GeoTracker:
         self.redo = set()       # (gx, gy) sent, to be asked for again (redo_all): sent again only where they changed
         self.swap, self.swap_held, self.swap_staged = None, [], 0      # (swap_begin)
         self.skin_h = {}        # (gx, gy) -> the digest of the skin sent (blockworker._geo_skin's "h")
+        self.skin_gen = 0       # (reskin) bumped when every skin is due again: a skin started before is not counted
+        self.reskinning = set()     # (gx, gy) whose skin reskin asked for again: done for progress() meanwhile
+
+    def reskin(self):
+        """The skins' inputs changed, not the content (earthd Server.snow_roads_changed: the road skins' winter part):
+        every skin sent is built and sent again, nearest first as any tile; the content (buildings, bridges, props,
+        season-free) stays as the mod has it, and the mod swaps a skin in place, its old parts kept until the new ones
+        are made (roads.lua onSkin). Before (2026-11-28, Baltimore) a new tracker sent every tile's content again and
+        dropped the builds running. A skin building now (made with the old inputs) is sent but stays due."""
+        self.reskinning |= self.skins
+        self.skins = set()
+        self.skin_gen += 1
 
     def redo_all(self):
         """Every geotile sent is asked for again, content and skin (earthd Connection.stale_swap: they were an
@@ -15611,7 +15644,10 @@ class GeoTracker:
         retry. near_m: only those within it of the car (the catch-up boost: the ground under the car, not SEND_M's
         far edge, where a tile is always on its way while driving)."""
         fast.require(551, "tracker_progress")
-        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, self.skins,
+        # (a skin reskin asked for again counts as there: the mod shows the old one until it comes; no catch-up boost
+        # or loading line for a winter look change)
+        skins = self.skins | self.reskinning if self.reskinning else self.skins
+        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, skins,
                                          getattr(self, "car_m", None), near_m)
 
     def ready_tiles(self, frame, x, y, r):
@@ -15620,7 +15656,15 @@ class GeoTracker:
         Before (2026-10-29) the signs waited until every road geotile round the car was in, which while driving it
         seldom was: signs came only once the car slowed down or stopped, one tile at a time, right next to it."""
         fast.require(551, "road_ready")
-        return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        held = self.reskinning
+        if not held:
+            return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        skins = self.skins                  # (a skin reskin asked for again: the mod has its old one, still ready)
+        self.skins = skins | held
+        try:
+            return fast._ef.road_ready(self, frame, (x, y), r, TILE)
+        finally:
+            self.skins = skins
 
     def again(self, keys):
         """The sent geotiles among keys built again (content and this anchor's skin) at the next pose and sent again
@@ -15667,6 +15711,7 @@ class GeoTracker:
                 del self.frames[old]
             self.skins, self.retry, self.fails, self.started, self.stuck_said = set(), {}, {}, {}, set()
             self.need = {}
+            self.reskinning = set()
             self.stats["anchors"] += 1
         if self.pool is None:
             from runtimeprofiler import TileJobs
@@ -15683,8 +15728,8 @@ class GeoTracker:
             if hasattr(getattr(conn, "s", None), "matslots"):
                 job = functools.partial(staging.prepare_shapes, conn.s, "roads", True, aid, k, job)
             fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
-            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
-                                  self._built(conn, a, kk, f, c, sk, m))
+            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make, g=self.skin_gen:
+                                  self._built(conn, a, kk, f, c, sk, m, g))
 
         def stuck():
             for k in list(self.building):    # (a snapshot: a tile's done callback or a start can change it meanwhile)
@@ -15699,6 +15744,7 @@ class GeoTracker:
             self.sent.discard(k)
             self.skins.discard(k)
             self.skin_h.pop(k, None)
+            self.reskinning.discard(k)
             self.redo.discard(k)
             self.info.pop(k, None)
             self.shown.pop(k, None)
@@ -15713,7 +15759,7 @@ class GeoTracker:
         fast._ef.road_geo(self, conn, aid, frame, (x, y), velocity, tuple(view) if view else None, foci, tree,
                           ground_busy, now, start, stuck, drop_tile)
 
-    def _built(self, conn, aid, key, fut, content, skin, make):
+    def _built(self, conn, aid, key, fut, content, skin, make, gen=None):
         import geotiles
         if self.futs.get(key) is fut:
             self.building.discard(key)
@@ -15819,7 +15865,9 @@ class GeoTracker:
                     m["slots"] = slots
             return m
         if skin and sk is not None:
-            self.skins.add(key)
+            if gen is None or gen == getattr(self, "skin_gen", 0):
+                self.skins.add(key)         # (else started before a reskin: made with the old inputs, still due)
+                getattr(self, "reskinning", set()).discard(key)
             self.stats["skins"] += 1
             if self.swap is not None:
                 self.swap_staged += 1

@@ -177,5 +177,27 @@ class LidsApplyTest(unittest.TestCase):
         self.assertAlmostEqual(float(z[0]), 100.0)
 
 
+class OneBuildTest(unittest.TestCase):
+    def test_two_askers_of_a_cell_build_it_once(self):
+        import threading
+        import time
+        lids = tunnellids.Lids(None, None)
+        calls = []
+
+        def build(key):
+            calls.append(key)
+            time.sleep(0.2)
+            return 1.0, 2.0, []
+        lids._build = build
+        out = []
+        ts = [threading.Thread(target=lambda: out.append(lids._cell("k"))) for _ in range(4)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(calls, ["k"])
+        self.assertEqual(out, [(1.0, 2.0, [])] * 4)
+
+
 if __name__ == "__main__":
     unittest.main()
