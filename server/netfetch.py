@@ -189,8 +189,6 @@ class HostPolicy:
 TILE_HOST = dict(redirect_limited=True, binary=True)
 # docs/research/2026-10-10-rate-limits.md §5.2, the hosts the server contacts today (rates per player).
 POLICIES = {
-    "graph.mapillary.com": HostPolicy(rate=2, burst=3, max_conc=2, shared=True, timeout=4,
-                                      connect_timeout=2, max_wait=2, max_attempts=1, optional=True),
     # (2026-10-16, the user: raise them, lower again on trouble; a first visit's far field waited ~100 s on 15/s)
     # (2026-10-23, the user: raise it again: 24 at once; a PC already got ~26/s with 12 and the same far field with 24,
     # all answered, so it helps players far from USGS, whose every request waits longer)
@@ -381,6 +379,8 @@ POLICIES = {
     "bulkdata.csdi.gov.hk": HostPolicy(rate=1.0, burst=4.0, max_conc=4, daily_budget=1000, daily_hard=2000,
                                        allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True, timeout=120.0,
                                        max_attempts=3, base_delay=2.0, optional=True),
+    "graph.mapillary.com": HostPolicy(rate=2, burst=3, max_conc=2, shared=True, timeout=4,
+                                      connect_timeout=2, max_wait=2, max_attempts=1, optional=True),
     # Enter-only bounded category searches, never terrain/bulk downloads. No retries on shared query services.
     "overpass-api.de": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
                                    cache_ttl=DAY, max_wait=1.0, timeout=4.0, max_attempts=1, optional=True,
