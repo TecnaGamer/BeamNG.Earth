@@ -254,6 +254,29 @@ def _fillet(v, head, half, r, t, joined=None):
 
 
 def _fillets(ways, runways):
+    """_fillets_py (its docstring the spec), in the native module where it has it (earthfast's aero_fillets, aerofillets.rs:
+    the same rings to the bit; a quarter of an airport's cold cost was here, the user, 2026-11-17)."""
+    import fast
+    native = getattr(fast._ef, "aero_fillets", None) if fast._ef is not None else None
+    if native is None:
+        return _fillets_py(ways, runways)
+    if not ways:
+        return []
+
+    def flat(lines):
+        lines = [(np.asarray(xy, np.float64).reshape(-1, 2), h) for xy, h in lines if len(xy) >= 2]
+        pts = np.ascontiguousarray(np.concatenate([xy for xy, _h in lines]) if lines else np.zeros((0, 2)))
+        starts = np.r_[0, np.cumsum([len(xy) for xy, _h in lines])].astype(np.int64)
+        return pts, np.ascontiguousarray(starts), np.ascontiguousarray(np.array([h for _xy, h in lines], np.float64))
+    if any(len(xy) < 2 for xy, _h in list(ways) + list(runways)):
+        return _fillets_py(ways, runways)          # (a one-point line: the Python's own handling)
+    pts, starts = native(*flat(ways), *flat(runways), [JOIN_TOL_M, FILLET_MIN_DEG, FILLET_R_K, FILLET_MAX_K,
+                                                       float(FILLET_ARC_N), FILLET_MIN_RUN_M, STRAIGHT_DEG])
+    pts = np.asarray(pts)
+    return [pts[starts[k]:starts[k + 1]].copy() for k in range(len(starts) - 1)]
+
+
+def _fillets_py(ways, runways):
     """The fillets (local metres) where the ways meet other pavement: a way's end on another way's or a runway's
     centreline (JOIN_TOL_M), and a way's vertex anywhere along it on a runway's (a taxiway mapped across the runway
     in one piece: the wedge between a shallow crossing and the runway edge, Brisbane's dirt triangles). One fillet for
@@ -509,6 +532,13 @@ def ways(feats_list):
     """[(lat (k,), lon (k,))]: the taxiway and taxilane outlines and their fillets alone (pads without the aprons and
     the runways' own strips)."""
     return _kept(feats_list, _KEY + "_taxi", lambda f: _feats_pads(f, False, "ways"))
+
+
+def stamp(feats):
+    """What says two reads of a cell's Features are one: the map data's own mark (cell, layer, versions: a cell the LRU dropped and
+    read again is the same data), else the object itself (the caller keeps it alive); None for None. What the airport modules'
+    answers that do not depend on the tile (airportscene, windsocks, airfieldlights) are kept by."""
+    return None if feats is None else feats.__dict__.get("_bnge_cell") or ("obj", id(feats))
 
 
 def pads(feats_list, runways=True):

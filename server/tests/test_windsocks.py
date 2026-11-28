@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -254,6 +255,17 @@ class TileRows(unittest.TestCase):
         self.assertEqual(len(a) + len(b), len(whole))
         self.assertTrue(all(r[1] < 1000.0 for r in a) and all(r[1] >= 1000.0 for r in b))
         self.assertEqual(rows(runway(), box=(5000.0, 5000.0, 5500.0, 5500.0)), [])
+
+    def test_the_spots_are_made_once_for_every_tile_that_reads_the_same_data(self):
+        # (they are the runways' and the data's, not the tile's: the user, 2026-11-17: "build each airport's scene once")
+        rw, f = runway(), feats(((100.0, 200.0), "windsock", {"aeroway": "windsock"}))
+        with mock.patch.object(ws, "spots", wraps=ws.spots) as spots:
+            a = rows(rw, f, box=(-500.0, -700.0, 1000.0, 700.0))
+            b = rows(rw, f, box=(1000.0, -700.0, 2600.0, 700.0))
+            whole = rows(rw, f)
+            rows(runway(length=900.0), f)
+        self.assertEqual(spots.call_count, 2, "once for these runways and data, once for others")
+        self.assertEqual(len(a) + len(b), len(whole))
 
     def test_none_without_an_airport_or_for_a_closed_or_water_runway(self):
         self.assertEqual(ws.tile_rows(FRAME, BOX, lambda k: None, lambda k: [], ground, keys=[0]), [])

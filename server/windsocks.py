@@ -64,6 +64,8 @@ _KEY = "_windsocks_mapped"
 _ROADS_KEY = "_windsocks_roads"
 _RUNWAYS = {}
 _SETS = {}
+ITEMS_MAX = 64                  # tile_rows' spots kept (by the runways and the cells' data they were made from)
+_ITEMS = {}
 M_PER_DEG = aeroways.M_PER_DEG
 
 
@@ -319,7 +321,7 @@ def tile_rows(frame, box, infra_fn, runways_fn, elev, wind_deg=None, keys=None, 
     if not runways:
         return []
     rws = [runways[k] for k in sorted(runways)]
-    pts, infra, roads, seen = {}, [], [], set()     # (the data round each candidate spot, so two tiles pick alike)
+    pts, infra, roads, seen, stamps, kept = {}, [], [], set(), [], []     # (the data round each candidate spot, so two tiles pick alike)
     for k in list(keys) + _cells_round(rws):
         if k in seen:
             continue
@@ -329,17 +331,31 @@ def tile_rows(frame, box, infra_fn, runways_fn, elev, wind_deg=None, keys=None, 
             infra.append(feats)
         for p in mapped(feats):
             pts.setdefault((round(p[0] * 2e5), round(p[1] * 2e5)), p)
+        rf = None
         if roads_fn is not None:
             try:
-                roads += road_lines(roads_fn(k))
+                rf = roads_fn(k)
+                roads += road_lines(rf)
             except Exception:               # (a cell without roads loaded: no road is kept clear of there)
-                pass
-    pts = list(pts.values())
+                rf = None
+        stamps.append((str(k), aeroways.stamp(feats), aeroways.stamp(rf)))
+        kept += [feats, rf]
     wind = None if wind_deg is None or not math.isfinite(float(wind_deg)) else float(wind_deg) % 360.0
-    items = [(sp[0], sp[1], sp[2], sp[3]) for sp in spots(rws, pts, aeroways.pads(infra), roads)]
-    for p in pts:                           # (a mapped one points along its nearest runway when no wind says)
-        rw = min(rws, key=lambda r: _seg_m(p[0], p[1], r))
-        items.append((p[0], p[1]) + _along(rw))
+    # (the spots are the runways' and the data's alone, not the tile's: every tile that reads the same cells asked for them again,
+    # the apron outlines and the clearance tests ~40 ms a tile, 80 per cent of a tile's airport cost once the scene was kept; the
+    # user, 2026-11-17: "build each airport's scene once")
+    memo = (_sig(rws), aeroways.runwaysnap.token(), tuple(stamps))
+    got = _ITEMS.get(memo)
+    if got is None:
+        pts = list(pts.values())
+        items = [(sp[0], sp[1], sp[2], sp[3]) for sp in spots(rws, pts, aeroways.pads(infra), roads)]
+        for p in pts:                       # (a mapped one points along its nearest runway when no wind says)
+            rw = min(rws, key=lambda r: _seg_m(p[0], p[1], r))
+            items.append((p[0], p[1]) + _along(rw))
+        if len(_ITEMS) >= ITEMS_MAX:
+            _ITEMS.clear()
+        got = _ITEMS[memo] = (items, kept)      # (the Features kept: an object's id in the key is its own while it lives)
+    items = got[0]
     if not items:
         return []
     lat, lon = (np.array([i[j] for i in items], np.float64) for j in (0, 1))

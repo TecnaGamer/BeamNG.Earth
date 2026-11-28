@@ -345,6 +345,18 @@ class Clearance(unittest.TestCase):
                         roads=[[(1500.0, -400.0), (1500.0, 400.0)]])
         self.assertEqual(far, base)
 
+    def test_the_clearance_is_made_once_for_every_tile_that_has_some_of_the_equipment(self):
+        # (the runway's and the data's, not the tile's: the user, 2026-11-17: "build each airport's scene once")
+        pad = box_at(LONG + 315.0, 0.0, 130.0, 80.0)
+        f = feats(area(pad))
+        rw = runway(LONG)
+        with mock.patch.object(al, "_clear", wraps=al._clear) as clear:
+            parts = [al.tile_rows(FRAME, box, lambda k: f, lambda k: [rw], lambda la, lo: np.full(np.shape(la), 12.0), keys=[0])
+                     for box in ((-1500.0, -400.0, 1500.0, 400.0), (1500.0, -400.0, 4500.0, 400.0))]
+        self.assertEqual(clear.call_count, 1)
+        whole = al.tile_rows(FRAME, self.BIG, lambda k: f, lambda k: [rw], lambda la, lo: np.full(np.shape(la), 12.0), keys=[0])
+        self.assertEqual(sorted(map(tuple, parts[0] + parts[1])), sorted(map(tuple, whole)))
+
     def test_a_localizer_on_an_apron_is_left_out_and_the_approach_row_stops_before_it(self):
         pad = box_at(LONG + 315.0, 0.0, 130.0, 80.0)            # (Brisbane's: the domestic apron past the end)
         got = self.rows(apron=[pad])
@@ -544,6 +556,59 @@ class TileRows(unittest.TestCase):
         self.assertEqual(al.tile_rows(FRAME, BOX, lambda k: None, lambda k: [], self.ground, keys=[0]), [])
         plain = feats(way(PARALLEL, sub="transit"))
         self.assertEqual(al.tile_rows(FRAME, BOX, lambda k: plain, lambda k: [runway(lighted=0)], self.ground, keys=[0]), [])
+
+
+class AirportCentreLights(unittest.TestCase):
+    """The taxiways' centre lights of an airport across the edge of two map cells are made once from both (airportscene; the user,
+    2026-11-17: "build each airport's scene once") and each tile takes its own: tiles reading other lists of cells (the box and
+    CENTRE_REACH_M round it) no longer make their own Scene."""
+
+    def setUp(self):
+        import airportscene
+        import mapcells
+        airportscene.clear()
+        self.addCleanup(airportscene.clear)
+        self.a = mapcells.cell_of(40.0, -76.0)                             # (the runway's cell: x -292 to 1584 m of FRAME)
+        self.b = mapcells.cell_of(40.0, self.a.bounds()[2] + 1e-4)
+        self.rw = runway()
+        self.cells = {self.a: feats(RUNWAY_LINE(), way([(200.0, 150.0), (1400.0, 150.0)])),
+                      self.b: feats(way([(1600.0, 150.0), (2400.0, 150.0)]))}      # (200 m on: the same airport)
+        self.ground = lambda lat, lon: np.full(np.shape(lat), 12.0)
+
+    def rows(self, box):
+        return al.tile_rows(FRAME, box, lambda k: self.cells.get(k), lambda k: [self.rw], self.ground, reach_m=al.CENTRE_REACH_M)
+
+    def test_the_tiles_read_other_cells_and_the_airport_is_made_once(self):
+        import airportscene
+        import mapcells
+        import taxiwaymarks
+        tiles = [(0.0, -300.0, 400.0, 600.0), (400.0, -300.0, 1400.0, 600.0), (1400.0, -300.0, 2000.0, 600.0),
+                 (2000.0, -300.0, 2600.0, 600.0)]
+        whole = (0.0, -300.0, 2600.0, 600.0)
+        reads = [tuple(al._reach_keys(FRAME, t, al.CENTRE_REACH_M)) for t in tiles]
+        self.assertEqual(reads[0], (self.a,))
+        self.assertEqual(reads[3], (self.b,))
+        self.assertGreaterEqual(len(set(reads)), 3, "tiles that read different lists of cells")
+        with mock.patch.object(al, "_taxi_centre", wraps=al._taxi_centre) as centre, \
+                mock.patch.object(taxiwaymarks, "_scene", wraps=taxiwaymarks._scene) as scene:
+            parts = [self.rows(t) for t in tiles]
+            want = self.rows(whole)
+        self.assertEqual((centre.call_count, scene.call_count), (1, 1))
+        self.assertEqual(airportscene.STATS["builds"], 1)
+        self.assertTrue(all(parts) and want)
+        self.assertEqual(sorted(map(tuple, sum(parts, []))), sorted(map(tuple, want)), "each light in one tile, whichever cells it read")
+        self.assertTrue(any(r[1] > 1700.0 for r in want), "the lights of the second cell")
+
+    def test_a_cell_that_cannot_be_read_gives_the_tiles_own_cells_lights_and_keeps_nothing(self):
+        import airportscene
+
+        def infra(k):
+            if k == self.b:
+                raise OSError("offline")
+            return self.cells.get(k)
+        got = al.tile_rows(FRAME, (0.0, -300.0, 400.0, 600.0), infra, lambda k: [self.rw], self.ground, reach_m=al.CENTRE_REACH_M)
+        self.assertTrue([r for r in got if r[0] == al.GROUPS[al.GREEN]], "the centre lights of the cell it reads")
+        self.assertEqual((airportscene.STATS["builds"], len(airportscene._AIRPORTS)), (0, 0))
 
 
 ROADS_LUA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "lua", "ge",

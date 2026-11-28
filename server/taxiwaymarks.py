@@ -2609,8 +2609,26 @@ def tile_chunks_md(md, keys, frame, tx, ty, elev, tile_bbox):
     """tile_chunks of the infrastructure Features of the map-data cells `keys` (mapdata.MapData md; the tile's cells
     with REACH_M round it, roads.cells_of_tile), with the lead-ins of the stands in them (parkedaircraft.lead_stands:
     the cells' buildings and building parts decide where an aircraft stands) and the stand marks that read the terminals
-    (the service roads, the red boxes under the jet bridges: site_of)."""
+    (the service roads, the red boxes under the jet bridges: site_of).
+    Each airport the cells touch is made once, whole, from all its cells (airportscene: the user, 2026-11-17: "build each
+    airport's scene once"; a scene per tile's list of cells cost Brisbane 12 builds, Atlanta 49), and the tile cuts its part
+    out of it: neighbouring tiles are cut from one layout, the lead-ins and lines meet at the tile's edge. Where an
+    airport cannot be built whole (a cell round it unreadable) the tile's own cells are read, as before."""
+    import airportscene
     infra = lambda k: md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+    load = lambda ks, layers: md.cells(ks, layers=layers, kind="demand")
+    airports = airportscene.of_cells(infra, keys, load)
+    if airports is None:
+        return _tile_chunks_cells(md, keys, infra, frame, tx, ty, elev, tile_bbox)
+    bl = pa.building_layers_fn(md)
+    out = []
+    for ap in airports:
+        out += _clip(ap.marks(infra, bl, load), frame, tx, ty, elev, tile_bbox)
+    return out
+
+
+def _tile_chunks_cells(md, keys, infra, frame, tx, ty, elev, tile_bbox):
+    """tile_chunks_md of the tile's own cells `keys` alone (an airport that could not be read whole: airportscene.of_cells)."""
     feats = [infra(k) for k in keys]
     stands, site = [], None
     if any(pa.has_stands(f) for f in feats):
@@ -2678,7 +2696,13 @@ def tile_chunks(feats_list, frame, tx, ty, elev, tile_bbox, stands=None, site=No
     "uvq", "quads": 1, "n": []}: roadmesh's filled polygons, the height at the corners). feats_list: the infrastructure
     Features of the cells around the tile (REACH_M); stands: the Craft of those cells (their lead-ins and marks are painted too);
     site: their terminals' walls and bridges (Site). tile_bbox(tx, ty) -> (x0, y0, x1, y1)."""
-    lines, boxes, polys, pboxes = _all_marks(feats_list, stands, site)
+    return _clip(_all_marks(feats_list, stands, site), frame, tx, ty, elev, tile_bbox)
+
+
+def _clip(marks, frame, tx, ty, elev, tile_bbox):
+    """tile_chunks of marks (lines, boxes, polys, pboxes: _all_marks, of the cells the tile reads or of a whole airport,
+    airportscene): the tile's part of them."""
+    lines, boxes, polys, pboxes = marks
     if not lines and not polys:
         return []
     box = tile_bbox(tx, ty)

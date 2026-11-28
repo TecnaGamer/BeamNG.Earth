@@ -853,3 +853,31 @@ class Liveries(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(pa._PA_PIP is None, "the native module has no pa_pip (earthfast older than 411)")
+class GateKernelsNative(unittest.TestCase):
+    """parkedaircraft's hottest geometry in the native module (earthfast's pa_area, pa_pip, pa_seg_dist, pa_bridge, pagates.rs)
+    gives the Python's results to the bit (the user, 2026-11-17)."""
+
+    def test_area_pip_and_distances(self):
+        rng = np.random.default_rng(7)
+        for k in (3, 5, 8, 9, 17, 130, 300):
+            ang = np.sort(rng.uniform(0, 2 * np.pi, k))
+            ring = np.c_[np.cos(ang), np.sin(ang)] * rng.uniform(20, 300, k)[:, None] + rng.uniform(-1e3, 1e3, 2)
+            pts = ring.mean(0) + rng.normal(size=(40, 2)) * 150.0
+            self.assertEqual(pa._area(ring), pa._area_py(ring))
+            self.assertTrue(np.array_equal(pa._pip(ring, pts), pa._pip_py(ring, pts)))
+            b = np.roll(ring, -1, axis=0)
+            self.assertTrue(np.array_equal(pa._seg_dist(pts, ring, b), pa._seg_dist_py(pts, ring, b)))
+
+    def test_bridge(self):
+        rng = np.random.default_rng(8)
+        for _ in range(50):
+            small = []
+            for oi in range(6):
+                c = rng.normal(size=2) * 20.0
+                small.append((c + rng.normal(size=(5, 2)) * 15.0, 1.0, oi * 3))
+            out = rng.normal(size=2)
+            out = out / np.hypot(*out)
+            self.assertEqual(pa._bridge(small, 0.5, -0.25, out), pa._bridge_py(small, 0.5, -0.25, out))

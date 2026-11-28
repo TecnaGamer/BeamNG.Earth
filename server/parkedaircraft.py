@@ -277,7 +277,24 @@ def _radius(kind):
 
 
 # ------------------------------------------------------------------------------------------------- geometry
+def _native(name):
+    """The native kernel `name` (earthfast 411: pagates.rs, the same results to the bit), or None where the module is older."""
+    import fast
+    return getattr(fast._ef, name, None) if fast._ef is not None else None
+
+
+_PA_PIP, _PA_AREA, _PA_SEG, _PA_BRIDGE = (_native(n) for n in ("pa_pip", "pa_area", "pa_seg_dist", "pa_bridge"))
+_f64 = lambda a: np.ascontiguousarray(a, np.float64).reshape(-1, 2)
+
+
 def _pip(ring, pts):
+    """_pip_py, in the native module where it has it (the gates' fitting called it ~8000 times at Atlanta)."""
+    if _PA_PIP is not None:
+        return np.asarray(_PA_PIP(_f64(ring), _f64(pts)))
+    return _pip_py(ring, pts)
+
+
+def _pip_py(ring, pts):
     """Which of pts (m, 2) are inside the polygon ring (k, 2) (even-odd)."""
     a, b = ring, np.roll(ring, -1, axis=0)
     y = pts[:, 1:2]
@@ -308,6 +325,13 @@ def _dense(ring):
 
 
 def _seg_dist(pts, a, b):
+    """_seg_dist_py, in the native module where it has it."""
+    if _PA_SEG is not None:
+        return np.asarray(_PA_SEG(_f64(pts), _f64(a), _f64(b)))
+    return _seg_dist_py(pts, a, b)
+
+
+def _seg_dist_py(pts, a, b):
     """(m, k) distances from pts (m, 2) to the segments a -> b (k, 2)."""
     ab = b - a
     ap = pts[:, None, :] - a[None]
@@ -317,6 +341,13 @@ def _seg_dist(pts, a, b):
 
 
 def _area(ring):
+    """_area_py, in the native module where it has it (~49000 calls at Atlanta: a ring's area asked again at every gate)."""
+    if _PA_AREA is not None:
+        return _PA_AREA(_f64(ring))
+    return _area_py(ring)
+
+
+def _area_py(ring):
     return 0.5 * abs(float(dnp.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - dnp.dot(np.roll(ring[:, 0], -1), ring[:, 1])))
 
 
@@ -1008,7 +1039,30 @@ def _terminal(obstacles, x, y, near=None):
     return ring, radial + out, centre
 
 
+_SMALL = {}
+
+
 def _bridge(small, gx, gy, out):
+    """_bridge_py, in the native module where it has it (the small buildings flattened once a list: kept by its identity)."""
+    if _PA_BRIDGE is None:
+        return _bridge_py(small, gx, gy, out)
+    got = _SMALL.get(id(small))
+    if got is None or got[0] is not small or got[1] != len(small):
+        if len(_SMALL) > 256:
+            _SMALL.clear()
+        rings = [_f64(r) for r, _a, _oi in small]
+        pts = np.ascontiguousarray(np.concatenate(rings) if rings else np.zeros((0, 2)))
+        starts = np.ascontiguousarray(np.r_[0, np.cumsum([len(r) for r in rings])].astype(np.int64))
+        oi = np.ascontiguousarray(np.array([int(o) for _r, _a, o in small], np.int64))
+        got = _SMALL[id(small)] = (small, len(small), pts, starts, oi)
+    r = _PA_BRIDGE(got[2], got[3], got[4], float(gx), float(gy), (float(out[0]), float(out[1])), ATTACH_M, BRIDGE_MIN_M,
+                   BRIDGE_CAP_M)
+    if r is None:
+        return None
+    return float(r[0]), float(r[1]), float(r[2]), tuple(int(i) for i in r[3])     # (the obstacle indexes: ints, _buildings)
+
+
+def _bridge_py(small, gx, gy, out):
     """The jet bridge of a gate: (tip distance along `out` from the gate, lateral centre, half width, indexes of the
     obstacles that are its bridges) of the small building touching it that reaches farthest out (at least BRIDGE_MIN_M;
     every such one is no obstacle to the gate's aircraft), None without."""

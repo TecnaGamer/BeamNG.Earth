@@ -491,14 +491,23 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, db=None):
     box = roads.tile_bbox(tx, ty)
     keys = roads.cells_of_tile(frame, tx, ty, taxiwaymarks.REACH_M)
     infra = lambda k: md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
-    feats = [infra(k) for k in keys]
-    stands = []
-    if any(pa.has_stands(f) for f in feats):
-        try:
-            stands = pa.lead_stands(keys, infra, pa.building_layers_fn(md))
-        except Exception as ex:                 # (the taxiway signs are worth more than the stand signs)
-            log.warning("stand signs: %s: %s", type(ex).__name__, ex)
-    found = signs(feats, db, stands)
+    import airportscene
+    load = lambda ks, layers: md.cells(ks, layers=layers, kind="demand")
+    airports = airportscene.of_cells(infra, keys, load)
+    if airports is None:                        # (an airport that could not be read whole: the tile's own cells, as before)
+        feats = [infra(k) for k in keys]
+        stands = []
+        if any(pa.has_stands(f) for f in feats):
+            try:
+                stands = pa.lead_stands(keys, infra, pa.building_layers_fn(md))
+            except Exception as ex:             # (the taxiway signs are worth more than the stand signs)
+                log.warning("stand signs: %s: %s", type(ex).__name__, ex)
+        found = signs(feats, db, stands)
+    else:                                       # (each airport's signs made once, whole: the tile takes the ones in it)
+        bl = pa.building_layers_fn(md)
+        found = []
+        for ap in airports:
+            found += signs(ap.feats, db, ap.stands_site(infra, bl, load)[0])
     if not found:
         return None, {}
     la = np.array([x.lat for x in found])

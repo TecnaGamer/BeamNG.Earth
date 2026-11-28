@@ -58,7 +58,9 @@ end of it back to the way's runway holding position (LEAD_DEFAULT_M without one)
 and yellow, the first (at the runway) green (kind "lead"). At each holding position (taxiwaymarks' sites, where the marking is
 painted) a red stop bar (kind "stopbar": a light every STOPBAR_STEP_M across the taxiway) and runway guard lights (kind "guard": a
 yellow pair GUARD_PAIR_M apart each side, GUARD_OUT_M outside the edge, GUARD_LIFT_M higher than the rest as the elevated units are;
-steady: the glow balls do not flash). The lights of a list of Features are kept on its taxiwaymarks Scene.
+steady: the glow balls do not flash). The lights of a list of Features are kept on its taxiwaymarks Scene. A tile takes them from
+the whole airport's Scene (airportscene: every cell of the airport, made once and cut to the tile; the user, 2026-11-17: "build each
+airport's scene once"; airport_centre_lights), from its own cells' only where the airport could not be read whole.
 
 Every light is a pure function of its runway's data or its Features, kept: a runway's by its data's signature (a bounded
 module cache), a Features' on the Features by the runways it was asked with (so every tile of a cell shares them). A
@@ -719,9 +721,9 @@ def _centre_points(sc, lit):
     return out, bars
 
 
-def _taxi_centre(feats, runways):
+def _taxi_centre(feats, runways, sc=None):
     import taxiwaymarks
-    sc = taxiwaymarks.scene(feats)
+    sc = taxiwaymarks.scene(feats) if sc is None else sc
     open_ = [rw for rw in runways if rw.surface != "water" and not rw.closed]
     if sc is None or not open_:
         return Lights()
@@ -757,16 +759,17 @@ def _taxi_centre(feats, runways):
     return Lights(la, lo, [p[2] for p in pts], [p[3] for p in pts])
 
 
-def taxiway_centre_lights(feats_list, runways):
+def taxiway_centre_lights(feats_list, runways, sc=None):
     """The Lights of the taxiways' centrelines, stop bars and runway guard lights (see the module docstring) of the Features
-    list feats_list (the infrastructure Features of the cells round a tile); runways: the airports.Runways around (their
-    lighting and distance decide, as for taxiway_lights). Kept on the Features' taxiwaymarks Scene by the runways' data."""
+    list feats_list (the infrastructure Features of the cells round a tile, or of a whole airport: airportscene); runways: the
+    airports.Runways around (their lighting and distance decide, as for taxiway_lights). Kept on the Features' taxiwaymarks
+    Scene by the runways' data. sc: that Scene where the caller holds it (an Airport's)."""
     runways = list(runways or ())
     feats = [f for f in (feats_list or ()) if f is not None and len(f)]
     if not feats or not runways:
         return Lights()
     import taxiwaymarks
-    sc = taxiwaymarks.scene(feats)
+    sc = taxiwaymarks.scene(feats) if sc is None else sc
     if sc is None:
         return Lights()
     cache = sc.memo.setdefault(_CENTRE_KEY, {})
@@ -775,8 +778,18 @@ def taxiway_centre_lights(feats_list, runways):
     if got is None:
         if len(cache) >= 8:
             cache.clear()
-        got = cache[key] = _taxi_centre(feats, runways)
+        got = cache[key] = _taxi_centre(feats, runways, sc)
     return got
+
+
+def airport_centre_lights(ap, runways_fn):
+    """The centre lights of the whole Airport ap (airportscene): from the runways round any of its cells, sorted, so the answer
+    is the airport's and the same for every tile that asks (kept on its Scene by them)."""
+    rws = {}
+    for k in ap.cells:
+        for rw in runways_fn(k) or ():
+            rws.setdefault(rw.key, rw)
+    return taxiway_centre_lights(ap.feats, [rws[k] for k in sorted(rws)], ap.scene())
 
 
 # ------------------------------------------------------------------------------------------------- the tile's rows
@@ -802,6 +815,40 @@ def _reach_keys(frame, box, margin_m):
         return []
 
 
+CENTRE_CROP_DEG = 0.001         # (about 110 m) the centre lights of a whole airport kept round the area they are asked for
+
+
+def _centre_lights(cells, all_cells, infra_fn, runways_fn, la, lo):
+    """The Lights of the taxiways' centrelines near the corners la, lo (arrays: the area asked for) from the airports the cells
+    touch, each whole (airportscene: made once, the same for every tile). cells: those the area reads (all_cells: every one is
+    read; else those with a runway in reach); the cells of an airport that cannot be built whole (airportscene.of_cells:
+    None) are read together, as a tile's own scene (taxiway_centre_lights of their Features)."""
+    import airportscene
+    seeds = [k for k in cells if runways_fn(k)]
+    if not seeds:
+        return Lights()
+    aps = airportscene.of_cells(infra_fn, seeds)
+    if aps is None:
+        infra, rws, near = [], [], set()
+        for k in cells:
+            runways = list(runways_fn(k) or ())
+            if runways or all_cells:
+                infra.append(infra_fn(k))
+            for rw in runways:
+                if rw.key not in near:
+                    near.add(rw.key)
+                    rws.append(rw)
+        return taxiway_centre_lights(infra, rws)
+    out = []
+    for ap in aps:
+        got = airport_centre_lights(ap, runways_fn)
+        if len(got):
+            near = ((got.lat >= la.min() - CENTRE_CROP_DEG) & (got.lat <= la.max() + CENTRE_CROP_DEG)
+                    & (got.lon >= lo.min() - CENTRE_CROP_DEG) & (got.lon <= lo.max() + CENTRE_CROP_DEG))
+            out.append(got.select(near))
+    return Lights.join(out)
+
+
 def lights_of_cells(keys, la, lo, infra_fn, runways_fn, roads_fn=None, buildings_fn=None, masts=True, skip=(), far=False,
                     centre_keys=None):
     """(Lights, [Mast]) of the cells keys (tile_rows' arguments; la, lo: the corners' lat / lon of the area they are for, which the
@@ -822,17 +869,9 @@ def lights_of_cells(keys, la, lo, infra_fn, runways_fn, roads_fn=None, buildings
                 parts.append(lights)
                 aerials += ms
         parts.append(taxiway_lights(infra_fn(k), runways))
-    infra, rws, near = [], [], set()
-    for k in (keys if centre_keys is None else centre_keys):
-        runways = list(runways_fn(k) or ())
-        if runways or centre_keys is not None:
-            infra.append(infra_fn(k))
-        for rw in runways:
-            if rw.key not in near:
-                near.add(rw.key)
-                rws.append(rw)
     try:                    # (the painted centrelines' lights: the edge lights are worth more than them)
-        parts.append(taxiway_centre_lights(infra, rws))
+        parts.append(_centre_lights(keys if centre_keys is None else centre_keys, centre_keys is not None, infra_fn, runways_fn,
+                                    la, lo))
     except Exception as ex:
         log.warning("taxiway centre lights: %s: %s", type(ex).__name__, ex)
     lights = Lights.join(parts)
@@ -881,6 +920,8 @@ def far_points(frame, box, infra_fn, runways_fn, elev):
 
 
 _BUILDINGS_KEY = "_airfield_building_outlines"
+CLEARED_MAX = 64                # _cleared's answers kept
+_CLEARED = {}
 
 
 def _building_outlines(feats):
@@ -924,20 +965,41 @@ def _cleared(rw, lights, masts, la, lo, infra_fn, roads_fn, buildings_fn):
     import mapcells
     cells = list(mapcells.cells_near_points(elat, elon, CLEAR_CELL_PAD_DEG, CLEAR_CELL_PAD_DEG))
     infra = [f for f in (infra_fn(k) for k in cells) if f is not None]
-    outlines, roads = list(aeroways.pads(infra, runways=False)), []
+    outlines, roads, kept, stamps = list(aeroways.pads(infra, runways=False)), [], list(infra), [tuple(aeroways.stamp(f) for f in infra)]
     for k in cells:
         if roads_fn is not None:
             try:                            # (a cell without its roads or buildings loaded: not kept clear of there)
-                roads += windsocks.road_lines(roads_fn(k))
+                rf = roads_fn(k)
+                roads += windsocks.road_lines(rf)
+                kept.append(rf)
+                stamps.append(aeroways.stamp(rf))
             except Exception:
                 pass
         if buildings_fn is not None:
             try:
-                outlines += _building_outlines(buildings_fn(k))
+                bf = buildings_fn(k)
+                outlines += _building_outlines(bf)
+                kept.append(bf)
+                stamps.append(tuple(aeroways.stamp(f) for f in (bf if isinstance(bf, (list, tuple)) else [bf])))
             except Exception:
                 pass
     if not (outlines or roads):
         return lights, masts
+    # (the answer is the runway's and the data's, not the tile's: every tile with some of the equipment in it asked for all of it
+    # again, ~30 ms each at Atlanta; kept by the runway's lights and the data round the equipment; the user, 2026-11-17: "build each
+    # airport's scene once")
+    memo = (id(lights), id(masts) if masts else 0, tuple(stamps))
+    got = _CLEARED.get(memo)
+    if got is None:
+        if len(_CLEARED) >= CLEARED_MAX:
+            _CLEARED.clear()
+        got = _CLEARED[memo] = (_clear(rw, lights, masts, eq, elat, elon, app, outlines, roads), lights, masts, kept)
+    return got[0]
+
+
+def _clear(rw, lights, masts, eq, elat, elon, app, outlines, roads):
+    """_cleared's lights and masts without what falls on the outlines or the road lines."""
+    import windsocks
     bad = windsocks._blocked(elat[:len(eq)], elon[:len(eq)], outlines, roads, 0.0, CLEAR_ROAD_M)
     keep = ~bad
     isapp = lights.kind[eq] == app

@@ -6,6 +6,7 @@ import json
 import math
 import os
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -14,7 +15,9 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import aeroways  # noqa: E402
 import airportgrade  # noqa: E402
+import airportscene  # noqa: E402
 import geodesy  # noqa: E402
+import mapcells  # noqa: E402
 import mapgeom  # noqa: E402
 import parkedaircraft as pa  # noqa: E402
 import standmarks  # noqa: E402
@@ -1911,5 +1914,210 @@ class TaxiwayNames(unittest.TestCase):
         self.assertEqual(one, two)
 
 
+class OneSceneAirport(unittest.TestCase):
+    """An airport across the edge of two map cells is built once, whole (airportscene), and each road tile cuts its part out of
+    it (the user, 2026-11-17: "build each airport's scene once"): tiles that read different lists of cells (the tile's box and
+    REACH_M round it) came from different Scenes, one build each; now one build, one layout, and the lines meet at the tile
+    edges. The frame's origin is on the cell edge (west of it cell A, east of it cell B)."""
+
+    SIDE = 256.0
+
+    def setUp(self):
+        for name, val in (("_edge_lines", lambda sc, feats_list: []), ("SMOOTH_MAPPED_M", 0.0)):
+            p = mock.patch.object(tm, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        airportscene.clear()
+        self.addCleanup(airportscene.clear)
+        for k in airportscene.STATS:
+            airportscene.STATS[k] = 0
+        lat, lon = -27.39, 153.118
+        east = mapcells.cell_of(lat, lon).bounds()[2]
+        self.frame = geodesy.EnuFrame(lat, east)
+        self.a, self.b = mapcells.cell_of(lat, east - 1e-4), mapcells.cell_of(lat, east + 1e-4)
+        self.assertNotEqual(self.a, self.b)
+        self.fa, self.fb = self.cell_a(), self.cell_b()
+        self.cells = {self.a: self.fa, self.b: self.fb}
+        self.bad = set()
+
+    def at(self, frame, make):
+        """make() with the rows' metres east / north of `frame` (the test module's FRAME: lonlat)."""
+        with mock.patch.object(sys.modules[__name__], "FRAME", frame):
+            return make()
+
+    def cell_a(self, frame=None):
+        return self.at(frame or self.frame, lambda: feats(runway((-1500, 0), (-100, 0)), taxiway((-700, 100), (-300, 100)),
+                                                          taxiway((-300, 100), (-300, 400))))
+
+    def cell_b(self, frame=None):
+        return self.at(frame or self.frame, lambda: feats(taxiway((50, 100), (600, 100))))      # (150 m from A's: the same airport)
+
+    def md(self):
+        outer = self
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                if key in outer.bad:
+                    raise OSError(f"{key}: offline")
+                return types.SimpleNamespace(layers={"infrastructure": outer.cells.get(key)})
+
+            def cells(self, keys, layers=(), kind="demand"):
+                return [self.cell(k, layers, kind) for k in keys]
+        return Md()
+
+    def bbox(self, tx, ty):
+        return (tx * self.SIDE, ty * self.SIDE, (tx + 1) * self.SIDE, (ty + 1) * self.SIDE)
+
+    def chunks(self, md, tx, ty):
+        return tm.tile_chunks_md(md, self.cells_read(tx, ty), self.frame, tx, ty, lambda la, lo: np.full(len(la), 7.0), self.bbox)
+
+    def cells_read(self, tx, ty=0):
+        import roads
+        return roads.cells_of_tile(self.frame, tx, ty, tm.REACH_M)
+
+    def test_the_tiles_read_different_cells_and_come_from_one_build(self):
+        sets = [tuple(self.cells_read(tx)) for tx in (-3, -2, 2)]
+        self.assertEqual(len(set(sets)), 3, "three tiles, three different lists of cells")
+        md = self.md()
+        with mock.patch.object(tm, "_build", wraps=tm._build) as build, mock.patch.object(tm, "_scene", wraps=tm._scene) as scene:
+            got = {tx: self.chunks(md, tx, 0) for tx in (-3, -2, 2)}
+            self.chunks(md, -3, 1)
+        self.assertTrue(got[-3] and got[-2] and got[2])
+        self.assertEqual((build.call_count, scene.call_count), (1, 1), "the airport's lines and Scene made once for every tile")
+        self.assertEqual((airportscene.STATS["builds"], airportscene.STATS["marks"]), (1, 1))
+        self.assertEqual(len(airportscene._AIRPORTS), 1)
+        (ap,) = airportscene._AIRPORTS.values()
+        self.assertEqual(set(ap.cells), {self.a, self.b}, "the cell the tile read and the one it did not: one airport")
+
+    def test_two_neighbouring_tiles_agree_on_a_line_across_their_border(self):
+        md = self.md()
+        a, b = self.chunks(md, -3, 0), self.chunks(md, -2, 0)               # (the border x = -512: the taxiway along y = 100)
+        edge = -2 * self.SIDE
+        on = lambda chunks: sorted((round(x, 3), round(y, 3)) for c in chunks for x, y, _z in c["n"] if abs(x - edge) < 1e-3)
+        self.assertTrue(a and b)
+        self.assertEqual(on(a), on(b))
+        self.assertIn((edge, 100.0), on(a))
+        for chunks, box in ((a, self.bbox(-3, 0)), (b, self.bbox(-2, 0))):
+            for c in chunks:
+                for x, y, _z in c["n"]:
+                    self.assertTrue(box[0] - 1e-3 <= x <= box[2] + 1e-3 and box[1] - 1e-3 <= y <= box[3] + 1e-3, (x, y))
+        self.assertEqual(airportscene.STATS["marks"], 1)
+
+    def test_the_same_chunks_whichever_tile_asks_first(self):
+        order = [(-3, 0), (-2, 0), (2, 0), (-4, 1)]
+        one = {t: self.chunks(self.md(), *t) for t in order}
+        airportscene.clear()
+        self.fa, self.fb = self.cell_a(), self.cell_b()
+        self.cells = {self.a: self.fa, self.b: self.fb}                    # (nothing of the first run kept on the Features)
+        two = {t: self.chunks(self.md(), *t) for t in reversed(order)}
+        self.assertEqual(airportscene.STATS["builds"], 1)                     # (the second run's: clear() zeroes STATS)
+        self.assertEqual(one, two)
+
+    def test_a_tile_away_from_the_airport_builds_nothing(self):
+        self.assertEqual(self.chunks(self.md(), 0, 60), [])
+        self.assertEqual(airportscene.STATS["builds"], 0)
+
+    def test_a_cell_that_cannot_be_read_builds_nothing_kept_and_the_tile_reads_its_own_cells(self):
+        self.bad = {self.b}
+        md = self.md()
+        with mock.patch.object(tm, "_build", wraps=tm._build) as build:
+            got = self.chunks(md, -3, 0)                                    # (this tile reads cell A alone)
+            again = self.chunks(md, -3, 0)
+        self.assertTrue(got)
+        self.assertEqual(got, again)
+        self.assertEqual((airportscene.STATS["builds"], len(airportscene._AIRPORTS)), (0, 0), "no partial airport kept")
+        self.assertEqual(build.call_count, 1, "the tile's own cells, memoised as before")
+        self.bad = set()
+        airportscene._FAILED.clear()                                        # (the retry delay)
+        self.chunks(md, -3, 0)
+        self.assertEqual((airportscene.STATS["builds"], len(airportscene._AIRPORTS)), (1, 1))
+
+    def test_a_cell_read_again_from_the_same_data_is_the_same_airport_another_version_is_not(self):
+        md = self.md()
+        stamp = ("14/1/1", "infrastructure", "{}")
+        self.fa.__dict__["_bnge_cell"] = stamp
+        self.chunks(md, -3, 0)
+        self.assertEqual(airportscene.STATS["builds"], 1)
+        reloaded = self.cell_a()
+        reloaded.__dict__["_bnge_cell"] = stamp                             # (the map data's LRU dropped the cell and read it again)
+        self.cells[self.a] = reloaded
+        self.chunks(md, -3, 0)
+        self.assertEqual(airportscene.STATS["builds"], 1, "the same stamp: the airport kept")
+        reloaded.__dict__["_bnge_cell"] = ("14/1/1", "infrastructure", '{"pipeline": 2}')
+        self.chunks(md, -3, 0)
+        self.assertEqual(airportscene.STATS["builds"], 2, "other versions of the data: made again")
+
+    def test_the_least_recently_used_airport_goes_when_there_are_more_than_the_cache_holds(self):
+        md = self.md()
+        other = mapcells.cell_of(-27.39, 153.5)
+        la, lo = other.center()
+        there = geodesy.EnuFrame(la, lo)
+        self.cells[other] = self.cell_a(there)                              # (another airport, 40 km east)
+        with mock.patch.object(airportscene, "CACHE_MAX", 1):
+            self.chunks(md, -3, 0)
+            tm.tile_chunks_md(md, [other], there, 0, 0, lambda la_, lo_: np.zeros(len(la_)), self.bbox)
+        self.assertEqual(len(airportscene._AIRPORTS), 1)
+        self.assertNotIn(str(self.a), airportscene._CELL_OF)
+        self.assertIn(str(other), airportscene._CELL_OF)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(standpaths._native() is None, "the native module has no sp_build (earthfast older than 409)")
+class StandpathsNative(unittest.TestCase):
+    """standpaths.build in the native module (earthfast's sp_build, standpaths.rs) gives the Python's result to the bit (the
+    user, 2026-11-17: "directly port standpaths.build whole"): rows, spines, lenses, connectors, the trimmed spines, the
+    final straights, on scenes that take every branch."""
+    NONE = Lenses.NONE
+    L, SPAN = Lenses.L, Lenses.SPAN
+
+    def stand(self, x, y, ux=0.0, uy=1.0):
+        u = np.array([ux, uy], np.float64)
+        return (np.array([x, y], np.float64), u / np.hypot(*u), self.L, self.SPAN)
+
+    def same(self, *args, **kw):
+        py = standpaths._build_py(*args, **kw)
+        rs = standpaths.build(*args, **kw)
+        self.assertEqual(py[2], rs[2])
+        self.assertEqual(len(py[0]), len(rs[0]))
+        for (a, ra, ma), (b, rb, mb) in zip(py[0], rs[0]):
+            self.assertEqual((ra, ma), (rb, mb))
+            self.assertTrue(np.array_equal(np.asarray(a, np.float64), np.asarray(b, np.float64)))
+        for a, b in zip(py[1], rs[1]):
+            self.assertEqual(a is None, b is None)
+            if a is not None:
+                self.assertTrue(np.array_equal(a, b))
+        return rs
+
+    def lanes(self, *pts, wi=0):
+        return [(np.array(p, np.float64), wi + k) for k, p in enumerate(pts)]
+
+    def test_nothing(self):
+        self.same([], [], [], self.NONE)
+
+    def test_a_row_behind_a_lane_with_neighbours_and_a_slit(self):
+        st = [self.stand(x, 60.0) for x in (-90.0, -45.0, 0.0, 45.0, 90.0)]
+        got = self.same(st, ["narrow"] * 5, self.lanes([(-200, 0), (200, 0)], [(0, -80), (0, 2)]), self.NONE)
+        self.assertTrue(got[0])
+
+    def test_a_row_no_lane_reaches_gets_a_spine_joined_to_the_network(self):
+        st = [self.stand(x, 200.0) for x in (-60.0, -20.0, 20.0, 60.0)]
+        ring = np.array([[-300.0, -50.0], [300.0, -50.0], [300.0, 300.0], [-300.0, 300.0]])
+        got = self.same(st, ["narrow"] * 4, self.lanes([(-250, 0), (250, 0)]), self.NONE, paved=[ring], aprons=[ring])
+        self.assertIn("spine", [r for _xy, r, _m in got[0]])
+
+    def test_a_satellite_ring_round_a_building_and_a_light_stand(self):
+        st = [self.stand(70.0 * np.cos(a), 70.0 * np.sin(a), -np.cos(a), -np.sin(a)) for a in np.linspace(0, 6.0, 7)]
+        sq = np.array([[-30.0, -30.0], [30.0, -30.0], [30.0, 30.0], [-30.0, 30.0]])
+        blocks = [(sq, (-30.0, -30.0, 30.0, 30.0))]
+        self.same(st, ["narrow"] * 6 + ["light"], self.lanes([(-300, -200), (300, -200)], [(300, -200), (300, 250)]),
+                  self.NONE, blocks)
+
+    def test_a_runway_pad_and_a_free_lane_end_on_the_apron(self):
+        st = [self.stand(x, 90.0) for x in (-40.0, 0.0, 40.0)]
+        pads = (np.array([[-400.0, -120.0]]), np.array([[400.0, -120.0]]), np.array([30.0]), np.array([-1], np.int64))
+        apron = np.array([[-200.0, -60.0], [200.0, -60.0], [200.0, 200.0], [-200.0, 200.0]])
+        self.same(st, ["narrow"] * 3, self.lanes([(-150, 0), (150, 0)], [(150, 0), (150, 120)]), pads,
+                  paved=[apron], aprons=[apron])

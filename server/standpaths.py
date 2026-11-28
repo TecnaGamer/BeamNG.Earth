@@ -396,7 +396,67 @@ def _closest(net, p):
     return q, t
 
 
+def _params():
+    """The constants the native build takes (native/earthfast/src/standpaths.rs Params::from, in this order), and its tuples."""
+    v = [LENS_R_K, LENS_R_MAX_K, LENS_ROOM_K, REACH_SPANS, TURN_MAX_RAD, SLIT_TURN_RAD, MIN_SIN, SLIT_NEAR_M, SLIT_COS,
+         CHAIN_M, CHAIN_COS, WING_MARGIN_M, CONN_TRIES, CONN_STEP_M, CONN_MAX_M, FAN_COS, PAVED_STEP_M, OFF_PAVED,
+         TRIM_TOL_M, FREE_ON_M, FREE_EDGE_M, FREE_PREFER_K, FREE_PREFER_M, FREE_REACH_M, ROW_RING_MIN, ROW_RING_MEAN,
+         tm.SPINE_LINK_M, tm.SPINE_LINK_COS, tm.SPINE_CLEAR_M, tm.LEAD_STUB_M, tm.MIN_RADIUS_M, tm.ARC_STEP_RAD,
+         tm.TURN_MAX_RAD, tm.PAD_EDGE_M, tm.SAMPLE_M]
+    f = lambda x: np.ascontiguousarray(np.asarray(x, np.float64).ravel())
+    return f(v), f(LENS_TRIES), f(RADIUS_STEPS), f(SLIT_BACK_M), f(SPINE_BACK_STEPS)
+
+
+def _flat(rings):
+    """(points (m, 2), starts (k + 1,)) of the rings [(n, 2)]."""
+    rings = [np.asarray(r, np.float64).reshape(-1, 2) for r in rings]
+    pts = np.ascontiguousarray(np.concatenate(rings) if rings else np.zeros((0, 2)))
+    return pts, np.ascontiguousarray(np.r_[0, np.cumsum([len(r) for r in rings], dtype=np.int64)].astype(np.int64))
+
+
+def _native():
+    """The native build (earthfast's sp_build, VERSION 409), or None where the loaded module is older."""
+    import fast
+    return getattr(fast._ef, "sp_build", None) if fast._ef is not None else None
+
+
 def build(items, kinds, lanes, pads, blocks=(), paved=(), aprons=()):
+    """standpaths' lead-ins, as _build_py (its docstring the spec), in the native module where it has them (earthfast's
+    sp_build, standpaths.rs: the same result to the bit; the user, 2026-11-17: "directly port standpaths.build whole")."""
+    sp = _native()
+    if sp is None:
+        return _build_py(items, kinds, lanes, pads, blocks, paved, aprons)
+    n = len(items)
+    f = lambda a, shape: np.ascontiguousarray(np.asarray(a, np.float64).reshape(shape))
+    nose = f([it[0] for it in items], (n, 2))
+    u = f([it[1] for it in items], (n, 2))
+    length = f([it[2] for it in items], (n,))
+    span = f([it[3] for it in items], (n,))
+    straight = f([tm.lead_straight(it[2]) for it in items], (n,))
+    rmin = f([tm._rmin(k) for k in kinds], (n,))
+    lanes = [(xy, wi) for xy, wi in lanes if len(xy) >= 2]
+    lp, ls = _flat([xy for xy, _wi in lanes])
+    lw = np.ascontiguousarray(np.array([int(wi) for _xy, wi in lanes], np.int64))
+    rp = tm._runway_pads(pads)
+    pa, pb = f(rp[0], (-1, 2)), f(rp[1], (-1, 2))
+    ph, pw = f(rp[2], (-1,)), np.ascontiguousarray(np.asarray(rp[3], np.int64).ravel())
+    bp, bs = _flat([r for r, _bx in blocks])
+    bb = f([bx for _r, bx in blocks], (len(blocks), 4))
+    vp, vs = _flat(list(paved))
+    ap, as_ = _flat(list(aprons))
+    prm = _params()
+    pts, starts, roles, rmins, fnd, fok, mem, rst, ring = sp(nose, u, length, span, straight, rmin, lp, ls, lw, pa, pb,
+                                                             ph, pw, bp, bs, bb, vp, vs, ap, as_, *prm)
+    pts = np.asarray(pts)
+    paint = [(pts[starts[k]:starts[k + 1]].copy(), "lead" if roles[k] else "spine", float(rmins[k]))
+             for k in range(len(roles))]
+    fnd = np.asarray(fnd)
+    found = [fnd[i].reshape(2, 2).copy() if fok[i] else None for i in range(n)]
+    rows = [([int(x) for x in mem[rst[r]:rst[r + 1]]], "ring" if ring[r] else "row") for r in range(len(ring))]
+    return paint, found, rows
+
+
+def _build_py(items, kinds, lanes, pads, blocks=(), paved=(), aprons=()):
     """(paint [(polyline (k, 2), role "spine" | "lead", rmin)], found [the stand's final run (2, 2) or None], rows [(members,
     "row" | "ring")]) of the stands items [(nose (2,), unit direction (2,), length, span)] (kinds: their aircraft kinds) off the
     lanes [(polyline (k, 2), way index)] (the painted mapped centrelines), pads: taxiwaymarks._pads' (a lead-in crosses no runway's

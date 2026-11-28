@@ -550,3 +550,34 @@ class AirfieldGround(unittest.TestCase):
         rgb = self.photo((190, 172, 132))
         self.assertTrue(np.array_equal(sf.photo_airfield(rgb, FRAME, self.ORIGIN, self.ORIGIN, self.SIZE, [lot]), rgb))
         self.assertIs(sf.photo_airfield(rgb, FRAME, self.ORIGIN, self.ORIGIN, self.SIZE, []), rgb)
+
+
+@unittest.skipIf(getattr(__import__("fast")._ef, "aero_fillets", None) is None, "the native module has no aero_fillets (earthfast older than 410)")
+class FilletsNative(unittest.TestCase):
+    """aeroways._fillets in the native module (earthfast's aero_fillets, aerofillets.rs) gives the Python's rings to the bit (the
+    user, 2026-11-17): ways ending on ways, on a runway, crossing a runway at a vertex, a shallow exit, a bent joined way."""
+
+    def same(self, ways, runways):
+        ways = [(np.asarray(xy, np.float64), h) for xy, h in ways]
+        runways = [(np.asarray(xy, np.float64), h) for xy, h in runways]
+        py, rs = aeroways._fillets_py(ways, runways), aeroways._fillets(ways, runways)
+        self.assertEqual(len(py), len(rs))
+        for a, b in zip(py, rs):
+            self.assertTrue(np.array_equal(a, b))
+        return rs
+
+    def test_nothing(self):
+        self.assertEqual(self.same([], [([(0, 0), (100, 0)], 22.5)]), [])
+
+    def test_a_t_junction_a_crossing_runway_and_a_rapid_exit(self):
+        rw = [([(-2000.0, 0.0), (2000.0, 0.0)], 22.5)]
+        ways = [([(0.0, 300.0), (0.0, 120.0), (0.0, 0.0)], 7.5),                    # (onto the runway square)
+                ([(-500.0, 120.0), (500.0, 120.0), (900.0, 300.0)], 7.5),          # (the parallel, bent; the first ends on it)
+                ([(300.0, 120.0), (600.0, 0.0)], 7.5),                              # (a rapid exit, shallow)
+                ([(-300.0, -200.0), (-280.0, 0.0), (-260.0, 200.0)], 7.5)]          # (across the runway at a vertex)
+        got = self.same(ways, rw)
+        self.assertTrue(got)
+
+    def test_ways_alone_meet_at_their_ends_only(self):
+        self.assertTrue(self.same([([(0.0, 0.0), (0.0, 200.0)], 5.25), ([(-200.0, 200.0), (200.0, 200.0)], 7.5),
+                                   ([(30.0, 10.0), (30.0, 150.0), (60.0, 170.0)], 5.25)], []) is not None)
