@@ -7849,13 +7849,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
-    // 643 (642 kept for tunnels): M5 round 8: roadsys_kept_ends / roadsys_approach_run / roadsys_ramp_dz (a short chain
+    // 649 (643 at first; 642 tunnels, 645 snow S1, 646 power plants, 647 air traffic, 648 trees): M5 round 8: roadsys_kept_ends / roadsys_approach_run / roadsys_ramp_dz (a short chain
     // keeps its profile's deck end where its approach ground lies in a hollow; the approach is ramped to it) and
     // embank_lift / embank_along (embank.rs: a mapped road's embankment the surface model's ground filter cut)
     m.add_function(wrap_pyfunction!(embank::embank_lift, m)?)?;
     m.add_function(wrap_pyfunction!(embank::embank_along, m)?)?;
     // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
     // tunnels' and the roads' branches)
-    m.add("VERSION", 644)?;
+    // 649: the M5 round 8 kernels above (roadsys_kept_ends / approach_run / ramp_dz, embank_lift / along), so that a
+    // 644 module, which lacks them, fails fast.require
+    m.add("VERSION", 649)?;
     Ok(())
 }

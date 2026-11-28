@@ -55,7 +55,7 @@ def of(state):
     return got
 
 EMBANK_CLASSES = ("motorway", "trunk", "primary", "secondary", "tertiary")
-EMBANK_KERNEL = 643         # earthfast embank_lift / embank_along (and profile_pin_field)
+EMBANK_KERNEL = 649         # earthfast embank_lift / embank_along (and profile_pin_field)
 EMBANK_STEP_M = 5.0         # m between a road's samples
 EMBANK_MATCH_M = 0.5        # m: the sample's ground within this of the filtered z12 (the filter's ground, no lidar)
 EMBANK_CUT_MIN = 0.5        # m: a cut at least this ...

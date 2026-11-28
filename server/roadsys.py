@@ -925,7 +925,7 @@ DECK_HALF_MIN_M = 2.0       # m: a deck part's half width at least, for the ends
 # structure, RAMP_MAX_M + RAMP_CLEAR_M read at most) for a ramp of |dz| / its class grade (RAMP_MIN_M at least) and
 # RAMP_CLEAR_M more: the ramp ends that far short of a junction, so the roads there (and their own pins) keep theirs.
 KEEP_ON = SURFACE
-KEPT_KERNEL = 643
+KEPT_KERNEL = 649
 # (the roads built to a design grade, not their links: a track's or a path's profile follows its ground, and a 12 m
 # track deck kept at its profile over a gully stood 15 m off it, Stelvio; a motorway link's kept end at Vancouver's
 # interchange left its 4 m end 0.1 m off the ramped ground at its corners: lips over 20 mm 156 -> 176)
