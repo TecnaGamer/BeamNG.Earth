@@ -1062,4 +1062,74 @@ roads.configureCliffs({available=true, natural=false, roadCuts=false})
 T.check(not roads._cliffsOn and #roads.CONTENT_WHATS == #roads._cliffBase.content and #roads.SKIN_WHATS == #roads._cliffBase.skin,
   'cliffs off again: the lists are the ones without cliffs')
 require('beamngEarth/clifftalus').enabled = false
+-- mod compatibility (2026-11-27): the buildings' TSStatics in a SimGroup named Buildings as the stock maps' (made by us;
+-- another mod's object of that name left alone), add-ons told of the drawn content made and deleted and of colliders
+-- put in effect (api._contentChanged: kind and box), the loaded buildings' boxes read round a point
+do
+  roads.reset()
+  local gpv0 = getPlayerVehicle
+  local still = { pos = vec3(200, 200, 0.5) }     -- (a car at rest beside the tile: its colliders made, rebuilt at once)
+  function still:getPosition() return self.pos end
+  function still:getVelocity() return vec3(0, 0, 0) end
+  getPlayerVehicle = function() return still end
+  local function frames(n)     -- (the reloaded module's update has no frame clock of its own: the test's)
+    for _ = 1, n do elapsedMs = elapsedMs + 16; roads.update(gov, 3) end
+  end
+  local notes = {}
+  beamngEarth_api = { _contentChanged = function(kind, b) notes[#notes + 1] = { kind, b } end }
+  local function noted(kind)
+    local n = 0
+    for _, x in ipairs(notes) do if x[1] == kind then n = n + 1 end end
+    return n
+  end
+  S.BOX_TOP = 20
+  roads.RELOAD_EVERY_S = 0
+  files['/t/bg.json'] = '{ chunks = { }, bld = { shape = "/t/bld_3_1_1.cdae", pos = { 256, 256, 0 } }, ' ..
+    'walk = { shape = "/t/walks_3_1_1.cdae", pos = { 256, 256, 0 } }, ' ..
+    'colliders = { bld = { { 260, 270, 4.4, 280, 290, 26 }, { 400, 300, 9.4, 410, 330, 30 } } } }'
+  roads.onTile({ anchorId = 3, key = '1_1', path = '/t/bg.json', n = 0 }, 3)
+  frames(6)
+  local g = scenetree.findObject(roads.BUILDINGS_GROUP)
+  T.check(roads.BUILDINGS_GROUP == 'Buildings' and g and g.class == 'SimGroup' and g.canSave == false
+    and g.fields.bngEarth == '1', 'the Buildings group, ours, not saved')
+  local inG = {}
+  for _, c in ipairs(g.children or {}) do inG[c.fields.shapeName] = true end
+  T.check(inG['/t/bld_3_1_1.cdae'] and not inG['/t/walks_3_1_1.cdae'], 'the building in it, the sidewalk not')
+  T.check(noted('buildings') == 1 and noted('roads') == 1 and notes[1][2] and notes[1][2][1] == 256,
+    'content: the building and the sidewalk heard, with their boxes')
+  T.check(noted('collision') >= 1, 'content: their colliders heard at the rebuild')
+  local near = roads.buildingBoxesNear(270, 280, 10)
+  T.check(#near == 1 and near[1].x == 270 and near[1].y == 280 and math.abs(near[1].z - 5.0) < 1e-9
+    and near[1].top == 20 and near[1].sizeX == 20 and near[1].sizeY == 20 and near[1].dist == 0,
+    'buildingBoxesNear: the box round the point, its ground and roof (less the collider pads)')
+  T.check(#roads.buildingBoxesNear(270, 280, 500) == 2 and #roads.buildingBoxesNear(-3000, 0, 10) == 0,
+    'buildingBoxesNear: within the radius only')
+  local far = roads.buildingBoxesNear(270, 280, 200)
+  T.check(#far == 2 and math.abs(far[2].dist - math.sqrt(130 * 130 + 20 * 20)) < 1e-9, 'buildingBoxesNear: dist to the box')
+  local n0 = #notes
+  roads.onDrop({ anchorId = 3, key = '1_1' })
+  frames(6)
+  T.check(noted('buildings') == 2 and noted('roads') == 2 and #notes > n0, 'content: their deletion heard too')
+  T.check(#roads.buildingBoxesNear(270, 280, 10) == 0, 'buildingBoxesNear: none once the tile went')
+  -- a Lua reload: the Buildings group's objects swept with the roads'
+  roads.onTile({ anchorId = 3, key = '1_1', path = '/t/bg.json', n = 0 }, 3)
+  frames(6)
+  T.check(g:getCount() == 1 and roads.sweep() >= 2 and g:getCount() == 0, 'sweep: the Buildings group emptied too')
+  roads.reset()
+  -- someone else's object named Buildings: ours go to our own group
+  S.objects[g.id] = nil
+  local theirs = createObject('SimGroup')
+  theirs:registerObject('Buildings')
+  roads.onTile({ anchorId = 3, key = '1_1', path = '/t/bg.json', n = 0 }, 3)
+  frames(6)
+  T.check(theirs.children == nil and roads.sweep() >= 1, 'another mod\'s Buildings group: left alone')
+  T.check(not roads.GROUP:lower():find('bounce') and not roads.BUILDINGS_GROUP:lower():find('bounce'),
+    'no group of ours named with "bounce" (scene-light scanners skip those)')
+  S.objects[theirs.id] = nil
+  roads.reset()
+  beamngEarth_api = nil
+  S.BOX_TOP = nil
+  getPlayerVehicle = gpv0
+end
+
 T.done('test_roads')

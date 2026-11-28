@@ -10,7 +10,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fast  # noqa: E402
 
-NATIVE = 645
+NATIVE = 655
 NF = 14
 MISSING = -2 ** 31
 F = {"t": 0, "td": 1, "p": 3, "swe": 4, "wind": 5, "sw": 6, "ts": 7, "depth": 9, "rh": 10, "hour": 11, "month": 12,

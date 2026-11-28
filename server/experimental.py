@@ -84,6 +84,9 @@ FEATURES = (
     ("expStaleRevisit", {"BNE_STALE_REVISIT": "on"}, None),               # revisit.STALE_ON (not a key: NOT_SWITCHES)
     ("expWinter", {"BNE_WINTER": "on"}, None),                            # snow.WINTER / snowcover.ON (not a key)
     ("expWetRoads", {"BNE_WET_ROADS": "on"}, None),                       # snow.WET_ROADS: rain's wet roads (not a key)
+    # the puddle plan (R1: the rain history in the weather message, weather.PUDDLES_V2; R2 on: the new puddle geometry)
+    ("expPuddlesV2", {"BNE_PUDDLES": "v2"}, None),                        # weather.PUDDLES_V2, roadwear.PUDDLES
+    ("expLeafCycle", {"BNE_LEAF_CYCLE": "on"}, "expWinter"),              # leafcycle.ON: the trees' leaf cycle (not a key)
     # local weather S1 (snowfield.py): the snow on the ground per 0.25-degree cell by height and aspect, with the
     # satellites' observed snow cover (not a key: the snow photos are keyed by their tables, snowcover.key_parts)
     ("expLocalSnow", {"BNE_LOCAL_WEATHER": "snowfield"}, "expWinter"),

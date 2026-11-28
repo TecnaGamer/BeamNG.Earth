@@ -411,6 +411,8 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 # snowcover.key_parts: a spec's hash of the band tables, the packs and the look's version, nothing
                 # where no snow can lie. Anything else snow comes to change must carry its own spec part, snowcover.py)
                 "BNE_WINTER", "BNE_SNOW", "BNE_WET_ROADS",
+                # (the trees' leaf cycle, leafcycle.py: a field of the anchor's message only, the mod's trees by it)
+                "BNE_LEAF_CYCLE",
                 # (local weather, snowfield.py and the later parts: live weather only; S1's snow photos are keyed by
                 # their tables as W2's, snowcover.key_parts with the S1 tables' own marker)
                 "BNE_LOCAL_WEATHER")

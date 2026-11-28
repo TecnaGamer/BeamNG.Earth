@@ -33,7 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "server"))
 import fast  # noqa: E402
 
-NATIVE = 645
+NATIVE = 655
 UA = "BeamNG.Earth snow probe (https://github.com/TecnaGamer/BeamNG.Earth)"
 IMS_URL = "https://noaadata.apps.nsidc.org/NOAA/G02156/GIS/1km/{y}/ims{y}{doy:03d}_1km_GIS_v1.3.tif.gz"
 GIBS_URL = ("https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/{layer}/default/{date}/500m/7/{row}/{col}.png")

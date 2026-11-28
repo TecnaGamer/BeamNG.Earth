@@ -92,6 +92,11 @@ NOT_LISTED = {
                   "on the ground photos is keyed by its specs in the items it changes (snowcover.key_parts: far "
                   "textures, base photos), never in plans or facts; nothing the planning reaches imports snowcover",
     "BNE_WET_ROADS": "no build switch at all (revisit.NOT_SWITCHES): a live snowstate message only (snow.py)",
+    "BNE_LEAF_CYCLE": "no build switch at all (revisit.NOT_SWITCHES): a field of the anchor_ready message only "
+                      "(leafcycle.py); only earthd's anchor reply imports leafcycle, nothing the planning reaches",
+    "BNE_PUDDLES": "the puddle plan: R1 only adds the rain history to the live weather message (weather.PUDDLES_V2); "
+                   "R2 on will change the skins' puddle geometry (roadwear), so it stays keyed and is not proven "
+                   "plan-neutral",
     "BNE_LOCAL_WEATHER": "no build switch at all (revisit.NOT_SWITCHES): local weather (snowfield.py, S1) is live; its "
                          "snow photos are keyed by their S1 tables (snowcover.key_parts), never in plans or facts; "
                          "nothing the planning reaches imports snowfield or snowcover",

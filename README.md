@@ -177,7 +177,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   same weather in multiplayer), darker light under storm clouds, optional lit rain streaks around you, a wet look on streets,
   sidewalks, markings, bridges and buildings, puddles that fill in the low spots, along kerbs and in worn wheel ruts and
   dry up after the rain, wet roads that lose grip in the rain you see (and aquaplaning in deep puddles and heavy rain
-  at speed), and rain sounds that follow the rain's strength and go muffled under cover.
+  at speed), and rain sounds that follow the rain's strength and go muffled under cover. An experimental "New puddle
+  look" (Weather page) makes the puddles still water mirroring the grey sky and the wet streets reflect an overcast sky, the puddles filled by how much it has
+  rained (the same for everyone in multiplayer with the host's weather), with no water film in tunnels.
   An experimental "Weather sounds: Live" setting has the app make the thunder live (the rain stays the pre-recorded
   loops for now), through your default audio device at the game's volume, with the pre-recorded sounds as the fallback.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
@@ -433,7 +435,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   black lanes with slush at their edges, side streets packed white with grey wheel tracks, markings fading under the
   snow, snowbanks along plowed roads (never across junctions, crossings or bridges), sidewalks shovelled, trampled or
   left covered, white bridge decks. `BNE_WINTER=light`, `heavy` or `ice` forces a fixed light-snow, snowstorm or
-  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too); **Local snow** (`BNE_LOCAL_WEATHER=snowfield`, needs Winter: the snow on the ground worked out for every 0.25° area round you by height (every 150 m) and slope, from that area's own weather and NOAA's daily satellite snow map, so mountains are white only above their real snowline and mild places stay bare; more weather downloads while on). A switch set by hand in the
+  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too); **New puddles (server)** (`BNE_PUDDLES=v2`: the weather comes with the last day of real rain, so the Weather page's New puddle look starts with the puddles a wet morning left; later versions add new puddle shapes and water along the kerbs); **Leaf cycle** (`BNE_LEAF_CYCLE=on`, with Winter: broadleaf trees colour and lose their leaves over several weeks in autumn, one tree at a time, and leaf out the same way in spring, by the place's latitude, height and climate); **Local snow** (`BNE_LOCAL_WEATHER=snowfield`, needs Winter: the snow on the ground worked out for every 0.25° area round you by height (every 150 m) and slope, from that area's own weather and NOAA's daily satellite snow map, so mountains are white only above their real snowline and mild places stay bare; more weather downloads while on). A switch set by hand in the
   server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
@@ -457,8 +459,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
   own mod manager, after a notice naming the author (they are not made by BeamNG.Earth); each download comes from the
   author's own GitHub releases and is checked against GitHub's checksum. Not while a BeamMP server is joined. Other
-  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`), and programs beside the game can read your
-  position from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md).
+  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`, which also says when the streamed world
+  changes and lists the buildings and towns round a point), and programs beside the game can read your position
+  from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md). Like the stock
+  maps, the level has a police vehicle group of the region you are in and its buildings in a `Buildings` group.
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads

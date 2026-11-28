@@ -1,0 +1,54 @@
+{
+  "bne_wetsky_overcast_city": {
+    "name": "bne_wetsky_overcast_city",
+    "class": "CubemapData",
+    "normalize": true,
+    "cubeFace": [
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_0.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_1.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_2.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_3.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_4.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_city_5.dds"
+    ]
+  },
+  "bne_wetsky_overcast_open": {
+    "name": "bne_wetsky_overcast_open",
+    "class": "CubemapData",
+    "normalize": true,
+    "cubeFace": [
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_0.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_1.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_2.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_3.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_4.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_overcast_open_5.dds"
+    ]
+  },
+  "bne_wetsky_clear_city": {
+    "name": "bne_wetsky_clear_city",
+    "class": "CubemapData",
+    "normalize": true,
+    "cubeFace": [
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_0.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_1.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_2.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_3.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_4.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_city_5.dds"
+    ]
+  },
+  "bne_wetsky_clear_open": {
+    "name": "bne_wetsky_clear_open",
+    "class": "CubemapData",
+    "normalize": true,
+    "cubeFace": [
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_0.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_1.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_2.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_3.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_4.dds",
+      "/levels/beamng_earth/art/shapes/beamngEarth/wetsky/bne_wetsky_clear_open_5.dds"
+    ]
+  }
+}

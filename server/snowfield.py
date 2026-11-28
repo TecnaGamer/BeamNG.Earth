@@ -43,7 +43,7 @@ SWITCH = "BNE_LOCAL_WEATHER"
 PARTS = frozenset(p.strip() for p in os.environ.get("BNE_LOCAL_WEATHER", "").lower().replace(";", ",").split(",")
                   if p.strip())
 ON = "snowfield" in PARTS
-NATIVE = 645
+NATIVE = 655
 
 CELL_DEG = 0.25
 BLOCK_DEG = 1.0
