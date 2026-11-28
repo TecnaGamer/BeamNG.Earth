@@ -208,6 +208,32 @@ class PartRulesTest(unittest.TestCase):
                       "_part_min": 0.0})
         self.assertEqual(s.cls, "mast")
 
+    def test_a_mast_takes_its_mapped_colour(self):
+        """The Palace of Culture's spire (mapped #F2C200) is gold; a mast with no colour mapped stays MAST_RGB."""
+        ring = bld.clean_ring(np.array([(0, 0), (4, 0), (4, 4), (0, 4)], np.float64))
+        at = {"class": "", "height": 60.0, "facade_material": "metal", "building_height": 200.0, "_part_min": 0.0}
+        gold = bld.plan(ring, dict(at, facade_color="#F2C200"))
+        plain = bld.plan(ring, dict(at))
+        self.assertEqual(gold.cls, "mast")
+        self.assertEqual(plain.cls, "mast")
+        self.assertEqual(bld.LOOKS[gold.facade][1], bld.parse_color("#F2C200"))
+        self.assertEqual(bld.LOOKS[plain.facade][1], bld.MAST_RGB)
+
+    @city
+    def test_a_heightless_part_under_an_outline_that_is_its_parts_top(self):
+        """The Palace of Culture, Warsaw: Overture's outline is 237 m, the spire's top; a part without a height (the
+        606 m² roof by the tower) was a 0-237 m prism. It takes the lowest part's top; under an outline clearly taller
+        than every known part (a church's heightless tower) it still takes the outline's."""
+        parts = [(-20, -20, 40, 40, {"height": 18.0}), (-3, -3, 6, 6, {"height": 237.0, "min_height": 200.0}),
+                 (14, 14, 5, 5, {})]
+        items = tile(*self._building(parts, height=237.0))
+        small = [s for s, _, _ in items if abs(bld._area2(s.ring)) / 2 < 40 and top(s) < 100.0]
+        self.assertEqual(len(small), 1)
+        self.assertLessEqual(top(small[0]), 18.0 + 1e-6)
+        items = tile(*self._building(parts, height=300.0))
+        heightless = [s for s, _, _ in items if abs(bld._area2(s.ring)) / 2 < 40 and top(s) > 250.0]
+        self.assertEqual([round(top(s)) for s in heightless], [300], "outline clearly above the parts: old fill")
+
     @city
     def test_tiny_parts_left_out_unless_tall(self):
         parts = [(-20, -20, 40, 40, {"height": 30.0}),
