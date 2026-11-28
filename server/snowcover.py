@@ -391,6 +391,35 @@ def spec_for_box(south, west, north, east):
     return Spec(("snow", h.hexdigest()[:20]), win, perm, leaf, wsh, credits, trees)
 
 
+def _look_of(win, roads):
+    """What of a field window (_window) a texture's snow look reads: the window as it is, or (roads False: texels too
+    coarse for the roads' plow classes, no road mask) without its road shares. None: no cover there."""
+    if win is None:
+        return None
+    res, ci0, cj0, idx, tables, counts = win
+    if not roads:
+        counts = counts.copy()
+        counts[:, 1:16] = 0
+    return (res, ci0, cj0, idx.shape, idx.tobytes(), tables.tobytes(), counts.tobytes())
+
+
+def look_changes(old, new, box, roads):
+    """Does a texture over box (south, west, north, east deg) look different under Field new than under Field old
+    (either None: no snow known)? Its spec's other parts (the permanent snow, the winter packs) are the same under both:
+    only the tables round it count, the road shares only with roads (its texels fine enough for them). No cover before
+    and after: no change (the server's snow_changed re-renders only where this is True)."""
+    return _look_of(_window(old, *box), roads) != _look_of(_window(new, *box), roads)
+
+
+def uniform_changes(old, new):
+    """(with roads, without) look_changes for two fields with one table everywhere (or None): the same for every
+    texture. None when either has tables by cell (then per texture)."""
+    if any(f is not None and f.uniform is None for f in (old, new)):
+        return None
+    box = (0.0, 0.0, 0.0, 0.0)          # (a uniform window's cell is the box's: the same one under both)
+    return look_changes(old, new, box, True), look_changes(old, new, box, False)
+
+
 def key_parts(spec):
     """A spec's part of a revisit key: () for no snow (the key stays what it was), else (its signature,)."""
     return () if spec is None else (tuple(spec.sig),)

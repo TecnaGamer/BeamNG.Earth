@@ -259,6 +259,27 @@ POLICIES = {
     "api.open-meteo.com": HostPolicy(rate=0.1, burst=2.0, max_conc=1, daily_budget=500, daily_hard=500,
                                      cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True,
                                      gzip=True),
+    # live air traffic (airtraffic.py; off by default, the player's own switch): one ask per ~15 s while it is on and
+    # the player is in the world, about a 28 km cell's point (never the exact position); 4-5 a minute for a whole day
+    # is ~6,000, so the hard cap leaves a margin and stops a runaway. adsb.lol first; airplanes.live and adsb.fi
+    # only while it is slow or refusing (the user, 2026-11-27), each with a smaller day. burst 1: a demand request
+    # takes a token with none left over (admission floor), one every 12 s. Answers are not kept (cache_ttl 0)
+    "api.adsb.lol": HostPolicy(rate=1 / 12, burst=1.0, max_conc=1, daily_budget=6000, daily_hard=8000, cache_ttl=0,
+                               miss_ttl=None, max_wait=3.0, timeout=8.0, connect_timeout=4.0, max_attempts=1,
+                               breaker_threshold=3, breaker_window=120.0, breaker_open=120.0, optional=True,
+                               gzip=True),
+    "api.airplanes.live": HostPolicy(rate=1 / 12, burst=1.0, max_conc=1, daily_budget=1500, daily_hard=2000,
+                                     cache_ttl=0, miss_ttl=None, max_wait=3.0, timeout=8.0, connect_timeout=4.0,
+                                     max_attempts=1, breaker_threshold=3, breaker_window=120.0, breaker_open=300.0,
+                                     optional=True, gzip=True),
+    "opendata.adsb.fi": HostPolicy(rate=1 / 12, burst=1.0, max_conc=1, daily_budget=1500, daily_hard=2000,
+                                   cache_ttl=0, miss_ttl=None, max_wait=3.0, timeout=8.0, connect_timeout=4.0,
+                                   max_attempts=1, breaker_threshold=3, breaker_window=120.0, breaker_open=300.0,
+                                   optional=True, gzip=True),
+    # ... and flight routes by airline callsign (its own switch, memory-only: adsbdb's terms forbid copying them into
+    # another database); one lookup every 2 s at most
+    "api.adsbdb.com": HostPolicy(rate=0.5, burst=1.0, max_conc=1, daily_budget=1500, daily_hard=2500, cache_ttl=0,
+                                 miss_ttl=None, max_wait=3.0, timeout=10.0, max_attempts=1, optional=True, gzip=True),
     # the EGM2008 coefficients (74 MB once; gravity.py resumes and checks the SHA-256 itself)
     "downloads.sourceforge.net": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=None,
                                             offline_ok=True, miss_ttl=None, max_attempts=1, timeout=30.0, optional=True),
@@ -521,6 +542,10 @@ ROLES = {
     "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",
     "noaadata.apps.nsidc.org": "the satellites' snow map (Local snow); the snow from the weather alone meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
+    "api.adsb.lol": "live air traffic; the other aircraft sources stand in",
+    "api.airplanes.live": "live air traffic (a stand-in source)",
+    "opendata.adsb.fi": "live air traffic (a stand-in source)",
+    "api.adsbdb.com": "flight routes of the live air traffic",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",

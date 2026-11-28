@@ -42,7 +42,7 @@
       v-for="item in rows"
       :key="item.id"
       class="earth-row"
-      :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors'"
+      :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors' || consentAsk === item.id"
       @mouseenter="setHelp(item)"
       @focusin="setHelp(item)"
     >
@@ -55,6 +55,14 @@
         :config="optionConfig"
         @valueChanged="val => selectOption(item, val)"
       />
+      <!-- a switch with a consent text (the live air traffic): what is sent and to whom, before it turns on -->
+      <div v-else-if="item.type === 'bool' && consentAsk === item.id" class="earth-consent">
+        <div>Turning this on sends your approximate area (a point on a grid about 17 miles / 28 km wide, never your exact position) about every 15 seconds to adsb.lol, and to airplanes.live or adsb.fi when adsb.lol is busy, only while you are in the world. These services see your internet address, as any website does. Flight routes, if you turn them on, send flight numbers to adsbdb.com. Turn it off at any time to stop.</div>
+        <div class="earth-inline">
+          <BngButton :accent="ACCENTS.main" @click="acceptConsent">Turn on</BngButton>
+          <BngButton :accent="ACCENTS.outlined" @click="cancelConsent">Cancel</BngButton>
+        </div>
+      </div>
       <BngSwitch
         v-else-if="item.type === 'bool'"
         :modelValue="config[item.id] === true"
@@ -151,6 +159,7 @@ import {
   setQuality, presetName, valueOf, selectOption, onSwitchChange, onSliderChange, onNumberEnter, onDevChange, infoValue,
   openFeedback, openLink,
   confirmClearCache, askClearCache, usePath, sendPath, pathNote, typing, applyDevPreset,
+  consentAsk, acceptConsent, cancelConsent,
 } from "./earthSettingsStore.js"
 import { CONTRIBUTORS } from "./contributors.js"
 import EarthAddons from "./EarthAddons.vue"
@@ -194,6 +203,15 @@ function applyNumber(item) {
 }
 
 .earth-note.is-error { color: var(--bng-add-red-400, #f88); }
+
+.earth-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  padding: 0.5em 0.75em;
+  border-left: 0.25em solid var(--bng-orange-500, #f60);
+  background: rgba(255, 102, 0, 0.12);
+}
 
 .earth-restart {
   display: flex;

@@ -1,0 +1,479 @@
+{
+  "lat_body": {
+    "name": "lat_body",
+    "mapTo": "lat_body",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "94d1e132-5dc6-5504-b492-9fa4a3c50735",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.9,
+          0.91,
+          0.92,
+          1.0
+        ],
+        "metallicFactor": 0.15,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_cabin": {
+    "name": "lat_cabin",
+    "mapTo": "lat_cabin",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2a1648fa-d91e-5094-826c-b2f454531890",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.88,
+          0.88,
+          0.86,
+          1.0
+        ],
+        "metallicFactor": 0.05,
+        "roughnessFactor": 0.6,
+        "emissiveFactor": [
+          0.123,
+          0.123,
+          0.12
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_cabin_light": {
+    "name": "lat_cabin_light",
+    "mapTo": "lat_cabin_light",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "586a0e0e-9d5e-5b46-8d20-0e226a1cee53",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.97,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5,
+        "emissiveFactor": [
+          1.0,
+          0.97,
+          0.9
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_carpet": {
+    "name": "lat_carpet",
+    "mapTo": "lat_carpet",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "52df6b49-1285-5032-80fa-c630b60ee9ba",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.22,
+          0.28,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.95,
+        "emissiveFactor": [
+          0.016,
+          0.018,
+          0.022
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_dark": {
+    "name": "lat_dark",
+    "mapTo": "lat_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "106d0ca2-dfdc-5272-9158-a7ca4544d621",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.16,
+          0.17,
+          0.19,
+          1.0
+        ],
+        "metallicFactor": 0.3,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_glass": {
+    "name": "lat_glass",
+    "mapTo": "lat_glass",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b223df22-ad3d-51be-a8aa-f4a6bbf742b8",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.07,
+          0.1,
+          1.0
+        ],
+        "metallicFactor": 0.5,
+        "roughnessFactor": 0.1
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_liv": {
+    "name": "lat_liv",
+    "mapTo": "lat_liv",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9f9722ea-0fc1-5a3e-b642-44b0c4c6f9d4",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "instanceDiffuse": true,
+        "metallicFactor": 0.15,
+        "roughnessFactor": 0.4
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_metal": {
+    "name": "lat_metal",
+    "mapTo": "lat_metal",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "88a74699-680d-5603-8709-241f084f225c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.67,
+          1.0
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.35
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_mil": {
+    "name": "lat_mil",
+    "mapTo": "lat_mil",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8bba7543-f173-5b56-b562-dad59e2fdd59",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.44,
+          0.47,
+          0.5,
+          1.0
+        ],
+        "metallicFactor": 0.15,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_mil_dark": {
+    "name": "lat_mil_dark",
+    "mapTo": "lat_mil_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "88c25aa2-7f2e-5b6c-965a-d79f56bd1589",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.31,
+          0.33,
+          0.36,
+          1.0
+        ],
+        "metallicFactor": 0.15,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_panel": {
+    "name": "lat_panel",
+    "mapTo": "lat_panel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fe0d6f92-24d4-5be9-80cd-ec727e90c6bc",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.07,
+          0.07,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0.2,
+        "roughnessFactor": 0.6,
+        "emissiveFactor": [
+          0.002,
+          0.002,
+          0.002
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_screen": {
+    "name": "lat_screen",
+    "mapTo": "lat_screen",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "cf720604-23fb-5eae-89ee-f70357c6aaae",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.3,
+          0.55,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3,
+        "emissiveFactor": [
+          0.07,
+          0.21,
+          0.385
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_seam": {
+    "name": "lat_seam",
+    "mapTo": "lat_seam",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "02146d48-6185-56ce-baee-5eca0ea236eb",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.52,
+          0.54,
+          0.57,
+          1.0
+        ],
+        "metallicFactor": 0.2,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_seat": {
+    "name": "lat_seat",
+    "mapTo": "lat_seat",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2c78fa5e-eeca-5374-84b6-b888769f0245",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.16,
+          0.22,
+          0.4,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85,
+        "emissiveFactor": [
+          0.016,
+          0.022,
+          0.04
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_seat2": {
+    "name": "lat_seat2",
+    "mapTo": "lat_seat2",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "cb89506c-17dc-5078-8656-739d5c3b7a74",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.8,
+          0.8,
+          0.78,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8,
+        "emissiveFactor": [
+          0.08,
+          0.08,
+          0.078
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_tail": {
+    "name": "lat_tail",
+    "mapTo": "lat_tail",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "84efa240-8582-5a87-a7c7-e7e35e65f287",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.2,
+          0.45,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_text": {
+    "name": "lat_text",
+    "mapTo": "lat_text",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d61e17a8-6937-5cba-8f36-b901714d6cdf",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.07,
+          0.09,
+          0.17,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_wicker": {
+    "name": "lat_wicker",
+    "mapTo": "lat_wicker",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0370b116-35ec-5ff7-9c29-95b6723cdf8e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.47,
+          0.32,
+          0.16,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "lat_window": {
+    "name": "lat_window",
+    "mapTo": "lat_window",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c93c34a2-a57f-5078-93c0-13d1645ee3af",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.14,
+          0.19,
+          0.45
+        ],
+        "metallicFactor": 0.3,
+        "roughnessFactor": 0.1,
+        "opacityFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false
+  }
+}

@@ -40,7 +40,7 @@ def _exit_hook():
 if _ef is not None and sys.version_info < (3, 14):
     import atexit
     atexit.register(_exit_hook)
-MIN_VERSION = 655 # (655: snowobs / snowfield, local weather S1 (was 645); 648: phenology leaf_calendar, the trees' leaf cycle, and texdds' coverage derive; 644: snow_band_table_relief, the snow bands cut to the cell's relief; 641: roadwear puddle_spots, the aquaplaning's puddles; 640: winter W3, snowroad.rs and SnowLook's 15 road slots; 639: roadwear puddle_plan) the newest kernel signature the server calls (earthd checks it at start) ...
+MIN_VERSION = 655 # (655: snowobs / snowfield, local weather S1 (was 645); 652: paintpar.rs, the ground photos' tone paint on several threads and paint_step_ms; 651: the terrain block's elementwise kernels threaded, the same bits; 650: the GPU service, gpu_info / gpu_last / gpu_stats / gpu_allowed, and RGBA integer mips for bc7.mips; 649: roadsys_kept_ends / approach_run / ramp_dz and embank_lift / along, M5 round 8 (first numbered 643); 647: airtraffic adsb_compact / adsbdb_route, the live air traffic; 648: phenology leaf_calendar, the trees' leaf cycle, and texdds' coverage derive; 644: snow_band_table_relief, the snow bands cut to the cell's relief; 641: roadwear puddle_spots, the aquaplaning's puddles; 640: winter W3, snowroad.rs and SnowLook's 15 road slots; 639: roadwear puddle_plan) the newest kernel signature the server calls (earthd checks it at start) ...
 if os.environ.get("BNE_BATTER", "off") == "vanilla":
     # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
     # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)
@@ -149,7 +149,91 @@ def gpu():
             _GPU = _ef.gpu_name() or "" if getattr(_ef, "VERSION", 0) >= 58 else ""
         except Exception:
             _GPU = ""
+        if _GPU and getattr(_ef, "VERSION", 0) >= 650:
+            try:            # (once a process; in the server only its main process has a device: gpu_owner)
+                _log().info("gpu: %s", _ef.gpu_info()["describe"])
+            except Exception:
+                pass
     return _GPU or None
+
+
+# --- the GPU service's glue (earthfast gpu.rs; research report move 1, 2026-11-27) -----------------------------------
+# One device in the server: its main process's (gpu_owner(), before the pools start: the block, far-tile and road
+# processes inherit BNGE_GPU_OWNER and keep the CPU paths). Before each call gpu_now() asks the Deck's gate (a Steam
+# Deck only while parked or loading); after it gpu_note() logs its time (DEBUG, INFO with BNGE_GPU_LOG=1) and every
+# GPU_SUMMARY_S one INFO line of the calls and the CPU fallbacks since the last one.
+GPU_LOG = os.environ.get("BNGE_GPU_LOG") == "1"
+GPU_SUMMARY_S = 300.0
+_gpu_sum = {"t0": None, "fallbacks": {}}
+_gpu_gate_was = [None]      # the gate's last answer (its changes are logged)
+
+
+def _log():
+    import logging
+    return logging.getLogger("earthd")
+
+
+def gpu_owner():
+    """This process alone makes a GPU device from now on (earthd's main, before it starts its worker processes)."""
+    os.environ["BNGE_GPU_OWNER"] = str(os.getpid())
+
+
+def gpu_now(kind, count=True):
+    """May kind's kernel run on the GPU now (fast.gpu() and the Deck's gate, earthfast gpu_allowed)? A refusal is a
+    CPU fallback (gpu_fallback) unless count is False (a caller choosing where to run it)."""
+    if not gpu():
+        return False
+    if getattr(_ef, "VERSION", 0) < 650:
+        return True
+    ok = bool(_ef.gpu_allowed())
+    if ok != _gpu_gate_was[0]:
+        if _gpu_gate_was[0] is not None:      # (a Steam Deck: driving <-> parked / loading)
+            _log().info("gpu: %s", "on the GPU again (parked or loading)" if ok else
+                        "the CPU paths while driving (Steam Deck)")
+        _gpu_gate_was[0] = ok
+    if not ok and count:
+        gpu_fallback(kind, "driving")
+    return ok
+
+
+def gpu_fallback(kind, reason):
+    """kind's kernel ran on the CPU instead (reason: "driving", "failed", ...): counted for the summary, DEBUG."""
+    f = _gpu_sum["fallbacks"]
+    f[(kind, reason)] = f.get((kind, reason), 0) + 1
+    _log().debug("gpu: %s on the CPU (%s)", kind, reason)
+    _gpu_summary()
+
+
+def gpu_note(kind, wall, cpu):
+    """After a GPU call of kind on this thread (wall, cpu: its seconds as the caller timed them; the GPU side from
+    earthfast gpu_last): one line (DEBUG, INFO with BNGE_GPU_LOG=1), and the summary when due."""
+    st = _ef.gpu_last() if getattr(_ef, "VERSION", 0) >= 650 else None
+    if st:
+        _log().log(20 if GPU_LOG else 10,
+                   "gpu: %s %.0f ms (CPU %.0f ms): %d submissions waited %.0f ms, longest %.1f ms, %.1f MB up, "
+                   "%.1f MB back", kind, wall * 1e3, cpu * 1e3, st["submits"], st["wait_s"] * 1e3,
+                   st["max_submit_s"] * 1e3, st["up_bytes"] / 1e6, st["down_bytes"] / 1e6)
+    _gpu_summary()
+
+
+def _gpu_summary(now=None):
+    import time
+    now = time.monotonic() if now is None else now
+    if _gpu_sum["t0"] is None:
+        _gpu_sum["t0"] = now
+        return
+    if now - _gpu_sum["t0"] < GPU_SUMMARY_S:
+        return
+    span, _gpu_sum["t0"] = now - _gpu_sum["t0"], now
+    tot = _ef.gpu_stats(True) if getattr(_ef, "VERSION", 0) >= 650 else {}
+    fb, _gpu_sum["fallbacks"] = _gpu_sum["fallbacks"], {}
+    if not tot and not fb:
+        return
+    parts = [f"{k} {t['calls']} calls ({t['fails']} failed) {t['wall_s']:.1f} s, waited {t['wait_s']:.1f} s in "
+             f"{t['submits']} submissions (longest {t['max_submit_s'] * 1e3:.1f} ms)" for k, t in sorted(tot.items())]
+    if fb:
+        parts.append("CPU fallbacks " + ", ".join(f"{k} {r} {n}" for (k, r), n in sorted(fb.items())))
+    _log().info("gpu: the last %.0f s: %s", span, "; ".join(parts))
 
 
 def perf_clean(v, strings=False, allowed=None):

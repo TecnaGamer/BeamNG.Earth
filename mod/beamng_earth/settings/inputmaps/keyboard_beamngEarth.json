@@ -4,6 +4,12 @@
     {"control":"ctrl shift e", "action":"beamngEarth_reportNote"},
     {"control":"ctrl shift y", "action":"beamngEarth_reportBench"},
     {"control":"ctrl alt w", "action":"beamngEarth_wireframe"},
-    {"control":"ctrl shift q", "action":"beamngEarth_nearestStation"}
+    {"control":"ctrl shift q", "action":"beamngEarth_nearestStation"},
+    {"control":"ctrl alt a", "action":"beamngEarth_airTrafficToggle"},
+    {"control":"ctrl alt k", "action":"beamngEarth_airTrafficLabels"},
+    {"control":"ctrl alt c", "action":"beamngEarth_airTrafficContrails"},
+    {"control":"ctrl alt i", "action":"beamngEarth_airTrafficIdentify"},
+    {"control":"ctrl alt s", "action":"beamngEarth_airTrafficSounds"},
+    {"control":"ctrl alt f", "action":"beamngEarth_airTrafficFollow"}
   ]
 }

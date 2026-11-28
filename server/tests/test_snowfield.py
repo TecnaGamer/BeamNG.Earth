@@ -335,12 +335,18 @@ class WiringTest(unittest.TestCase):
         srv.retex_request = lambda ck, pump=True: queued.append(ck)
         srv._retex_pump = lambda: None
         self.assertTrue(hasattr(farfield, "GTile"))
+        import snowcover
         cell = snowfield.cell_of(39.875, -105.125)
-        self.assertEqual(earthd.Server.snow_changed(srv, cells=[cell]), 1)
+        rows = ((0, 0, 0, 0, 0, 0), (1500, 8, 3, 8, 3, 0))
+        new = snowcover.Field(0.25, cells={cell: snowcover.Table(rows, snowcover.NO_ROAD, 0)})
+        # the field's change (none before, a table at the cell after) with the changed cells: the tile and the
+        # block over it, not the ones 200-300 km away (the cells' pre-filter, then the look's comparison)
+        self.assertEqual(earthd.Server.snow_changed(srv, fields=(None, new), cells=[cell]), 1)
         self.assertEqual((queued, here.stale, far_.stale), ([(1, "a")], True, False))
         self.assertEqual(srv.base_stale, {(1, 0.0, 0.0)})
-        # no cell: nothing; no cells argument: everything (W2's change)
-        self.assertEqual(earthd.Server.snow_changed(srv, cells=[]), 0)
+        # the same fields: no look changed, nothing; no fields (a mode set live): everything
+        srv.base_stale.clear()
+        self.assertEqual(earthd.Server.snow_changed(srv, fields=(new, new), cells=[cell]), 0)
         self.assertEqual(earthd.Server.snow_changed(srv), 2)
 
     def test_service_draws_the_field(self):
@@ -374,13 +380,14 @@ class WiringTest(unittest.TestCase):
         loop = asyncio.new_event_loop()
         self.addCleanup(loop.close)
         changed = []
-        conn = SimpleNamespace(loop=loop, s=SimpleNamespace(snow_changed=lambda cells=None: changed.append(cells)))
+        conn = SimpleNamespace(loop=loop, s=SimpleNamespace(
+            snow_changed=lambda fields=None, cells=None: changed.append((fields, cells))))
         tasks = []
         conn.spawn = lambda coro: tasks.append(loop.create_task(coro))
         svc.field_tick(conn, 39.9, -105.1, arrived=True)
         loop.run_until_complete(asyncio.gather(*tasks))
         self.assertEqual(field.calls, ["near", "far"])
-        self.assertEqual(changed, [[(1, 2)]])
+        self.assertEqual(changed, [((("field", -90.0), ("field", -90.0)), [(1, 2)])])
         self.assertFalse(svc.field_busy)
 
 

@@ -109,6 +109,20 @@
         <div class="station-icon">{{ ms.ICON[m.kind] }}</div>
         <div v-if="m.showLabel" class="marker-label">{{ m.name || ms.NAMES[m.kind] }}</div>
       </div>
+      <!-- the live air traffic (Layers; airtraffic.lua, only while it is on): click one to set the GPS to where it is -->
+      <div
+        v-for="a in airMarkers"
+        :key="'a' + a.h"
+        class="marker aircraft"
+        :class="{ ground: a.g }"
+        :style="{ left: a.sx + 'px', top: a.sy + 'px' }"
+        :title="a.title"
+        @mousedown.stop
+        @click.stop="setGps(a.lat, a.lon, a.label)"
+      >
+        <svg class="aircraft-icon" viewBox="-12 -12 24 24" :style="{ transform: 'rotate(' + a.rot + 'deg)' }"><path :d="ma.PLANE" /></svg>
+        <div v-if="a.showLabel" class="marker-label">{{ a.label }}</div>
+      </div>
       <!-- the GPS destination -->
       <div v-if="gpsScreen" class="marker gps" :style="{ left: gpsScreen.x + 'px', top: gpsScreen.y + 'px' }">
         <div class="flag"></div>
@@ -247,6 +261,8 @@
             <input type="checkbox" v-model="fuelOn" /> Gas stations <span class="layer-hint">(zoom in)</span></label>
           <label class="layer-opt" title="EV chargers where the map data is downloaded (around the car, where you have driven, pre-cached areas); click one to set the GPS">
             <input type="checkbox" v-model="evOn" /> EV chargers <span class="layer-hint">(zoom in)</span></label>
+          <label v-if="airFeature" class="layer-opt" title="The live air traffic's aircraft (Settings, Air traffic); click one to set the GPS to where it is">
+            <input type="checkbox" v-model="airOn" /> Aircraft <span class="layer-hint">(live)</span></label>
           <label class="layer-opt" title="What is downloaded on this computer, and at what detail (LB / RB: the next view)">
             <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
@@ -503,6 +519,7 @@ import { vBngOnUiNav } from "@/common/directives"
 import { paintDebugFeatures } from "./debugoverlay.js"
 import * as mm from "./mapmath.js"
 import * as ms from "./mapstations.js"
+import * as ma from "./mapaircraft.js"
 import * as sm from "./mapsearch.js"
 import layerData from "./maplayers.js"
 import { BngSelect } from "@/common/components/base"
@@ -1315,6 +1332,25 @@ const stationMarkers = computed(() => {
     .map(i => { const s = screen(i.lat, i.lon); return { ...i, sx: s.x, sy: s.y } })
     .filter(m => onScreen({ x: m.sx, y: m.sy }))
   return ms.labels(shown, v.z, w.value, h.value)
+})
+// ---- the live air traffic (airtraffic.lua mapItems through settings.uiAirTraffic): asked every ma.POLL_MS while the
+// map is open; the layer's switch shows only while the feature is on
+const airOn = ref(stored("beamngEarth.map.air", "1") === "1")
+watch(airOn, on => store("beamngEarth.map.air", on ? "1" : "0"), { flush: "sync" })
+const airFeature = ref(false)
+const airItems = shallowRef([])
+function pollAir() {
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiAirTraffic and beamngEarth_settings.uiAirTraffic(${airOn.value ? "true" : "false"}) or nil`, r => {
+    airFeature.value = !!(r && r.status && r.status.on)
+    airItems.value = (r && Array.isArray(r.items)) ? r.items : []
+  })
+}
+const airTimer = setInterval(pollAir, ma.POLL_MS)
+pollAir()
+onUnmounted(() => clearInterval(airTimer))
+const airMarkers = computed(() => {
+  if (!airOn.value || !airFeature.value) return []
+  return ma.markers(airItems.value, view.value.z, screen, onScreen)
 })
 // Nearest for the car (finder.lua: its kind, the GPS, the message saying where)
 function nearestStation() {
@@ -2447,6 +2483,12 @@ const fmtLatLon = mm.fmtLatLon
   font-size: 13px; border-radius: 50%; background: rgba(20, 24, 28, 0.85); border: 2px solid #f0a020;
 }
 .marker.station.ev .station-icon { border-color: #3cc8ff; }
+.marker.aircraft { cursor: pointer; z-index: 3; }
+.marker.aircraft .aircraft-icon {
+  position: absolute; left: -11px; top: -11px; width: 22px; height: 22px;
+  fill: #ffd84a; stroke: rgba(0, 0, 0, 0.8); stroke-width: 1.2px;
+}
+.marker.aircraft.ground .aircraft-icon { fill: #b9c2cc; width: 16px; height: 16px; left: -8px; top: -8px; }
 .marker.place .pin {
   position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; border-radius: 50%;
   background: #ff9a3c; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);

@@ -1425,6 +1425,8 @@ local function onMessage(msg)
       la.reset()
       la.setSender(function(m) if st.sessionId and net.isConnected() then net.send(m) return true end return false end)
     end
+    -- the live air traffic: a test server's switch (BNE_AIRTRAFFIC_TEST, the person who started it: airtraffic.onHello)
+    if rawget(_G, 'beamngEarth_airtraffic') then beamngEarth_airtraffic.onHello(msg) end
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
     -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
@@ -1781,6 +1783,9 @@ local function onMessage(msg)
   elseif t == 'stations_result' then         -- the station finder's answer (finder.lua: Nearest, the prompt, the map)
     local f = rawget(_G, 'beamngEarth_finder')
     if f and f.onStations then f.onStations(msg) end
+  elseif t == 'air_traffic_result' then      -- the live air traffic's aircraft (airtraffic.lua; server airtraffic.py)
+    local at = rawget(_G, 'beamngEarth_airtraffic')
+    if at and at.onResult then at.onResult(msg) end
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error, text = msg.text } end
   elseif t == 'areas' then
@@ -3654,6 +3659,7 @@ teleportTo = function(lat, lon, name, kind, heading)
     do local ok, err = pcall(farcars.onTeleport) if not ok then log('W', 'beamngEarth', 'far cars: ' .. tostring(err)) end end
     pcall(mpsession.onTeleport)      -- (BeamMP: the camera is ours to put at the target, commitTeleport)
     do local w = rawget(_G, 'beamngEarth_weather') if w and w.onTeleport then pcall(w.onTeleport) end end   -- (wet roads stay behind)
+    do local wm = package.loaded['beamngEarth/winter'] if wm and wm.onTeleport then pcall(wm.onTeleport) end end   -- (the origin's road state too)
     if kind ~= 'tool' then
       statusbar.reset()
       local ok, err = pcall(places.noteTeleport, lat, lon, name, kind)
