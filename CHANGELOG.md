@@ -81,6 +81,8 @@ What changed in each release of BeamNG.Earth, newest first.
   ground ahead could fail to build again and again.
 
 ### Changed
+- Painting roads, car parks and pads into the ground photos should take less time and memory (about half the time
+  per photo on a four-core server share; the pictures are the same).
 - Retired the Experimental "Road surface from aerial photos" setting (`BNE_PHOTO_SURFACE`). Roads should look the same as they do by default, and an old setting or variable is now ignored.
 - **BeamMP hosting:** the releases no longer carry the Windows and Linux host bundles with BeamMP's own server program
   inside. Get the server from BeamMP's own releases and add `BeamNG.Earth-BeamMP-Server-<version>.zip` (the mod and
