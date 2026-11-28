@@ -157,6 +157,7 @@ import airports as airportsmod  # noqa: E402
 import seacarve as seacarvemod  # noqa: E402
 import seatiles as seatilesmod  # noqa: E402
 import vegetation as vegetationmod
+import vegfar as vegfarmod
 import buildings as buildingsmod  # noqa: E402
 import bldhz as bldhzmod  # noqa: E402
 import rockface as rockfacemod  # noqa: E402
@@ -2394,6 +2395,25 @@ class Server:
                     reader=md.overture if md is not None else None)
             return pn
 
+    def build_vegfar_geo(self, gx, gy):
+        """vegfar.far_rows: geotile (gx, gy)'s far forest clumps (zoom vegfar.Z) in its own frame, written to the session
+        folder as a vegetation geotile: (vfs path, n, frame (lat, lon), pivot), or None without the map data. Their
+        ground the DEM's at ~30 m pixels (the far field's own coarseness there)."""
+        if self.veg is None or getattr(self, "mapdata", None) is None:
+            return None
+        import geotiles
+        import vegfar
+        clat, clon = geotiles.centre(gx, gy, vegfar.Z)
+        zoom = demmod.zoom_for(clat, 30.0)
+
+        def elev(la, lo):
+            return self.ground(None, la, lo, self.dem.sample(la, lo, zoom))
+        rows, pivot = vegfar.far_rows(gx, gy, self.mapdata.rasters, elev)
+        frame = (clat, clon)
+        path, n = vegetationmod.write_tile(self.out_dir, self.vfs_dir, None, gx, gy, rows,
+                                           geo={"key": geotiles.key(gx, gy, vegfar.Z), "frame": frame, "pivot": pivot})
+        return path, n, frame, pivot
+
     def build_turbines_geo(self, gx, gy):
         """Mapped wind turbines through the existing geotile tracker, without building distant roads.
 
@@ -3726,6 +3746,30 @@ class Server:
                                    walk_ground=lambda x, y: roadmeshmod.drawn_ground(
                                        anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)),
                                    speed_traps=speed_traps)
+
+    _season_base = None         # (set_season_day: --season as started)
+
+    def set_season_day(self, doy):
+        """The ground photo's season date (message season_date; the mod's settings seasonDate 'game': its environment
+        date, a week's first day): only under --season auto, whose date it replaces ("doy:<n>", season.amounts_for;
+        the imagery's keys hold the mode, so newly built ground takes it); None: the server's own date again. True
+        when it changed."""
+        im = self.imagery
+        if im is None:
+            return False
+        if self._season_base is None:
+            self._season_base = im.season_mode
+        if self._season_base != "auto":
+            return False
+        try:
+            want = f"doy:{int(doy)}" if doy is not None and 1 <= int(doy) <= 366 else "auto"
+        except (TypeError, ValueError):
+            want = "auto"
+        if im.season_mode == want:
+            return False
+        im.season_mode = want
+        log.info("season date: %s", want)
+        return True
 
     def set_dej(self, on):
         """The settings page's German junction signs switch (message german_junctions): True when it changed (the road
@@ -8255,6 +8299,13 @@ class Connection:
         self.far_pack = False                   # far building packs past PACK_INNER_M (hello.farPack, buildings.PACK_*)
         self.make_far_trackers(False)
         self.turbine_geo = False               # separate capability; no road/building radius increase
+        # the far forest ring (vegfar.py, hello.vegFar): the stock far clumps from the vegetation tiles' reach to past
+        # the skyline, flat pictures (their imposters) at that distance
+        self.veg_far = False
+        self.vegfar = vegetationmod.Tracker(vegfarmod.send_m(buildingsmod.SKY_SEND_M),
+                                            vegfarmod.send_m(buildingsmod.SKY_SEND_M) + vegfarmod.FAR_DROP_M - vegfarmod.FAR_SEND_M,
+                                            vegfarmod.PER_POSE, "vegfar", geo=True, z=vegfarmod.Z,
+                                            inner=(vegfarmod.ring_inner_m(), 1), rebuild_history=False)
         self.turbines = vegetationmod.Tracker(TURBINE_SEND_M, TURBINE_DROP_M, TURBINE_PER_POSE, "turbines",
                                               geo=True, z=TURBINE_Z)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
@@ -9347,7 +9398,7 @@ class Connection:
                 self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
             for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None),
-                       getattr(self, "bldhz", None), getattr(self, "turbines", None), self.nav,
+                       getattr(self, "bldhz", None), getattr(self, "turbines", None), getattr(self, "vegfar", None), self.nav,
                        self.distant_traffic, self.distant_traffic_far):
                 if tr is not None:
                     tr.close()
@@ -9440,7 +9491,7 @@ class Connection:
         self.signs.close()
         self.signs = signstream.Tracker()
         for tr in (self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None), getattr(self, "bldhz", None),
-                   getattr(self, "turbines", None),
+                   getattr(self, "turbines", None), getattr(self, "vegfar", None),
                    self.distant_traffic, self.distant_traffic_far):
             if tr is not None:
                 tr.forget()
@@ -9612,7 +9663,8 @@ class Connection:
                 m["colormatch"] = self.s.colormatch.mode
             season_mode = getattr(self.s.imagery, "season_mode", "off") if self.s.imagery is not None else "off"
             if season_mode not in (None, "off"):    # --season: the mod tints the trees' leaves to match (seasonlook.lua)
-                m["season"] = season_mode
+                # (a game date, "doy:<n>": the mod's own day, seasondate.lua, so its leaves go as 'auto')
+                m["season"] = "auto" if str(season_mode).startswith("doy:") else season_mode
             if snowcovermod.ON:                 # BNE_WINTER: the snow layer's look, the grass under snow (winterlook.lua)
                 m["snow"] = snowcovermod.hello()
             if self.s.map_port:                 # the world map's tiles (maptiles.py; --map-tiles on)
@@ -9685,6 +9737,9 @@ class Connection:
             self.turbine_geo = msg.get("turbineGeo") == TURBINE_GEO
             if self.turbine_geo:
                 m["turbineGeo"] = TURBINE_GEO
+            self.veg_far = geo and msg.get("vegFar") == vegfarmod.PROTO
+            if self.veg_far:
+                m["vegFar"] = vegfarmod.PROTO
             # ... and the far field's levels from 3 up as global tiles when it places those (hello.globalFar:
             # farfield.lua's GLOBAL_FAR; geotiles phase 3b, --global-far): built once, kept across rebases
             self.ready_set = msg.get("readySet") == 1      # (the mod takes 'terrain_ready_set': follow.preferReady)
@@ -9900,6 +9955,8 @@ class Connection:
                 self.roads = road_tracker(self)
         elif kind == "graphics":                # the settings page's graphics knobs (set_graphics)
             self.set_graphics(msg)
+        elif kind == "season_date":             # the settings page's Season date: the game's day, or none (the PC's)
+            self.s.set_season_day(msg.get("doy"))
         elif kind == "german_junctions":        # the settings page's switch: the road and sign tiles again, with or without
             if self.s.set_dej(msg.get("on")):   # (and the AI's graph: its stops, give-ways and zone speeds)
                 self.roads.close()
@@ -9937,9 +9994,12 @@ class Connection:
             self.tree_scale = tree
             self.veg.send_m = vegetationmod.SEND_M * tree
             self.veg.drop_m = self.veg.send_m + (vegetationmod.DROP_M - vegetationmod.SEND_M)
+            self.vegfar.inner = (vegfarmod.ring_inner_m(tree), 1)
         if bld != self.building_scale:
             self.building_scale = bld
             self.set_far_reach(buildingsmod.FAR_SEND_M * bld)
+            self.vegfar.send_m = vegfarmod.send_m(buildingsmod.SKY_SEND_M * bld)
+            self.vegfar.drop_m = self.vegfar.send_m + vegfarmod.FAR_DROP_M - vegfarmod.FAR_SEND_M
             if self.bldsky is not None:
                 self.bldsky.send_m = buildingsmod.SKY_SEND_M * bld
                 self.bldsky.drop_m = self.bldsky.send_m + (buildingsmod.SKY_DROP_M - buildingsmod.SKY_SEND_M)
@@ -10865,6 +10925,20 @@ class Connection:
     def on_pose(self, msg):
         fast.require(557, "connection_pose")
         fast._ef.connection_pose(self, msg, globals())
+        self._pose_vegfar()
+
+    def _pose_vegfar(self):
+        """The far forest ring's geotiles (vegfar.py) round the active anchor's focus, after the native pose's
+        trackers (earthfast connection_pose: the trees' among them): not in the 3D map's view from high up, as the
+        trees."""
+        if not self.veg_far or self.s.veg is None or self.active is None:
+            return
+        if self.map_view and self.eye_clearance() > MAP_DETAIL_EYE_M:
+            return
+        anchor = self.s.anchors.get(self.active)
+        if anchor is not None:
+            self.vegfar.on_pose(self, self.active, *self.focus, asyncio.get_running_loop(), self.s.build_vegfar_geo,
+                                view=self.view_at, frame=anchor.frame)
 
     def _pose_ground(self, aid, x, y, vx, vy, msg):
         self.gravity.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))

@@ -17,6 +17,7 @@ the same every time.
 """
 import hashlib
 from runtimeprofiler import step as profile_step
+import json
 import logging
 import math
 from collections import OrderedDict
@@ -80,17 +81,25 @@ MATERIALS = (
     ("bngEarthGroundDryGrass", "GRASS"),
     ("bngEarthGroundCrop", "DIRT"),
     ("bngEarthGroundSand", "SAND"),
+    # Herbaceous wetland (WorldCover 90: marsh, fen, reed beds; 2026-11-19, the grass overhaul): it had the water beds'
+    # mud layer and no 3D plants. Its own layer carries the stock cattails and reeds (groundcover.lua); the tyres' MUD
+    # as before. Mangroves (95) and the water beds (80) keep the mud layer.
+    ("bngEarthGroundWet", "MUD"),
+    # Lavender fields (2026-11-19, the user: "add the lavender"): farmland whose OSM tags say crop=lavender (Provence's
+    # Valensole, Norfolk's, Tasmania's) its own layer, the crop soil's look, for the mod's lavender ground cover; the
+    # tyres' DIRT as crop soil's. Painted only there: no block elsewhere lists it.
+    ("bngEarthGroundLavender", "DIRT"),
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
     GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT, \
-    FOREST, DRYGRASS, CROP, SAND = range(len(MATERIALS))
+    FOREST, DRYGRASS, CROP, SAND, WET, LAVENDER = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
 # (paint_roads), and the photo's own colours now show through. Tree cover is the forest floor, cropland crop soil
 # (2026-11-16: both had the grass and the dirt layers); grassland in an arid climate dry grass (classify).
 CLASS_MATERIAL = {0: DIRT, 10: FOREST, 20: DUSTY, 30: GRASS, 40: CROP, 50: DIRT, 60: LOOSE, 70: SNOW,
-                  80: MUD, 90: MUD, 95: MUD, 100: GRASS}
+                  80: MUD, 90: WET, 95: MUD, 100: GRASS}
 DRY_KOPPEN = (4, 5, 6, 7)   # Koppen B (arid: BWh BWk BSh BSk; climate.py): grassland there is dry grass
 # Lawns (2026-10-14, street photos of Ocean City, Lancaster, Frederick, Moab): built-up land between the
 # buildings is mostly mown grass, which the dirt layer drew pale and bare. A share of it is LAWN, in patches
@@ -161,7 +170,10 @@ def warp(lat, lon):
 
 # road surface kind (roads.py) -> material; drawn in this order (paved last: it wins at junctions)
 ROAD_MATERIAL = {"dirt": DIRT, "gravel": LOOSE, "cobble": COBBLE, "paved": ASPHALT,
-                 "rock": ROCK, "grass": GRASS}     # rock and grass roads: the ground's own materials (roads.terrain_surface)
+                 "rock": ROCK, "grass": LAWN}      # rock and grass roads: the ground's own materials (roads.terrain_surface);
+# (2026-11-24) a grass road (OSM surface=grass, grass_paver: a vineyard's or a field's track) the mown lawn's layer, not
+# the meadow's: the meadow's long grass and seeded heads grew knee-high on Laufen's Herrenweg, the user's; a track's
+# grass is kept short by the wheels and the mower (the lawn's short grass only, groundcover.lua; the same tyres' GRASS)
 ROAD_ORDER = ("dirt", "gravel", "rock", "grass", "cobble", "paved")
 
 
@@ -425,7 +437,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         # Material layers drive BeamNG's stock GroundCover. Keep the strip green
         # even on WorldCover's built-up village pixels, while roads and footways
         # still win below.
-        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT, FOREST, DRYGRASS, CROP))] = GRASS
+        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT, FOREST, DRYGRASS, CROP, WET))] = GRASS
     if footpaths[0]:
         out[mask(footpaths)] = ROAD_MATERIAL["paved"]
     for k in ROAD_ORDER:
@@ -1036,7 +1048,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None, corners=True):
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
 VERGE_M = 1.0 + 0.5 * heightmap.SQUARE     # (1.5 m at 1 m squares, 2 m at 2 m)
-VERGE_FROM = (GRASS, LAWN, DUSTY, FOREST, DRYGRASS)
+VERGE_FROM = (GRASS, LAWN, DUSTY, FOREST, DRYGRASS, WET)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
 PARKING_CLASSES = {"parking"}     # Overture infrastructure (transit) polygons drawn as asphalt: no grass on a lot
@@ -1057,8 +1069,9 @@ FARM_ROAD_CLEAR_M = 4.0     # furrows stop this far short of a dirt road's edge
 
 
 def paint_fields(idx, lat, lon, feats_list):
-    """idx with farmland polygons drawn as crop soil (the whole field: the furrows are only in the photo). Pure."""
-    return _paint(idx, lat, lon, feats_list, _farmland, CROP)
+    """idx with farmland polygons drawn as crop soil (the whole field: the furrows are only in the photo), the lavender
+    fields (_lavender) as the lavender layer. Pure."""
+    return _paint(_paint(idx, lat, lon, feats_list, _farmland, CROP), lat, lon, feats_list, _lavender, LAVENDER)
 
 
 def paint_grass(idx, lat, lon, feats_list):
@@ -1205,7 +1218,7 @@ def paint_frontage_pads(idx, lat, lon, pads, material=ASPHALT):
         hit = polygon.contains_points(xy, np.c_[x.ravel(), y.ravel()])
         y, x = y.ravel()[hit], x.ravel()[hit]
         if material == GRASS:
-            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY, FOREST, DRYGRASS, CROP))
+            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY, FOREST, DRYGRASS, CROP, WET))
             y, x = y[keep], x[keep]
         out[y, x] = material
     return out
@@ -1368,6 +1381,29 @@ def _field_phase(fid, xy):
 def _farmland(feats):
     cls = feats.attrs.get("class")
     return None if cls is None else np.isin(np.asarray(cls).astype(str), list(FARM_CLASSES))
+
+
+LAVENDER_CLASSES = {"farmland", "orchard", "plant_nursery", "meadow", "farmyard"}
+
+
+def _lavender(feats):
+    """The land use polygons whose OSM tags name a lavender (or lavandin) crop: crop=lavender, produce=lavender."""
+    cls, tags = feats.attrs.get("class"), feats.attrs.get("tags")
+    if cls is None or tags is None:
+        return None
+    out = np.zeros(len(cls), bool)
+    for i, t in enumerate(tags):
+        if not t or "lavand" not in str(t).lower() and "lavend" not in str(t).lower():
+            continue
+        if str(cls[i]) not in LAVENDER_CLASSES:
+            continue
+        try:
+            d = json.loads(t) if isinstance(t, str) else dict(t)
+        except (ValueError, TypeError):
+            continue
+        val = " ".join(str(d.get(k, "")) for k in ("crop", "produce", "trees")).lower()
+        out[i] = "lavend" in val or "lavand" in val
+    return out
 
 
 def lots_mask(frame, x0, y0, size, px, feats_list):
@@ -1636,7 +1672,7 @@ def used_materials(idx):
 # pair one ground model), then folds its least used land-cover layers whatever their size: a visible but rare loss,
 # against a 250-560 ms swap with ten materials (in-game probes 2026-10-18). BNE_LAYER_FOLD=off: every layer kept.
 FOLD_ON = os.environ.get("BNE_LAYER_FOLD", "on").lower() not in ("off", "0", "false", "no")
-FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW, FOREST, DRYGRASS, CROP, SAND)
+FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW, FOREST, DRYGRASS, CROP, SAND, WET)
 FOLD_SHARE = 0.01
 FOLD_CORE_R_M = 2.0
 FOLD_CORE_M2 = 256.0
@@ -1644,7 +1680,7 @@ LAYER_CAP = 9
 # (dropped, kept): golf greens and fairways are the same grass at another grain, fairways mown lawns, a rough long
 # grass; brick and setts both stone paving; pavers the asphalt's ground model
 LOOKALIKE = ((GOLF_GREEN, GOLF_FAIRWAY), (BRICK, COBBLE), (GOLF_FAIRWAY, LAWN), (GOLF_ROUGH, GRASS), (PAVERS, ASPHALT),
-             (DRYGRASS, GRASS), (CROP, DIRT), (FOREST, GRASS))
+             (DRYGRASS, GRASS), (CROP, DIRT), (FOREST, GRASS), (WET, MUD), (LAVENDER, CROP))
 
 
 def core_radius(square):

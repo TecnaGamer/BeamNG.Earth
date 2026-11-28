@@ -140,6 +140,8 @@ M.SCHEMA = {
   realWind = { kind = 'bool', default = true, label = 'Real wind' },
   realPrecip = { kind = 'bool', default = true, label = 'Real rain and snow' },
   fogLimit = { kind = 'enum', default = '0', values = { '0', '200', '500', '1600' }, label = 'Thickest fog (m, 0: real)' },
+  -- the seasons' date (seasondate.lua; the user, 2026-11-23): the PC's clock (dev's) or the game's environment date
+  seasonDate = { kind = 'enum', default = 'clock', values = { 'clock', 'game' }, label = 'Season date' },
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
   -- the station finder's prompt when the fuel or charge runs low (finder.lua; the user, 2026-11-09)
   lowFuelPrompt = { kind = 'bool', default = true, label = 'Low fuel prompt' },
@@ -292,6 +294,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherWetGrip', 'weatherPuddleLook', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'weatherWindSound', 'realClouds',
   'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'airTraffic', 'airTrafficRoutes', 'airTrafficRangeNm', 'airTrafficLabels', 'airTrafficContrails', 'airTrafficSounds', 'airTrafficVolume', 'airTrafficGround', 'airTrafficSizeBoost', 'airTrafficMaxModels', 'airTrafficMap', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
+  'seasonDate',     -- (this branch's: on its own line, an unchanged line away from dev's busy ones above)
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'mainMenuTile', 'cacheCapGb', 'routeDownload', 'routeAvoidHighways', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
@@ -705,6 +708,7 @@ M.APPLY = {
     local w = ext('beamngEarth_weather')
     if w and w.setMode and not (v == 'manual' and w.getMode and w.getMode() == v) then w.setMode(v) end
   end,
+  seasonDate = function(v) require('beamngEarth/seasondate').setSource(v) end,
   weatherPreset = function(v) local w = ext('beamngEarth_weather') if w and w.setPresetChoice then w.setPresetChoice(v) end end,
   weatherIntensity = function(v) local w = ext('beamngEarth_weather') if w and w.setIntensity then w.setIntensity(v) end end,
   weatherChange = function(v) local w = ext('beamngEarth_weather') if w and w.setChangeSpeed then w.setChangeSpeed(tonumber(v)) end end,

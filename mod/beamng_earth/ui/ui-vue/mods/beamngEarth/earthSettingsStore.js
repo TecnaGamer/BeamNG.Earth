@@ -63,6 +63,8 @@ export const settingsSchema = [
       { id: "skyMode", type: "select", default: "real", name: "Sun and stars", desc: "Real time: the sun, moon and stars follow the real clock and date where you are. Manual: use the game's own Time & Weather controls. Changing the time in the pause menu switches this to Manual by itself; choose Real time to go back.",
         note: "Changing the time in the pause menu switches this to Manual.",
         options: [ { label: "Real time", value: "real" }, { label: "Manual", value: "manual" } ] },
+      { id: "seasonDate", type: "select", default: "clock", name: "Season date", desc: "Which date the seasons follow: the autumn colours of the leaves, the grass and flowers, and the ground photo. PC clock: today's date on your computer. Game date: the date set in the game's Time & Weather (environment), so a place keeps its season whatever day you play it. Newly loaded ground follows a change; the leaves and grass within a few seconds.",
+        options: [ { label: "PC clock", value: "clock" }, { label: "Game date", value: "game" } ] },
       { id: "clouds", type: "bool", default: true, name: "Clouds", desc: "A volumetric cloud layer that follows the ground under you." },
       { id: "realGravity", type: "bool", default: true, name: "Real gravity", desc: "Gravity as it really is where you are (it varies a little with latitude, height and the ground below). Off: the usual 9.81 m/s2." },
       { id: "lowFuelPrompt", type: "bool", default: true, name: "Low fuel prompt", desc: "When the fuel or charge drops below 15 %, a message names the nearest gas station (an EV charger for an electric car) and the key that routes the GPS there (Ctrl+Shift+Q, or Nearest station in the radial menu)." },

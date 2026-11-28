@@ -46,6 +46,7 @@ CHM_URL = ("https://dataforgood-fb-data.s3.amazonaws.com/forests/v2/global/dinov
            "chm/{quadkey}.tif")
 CHM_FILE_Z = 10                     # files are quadkey level 10 tiles
 CHM_NODATA = 255
+CHM_COARSE_PX_M = 15.0              # canopy_coarse's overview: the first at least this coarse (~19 m pixels)
 MERC_HALF = 20037508.342789244      # m, half the Web-Mercator world width
 COG_CACHE = 16                      # parsed COG headers kept in memory
 # British Columbia (Vancouver Island, 2026-10-23): where LidarBC flew both a surface (DSM) and a terrain
@@ -178,6 +179,73 @@ class Rasters:
             raise cogmod.CogError(f"CHM {qk}: cell not aligned to the file's pixels")
         data = c.read_window(col0, row0, w, w)
         return Raster(data, "EPSG:3857", mx0, my0, c.sx, c.sy, CHM_NODATA, [qk])
+
+    def canopy_coarse(self, mx0, my0, mx1, my1, min_px_m=CHM_COARSE_PX_M, kind="prefetch"):
+        """The canopy height over a Web-Mercator box (mx0 < mx1, my0 < my1) from the CHM files' overviews, the first
+        whose pixel is at least min_px_m (2026-11-19: the far forest ring, vegfar.py; ~19 m, a whole quadkey-10 file
+        2048² there): a Raster (uint8 m, EPSG:3857) mosaicked over the files the box touches, nodata where none exists,
+        or None outside every file."""
+        n = 1 << CHM_FILE_Z
+        size = 2 * MERC_HALF / n
+        i0, i1 = int(math.floor((mx0 + MERC_HALF) / size)), int(math.floor((mx1 + MERC_HALF) / size))
+        j0, j1 = int(math.floor((MERC_HALF - my1) / size)), int(math.floor((MERC_HALF - my0) / size))
+        parts, px = [], None
+        for fi in range(i0, i1 + 1):
+            for fj in range(j0, j1 + 1):
+                qk = "".join(str(((fi >> b) & 1) + 2 * ((fj >> b) & 1)) for b in range(CHM_FILE_Z - 1, -1, -1))
+                c = self._overview(qk, min_px_m, kind)
+                if c is None:
+                    continue
+                px = c.sx
+                fx0, fy0 = fi * size - MERC_HALF, MERC_HALF - fj * size
+                a0 = max(0, int(math.floor((max(mx0, fx0) - fx0) / c.sx)))
+                b0 = max(0, int(math.floor((fy0 - min(my1, fy0)) / c.sy)))
+                a1 = min(c.width, int(math.ceil((min(mx1, fx0 + size) - fx0) / c.sx)))
+                b1 = min(c.height, int(math.ceil((fy0 - max(my0, fy0 - size)) / c.sy)))
+                if a1 <= a0 or b1 <= b0:
+                    continue
+                parts.append((fx0 + a0 * c.sx, fy0 - b0 * c.sy, c.read_window(a0, b0, a1 - a0, b1 - b0)))
+        if not parts:
+            return None
+        x0 = min(p[0] for p in parts)
+        y0 = max(p[1] for p in parts)
+        w = int(round((max(p[0] + p[2].shape[1] * px for p in parts) - x0) / px))
+        h = int(round((y0 - min(p[1] - p[2].shape[0] * px for p in parts)) / px))
+        out = np.full((h, w), CHM_NODATA, np.uint8)
+        for x, y, a in parts:
+            c0, r0 = int(round((x - x0) / px)), int(round((y0 - y) / px))
+            out[r0:r0 + a.shape[0], c0:c0 + a.shape[1]] = a[:h - r0, :w - c0]
+        return Raster(out, "EPSG:3857", x0, y0, px, px, CHM_NODATA, [])
+
+    def _overview(self, qk, min_px_m, kind):
+        """The parsed overview of CHM file qk whose pixel is first at least min_px_m (its masks' 1-bit images skipped),
+        or None (no file, no such overview)."""
+        key = ("chm-ov", qk, min_px_m)
+        with self._lock:
+            c = self._cogs.get(key)
+            if c is not None:
+                self._cogs.move_to_end(key)
+                return c if c is not False else None
+        url = CHM_URL.format(quadkey=qk)
+        path = os.path.join(self.raw_dir, "chm", CHM_RELEASE, qk)
+        found = False
+        for level in range(1, 16):
+            try:
+                c = cogmod.Cog(rangeread.RemoteFile(url, None, path, self.fetcher), kind, level=level)
+            except rangeread.Missing:
+                break
+            except cogmod.CogError as e:
+                if "no overview" in str(e):
+                    break
+                continue                # (a mask)
+            if c.sx >= min_px_m and c.dtype == np.uint8:
+                found = c
+                break
+        with self._lock:
+            self._cogs[key] = found
+            while len(self._cogs) > COG_CACHE:
+                self._cogs.popitem(last=False)
+        return found or None
 
     def bc_canopy(self, cell, base):
         """base (the Meta / WRI canopy Raster of the cell, or None) with LidarBC's measured canopy heights put in

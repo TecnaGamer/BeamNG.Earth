@@ -455,7 +455,8 @@ function M.map(shape, rank)
   end
   if latched == nil then
     if inputs.mode == 'auto' and not inputs.lat then return shape end      -- (no anchor yet: none placed anyway)
-    local doy, f = tonumber(os.date('*t').yday), M.climateFactor(inputs.koppen)
+    local doy, f = require('beamngEarth/seasondate').doy(), M.climateFactor(inputs.koppen)     -- (the PC's or the
+    -- game's date, settings Season date: as the leaves' tint and the grass)
     latched = M.amountFor(inputs.mode, doy, inputs.lat, inputs.snow, inputs.state, f)
     tints, tintRoot, tcopies = M.tintsFor(inputs.mode, doy, inputs.lat, f), nil, {}
     local tl = {}

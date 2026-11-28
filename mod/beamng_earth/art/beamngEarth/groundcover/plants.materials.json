@@ -1,0 +1,206 @@
+{
+  "bngEarth_stubble": {
+    "name": "bngEarth_stubble",
+    "mapTo": "bngEarth_stubble",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/grass/t_cut_wheat/t_cut_wheat_d.color.dds",
+        "normalMap": "/assets/materials/foliage/grass/t_cut_wheat/t_cut_wheat_nm.normal.dds",
+        "specularMap": "/assets/materials/foliage/grass/t_cut_wheat/t_cut_wheat_s.color.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 70,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "translucentBlendOp": "None"
+  },
+  "bngEarth_ripe_grain": {
+    "name": "bngEarth_ripe_grain",
+    "mapTo": "bngEarth_ripe_grain",
+    "class": "Material",
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_ao.data.png",
+        "baseColorMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_b.color.png",
+        "baseColorFactor": [
+          1.3,
+          1.08,
+          0.52,
+          1
+        ],
+        "normalMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_nm.normal.png",
+        "normalMapStrength": 2,
+        "opacityMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_o.data.png",
+        "roughnessMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_r.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 90,
+    "alphaTest": true,
+    "doubleSided": true,
+    "dynamicCubemap": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "version": 1.5
+  },
+  "bngEarth_lavender": {
+    "name": "bngEarth_lavender",
+    "mapTo": "bngEarth_lavender",
+    "class": "Material",
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_ao.data.dds",
+        "baseColorMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_b.color.dds",
+        "normalMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_nm.normal.dds",
+        "opacityMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_o.data.dds",
+        "roughnessMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_r.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "doubleSided": true,
+    "dynamicCubemap": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "version": 1.5
+  },
+  "bngEarth_greybush": {
+    "name": "bngEarth_greybush",
+    "mapTo": "bngEarth_greybush",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/bush/utah_bush_vegetation/Greybush_d.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85,
+        "normalMap": "/assets/materials/foliage/bush/utah_bush_vegetation/Greybush_n.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "translucentBlendOp": "None"
+  },
+  "bngEarth_drybranch": {
+    "name": "bngEarth_drybranch",
+    "mapTo": "bngEarth_drybranch",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/bush/desert_bush_branch/dry_bush_branch_d.color.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85,
+        "normalMap": "/assets/materials/foliage/bush/desert_bush_branch/dry_bush_branch_n.normal.dds",
+        "specularMap": "/assets/materials/foliage/bush/desert_bush_branch/dry_bush_branch_s.color.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "translucentBlendOp": "None"
+  },
+  "bngEarth_lush": {
+    "name": "bngEarth_lush",
+    "mapTo": "bngEarth_lush",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/groundcover/lush_vegetation/lush_vegetation_d.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85,
+        "normalMap": "/assets/materials/foliage/groundcover/lush_vegetation/lush_vegetation_n.dds",
+        "specularMap": "/assets/materials/foliage/groundcover/lush_vegetation/lush_vegetation_s.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "translucentBlendOp": "None"
+  },
+  "bngEarth_vines": {
+    "name": "bngEarth_vines",
+    "mapTo": "bngEarth_vines",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/groundcover/lush_vegetation_bb/lush_vegetation_bb_d.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "translucentBlendOp": "None"
+  }
+}

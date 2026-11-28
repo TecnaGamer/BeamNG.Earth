@@ -41,6 +41,12 @@ def season_amounts(date, lat):
     return {"fall": fall, "winter": winter, "spring": spring}
 
 
+def day_date(doy, today=None):
+    """The date of day of the year doy (1..366) in today's year."""
+    t = today or datetime.date.today()
+    return datetime.date(t.year, 1, 1) + datetime.timedelta(days=max(0, min(365, int(doy) - 1)))
+
+
 # "auto" grades with the date of the week it is in (UTC, slots of SEASON_SLOT_DAYS from a fixed Monday), not today's:
 # what a texture is graded with is then a function of its cache key (season_key), the same on every machine, and the
 # far tiles and block photos made in October are not served as late November's (their keys held "auto" alone).
@@ -61,11 +67,17 @@ def slot_date(today=None):
 
 def amounts_for(mode, lat, today=None):
     """season_amounts for --season: "auto" (the date of this week's slot, slot_date), "off" (none), "fall" / "winter" /
-    "spring" (full)."""
+    "spring" (full); and "doy:<n>": --season auto with the game's date (the mod's settings seasonDate 'game': message
+    season_date, its day rounded to a week there; the mode itself is its cache key, season_key)."""
     if mode in ("fall", "winter", "spring"):
         return {"fall": 0.0, "winter": 0.0, "spring": 0.0, mode: 1.0}
     if mode == "auto":
         return season_amounts(slot_date(today), lat)
+    if isinstance(mode, str) and mode.startswith("doy:"):
+        try:
+            return season_amounts(day_date(int(mode[4:]), today), lat)
+        except ValueError:
+            return season_amounts(slot_date(today), lat)
     return {"fall": 0.0, "winter": 0.0, "spring": 0.0}
 
 

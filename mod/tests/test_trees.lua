@@ -47,6 +47,53 @@ jsonDecode = function(s)
   return d
 end
 local trees = require('beamngEarth/trees')
+
+-- (35) the vegetation's height spread and shape variety: a tree's drawn height within HEIGHT_VARY of its measured
+-- one, fixed by its rank; at least MIN_VARIANTS shapes to choose from where the catalog has them; props unchanged
+do
+  T.check(trees.varies('birch') and trees.varies('conifer_clump') and not trees.varies('guardrail'),
+          'the trees, bushes and clumps vary; furniture does not')
+  local shapes, lo, hi = {}, 1e9, 0
+  for i = 0, 199 do
+    local rank = (i + 0.5) / 200
+    local s, sc = trees.pick('birch', 15.0, rank)
+    local s2, sc2 = trees.pick('birch', 15.0, rank)
+    T.check(s == s2 and sc == sc2, 'the same tree, the same look')
+    shapes[s] = true
+    for _, v in ipairs(trees.CATALOG.birch) do
+      if v[1] == s then lo, hi = math.min(lo, sc * v[2]), math.max(hi, sc * v[2]) end
+    end
+  end
+  local n = 0; for _ in pairs(shapes) do n = n + 1 end
+  T.check(n >= trees.MIN_VARIANTS, 'a 15 m birch: at least ' .. trees.MIN_VARIANTS .. ' shapes (was 2), ' .. n)
+  T.check(lo < 14.0 and hi > 16.0 and lo >= 15.0 * (1 - trees.HEIGHT_VARY) - 0.01
+          and hi <= 15.0 * (1 + trees.HEIGHT_VARY) + 0.01, 'heights spread within HEIGHT_VARY: ' .. lo .. '..' .. hi)
+  local s, sc = trees.pick('guardrail', 0.9, 0.37)
+  T.check(sc == 1, 'a guardrail at its authored size')
+  -- the lean: a few degrees in a direction of its own, the same at every visit; conifers straighter
+  local maxB, maxC, dirs, upright = 0, 0, {}, 0
+  for i = 0, 199 do
+    local rank = (i + 0.5) / 200
+    local x, y = trees.lean('oak', rank)
+    local x2, y2 = trees.lean('oak', rank)
+    T.check(x == x2 and y == y2, 'the same tree leans the same way')
+    local a = math.deg(math.sqrt(x * x + y * y))
+    maxB = math.max(maxB, a)
+    if a < 1.0 then upright = upright + 1 end
+    if a > 0.3 then dirs[math.floor((math.atan2(y, x) + math.pi) / (math.pi / 2)) % 4] = true end
+    local cx, cy = trees.lean('spruce', rank)
+    maxC = math.max(maxC, math.deg(math.sqrt(cx * cx + cy * cy)))
+  end
+  T.check(maxB <= trees.LEAN_DEG + 1e-6 and maxB > 0.6 * trees.LEAN_DEG, 'broadleaves lean up to LEAN_DEG: ' .. maxB)
+  T.check(maxC <= trees.LEAN_DEG_CONIFER + 1e-6, 'conifers straighter: ' .. maxC)
+  T.check(upright > 80, 'most trees nearly upright: ' .. upright .. ' of 200 under 1 degree')
+  local nd = 0; for _ in pairs(dirs) do nd = nd + 1 end
+  T.check(nd == 4, 'leaning every way')
+  T.check(select(1, trees.lean('deadwood', 0.7)) == 0, 'dead wood lies as it is')
+end
+-- (the tests below count shapes and items at set heights: the spread off for them, as before 35)
+trees.HEIGHT_VARY, trees.MIN_VARIANTS = 0, 1
+trees.VARIANT_WINDOWS = { { 0.8, 1.25 }, { 0.6, 1.6 } }
 -- The detail keep-up defaults (2026-11-13: PROP_LEAD_S 4, NEAR_URGENT_MS 8, POOL_SPARE_DRIVE 2, NEW_SHAPES_PER_FRAME 2)
 -- checked once here; the tests below exercise the base behaviour with them off and turn each on where they test it.
 T.check(trees.PROP_LEAD_S == 4 and trees.NEAR_URGENT_MS == 8 and trees.POOL_SPARE_DRIVE == 2
@@ -1002,7 +1049,7 @@ do -- far clumps (server vegetation.CLUMP_OF, GitHub #1074): the clump beyond CL
     local out = {}
     for it in pairs(items) do
       local sf = it.d.fields.shapeFile
-      local k = sf:find('group_low', 1, true) and 'clump' or sf:find('douglasfir', 1, true) and 'fir' or 'other'
+      local k = sf:find('douglasfir_group', 1, true) and 'clump' or sf:find('douglasfir', 1, true) and 'fir' or 'other'
       out[k] = (out[k] or 0) + 1
     end
     return out
@@ -1118,6 +1165,90 @@ do -- PROP_LEAD_S: at speed the furniture tiles ahead count nearer for the group
 end
 T.check(trees.spareWanted(trees.FRAME_MS) == 0 and trees.spareWanted(trees.LOADING_FRAME_MS) >= trees.POOL_SPARE,
   'no spare Forests while driving by default (POOL_SPARE_DRIVE 0)')
+-- (2026-11-23) the city holm oaks' copies: leaf materials renamed (whole names, ids with them), the rest untouched;
+-- their materials copied under the new names; the copies in the Mediterranean towns' open twin only
+do
+  local dae = '<material id="oak_leaves_02-material" name="oak_leaves_02"><instance_effect url="#oak_leaves_02-effect"/>'
+    .. '<material id="m_oak_leaves_02_distant-material" name="m_oak_leaves_02_distant"/>'
+    .. '<material id="holm_oak_branches-material" name="holm_oak_branches"/><image id="t_oak_leaves_b_color_png"/>'
+  local out = trees.holmOakDae(dae)
+  T.check(out ~= nil, 'holm oak dae renamed')
+  T.check(not out:find('"oak_leaves_02', 1, true) and out:find('name="bne_holm_oak_leaves_02"', 1, true) ~= nil,
+    'oak_leaves_02 renamed')
+  T.check(out:find('url="#bne_holm_oak_leaves_02-effect"', 1, true) ~= nil, 'its effect id too')
+  T.check(out:find('name="bne_holm_oak_leaves_02_distant"', 1, true) ~= nil, 'the distant one')
+  T.check(out:find('holm_oak_branches', 1, true) ~= nil and out:find('t_oak_leaves_b_color_png', 1, true) ~= nil,
+    'branches and texture ids untouched')
+  T.check(trees.holmOakDae('<material name="Oak_bark_01"/>') == nil, 'nothing to rename: nil')
+  local stock = { oak_leaves_01 = { name = 'oak_leaves_01', mapTo = 'oak_leaves_01', persistentId = 'x', Stages = {} },
+    oak_leaves_02 = { name = 'oak_leaves_02', mapTo = 'oak_leaves_02', Stages = {} },
+    m_oak_leaves_distant = { name = 'm_oak_leaves_distant', Stages = {} },
+    m_oak_leaves_02_distant = { name = 'm_oak_leaves_02_distant', Stages = {} } }
+  local mats = trees.holmOakMaterials(stock)
+  T.check(mats and mats.bne_holm_oak_leaves_01 and mats.bne_holm_oak_leaves_01.mapTo == 'bne_holm_oak_leaves_01'
+    and mats.bne_holm_oak_leaves_01.persistentId == nil, 'materials copied under the new names')
+  T.check(trees.holmOakMaterials({ oak_leaves_01 = {} }) == nil, 'a missing stock material: nil')
+  local inOpen, inForest = 0, 0
+  for _, v in ipairs(trees.CATALOG.mediterranean_open) do if v[1]:find('holm_oak_city', 1, true) then inOpen = inOpen + 1 end end
+  for _, v in ipairs(trees.CATALOG.mediterranean) do if v[1]:find('holm_oak_city', 1, true) then inForest = inForest + 1 end end
+  -- (offline the game's files are not there: setup drops the copies it could not write, else both stand in the open)
+  T.check((inOpen == 2 or inOpen == 0) and inForest == 0, 'the copies in the open twin only, or none when not written')
+  -- the woods' holm oaks (2026-11-24): the tree in the woods and in the open, the fillers in the woods only, the bushes
+  -- in the maquis, the filler group as the far clump; each a copy (never the stock shape with its deciduous leaves)
+  local function count(g, k)
+    local n = 0
+    for _, v in ipairs(trees.CATALOG[g]) do if v[1]:find(k, 1, true) then n = n + 1 end end
+    return n
+  end
+  local wrote = count('mediterranean', 'holm_oak_v1') == 1
+  T.check(count('mediterranean_open', 'holm_oak_v1') == (wrote and 1 or 0), 'the holm oak in the open too')
+  T.check(count('mediterranean', 'holm_oak_filler_') == (wrote and 2 or 0)
+    and count('mediterranean_open', 'holm_oak_filler') == 0, 'its fillers in the woods only')
+  T.check(count('maquis', 'holm_oak_bush') == (wrote and 2 or 0), 'its bushes in the maquis')
+  T.check(count('mediterranean_clump', 'holm_oak_filler_center_v1') == (wrote and 1 or 0), 'its far clump')
+  local stockHolm = 0
+  for g, list in pairs(trees.CATALOG) do
+    for _, v in ipairs(list) do
+      if v[1]:find('trees_italy/holm_oak', 1, true) and not v[1]:find('holm_oak_city', 1, true)
+        and (wrote or g ~= 'holm_oak') then stockHolm = stockHolm + 1 end
+    end
+  end
+  -- (dev's mapped holm oaks, natural.py: their group takes the copies too; with none written, the stock shapes)
+  T.check(stockHolm == 0, 'no stock holm oak anywhere (its leaves turn in the fall)')
+  -- (55) the veteran oak and the tropics' giant filler: their own groups only (the server places them)
+  T.check(#trees.CATALOG.oak_veteran == 1 and trees.CATALOG.oak_veteran[1][1]:find('tree_oak_large_a', 1, true) ~= nil,
+    'the veteran oak group')
+  T.check(#trees.CATALOG.tro_giant == 1 and count('tropical', 'filler_04') == 0, 'the giant filler its own group only')
+  T.check(count('oak', 'tree_oak_large_a') == 0 and count('deciduous', 'tree_oak_large_a') == 0,
+    'no veteran among the common oaks')
+  T.check(count('pine_eu', 'scots_pine_filler') == 1 and count('pine_eu_open', 'scots_pine_filler') == 0,
+    'the crowd-grown Scots pine in the woods only')
+  -- (2026-11-24) the liana-hung jungle trees in the forest only, never by a road
+  T.check(count('tropical', 'tro_tree_1_huge') == 1 and count('tropical_open', 'tro_tree_1_huge') == 0
+    and count('tropical_open', 'tro_tree_2_medium') == 0 and count('tropical_open', 'tro_tree_2_tall') == 1,
+    'liana trees off the roads (tro_tree_2_tall_02 stays)')
+  -- (the olive's copy replaces the stock olive in every group, or offline the stock one is back: never both)
+  local copyN, stockN = 0, 0
+  for _, list in pairs(trees.CATALOG) do
+    for _, v in ipairs(list) do
+      if v[1]:find('olive_v1', 1, true) then copyN = copyN + 1 end
+      if v[1]:find('trees_italy/olive', 1, true) then stockN = stockN + 1 end
+    end
+  end
+  T.check((copyN == 0) ~= (stockN == 0), 'the olive: its copy or the stock one, not both')
+  T.check(#trees.SHAPE_COPIES == 10 and trees.SHAPE_COPIES[1].out:find('^/temp/beamngEarth/shapes/') ~= nil,
+    'the copies in the user folder')
+  -- the fluffy bush's copy: its material renamed, its colour factor the stock one times the tint (in the definition:
+  -- the far imposter bakes darker, no reload)
+  local fl = trees.copyMaterials({ fluffy = { name = 'fluffy', Stages = { { baseColorFactor = { 1, 0.9, 1, 1 } }, {} } } },
+    { fluffy = 'bne_fluffy_v1' }, { bne_fluffy_v1 = { 0.74, 0.8, 0.62 } })
+  local f = fl and fl.bne_fluffy_v1.Stages[1].baseColorFactor
+  T.check(f and math.abs(f[1] - 0.74) < 1e-6 and math.abs(f[2] - 0.72) < 1e-6 and math.abs(f[3] - 0.62) < 1e-6
+    and f[4] == 1, 'the tint multiplied into the copy factor')
+  local nofactor = trees.copyMaterials({ fluffy = { Stages = { {} } } }, { fluffy = 'x' }, { x = { 0.5, 0.5, 0.5 } })
+  T.check(nofactor.x.Stages[1].baseColorFactor[1] == 0.5, 'no stock factor: the tint alone')
+end
+
 do
   local ground = require('beamngEarth/terrainpatch')
   local roads = require('beamngEarth/roads')

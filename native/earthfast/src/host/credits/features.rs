@@ -201,7 +201,10 @@ impl<'py> Sources<'py> {
             ids.insert("grav:egm2008".into());
         }
         if veg {
-            ids.insert("climate:beck-kg".into());
+            // (the species rules' maps, server/vegetation.py: climate, ecoregions, leaf type, the genus map)
+            for id in ["climate:beck-kg", "eco:resolve", "leaf:lc100", "leaf:cci", "genus:forestpaths"] {
+                ids.insert(id.into());
+            }
         }
         Ok(ids)
     }

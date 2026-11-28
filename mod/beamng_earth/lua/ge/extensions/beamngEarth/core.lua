@@ -398,7 +398,7 @@ local function loadBlock(tr, aid)
   if warn then warnOnce('height', 'terrain height scale: ' .. warn) end
   local layers = (type(tr.layers) == 'table' and type(tr.materials) == 'table')
     and { masks = tr.layers, materials = tr.materials } or nil -- server --surface on (surface.py)
-  if layers then groundcover.ensure() end
+  if layers then groundcover.ensure(tr.materials) end   -- (its layers: objects only for those listed, groundcover.lua)
   -- Detail mode: the block's photo (server write_base; or its stand-in, write_quick_base: the far tiles' textures of
   -- its ground), else the level's flat base (false). nil (left as it was) kept the block before's photo on the
   -- materials, drawn on this block where it had moved: the ground of 128 m or more away, its painted roads beside the
@@ -1309,6 +1309,7 @@ local function onMessage(msg)
       farPack = roads.FAR_PACK,        -- (and the far buildings past the road geotiles' as a pack a square: roads.lua)
       farHz = roads.FAR_HZ,            -- (and the horizon ring's tall buildings past the skyline: roads.lua 'H')
       turbineGeo = require('beamngEarth/turbinestream').PROTOCOL,
+      vegFar = trees.VEG_FAR,          -- (the far forest ring's clumps as vegetation geotiles: trees.lua)
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
       trafficVisuals = M._trafficvisuals.PROTO,
       -- (the game's own user folder: the server checks it writes its files there, GitHub #770)
@@ -1409,6 +1410,7 @@ local function onMessage(msg)
     st.deshadow = msg.deshadow -- server-side imagery de-shadowing ('lambert' / 'full'; nil = off), shown on the settings page
     st.colormatch = msg.colormatch -- server-side imagery colour-seam removal ('s2'; nil = off), likewise
     seasonlook.setMode(msg.season) -- the imagery's season (server --season): the leaves follow it
+    require('beamngEarth/seasondate').resetSent()     -- (a new connection: the season date sent again)
     seasonlook.setSnow(msg.snow) -- winter's snow (server BNE_WINTER; nil: off): the snow layer's look, the grass
     st.mapPort = msg.mapPort -- the world map's tile endpoint on 127.0.0.1 (server/maptiles.py; nil = an older server)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the
@@ -1723,6 +1725,11 @@ local function onMessage(msg)
   elseif t == 'veg_drop' then
     trees.onDrop(msg)
     ambience.onDrop(msg.anchorId, msg.key)
+  elseif t == 'vegfar_tile' then
+    -- the far forest ring (server vegfar.py): the stock far clumps past the tree tiles, as vegetation geotiles
+    trees.onTile(msg, st.anchorId, st.anchor, true)
+  elseif t == 'vegfar_drop' then
+    trees.onDrop(msg)
   elseif t == 'turbines_tile' then
     require('beamngEarth/turbinestream').onTile(msg, st.anchor, st.sessionId)
   elseif t == 'turbines_drop' then
@@ -3358,6 +3365,7 @@ local function onUpdate(dtReal, dtSim)
   if not M._mpMarked then M._mpMarked = true; pcall(mpsession.setMark, mark, hitchClock) end
   updateBeamMP(dtReal)
   t = mark('beammp', t)
+  require('beamngEarth/seasondate').frame(net, st.anchor)   -- (the season date to the server, the grass's place)
   -- Lua garbage collection pacing (gcpace.lua): the engine's full collections kept out of play, after the frame's own
   -- work; hidden frames (the loading cover, paused, the 3D map) may take the unavoidable one
   if st.inOurLevel and not M._gcBroken then

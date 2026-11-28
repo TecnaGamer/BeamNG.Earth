@@ -54,4 +54,44 @@ do
   scenetree = saved
 end
 
+-- the poplars' fall-gold texture: green in July (the summer tint, full), their own gold at the fall's peak (2026-11-17)
+do
+  local pop = S.SPECIES[4]
+  local t1, a1 = S.speciesTint(pop, 'auto', 190, 45)
+  T.check(t1 == pop.summer and a1 == 1, 'July: the poplars green')
+  local _, a2 = S.speciesTint(pop, 'auto', 300 - 5 - 12, 45)
+  T.check(a2 < 0.2, 'their fall: the texture\'s gold, about untinted')
+  T.check(S.imposterSpecies('imposter_mat__levels_automation_test_track_art_shapes_trees_trees_poplar_s_poplar_large_01.dae')
+    == pop, 'a poplar imposter: the poplar')
+end
+
+-- (2026-11-23) every deciduous leaf material the vegetation shapes wear turns: the vines, the ferns, the generic bushes
+do
+  local have = {}
+  for _, sp in ipairs(S.SPECIES) do for _, m in ipairs(sp.mats) do have[m:lower()] = true end end
+  for _, m in ipairs({ 'oak_leaves_01', 'beech_leaves', 'birch_leaves_01', 'm_poplar_leaves_01', 'grape',
+    'forest_vegetation', 'generibush_leaves' }) do
+    T.check(have[m], m .. ' turns in the fall')
+  end
+end
+
+-- (2026-11-23) an evergreen's constant tint: every season and mode, the fall's off too
+do
+  local fl
+  for _, sp in ipairs(S.SPECIES) do if sp.mats[1] == 'm_seeded_grass_01' then fl = sp end end
+  T.check(fl ~= nil, 'the seeded grasses have their tint')
+  for _, m in ipairs({ 'auto', 'fall', 'winter', 'spring', nil }) do
+    local tint, t = S.speciesTint(fl, m, 300, 43.3)
+    T.check(t == 1 and tint[1] < 1 and tint[3] < tint[2], 'seeded grass: darker in mode ' .. tostring(m))
+  end
+end
+-- (2026-11-24) the dry grasses darker, every season
+do
+  local dry
+  for _, sp in ipairs(S.SPECIES) do if sp.mats[1] == 'm_grass_dry_01' then dry = sp end end
+  T.check(dry ~= nil and dry.mats[2] == 'm_grass_dry_02', 'the dry grasses have their tint')
+  local tint, t = S.speciesTint(dry, 'auto', 220, 41.2)
+  T.check(t == 1 and tint[1] < 0.8 and tint[1] >= tint[3], 'dry grass: darker, a little less warm')
+end
+
 T.done('test_seasonlook')

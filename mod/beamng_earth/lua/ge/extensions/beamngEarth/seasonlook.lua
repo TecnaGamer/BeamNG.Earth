@@ -13,11 +13,34 @@ M.SPECIES = {
   { mats = { 'oak_leaves_01', 'oak_leaves_02', 'oak_leaves_03', 'm_oak_leaves_distant' },
     merged = { 'm_oak_merged_foliage' }, folders = { 'trees_oak' }, tint = { 1.55, 0.72, 0.32 }, days = -12,
     winter = { 1.05, 0.68, 0.45 } },        -- oaks and beeches keep dead brown leaves through winter
-  { mats = { 'beech_leaves', 'm_beech_leaves_distant' }, merged = { 'm_beech_merged_foliage' }, folders = { 'trees_beech' },
-    tint = { 1.6, 1.0, 0.35 }, days = 0, winter = { 1.15, 0.8, 0.5 } },
+  -- (beech_blocker: the dense leaf cards inside the big and forest beeches' crowns; untinted they stayed summer green
+  -- in a bronze crown, the gallery 2026-11-17)
+  { mats = { 'beech_leaves', 'beech_blocker', 'm_beech_leaves_distant' }, merged = { 'm_beech_merged_foliage' },
+    folders = { 'trees_beech' }, tint = { 1.6, 1.0, 0.35 }, days = 0, winter = { 1.15, 0.8, 0.5 } },
   { mats = { 'Birch_Leaves_01', 'm_birch_leaves_distant' }, merged = {}, folders = { 'trees_birch', 'trees_aspen' },
     tint = { 1.7, 1.3, 0.3 }, days = 10,
     winter = { 1.0, 0.9, 0.7 } },           -- (a leafless birch is not possible with its shape: pale instead)
+  -- Automation Test Track's Lombardy poplars: their leaf texture is fall gold, all year (the gallery 2026-11-17). Their
+  -- summer green is a tint (summer, applied the more the less fall it is), their fall the texture's own gold.
+  { mats = { 'm_poplar_leaves_01', 'm_poplar_leaves_02' }, merged = {}, folders = { 'trees_poplar' },
+    summer = { 0.55, 0.85, 0.95 }, days = 5, winter = { 0.95, 0.85, 0.7 } },
+  -- (2026-11-23, every shape's leaf materials against this list) the vineyards' vines (Italy's grape_vine_group: grape)
+  -- turn gold and rust; the forest floor's ferns (Hirochi's lush_ferns: forest_vegetation, also Cliff's buttercups'
+  -- atlas, which the grass shows only from April to July) brown like bracken; the temperate woods' generic bushes
+  -- (generibush: generibush_leaves; out of the maquis since, which is evergreen)
+  { mats = { 'grape' }, merged = {}, folders = {}, tint = { 1.5, 1.0, 0.35 }, days = 0, winter = { 1.0, 0.72, 0.5 } },
+  { mats = { 'forest_vegetation' }, merged = {}, folders = {}, tint = { 1.45, 0.9, 0.4 }, days = 5,
+    winter = { 1.05, 0.72, 0.5 } },
+  { mats = { 'generibush_leaves' }, merged = {}, folders = {}, tint = { 1.5, 0.95, 0.35 }, days = 0,
+    winter = { 1.05, 0.75, 0.5 } },
+  -- (2026-11-23) a constant tint (always: every season, whatever the mode): East Coast USA's seeded grasses (the hay
+  -- meadows' heads m_seeded_grass_01, the reeds and tall grass m_seeded_grass_03) pale yellow-green, brighter than the
+  -- grass round them, near and far (the grass has no imposters), the user's screenshot
+  { mats = { 'm_seeded_grass_01', 'm_seeded_grass_03' }, merged = {}, folders = {}, always = { 0.78, 0.85, 0.7 } },
+  -- (2026-11-24) the dry grasses (West Coast USA's m_grass_dry_01, Automation Test Track's m_grass_dry_02: the summer-dry
+  -- climates' and the steppes' straw) a light straw that shone gold over whole hillsides in a low sun, Porto's in
+  -- August, the user's comparison: darker and a little less warm
+  { mats = { 'm_grass_dry_01', 'm_grass_dry_02' }, merged = {}, folders = {}, always = { 0.74, 0.72, 0.7 } },
 }
 -- (oaks turn last; folders: the species' tree shapes, whose far imposters (the engine's flat pictures of a whole tree,
 -- materials 'imposter_mat__<shape path>') take the same tint: they kept their summer green while the 3D trees in front
@@ -84,6 +107,7 @@ local applied = {}      -- material name -> the amount applied
 local lastCheck = -math.huge
 
 function M.setMode(m) mode = m end
+function M.getMode() return mode end     -- (groundcover.lua: the grass's season)
 
 -- Winter's snow (server BNE_WINTER: hello.snow, the 'snow' message; nil without): winterlook.lua and baretrees.lua (the
 -- bare deciduous trees), loaded only when the server has winter on (nothing otherwise, not even the modules).
@@ -106,6 +130,7 @@ end
 -- Pure: the tint of a species {tint, days, winter} on day doy at lat for mode: the strongest of its fall (its own
 -- timing, eased), winter and spring tints, as {r, g, b} multipliers and that amount.
 function M.speciesTint(sp, mode_, doy, lat)
+  if sp.always then return sp.always, 1 end
   local f, w, s
   if mode_ == 'fall' then f, w, s = 1, 0, 0
   elseif mode_ == 'winter' then f, w, s = 0, 1, 0
@@ -117,6 +142,7 @@ function M.speciesTint(sp, mode_, doy, lat)
     return { 1, 1, 1 }, 0
   end
   if w >= f and w >= s and w > 0 then return sp.winter or { 1, 1, 1 }, w end
+  if sp.summer then return sp.summer, 1 - f end     -- (a fall-coloured texture: green but in the fall)
   if s > f and s > 0 then return M.SPRING, s end
   return sp.tint, f
 end
@@ -198,7 +224,7 @@ function M.update(inOurLevel, lat, koppen, leaf)
     if next(applied) ~= nil then untintAll() end
     return
   end
-  local doy, f = tonumber(os.date('*t').yday), M.climateFactor(koppen)
+  local doy, f = require('beamngEarth/seasondate').doy(), M.climateFactor(koppen)     -- (settings seasonDate)
   for _, sp in ipairs(M.SPECIES) do
     local tint, t = M.speciesTint(sp, mode, doy, lat)
     t = t * f

@@ -123,6 +123,10 @@ FEATURES = {
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
+    "eco:resolve": "RESOLVE (Dinerstein et al. 2017)",
+    "genus:forestpaths": "ForestPaths European Tree Genus Map",
+    "leaf:cci": "ESA CCI Land Cover (UCLouvain)",
+    "leaf:lc100": "Copernicus Land Cover 100 m",
     # (winterpacks.py: the winter looks' packs; the consumer names them where it used them)
     "land:esa-cci-lc": "ESA Land Cover CCI", "land:jrc-gsw": "EC JRC/Google (Global Surface Water)",
 }

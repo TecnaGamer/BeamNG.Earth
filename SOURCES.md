@@ -142,6 +142,28 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 - **Country and state borders, big town names** (Natural Earth): the world map.
 - **US Interstates and US routes** (Natural Earth): the world map's Highways layer.
 - **Climate zones** (Beck et al. Köppen-Geiger map): which trees grow where and which landscape sounds play.
+- **Ecoregions** (RESOLVE Ecoregions 2017): which regional trees grow where (the Mediterranean's, the steppe
+  junipers, the desert's creosote).
+- **Forest leaf types** (Copernicus Global Land Cover 100 m, 2019, averaged with ESA CCI Land Cover 2020): how many of
+  the trees are conifers.
+- **European tree genera** (ForestPaths European Tree Genus Map 2020, early access): Europe's pines, spruces,
+  larches, beeches and oaks, and half of its conifer share.
+- **European tree species shares** (EU-Forest, Mauri et al. 2017, the national forest inventories' plots; CC0): a
+  few constants (the Mediterranean ecoregions' evergreen share, the Atlantic's spruces, the north's birches), and
+  the check `tools/veg_euforest_check.py`. The data file itself is not shipped.
+
+  **Rebuilding the species maps.** Each file is made by one script from its public source; `vegetation.data_key()`
+  hashes all five into the vegetation cells' cache folder, so a rebuilt file never serves cells made from the old one.
+  The PNG and npz encoders can differ between Pillow / numpy versions: if a rebuilt file's sha256 differs, compare the
+  decoded arrays.
+
+  | File | sha256 | Recipe |
+  |---|---|---|
+  | `server/ecoregions_2017_0p05.png` | `a6fba5c0fc2cb1149c7777d7083be3beef6180f300ebc4ea3a18b387adf98a31` | `Ecoregions2017.zip` from https://storage.googleapis.com/teow2016/, unzipped; `python tools/build_ecoregions.py Ecoregions2017.shp` (pyshp, Pillow) |
+  | `server/ecoregions_2017.json` | `83513689e262e11e273f557e224e26c544d97aeab14f300155e784a89d084c01` | written by the same run |
+  | `server/leaftype_2019.png` | `ef16c485d6f6bfd4c919d28b5b9ce99ed05950769e98296ecd9c89c756ceaa0e` | `PROBAV_LC100_global_v3.0.1_2019-nrt_Forest-Type-layer_EPSG-4326.tif` from Zenodo record 3939050; `python tools/build_leaftype.py <that tif>` (tifffile, imagecodecs) |
+  | `server/leaftype_cci_2020.png` | `93e33061754596b05de9c9a6443351892f9e06715eec3bdbe8067a127f0ce1c2` | the 32 tiles `C3S-LC-L4-LCCS-Map-300m-P1Y-2020-v2.1.1-<tile>-lccs_class.tif` from Microsoft's Planetary Computer (collection `esa-cci-lc`) in one folder; `python tools/build_leaftype_cci.py <folder>` (tifffile, imagecodecs) |
+  | `server/treegenus_2020.npz` | `c757e759d2fa32f0eae7386e4b67758e225fb998784d2c2b748872889835b403` | the tiles of Zenodo record 13341104 (`ulx_*.zip`) in one folder; `python tools/build_treegenus.py <folder>` (overview level 2, 40 m; tifffile, imagecodecs) |
 - **Oil wells and refineries** (OpenStreetMap, exported once): pump jacks, refinery sounds.
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed
   bridges, and their real spans and heights.

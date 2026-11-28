@@ -69,6 +69,7 @@
     "farPack": {"type": "int", "optional": true, "doc": "far building packs past buildings.PACK_INNER_M (hello.farPack)"},
     "farHz": {"type": "int", "optional": true, "doc": "the horizon ring's tall buildings (bldhz.PROTO)"},
     "turbineGeo": {"type": "int", "optional": true, "doc": "mapped turbine landmarks reuse the geotile tracker, independently of buildings/roads"},
+    "vegFar": {"type": "int", "optional": true, "doc": "the mod takes the far forest ring's stock far clumps as vegetation geotiles (trees.VEG_FAR; server vegfar.py)"},
     "globalFar": {"type": "int", "optional": true, "doc": "... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)"},
     "readySet": {"type": "int", "optional": true, "doc": "it takes a built block near its target (follow.preferReady: 'terrain_ready_set')"},
     "userPath": {"type": "str", "optional": true, "doc": "the game's own user folder (FS:getUserPath: Server.check_user_dir, GitHub #770)"},
@@ -118,6 +119,12 @@
     "anchorId": {"type": "int"},
     "cx": {"type": "num"},
     "cy": {"type": "num"}
+   }
+  },
+  "season_date": {
+   "doc": "the day of the year the season follows (seasondate.lua, Season date: game; rounded to a week), null for the server's own date; used under --season auto only (earthd Server.set_season_day)",
+   "fields": {
+    "doy": {"type": "int", "optional": true, "nullable": true}
    }
   },
   "swap_done": {
@@ -865,6 +872,7 @@
     "farPack": {"type": "int", "optional": true, "doc": "... and the far buildings past PACK_INNER_M as packs (hello.farPack)"},
     "farHz": {"type": "int", "optional": true, "doc": "... and the horizon ring (hello.farHz, BNE_BLDHZ_DIR)"},
     "turbineGeo": {"type": "int", "optional": true, "doc": "mapped turbine geotiles (zoom 15; native stock shapes)"},
+    "vegFar": {"type": "int", "optional": true, "doc": "the far forest ring as vegetation geotiles (vegfar.PROTO; sent back when the mod asked and geotiles are on)"},
     "globalFar": {"type": "int", "optional": true, "doc": "far levels >= 3 as global tiles (hello.globalFar, --global-far)"},
     "deshadow": {"type": "str", "optional": true, "doc": "--deshadow lambert|full only (the settings page shows it)"},
     "colormatch": {"type": "str", "optional": true, "doc": "--colormatch s2 only (likewise)"},

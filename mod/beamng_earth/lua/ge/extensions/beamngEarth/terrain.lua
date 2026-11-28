@@ -166,6 +166,10 @@ M.LOOKS = {
   bngEarthGroundDryGrass = look('grass/t_dirt_dry_grass/t_dirt_dry_grass', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16),
   bngEarthGroundCrop = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_holes/t_macro_holes', 16),
   bngEarthGroundSand = look('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 32),
+  -- herbaceous wetland (server/surface.py WET): the grass's grain, the mud's holes macro
+  bngEarthGroundWet = look('grass/t_grass_01/t_grass_01', 2, 'soil/macro_holes/t_macro_holes', 16),
+  -- the lavender fields (server/surface.py LAVENDER): the crop soil's look
+  bngEarthGroundLavender = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_holes/t_macro_holes', 16),
 }
 -- The tile layers' stand-ins when the server could not write their PNGs (terraintex.py: no game folder, a failed
 -- decode): the stock asphalt grain they had before, not a missing texture (a cobbled street plainer than before)

@@ -22,7 +22,10 @@ M.PER_FRAME = 250       -- items made or removed per frame at most
 M.ROWS_PER_FRAME = 12000 -- rows of changing tiles looked at per frame at most (Lua time: 30000 averaged 2.5 ms)
 -- 2026-10-14: was { 300, 1 }, { 550, 0.5 }, { 900, 0.25 }, { 1e9, 0.12 }; the engine already draws far trees as
 -- billboards (their LODs), so our extra thinning made far forest sparse. Columbia: 48k -> 78k items, no frame cost seen.
-M.RINGS = { { 300, 1.0 }, { 700, 0.6 }, { 1500, 0.35 }, { 1e9, 0.2 } }   -- tile distance (m): the rank shown below
+M.RINGS = { { 300, 1.0 }, { 700, 0.6 }, { 1500, 0.35 }, { 2500, 0.2 }, { 4000, 0.12 }, { 1e9, 0.07 } }
+-- (2026-11-19) the far forest ring (server vegfar.py: the stock far clumps from the tree tiles' reach to past the
+-- skyline, ranks under 0.2, drawn as their imposters there): fewer of them beyond 2.5 km and 4 km (the rings above)
+M.VEG_FAR = 1   -- tile distance (m): the rank shown below
 -- ... and at most this many items a tile (the lowest ranks: the hashed ranks thin it evenly). Dense forest has 10-20k
 -- a tile: Bodø's 145 tiles made 1.66 M items (GitHub #66: 28 fps standing on a Steam Deck, 23 ms of each frame waiting
 -- on the GPU, and the engine's tick hitched at every tile change while driving: 19.8 fps over a drive, 38.4 with trees
@@ -36,12 +39,13 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- density settings (rescale: QUALITY_LEVELS' clump).
 M.CLUMP_M = 200
 M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = true, mediterranean_clump = true,
-  eucalyptus_clump = true }
+  eucalyptus_clump = true, birch_clump = true, oak_clump = true, beech_clump = true }
 -- small props only near the player (2026-10-14, Fells Point at street level: ~10 ms a frame for the Forest
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
+-- (2026-11-19: the rocks, 0.1-2 m and most shipping no imposter, to 250 m, was 400: a 2 m boulder ~6 px there)
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, slope_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 80, fern = 200, shrub = 250, desert_shrub = 160, rock = 250, desert_rock = 250, slope_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -182,6 +186,7 @@ local JRI = '/levels/jungle_rock_island/art/shapes/'
 local HIR = '/levels/hirochi_raceway/art/shapes/'
 local IT = '/levels/italy/art/shapes/'
 local ATT = '/levels/automation_test_track/art/shapes/'
+local SIR = '/levels/small_island/art/shapes/rocks/groundcover_rocks/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
@@ -197,11 +202,20 @@ M.CATALOG = {
   deciduous = {
     { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
     { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
-    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 },
+    -- (no tree_oak_large_a: a veteran oak's swollen trunk, 2.6 m wide at the ground at 13.2 m; scaled to a 20 m forest
+    -- tree's top it was a 3-4 m boulder of bark among the trunks, the user's Rogowska 2026-11-20)
     { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },
     { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
     { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+    -- (the stock survey 2026-11-15: unused East Coast USA shapes, every one with its imposter and its materials in the
+    -- folders MATERIALS loads; heights from the shapes' bounds, to be checked in game): young trees for 5-8 m (a 4 m
+    -- tree was an 8.3 m shape at 0.48), and more beeches
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_low', 6.05 }, { ECA .. 'trees/trees_beech/tree_beech_bush_e', 6.51 },
+    { ECA .. 'trees/trees_beech/tree_beech_bush_d', 7.23 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_b', 8.18 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_d', 10.37 }, { ECA .. 'trees/trees_beech/tree_beech_small_b', 11.6 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_d', 13.32 }, { ECA .. 'trees/trees_beech/tree_beech_forest_b', 21.75 },
   },
   -- low ground plants of a roundabout island's planting (server roundabouts.plant_rows): patches of clover and daisies, ferns
   -- (Hirochi's groundcover shapes, measured 2026-11-10: a patch 2.3 / 1.45 m wide, 0.17 / 0.11 high; ferns 0.62 .. 1.49 high)
@@ -213,41 +227,61 @@ M.CATALOG = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
     { IT .. 'trees/trees_italy/scots_pine', 18.9 },
+    -- (the stock survey 2026-11-15) young firs for 5-8 m
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_d', 5.01 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_c', 7.78 },
   },
   shrub = {
     { ECA .. 'trees/ECA_coast_bush/generibush', 1.8 }, { ECA .. 'trees/trees_aspen/tree_aspen_bush_a', 2.2 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_a', 2.7 }, { ECA .. 'trees/trees_oak/tree_oak_bush_c', 3.1 },
     { ECA .. 'trees/trees_beech/tree_beech_bush_b', 3.3 }, { ECA .. 'trees/trees_beech/tree_beech_bush_c', 3.9 },
     { ECA .. 'trees/trees_oak/tree_oak_bush_b', 4.1 },
+    -- (the stock survey 2026-11-15) low bushes for 1-2.5 m (only generibush before)
+    { ECA .. 'trees/trees_beech/tree_beech_bush_a', 1.2 }, { ECA .. 'trees/trees_oak/tree_oak_bush_a', 1.26 },
+    { ECA .. 'trees/ECA_coast_bush/generibush_small', 2.09 },     -- (tree_douglasfir_bush_b out: a few flat broken fronds)
+    { ECA .. 'trees/trees_aspen/tree_aspen_bush_b', 2.47 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_bush_c', 3.27 },     -- (the stock survey 2026-11-16)
   },
   rock = {
     { ECA .. 'rocks/eca_rock_small', 0.6 }, { ECA .. 'rocks/rock_01_a_large_a', 0.7 }, { ECA .. 'rocks/eca_rock_small_2', 0.9 },
     { ECA .. 'rocks/eca_rock_medium_1', 1.5 }, { ECA .. 'rocks/eca_rock_medium_2', 1.6 }, { ECA .. 'rocks/eca_rock_big_narrow', 1.9 },
     { ECA .. 'rocks/eca_rock_big_wide', 1.9 },
+    -- (the asset survey 2026-11-19, heights from the shapes' bounds) Small Island's small stones
+    { SIR .. 'GC_rock_01_a_small_a', 0.18 }, { SIR .. 'GC_rock_boulder_01', 0.25 }, { SIR .. 'GC_rock_boulder_02', 0.27 },
   },
   pine_west = {
     { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 }, { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 },
     { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 }, { WCA .. 'trees/trees_conifer/pine_radiata_weathered', 13.2 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
-    { IT .. 'trees/trees_italy/scots_pine', 18.9 }, { WCA .. 'trees/trees_conifer/redwood_tall', 38.5 },
-    { WCA .. 'trees/trees_conifer/redwood_split', 38.1 }, { WCA .. 'trees/trees_conifer/redwood_broad', 38.5 },
+    { IT .. 'trees/trees_italy/scots_pine', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 },
+  },
+  -- (34) the coast redwoods, their fog belt's 25 m+ conifers only (server vegetation.redwood_belt; were pine_west's
+  -- tallest anywhere, the gallery 2026-11-17)
+  redwood = {
+    { WCA .. 'trees/trees_conifer/redwood_split', 38.1 }, { WCA .. 'trees/trees_conifer/redwood_tall', 38.5 },
+    { WCA .. 'trees/trees_conifer/redwood_broad', 38.5 },
   },
   oak_west = {
     { WCA .. 'trees/trees_oak/oak_d', 7.1 }, { WCA .. 'trees/trees_oak/oak_b', 8.2 }, { WCA .. 'trees/trees_oak/oak_c', 8.4 },
     { WCA .. 'trees/trees_oak/oak_a', 9.6 }, { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
     { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 },
   },
+  -- coconut-type palms (Jungle Rock Island's), the tropics' climates only (server vegetation.species_groups, 34: the fan
+  -- and date palms are palm_dry's, every other climate's; the gallery 2026-11-17: the two kinds were mixed here)
   palm = {
+    { JRI .. 'trees/trees_palm/palm_tiny', 3.0 },     -- (2026-11-16: a young palm for 3-5 m, was palm_small at 0.4)
     { JRI .. 'trees/trees_palm/palm_small', 8.9 }, { JRI .. 'trees/trees_palm/palm_short', 9.1 },
-    { WCA .. 'trees/trees_palm/fanpalm_short', 10.6 }, { WCA .. 'trees/trees_palm/fanpalm_skirt', 11.7 },
-    { WCA .. 'trees/trees_palm/fanpalm_full', 13.8 }, { JRI .. 'trees/trees_palm/palm_medium', 18.0 },
-    { WCA .. 'trees/trees_palm/fanpalm_tall', 18.5 }, { WCA .. 'trees/trees_palm/fanpalm_slim', 20.8 },
-    { JRI .. 'trees/trees_palm/palm_tall', 25.3 },
+    { JRI .. 'trees/trees_palm/palm_bend_sml', 10.24 }, { JRI .. 'trees/trees_palm/palm_medium', 18.0 },
+    { JRI .. 'trees/trees_palm/palm_bend', 18.8 }, { JRI .. 'trees/trees_palm/palm_tall', 25.3 },
   },
   juniper = {
     { UT .. 'trees/Juniper/Juniper_bush_large_01', 2.6 }, { UT .. 'trees/Juniper/Juniper_tree_04', 4.5 },
     { UT .. 'trees/Juniper/Juniper_tree_03', 5.2 }, { UT .. 'trees/Juniper/Juniper_tree_01', 6.3 },
     { UT .. 'trees/Juniper/Juniper_tree_02', 7.4 }, { UT .. 'trees/Juniper/Juniper_ancient_01', 7.5 },
+    { UT .. 'trees/Juniper/Juniper_bush_large_dry_01', 2.65 },     -- (the stock survey 2026-11-15)
+    -- (2026-11-24, the gallery: the two dying junipers, a few yellow needles on grey wood; their Juniper_bark is Utah's
+    -- juniper_bark, the material names' case aside)
+    { UT .. 'trees/Juniper/Juniper_bush_small_dry_03', 2.85 }, { UT .. 'trees/Juniper/Juniper_bush_large_dry_02', 2.89 },
   },
   -- (2026-10-16: not JV's deserttree_bush_tiny: it ships no imposter, and the one the engine baked into its temp
   -- folder while the leaf material did not resolve is solid no-texture orange, kept for good: orange bushes at range)
@@ -257,11 +291,35 @@ M.CATALOG = {
     { JV .. 'groundcover/s_gc_jv_dry_bush_03', 1.0 }, { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 },
     { UT .. 'trees/Juniper/Juniper_bush_small_dry_01', 2.0 }, { UT .. 'trees/Juniper/Juniper_bush_medium_01', 2.4 },
     { JV .. 'trees/deserttrees/deserttree_bush_medium', 2.9 },
+    -- (the stock survey 2026-11-15)
+    { UT .. 'trees/Juniper/Juniper_bush_small_02', 2.15 }, { JV .. 'trees/deserttrees/deserttree_bush_medium_dead', 2.5 },
+    -- (the stock survey 2026-11-16: low dry and dead bushes, the groundcover kind as the grey bushes above)
+    { UT .. 'groundcover/s_gc_dead_bush_02', 0.71 }, { JV .. 'groundcover/s_gc_jv_dry_bush_04', 1.06 },
+    -- (2026-11-20, the unused stock survey) West Coast USA's big bunchgrass clump (no imposter: a low shape, drawn to
+    -- desert_shrub's 160 m)
+    { WCA .. 'trees/grassclump_large', 1.2 },
+    { UT .. 'trees/Juniper/Juniper_bush_small_dry_02', 2.15 },
+    -- (the asset survey 2026-11-19: the rest of Utah's and Johnson Valley's low dry bushes)
+    { UT .. 'groundcover/s_gc_dead_bush_01', 0.37 }, { UT .. 'groundcover/s_gc_utah_grey_bush_02', 0.71 },
+    { JV .. 'groundcover/s_gc_jv_dry_bush_02', 0.71 }, { UT .. 'groundcover/s_gc_dry_plant_03', 0.99 },
+    { UT .. 'groundcover/s_gc_utah_grey_bush_04', 1.06 },
+    -- (2026-11-24, the gallery: the last of them; "Juniper_bark ... in no level" before was the material names' case,
+    -- Utah's juniper_bark) a dead juniper branch on the ground, the dying junipers, the dry bunchgrasses, a green and a
+    -- grey sage-like dry plant, the white-flowered one (no imposter: low shapes, as the grey bushes)
+    { UT .. 'trees/Juniper/Juniper_dead_branch_01', 1.28 },
+    { UT .. 'trees/Juniper/Juniper_bush_small_dry_03', 2.85 }, { UT .. 'trees/Juniper/Juniper_bush_large_dry_02', 2.89 },
+    { JV .. 'groundcover/s_gc_dry_grass_01', 0.71 }, { JV .. 'groundcover/s_gc_dry_grass_02', 1.06 },
+    { UT .. 'groundcover/s_gc_dry_plant_01', 0.71 }, { JV .. 'groundcover/s_gc_jv_dry_plant_03', 0.99 },
+    { UT .. 'groundcover/s_gc_white_flower_02', 0.48 }, { UT .. 'groundcover/s_gc_white_flower_01', 0.74 },
   },
   desert_rock = {
     { UT .. 'rocks/rock_01_a_small_a', 0.3 }, { UT .. 'rocks/utah_rock_flat_a', 0.5 }, { UT .. 'rocks/utah_boulder_5', 0.6 },
     { JV .. 'rocks/s_rocks_desert_small_01', 0.9 }, { JV .. 'rocks/s_rocks_desert_medium_03', 1.4 },
     { UT .. 'rocks/utah_boulder_3', 1.7 }, { UT .. 'rocks/utah_boulder_1', 1.9 }, { JV .. 'rocks/s_rocks_desert_medium_01', 2.1 },
+    -- (the asset survey 2026-11-19) Utah's pebble scatters and Small Island's stones
+    { UT .. 'groundcover/pebbles/s_cg_pebble_01', 0.13 }, { SIR .. 'GC_rock_boulder_01', 0.25 },
+    { UT .. 'groundcover/pebbles/s_cg_pebble_05', 0.45 }, { UT .. 'groundcover/pebbles/s_cg_pebble_03', 0.7 },
+    { UT .. 'groundcover/pebbles/s_cg_pebble_02', 0.65 }, { UT .. 'groundcover/pebbles/s_cg_pebble_04', 0.73 },     -- (2026-11-24)
   },
   door = {     -- the stock Building Architect kit (art_shapes.zip; global materials)
     { '/art/shapes/common/building_architect_modules/doors/R_HS_A_DR_01_100x210', 2.2 },
@@ -340,20 +398,56 @@ M.CATALOG = {
   catpost_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_eu', 10.4 } },
   -- the Mediterranean basin's Cs climates (server vegetation.G_MEDITERRANEAN): Italy's own trees, already loaded with
   -- its folder (MATERIALS); heights measured from the shapes' bounds (the asset survey, 2026-11-10)
+  -- (2026-11-17, the gallery: Italy's holm_oak* shapes wear oak_leaves_01/02, East Coast USA's deciduous oak leaves,
+  -- lobed, and turned rust-brown with them in the fall: no evergreen holm oak (Quercus ilex) look in a summer-dry
+  -- climate's woods all year. Out; the evergreen cork oaks, olive, pines, cypress and scraggly broadleaves stay.
+  -- 2026-11-24: back as evergreen copies, M.SHAPE_COPIES)
   mediterranean = {
-    { IT .. 'trees/trees_italy/olive', 4.3 }, { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 },
-    { IT .. 'trees/trees_italy/cypress_tree', 7.2 }, { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 },
+    { IT .. 'trees/trees_italy/olive', 4.3 }, { IT .. 'trees/trees_italy/cypress_tree', 7.2 },
     { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
-    { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/holm_oak', 12.9 },
-    { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+    { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+    -- (the stock survey 2026-11-15) the young maritime pine, the scraggly broadleaves, the slender forest cork oak
+    -- (Italy's forest fillers: single trees ~0.5 of their height across)
+    { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 },
+    { IT .. 'trees/trees_italy/scraggly_2', 8.52 }, { IT .. 'trees/trees_italy/scraggly', 9.55 },
+    { IT .. 'trees/trees_italy/cork_oak_filler_small', 10.1 }, { IT .. 'trees/trees_italy/scraggly_tree_filler_1', 10.7 },
+    { IT .. 'trees/trees_italy/cork_oak_filler_large', 13.42 },     -- (the asset survey 2026-11-19; a filler: forest only)
+  },
+  -- (35) the world's own groups (server vegetation._world_groups), from shapes already in MATERIALS' folders:
+  -- the savannas' and the dry country's acacias: Johnson Valley's mesquite / acacia bush, Italy's feathery scraggly
+  -- trees, Jungle Rock Island's umbrella-crowned filler (alone it reads as an acacia or a miombo tree) and its ceiba
+  -- (a baobab's or a fig's lone giant)
+  savanna = {
+    { JV .. 'trees/deserttrees/deserttree_bush_medium', 2.9 },
+    { IT .. 'trees/trees_italy/scraggly_2', 8.52 }, { IT .. 'trees/trees_italy/scraggly', 9.55 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 },
+    { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
+    -- (2026-11-24, the gallery) Johnson Valley's gnarled, thin-leaved desert tree (a mesquite's or an ironwood's look)
+    { JV .. 'trees/deserttrees/deserttree_dead', 10.61 },
+  },
+  -- the subtropics' and the south's evergreen broadleaf (laurel) forests: Italy's evergreen cork oaks (the look of
+  -- Castanopsis, Lithocarpus, the live oaks, Nothofagus dombeyi), the island's young and lianad broadleaves
+  laurel = {
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_tiny', 6.13 },
+    { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 }, { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 18.53 },
+  },
+  -- the maritime and Mediterranean pines (Pinus pinaster, pinea, halepensis, brutia): Italy's maritime pines, and its
+  -- Scots pine for the tall straight forest-grown ones (the Landes', Galicia's)
+  pine_maritime = {
+    { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
+    { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/scots_pine', 18.9 },
   },
   -- Far clumps (server vegetation.CLUMP_OF, GitHub #1074): one item for a forest square's 4-8 trees, shown only
   -- beyond CLUMP_M (FAR_ONLY) where those trees are not (rows with a negative scale). The stock maps' own forest
   -- fillers, in the materials of the single trees they stand for (no new materials); heights from their bounds
   -- (the asset survey, 2026-11-10).
-  conifer_clump = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group_low', 22.6 } },
+  conifer_clump = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group_low', 22.6 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group', 23.09 } },     -- (the stock survey 2026-11-15)
   deciduous_clump = {
     { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 }, { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
+    -- (the stock survey 2026-11-15) a low wide group of beeches and a tall narrow one of birches
+    { ECA .. 'trees/trees_beech/tree_beech_small_forest_group', 14.17 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_group', 20.1 },
   },
   oak_west_clump = { { WCA .. 'trees/trees_oak/oak_a_distant', 9.8 } },
   -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
@@ -366,40 +460,180 @@ M.CATALOG = {
   -- silage on meadows; by hemisphere, shown in their season only (SEASON)
   straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
   silage_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_alt_01', 1.18 } },
-  mediterranean_clump = { { IT .. 'trees/trees_italy/holm_oak_filler_center', 13.9 } },
+  mediterranean_clump = { { IT .. 'trees/trees_italy/cork_oak_filler_center', 14.14 } },     -- (the stock survey
+  -- 2026-11-15; holm_oak_filler_center out 2026-11-17: deciduous oak leaves, brown in the fall; back 2026-11-24 as an
+  -- evergreen copy, M.SHAPE_COPIES)
   eucalyptus_clump = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_group', 20.3 } },
   -- regional trees (server vegetation.regional's zones; heights from the shapes' bounds, the asset survey 2026-11-10):
   -- Australia's eucalypts (West Coast USA's), temperate Europe's riverside poplars and North America's hot-desert
   -- creosote bushes (Automation Test Track's)
   eucalyptus = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
     { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 } },
-  poplar = { { ATT .. 'trees/trees_poplar/s_poplar_large_01', 16.5 }, { ATT .. 'trees/trees_poplar/s_poplar_large_02', 23.1 } },
+  poplar = { { ATT .. 'trees/trees_poplar/s_poplar_large_01', 16.5 }, { ATT .. 'trees/trees_poplar/s_poplar_large_02', 23.1 },
+    { ATT .. 'trees/trees_poplar/s_poplar_large_03', 23.03 } },     -- (the stock survey 2026-11-15)
   creosote = { { ATT .. 'trees/trees_shrub/shrub_c', 1.15 }, { ATT .. 'trees/trees_shrub/shrub_b', 1.63 },
-    { ATT .. 'trees/trees_shrub/shrub_a', 2.43 } },
+    -- (2026-11-20, the unused stock survey) West Coast USA's Spanish bayonets: yuccas among the Mojave's and the
+    -- Sonoran's creosote (no imposter: low shapes, drawn to creosote's 250 m)
+    { WCA .. 'trees/spanishbayonet1', 1.6 }, { WCA .. 'trees/spanishbayonet2', 1.6 },
+    { ATT .. 'trees/trees_shrub/shrub_a', 2.43 },
+    -- (the stock survey 2026-11-16) West Coast USA's big old creosotes (its trees_shrub d-g: the same m_creosote_*
+    -- materials as Automation Test Track's, loaded with that folder; leaves_thin from WCA .. 'trees')
+    { WCA .. 'trees/trees_shrub/shrub_e', 3.18 }, { WCA .. 'trees/trees_shrub/shrub_f', 3.21 },
+    { WCA .. 'trees/trees_shrub/shrub_d', 3.78 }, { WCA .. 'trees/trees_shrub/shrub_g', 5.02 } },
+  -- Eurasia's species (server vegetation.species_groups, 29; the stock survey 2026-11-15, heights from the shapes'
+  -- bounds, to be checked in game): East Coast USA's "aspen" shapes wear the game's birch bark and leaves
+  -- (/assets/materials/tree/birch); Scots pines (Italy's) with Monterey pines and a young maritime pine for variety;
+  -- Douglas firs stand in for spruces (no stock spruce)
+  birch = {
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_low', 6.05 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_b', 8.18 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_d', 10.37 }, { ECA .. 'trees/trees_aspen/tree_aspen_large_b', 10.43 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_large_a', 10.45 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_a', 15.62 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_low_group', 6.03 },     -- (2026-11-24: a clump of young birches)
+  },
+  oak = {
+    { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
+    { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },     -- (not tree_oak_large_a: as deciduous)
+    { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 },
+    { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
+  },
+  beech = {
+    { ECA .. 'trees/trees_beech/tree_beech_bush_e', 6.51 }, { ECA .. 'trees/trees_beech/tree_beech_bush_d', 7.23 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_beech/tree_beech_small_b', 11.6 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_d', 13.32 }, { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 },
+    { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+    { ECA .. 'trees/trees_beech/tree_beech_forest_b', 21.75 },
+  },
+  -- (2026-11-16, the user's test: Italy's scots_pine_filler, a sparse forest filler meant to be seen among other trees,
+  -- stood alone like no pine in Poland; West Coast USA's sparse forest Monterey pine out too: a young maritime pine,
+  -- a young Monterey pine for 7-11 m, Italy's Scots pine above, M.pick scaling it down to 12 m)
+  -- (2026-11-17, the user's test at Gorzyce, Silesia: a stand of nothing but one Scots pine, clones in a row: the
+  -- weathered and large Monterey pines back for 10-17 m so M.pick has several to choose from at every height)
+  -- (2026-11-17, the gallery: Italy's maritime_pine_bush is a round bush, no young Scots pine; the young Monterey pine,
+  -- conical with whorls as a young Scots pine is, scaled down for the smallest)
+  pine_eu = {
+    { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 },
+    { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 }, { WCA .. 'trees/trees_conifer/pine_radiata_weathered', 13.2 },
+    { IT .. 'trees/trees_italy/scots_pine', 18.9 },
+    -- (2026-11-24, the gallery: back as a forest tree only, its filler name keeps it off pine_eu_open: a crowd-grown
+    -- Scots pine, bare trunk, crown up top, as a pine wood's are)
+    { IT .. 'trees/trees_italy/scots_pine_filler', 14.21 },
+  },
+  spruce = {
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_d', 5.01 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_c', 7.78 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
+  },
+  -- dead trees in the forests (species_groups' SNAG_SHARE)
+  snag_broad = { { ECA .. 'trees/trees_oak/tree_oak_dead_b', 8.7 }, { ECA .. 'trees/trees_oak/tree_oak_dead_a', 12.54 } },
+  -- (tree_douglasfir_dead is a fallen fir, 15 m long: dead wood's since 2026-11-17, not a standing snag)
+  snag_conifer = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_dead_02', 13.96 } },
+  -- (55) the veteran oaks, rare inside loose broadleaf woods only (server vegetation.veteran_oaks: 11-17 m, near the
+  -- shape's own 13.2 m, so its flared trunk stays an old oak's ~2-3 m)
+  oak_veteran = { { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.22 } },
+  -- (55) the tropics' giant filler, a 24 m dome of aerial roots and vines, in remote forest only (server vegetation
+  -- G_TRO_GIANT: a quarter of the thickets' places, 80 m or more from any road; it stood by a road like a hut before)
+  tro_giant = { { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_04', 24.26 } },
+  -- warm towns' palms outside the tropics (species_groups' DRY_PALMS): West Coast USA's fan palms, Italy's date palms
+  palm_dry = {
+    { WCA .. 'trees/trees_palm/fanpalm_short', 10.6 }, { WCA .. 'trees/trees_palm/fanpalm_skirt', 11.7 },
+    { IT .. 'trees/trees_italy/italy_palm_1_short', 11.74 }, { WCA .. 'trees/trees_palm/fanpalm_full', 13.8 },
+    { IT .. 'trees/trees_italy/italy_palm_1', 13.77 }, { WCA .. 'trees/trees_palm/fanpalm_tall', 18.5 },
+    { WCA .. 'trees/trees_palm/fanpalm_slim', 20.8 },
+  },
+  birch_clump = { { ECA .. 'trees/trees_aspen/tree_aspen_forest_group', 20.1 } },
+  -- the bushes by the climate (server vegetation.shrub_groups, 30; the stock survey 2026-11-16, heights from the shapes'
+  -- bounds, every tree-kind shape with its imposter; the grey bushes are groundcover shapes as desert_shrub's):
+  -- the summer-dry climates' maquis and garrigue, California's chaparral (Italy's bushes, Utah's junipers and low grey
+  -- bushes)
+  maquis = {
+    { UT .. 'groundcover/s_gc_utah_grey_bush_01', 0.7 }, { UT .. 'groundcover/s_gc_utah_grey_bush_03', 1.0 },
+    { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 },     -- (not generibush: its leaves turn in the fall, seasonlook)
+    { UT .. 'trees/Juniper/Juniper_bush_medium_01', 2.4 },
+    -- (Italy's fluffy_bush: a darker copy, M.SHAPE_COPIES)
+    { IT .. 'trees/trees_italy/cork_oak_bush_medium', 3.04 }, { IT .. 'trees/trees_italy/scraggly_bush', 3.8 },
+    -- (the asset survey 2026-11-19) the tall maquis: Italy's large cork oak bush and its tall-plant bush
+    { IT .. 'trees/trees_italy/cork_oak_bush_large', 5.7 }, { IT .. 'trees/trees_italy/tall_plant_bush', 5.93 },
+    -- (not Italy's tall_plant: a 7.7 x 2.3 m strip of tall plants 2.5 m high, a hedge piece, not a bush: blocks in the
+    -- maquis; 2026-11-23)
+  },
+  -- the north's and the mountains' tops: birch / willow scrub (the birch-barked aspen bushes), spruce saplings, junipers
+  shrub_north = {
+    { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_bush_a', 2.2 }, { ECA .. 'trees/trees_aspen/tree_aspen_bush_b', 2.47 },
+    { UT .. 'trees/Juniper/Juniper_bush_large_01', 2.6 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_a', 2.7 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_bush_c', 3.27 },
+  },
+  -- the rainforests', mangroves' and savannas' bushes (Jungle Rock Island's), in the open and in the canopy's gaps
+  shrub_tropical = {
+    { JRI .. 'trees/trees_palm/palm_tiny', 3.0 }, { JRI .. 'trees/bush_tropical_1/tro_tree_1_bush_large', 3.38 },
+    { JRI .. 'trees/bush_tropical_1/tro_bush_small', 3.9 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 3.95 },
+  },
+  -- (34) the tropics' forest floor: the wide-leaved shade plants (monstera and the like), never in the open (server
+  -- vegetation.shrub_groups: the understory scatter only; the gallery 2026-11-17)
+  tro_understory = {
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_02_a', 2.77 }, { JRI .. 'trees/trees_palm/palm_tiny', 3.0 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_e', 3.19 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_a', 3.33 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_b', 3.64 },
+    -- (the asset survey 2026-11-19) the other wide-leaved plants, and the low vine bushes for the smallest
+    { JRI .. 'trees/vines/vine_bush_small', 0.55 }, { JRI .. 'trees/vines/vine_bush_wide', 0.92 },
+    { JRI .. 'trees/vines/vine_bush_large', 1.25 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_b', 2.5 },
+    { JRI .. 'trees/vines/vine_bush_wide_b', 1.12 },     -- (2026-11-24: a low mat of vines 8 m across)
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_02_b', 3.2 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_d', 4.48 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_a', 5.99 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_c', 6.21 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_c', 6.41 },
+  },
+  -- the tropics' vine-draped thicket (a 9 m dome of aerial roots, 6.6 m high), only in remote forest on level ground
+  -- (server vegetation._remote_floor: it stood by a road like a hut, the user's test 2026-11-16)
+  tro_thicket = { { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.6 } },
+  -- (48) the tropics' dead wood (server vegetation.THICKET_SHARE): Jungle Rock Island's fallen palm fronds and branches,
+  -- its fallen giant (34 m long); heights given in dead wood's 1-3 m so each draws at about its own size (as deadwood's)
+  deadwood_tropical = {
+    { JRI .. 'trees/trees_palm/deadpalm_03', 1.0 }, { JRI .. 'trees/trees_palm/deadpalm_02', 1.25 },
+    { JRI .. 'trees/trees_palm/deadpalm_01', 1.5 }, { JRI .. 'trees/vines/vine_ground_medium', 1.6 },     -- (2026-11-20)
+    { JRI .. 'trees/vines/vine_ground_large', 1.75 }, { JRI .. 'trees/vines/vine_ground_small', 1.1 },     -- (2026-11-24)
+    { JRI .. 'trees/trees_tropical_2/deadbranch_02', 2.0 }, { JRI .. 'trees/trees_tropical_2/deadbranch_04', 2.25 },
+    { JRI .. 'trees/trees_tropical_2/deadbranch_03', 2.5 }, { JRI .. 'trees/trees_tropical_2/deadbranch_01', 2.75 },
+    { JRI .. 'trees/trees_tropical_1/tro_tree_1_fallen', 2.95 },
+  },
+  -- dead wood on the forest floor: a stump, fallen branches, fallen beeches (East Coast USA's)
+  deadwood = {
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_chopped', 1.0 }, { ECA .. 'trees/trees_douglasfir/fir_dead_branches', 1.51 },
+    { ECA .. 'trees/trees_beech/tree_beech_dead_a', 2.07 }, { ECA .. 'trees/trees_beech/tree_beech_dead_b', 2.98 },
+    -- a fallen fir, 15 m long (its bounds 7.3 m high with the broken branches up; given as 2.9 so dead wood's 1-3 m
+    -- items draw it at about its own size: the gallery 2026-11-17, it was a standing snag's shape)
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_dead', 2.9 },
+  },
+  oak_clump = { { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 } },
+  beech_clump = { { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_forest_group', 14.17 } },
   tropical = {
-    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
+    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 },     -- (tro_bush_2_small: tro_thicket's since 2026-11-16)
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
+    -- (the stock survey 2026-11-15) the gaps between 6 and 20 m
+    { JRI .. 'trees/bush_tropical_2/tro_bush_2_tiny', 5.19 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tiny', 6.13 },
+    { JRI .. 'trees/bush_tropical_2/tro_bush_2_tiny_b', 6.45 },     -- (the asset survey 2026-11-19)
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 18.53 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler_02', 29.62 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall', 32.28 },
+    -- (the stock survey 2026-11-16) the island's wide-crowned fillers and its second tall tree (not tro_tree_2_filler_04:
+    -- a dome of aerial roots and vines like the thicket's, a hut of a tree; the gallery 2026-11-17)
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall_02', 26.98 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_03', 30.15 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_02', 33.11 },
+    -- (2026-11-24, the gallery: no imposter of its own, the engine bakes one; its materials in MATERIALS' folders: West
+    -- Coast USA's oak_leaves, the island's tropical 1 and 2)
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_large', 20.88 },
   },
 }
 -- The mapped trees' species (server natural.SPECIES, BNE_NATURAL_TREES: OpenStreetMap's genus / species / leaf type on
 -- natural=tree and tree rows): the stock shapes of that kind, all in folders MATERIALS already loads and all already
 -- drawn by other groups (no new shape's cost; only BARE's leafless oaks are new); heights from the shapes' bounds (the
 -- asset survey, 2026-11-10)
-M.CATALOG.oak = {
-  { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
-  { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 }, { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },
-  { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 },
-  { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
-}
-M.CATALOG.beech = {
-  { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 },
-  { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
-}
-M.CATALOG.birch = {     -- (East Coast USA's aspens: white bark, the birches' and aspens' stand-in)
-  { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
-  { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
-}
+-- (a mapped oak, beech or birch is the species rules' group of that name, CATALOG above: the same shapes for a mapped
+-- tree and a modelled one; the veteran oak is its own group, oak_veteran, never a mapped street tree)
 M.CATALOG.pine = {
   { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
   { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 },
@@ -410,13 +644,10 @@ M.CATALOG.fir = {       -- (spruces, firs, larches, cedars, hemlocks: the Dougla
   { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
   { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
 }
-M.CATALOG.redwood = {
-  { WCA .. 'trees/trees_conifer/redwood_split', 38.1 }, { WCA .. 'trees/trees_conifer/redwood_tall', 38.5 },
-  { WCA .. 'trees/trees_conifer/redwood_broad', 38.5 },
-}
+-- (a mapped redwood: the species rules' redwood group, CATALOG above)
 M.CATALOG.cypress = { { IT .. 'trees/trees_italy/cypress_tree', 7.2 } }
 M.CATALOG.olive = { { IT .. 'trees/trees_italy/olive', 4.3 } }
-M.CATALOG.holm_oak = {  -- (evergreen oaks and the evergreen broadleaves' stand-in)
+M.CATALOG.holm_oak = {  -- (evergreen oaks and the evergreen broadleaves' stand-in; the evergreen copies, SHAPE_COPIES)
   { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 }, { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 },
   { IT .. 'trees/trees_italy/holm_oak', 12.9 },
 }
@@ -534,6 +765,10 @@ M.GROUP_MAX_M.fr_hedge = 350
 M.GROUP_MAX_M.fr_fence_hedge = 350
 M.NO_COLLIDE.fr_hedge = true
 M.NO_COLLIDE.fr_fence_hedge = true
+-- the summer-dry climates' mapped hedges (server fences.med_hedge_rows): Italy's clipped cypress hedge, 2 m pieces
+M.CATALOG.med_hedge = { { IT .. 'trees/trees_italy/cypress_hedge_3m', 1.64 } }
+M.GROUP_MAX_M.med_hedge = 350
+M.NO_COLLIDE.med_hedge = true
 for group, asset in pairs(require('beamngEarth/frRadarAssets')) do
   M.CATALOG[group] = { { asset[1], asset[2] } }
   M.GROUP_MAX_M[group] = asset[3]
@@ -640,6 +875,110 @@ M.GROUP_MAX_M.vine = 450
 M.GROUP_MAX_M.vine_row = 450
 M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
 M.NO_COLLIDE.creosote = true
+for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical', 'tro_understory' }) do     -- (30: as the other shrubs)
+  M.GROUP_MAX_M[g] = 250; M.NO_COLLIDE[g] = true
+end
+-- (2026-11-19: the low shapes that ship no imposter are drawn whole as far as they are drawn at all: a 1 m bush is ~5 px
+-- at 160 m, a 0.2 m daisy patch ~1 px at 80 m, a log on the forest floor hidden by the undergrowth beyond 150 m. The
+-- roundabouts' tufts 80 m (was 200), the desert bushes 160 m (250), the dead wood 150 m (200); the ferns keep 200 m,
+-- they ship imposters)
+M.GROUP_MAX_M.deadwood = 150; M.NO_COLLIDE.deadwood = true     -- (on the forest floor, as the ferns)
+M.GROUP_MAX_M.deadwood_tropical = 150; M.NO_COLLIDE.deadwood_tropical = true
+M.GROUP_MAX_M.tro_thicket = 250; M.NO_COLLIDE.tro_thicket = true     -- (44: the tropics' tangled thickets, as the shrubs)
+-- (34) the hot deserts' bushes: desert_shrub without Utah's junipers (cold deserts' and mountains': the Great Basin,
+-- Central Asia, Iran), server vegetation.shrub_groups for BWh / BSh; the gallery 2026-11-17
+do
+  local out = {}
+  for _, v in ipairs(M.CATALOG.desert_shrub) do
+    if not v[1]:find('/Juniper/', 1, true) then out[#out + 1] = v end
+  end
+  M.CATALOG.desert_shrub_hot = out
+  M.GROUP_MAX_M.desert_shrub_hot = M.GROUP_MAX_M.desert_shrub
+  M.NO_COLLIDE.desert_shrub_hot = M.NO_COLLIDE.desert_shrub
+end
+-- Trees in the open (server vegetation.OPEN_FROM, 31: within 15 m of a road, on built-up land): each group's _open
+-- twin is its catalog without the forest-interior shapes: the forest trees and fillers (tall, thin, sparse: meant to be
+-- seen among others; Italy's scots_pine_filler stood alone) and the mossy oaks (Moss_01 on the trunk: by an asphalt
+-- road, the user's test 2026-11-16)
+-- (2026-11-17, the user's test at Syrynka: a roadside row of tree_oak_large_a, a veteran oak with a huge flared,
+-- gnarled trunk, the only open shape at 11-17 m: a wall of clones; all three large oaks are forest-only now)
+-- (2026-11-17, the gallery: the conifers grown in a crowd, their lower half bare dead branches or a sparse crown up top
+-- only: East Coast USA's douglasfir large_c / large_d / small_a, West Coast USA's weathered Monterey pine)
+M.FOREST_ONLY = { '_forest', 'filler', 'tree_oak_large_', 'douglasfir_large_c', 'douglasfir_large_d',
+  'douglasfir_small_a', 'pine_radiata_weathered' }
+-- (2026-11-24, the user's Bali: liana-hung jungle giants with buttress roots by an asphalt road, their roots on the
+-- sidewalk) Jungle Rock Island's trees that wear its hanging vines (tro_vines_2d), by name: the forest's only, as the
+-- fillers (tro_tree_2_tall_02, tro_tree_2_large carry none and stay in the open)
+M.FOREST_ONLY_NAMES = { tro_tree_1_huge = true, tro_tree_2_medium = true, tro_tree_2_tall = true }
+function M.forestOnly(shape)
+  if M.FOREST_ONLY_NAMES[shape:match('([^/]+)$') or ''] then return true end
+  for _, k in ipairs(M.FOREST_ONLY) do
+    if shape:find(k, 1, true) then return true end
+  end
+  return false
+end
+for _, g in ipairs({ 'deciduous', 'oak', 'birch', 'beech', 'pine_west', 'mediterranean', 'tropical', 'conifer', 'spruce',
+  'pine_eu' }) do
+  local out = {}
+  for _, v in ipairs(M.CATALOG[g]) do
+    if not M.forestOnly(v[1]) then out[#out + 1] = v end
+  end
+  M.CATALOG[g .. '_open'] = out
+end
+-- (2026-11-23) copies of stock shapes, written once into the user folder from the game's own files (as the static
+-- signal; the user 2026-11-23: a new shape is fine done well): their materials renamed (mats) and copied from the stock
+-- materials file under the new names, with a constant colour factor (tint) in the copy's definition. A material is
+-- global: the renamed ones keep seasonlook off them (Italy's city holm oaks wear the deciduous oaks' oak_leaves_01 /
+-- 02, which turn rust-brown in the fall; a holm oak is evergreen). The tint is in the definition before the shape first
+-- draws, so its far imposter bakes in that colour too: no imposter reload (seasonlook leaves imposters alone since
+-- 1.7.3: reloading them while trees streamed in hung GPUs, GitHub #535). Italy's fluffy_bush a pale sage green
+-- (~0.40 0.46 0.32) among the maquis' ~0.30 0.36 0.20: it stood out on Makarska's slopes, near and far, the user's.
+-- The same geometry and textures as the stock shapes: no cost beyond them.
+M.HOLM_OAK_MATS = { oak_leaves_01 = 'bne_holm_oak_leaves_01', oak_leaves_02 = 'bne_holm_oak_leaves_02',
+  m_oak_leaves_distant = 'bne_holm_oak_leaves_distant', m_oak_leaves_02_distant = 'bne_holm_oak_leaves_02_distant' }
+local ITM = IT .. 'trees/trees_italy/main.materials.json'
+local COPY = '/temp/beamngEarth/shapes/'
+M.SHAPE_COPIES = {
+  { stock = IT .. 'trees/trees_italy/holm_oak_city_small', out = COPY .. 'holm_oak_city_small_v1', h = 5.6,
+    group = 'mediterranean_open', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/holm_oak_city_tall', out = COPY .. 'holm_oak_city_tall_v1', h = 9.7,
+    group = 'mediterranean_open', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  -- (2026-11-24, the user: "we can fix it the same way") the holm oak woods (the encinares, the macchia, Dalmatia's
+  -- coast): Italy's holm oak in the woods and in the open, its crowd-grown fillers in the woods only (their names keep
+  -- the filler mark), its young bushes in the maquis, its filler group as the far clump beside the cork oaks'
+  { stock = IT .. 'trees/trees_italy/holm_oak', out = COPY .. 'holm_oak_v1', h = 12.86,
+    group = { 'mediterranean', 'mediterranean_open' }, matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/holm_oak_filler_2', out = COPY .. 'holm_oak_filler_2_v1', h = 11.17,
+    group = 'mediterranean', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/holm_oak_filler_1', out = COPY .. 'holm_oak_filler_1_v1', h = 16.32,
+    group = 'mediterranean', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/holm_oak_bush', out = COPY .. 'holm_oak_bush_v1', h = 5.86,
+    group = 'maquis', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/holm_oak_bush_huge', out = COPY .. 'holm_oak_bush_huge_v1', h = 7.14,
+    group = 'maquis', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/holm_oak_filler_center', out = COPY .. 'holm_oak_filler_center_v1', h = 13.91,
+    group = 'mediterranean_clump', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/fluffy_bush', out = COPY .. 'fluffy_bush_v1', h = 2.47, group = 'maquis',
+    matfile = ITM, mats = { fluffy = 'bne_fluffy_v1' }, tint = { bne_fluffy_v1 = { 0.74, 0.8, 0.62 } } },
+  -- (replace: the copy stands for the stock shape in every group) Italy's olive: a silvery grey-green (~0.44 0.50
+  -- 0.31), right near, but its far imposter has no shade of its own crown and shone off the hills (the user,
+  -- 2026-11-23): its leaves a little darker, its distant LOD's more
+  { stock = IT .. 'trees/trees_italy/olive', out = COPY .. 'olive_v1', replace = true, matfile = ITM,
+    mats = { olive = 'bne_olive_v1', m_olive_distant = 'bne_olive_distant_v1' },
+    tint = { bne_olive_v1 = { 0.85, 0.87, 0.8 }, bne_olive_distant_v1 = { 0.78, 0.8, 0.72 } } },
+}
+-- the copies into the catalog: a new shape into its group, a replacing one in place of its stock shape everywhere
+local function swapShape(from, to)
+  for _, list in pairs(M.CATALOG) do
+    for _, v in ipairs(list) do if v[1] == from then v[1] = to end end
+  end
+end
+for _, o in ipairs(M.SHAPE_COPIES) do
+  if not o.replace then
+    for _, g in ipairs(type(o.group) == 'table' and o.group or { o.group }) do table.insert(M.CATALOG[g], { o.out, o.h }) end
+  end
+  swapShape(o.stock, o.out)     -- (the stock shape stands nowhere its copy exists: dev's mapped holm oaks, natural.py)
+end
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
 for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
 -- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months
@@ -695,6 +1034,10 @@ local MATERIALS = {
   JV .. 'rocks', JV .. 'trees/deserttrees', JV .. 'trees', JRI .. 'trees/trees_palm', JRI .. 'trees/trees_tropical_1',
   JRI .. 'trees/trees_tropical_2', JRI .. 'trees/bush_tropical_1', JRI .. 'trees/bush_tropical_2', JRI .. 'trees',
   JRI .. 'trees/vines_tropical',     -- tro_tree_1's vines and aerial roots (tro_vines_2d; orange without it)
+  JRI .. 'trees/tropical_wide_leaves',     -- shrub_tropical's wide-leaved plants (tropical_wide_leaves, tropical_stem)
+  JRI .. 'trees/vines',     -- the understory's vine bushes, the dead wood's ground vines (vine_leaves)
+  UT .. 'groundcover/pebbles',     -- the desert rocks' pebble scatters (m_gc_pebbles)
+  SIR,     -- Small Island's ground-cover stones (GC_utah_rocks_b)
   IT .. 'trees/trees_italy', IT .. 'trees', IT .. 'rocks', '/levels/automation_test_track/art/shapes/objects',
   ATT .. 'trees', ATT .. 'trees/trees_poplar', ATT .. 'trees/trees_shrub',     -- riverside poplars, creosote bushes
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal
@@ -946,6 +1289,71 @@ function M.applySeason(month)
   end
 end
 
+-- Pure: a dae's text with its materials renamed (mats: whole names only, the ids '<name>-material' / '-effect' with
+-- them); nil without any.
+function M.copyDae(dae, mats)
+  if type(dae) ~= 'string' then return nil end
+  local n = 0
+  for from, to in pairs(mats) do
+    local c
+    dae, c = dae:gsub('%f[%w_]' .. from:gsub('_', '%%_') .. '%f[^%w_]', to)
+    n = n + c
+  end
+  return n > 0 and dae or nil
+end
+function M.holmOakDae(dae) return M.copyDae(dae, M.HOLM_OAK_MATS) end
+-- Pure: the renamed materials from the stock materials file's table: each as the stock one (name, mapTo; no
+-- persistentId), its first stage's baseColorFactor times tint[new name] when given; nil when one is missing.
+function M.copyMaterials(stock, mats, tint)
+  if type(stock) ~= 'table' then return nil end
+  local out = {}
+  for from, to in pairs(mats) do
+    local m = stock[from]
+    if type(m) ~= 'table' then return nil end
+    local c = {}
+    for k, v in pairs(m) do c[k] = v end
+    c.name, c.mapTo, c.persistentId = to, to, nil
+    local t = tint and tint[to]
+    if t and type(m.Stages) == 'table' then
+      local stages = {}
+      for k, v in pairs(m.Stages) do stages[k] = v end
+      local s1 = {}
+      for k, v in pairs(stages[1] or {}) do s1[k] = v end
+      local f = type(s1.baseColorFactor) == 'table' and s1.baseColorFactor or { 1, 1, 1, 1 }
+      s1.baseColorFactor = { (f[1] or 1) * t[1], (f[2] or 1) * t[2], (f[3] or 1) * t[3], f[4] or 1 }
+      stages[1] = s1
+      c.Stages = stages
+    end
+    out[to] = c
+  end
+  return out
+end
+function M.holmOakMaterials(stock) return M.copyMaterials(stock, M.HOLM_OAK_MATS) end
+local function copyShape(o)
+  local mat, dae = o.out .. '.materials.json', o.out .. '.dae'
+  if not FS:fileExists(mat) then
+    local mats = M.copyMaterials(jsonDecode(readFile(o.matfile) or ''), o.mats, o.tint)
+    if not mats then return false end
+    writeFile(mat, jsonEncode(mats))
+  end
+  loadJsonMaterialsFile(mat)
+  if not FS:fileExists(dae) then
+    local text = M.copyDae(readFile(o.stock .. '.dae'), o.mats)
+    if not text then return false end
+    writeFile(dae, text)
+  end
+  return FS:fileExists(dae)
+end
+local function dropCopy(o)
+  if o.replace then swapShape(o.out, o.stock); return end     -- (the stock shape back)
+  for _, g in ipairs(type(o.group) == 'table' and o.group or { o.group }) do
+    local out = {}
+    for _, v in ipairs(M.CATALOG[g]) do if v[1] ~= o.out then out[#out + 1] = v end end
+    M.CATALOG[g] = out
+  end
+  swapShape(o.out, o.stock)     -- (where it stood for the stock shape: back)
+end
+
 local function setup()
   if ready then return true end
   M.applySeason()
@@ -958,6 +1366,15 @@ local function setup()
     local ok, made = pcall(staticSignal)
     if ok and made then M.CATALOG.signal[1][1] = M.STATIC_SIGNAL
     else log('W', 'beamngEarth.trees', 'static signal shape: ' .. tostring(made)) end
+    for _, o in ipairs(M.SHAPE_COPIES) do
+      local okC, madeC = pcall(copyShape, o)
+      if not (okC and madeC) then
+        dropCopy(o)
+        log('W', 'beamngEarth.trees', 'shape copy ' .. o.out .. ': ' .. tostring(madeC))
+      end
+    end
+  else
+    for _, o in ipairs(M.SHAPE_COPIES) do dropCopy(o) end
   end
   ready = true
   return true
@@ -994,17 +1411,64 @@ local function itemType(shape, solid)
   return d
 end
 
--- The variant of a group for an item of height h: those within 0.8 .. 1.25 of it (else 0.6 .. 1.6), picked by the
--- item's rank; else the nearest. Returns shape, scale.
+-- Trees and bushes (35, the user's test at Syrynka 2026-11-18: a wall of the same two birch shapes at one height):
+-- the canopy height model's tops are good to a couple of metres at best (CHMv2's error), the trees grow, and no row
+-- of them is one height, planted the same year or not. So a tree's drawn height varies about its measured one by up
+-- to HEIGHT_VARY either way (a triangular spread, fixed by its rank: the same tree looks the same at every visit), and
+-- its shape is picked among at least MIN_VARIANTS near its height when the catalog has them (the windows widened in
+-- VARIANT_WINDOWS' steps; furniture and props keep the first window that has any: their sizes are authored).
+M.HEIGHT_VARY = 0.15
+M.MIN_VARIANTS = 3
+-- (2026-11-20) the windows widen upward, not down: a taller shape drawn smaller keeps a slender trunk, a shorter one
+-- scaled up 1.6 times had a trunk 1.6 times as thick (the user's Rogowska: trunks through each other). Trees scaled
+-- 1.5x or more on real cells: Pennsylvania 5.6 -> 1.3 %, Finland 3.1 -> 0.1 %, the Black Forest 17 -> 9 %, Syrynka
+-- 19 -> 13 % (its 25 m oaks: the catalog's tallest oak is 16 m)
+M.VARIANT_WINDOWS = { { 0.8, 1.25 }, { 0.75, 1.5 }, { 0.75, 1.8 } }
+function M.varies(group)
+  return townsigns.TREE_GROUPS[group] or M.FAR_ONLY[group] or false
+end
+local function frac(x) return x - math.floor(x) end
+local PROP_WINDOWS = { { 0.8, 1.25 }, { 0.6, 1.6 } }
+
+-- A tree's lean (the user's test at Syrynka 2026-11-18: East Coast USA's forest birches are straight upright
+-- cylinders, a turn about the vertical does not change one, a stand of them read as one shape repeated): a few degrees
+-- off the vertical in a direction of its own, both from its rank (the same tree leans the same way at every visit),
+-- most trees nearly upright (the lean's size ~ u^2). The conifers stand straighter (their gravitropism; a leaning fir
+-- reads as storm damage), the bushes sprawl more. Returns the Euler x, y angles (radians) for setFromEuler.
+M.LEAN_DEG = 3.0
+M.LEAN_DEG_CONIFER = 1.2
+M.LEAN_DEG_BUSH = 5.0
+local CONIFERS = { conifer = true, conifer_open = true, spruce = true, spruce_open = true, pine_eu = true,
+  pine_eu_open = true, pine_west = true, pine_west_open = true, redwood = true, pine_maritime = true,
+  snag_conifer = true, conifer_clump = true }
+local BUSHES = { shrub = true, maquis = true, shrub_north = true, shrub_tropical = true, tro_understory = true,
+  fern = true, desert_shrub = true, desert_shrub_hot = true, creosote = true }
+function M.lean(group, rank)
+  local maxDeg = CONIFERS[group] and M.LEAN_DEG_CONIFER or BUSHES[group] and M.LEAN_DEG_BUSH or M.LEAN_DEG
+  if group == 'deadwood' or group == 'deadwood_tropical' then return 0, 0 end      -- (lying on the ground already)
+  local u = frac(rank * 48611.27)
+  local a = math.rad(maxDeg * u * u)
+  local dir = 2 * math.pi * frac(rank * 70001.913)
+  return a * math.cos(dir), a * math.sin(dir)
+end
+
+-- The variant of a group for an item of height h: those within 0.8 .. 1.25 of it (wider for the vegetation, above;
+-- else 0.6 .. 1.6), picked by the item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
   if (clifftalus.enabled and clifftalus.isGroup(group)) then return clifftalus.pick(group, list, h, rank) end
+  local vary = M.varies(group)
+  if vary then
+    local tri = frac(rank * 15485.863) + frac(rank * 32452.843) - 1.0      -- (-1, 1), most near 0
+    h = h * (1.0 + M.HEIGHT_VARY * tri)
+  end
   local cands = {}
-  for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
+  for _, range in ipairs(vary and M.VARIANT_WINDOWS or PROP_WINDOWS) do      -- near its size first, then wider
+    cands = {}
     for _, v in ipairs(list) do
       if v[2] >= h * range[1] and v[2] <= h * range[2] then cands[#cands + 1] = v end
     end
-    if #cands > 0 then break end
+    if #cands >= (vary and M.MIN_VARIANTS or 1) then break end
   end
   if #cands == 0 then
     local best, bd
@@ -1200,8 +1664,10 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
     setBasis(m, t.geo and t.madePl and t.madePl.r, basis9)
     m:setPosition(itemPos)
   else
-    -- Existing props use a flat yaw (counter-clockwise in server coordinates).
-    itemVec:set(0, 0, -math.rad(f[b + F_YAW] + yawAdd))
+    -- Existing props use a flat yaw (counter-clockwise in server coordinates). The vegetation leans a little (M.lean).
+    local lx, ly = 0, 0
+    if M.varies(group) then lx, ly = M.lean(group, f[b + F_RANK]) end
+    itemVec:set(lx, ly, -math.rad(f[b + F_YAW] + yawAdd))
     m:setFromEuler(itemVec)
     m:setPosition(itemPos)
   end
@@ -1311,7 +1777,7 @@ end
 M.geoPlacement = geoPlacement
 
 -- A 'veg_tile' message: { anchorId, key, path, n }. Returns the tile's data (its ambience: ambience.lua).
-function M.onTile(msg, currentAnchor, anchorObj)
+function M.onTile(msg, currentAnchor, anchorObj, far)
   local isGeo = geotile.isKey(msg.key)
   if isGeo then
     if not anchorObj or type(msg.path) ~= 'string' then return end
@@ -1342,6 +1808,7 @@ function M.onTile(msg, currentAnchor, anchorObj)
   if geo then
     local t = tiles['g:' .. tostring(msg.key)]
     t.key, t.anchorObj = msg.key, anchorObj
+    t.vegFar = far or nil
     M.placeGeo(t)
     -- the ambience's nodes (x, y, z, depth, size, count rows) placed into this anchor's world (ambience.lua)
     if type(data.audio) == 'table' then
@@ -1404,6 +1871,8 @@ end
 -- The ranks are those of the rows shown at that side of CLUMP_M: within it every row but the far clumps (FAR_ONLY),
 -- beyond it every row but the trees they stand for (a negative scale).
 local function tileThreshold(d, t)
+  -- (a far forest ring tile nearer than the tree tiles' reach: hidden, the trees there are the vegetation tiles')
+  if t.vegFar and d < M.TILE_SEND_M * M.distanceScale() then return 0 end
   local want = threshold(d)
   local n = t.n or 0
   for _, r in ipairs(M.TILE_CAP) do

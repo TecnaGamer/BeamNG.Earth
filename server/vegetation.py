@@ -42,7 +42,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 30          #(the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 60          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -51,11 +51,86 @@ VERSION = 30          #(the cached cells hold their groups: 14 for the regional 
                       # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
                       # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023;
                       # 28: lengths in ground metres at every latitude, _merc_k; ties among flat crowns by a hash;
-                      # 29: the far clumps kept off the carriageways, CLUMP_ROAD_MARGIN_M; 30: the vineyards' rows
-                      # down the slope, _row_axis, carried on to the field's edge and roads by single rows,
+                      # 29 (dev): the far clumps kept off the carriageways, CLUMP_ROAD_MARGIN_M; 30 (dev): the vineyards'
+                      # rows down the slope, _row_axis, carried on to the field's edge and roads by single rows,
                       # _row_fill, a group's outer rows inside the field and off the roads too, the groups end to
-                      # end on a slope, _row_cos)
+                      # end on a slope, _row_cos (PR #1501)
+                      # 29: Eurasia's own species from the stock shapes, species_groups: birches, oaks and beeches
+                      # out of the broadleaves, Scots pines and (Douglas firs standing in for) spruces out of the
+                      # conifers by latitude and height above the sea, both in stands (stand_u); dead trees; date and
+                      # fan palms in warm towns; the rainforests' trees tropical, fewer palms there);
+                      # 30: the bushes by the climate (shrub_groups: maquis, the north's, the tropics',
+                      # the deserts'), ferns on the forest floor, dead wood added in remote forest (_remote_floor), the
+                      # mangroves' trees tropical
+                      # 31: dead wood only added, in remote forest on level ground (30's replaced bushes and reached
+                      # over roads); the tropics' vine-draped thickets the same way (G_TRO_THICKET); no mossy forest
+                      # oaks or dead trees by the roads and in town (OPEN_FROM)
+                      # 32: more admixture in the stands (STAND_MIX 0.3), pine_eu's shapes back to five
+                      # 33: the open's oaks the open broadleaves (oak_open had two young oaks and one veteran)
+                      # 34: the conifers in the open too (no bare-trunked crowd-grown firs and pines by roads)
+                      # and palms by the climate: coconut palms in the tropics, fan / date palms elsewhere
+                      # 35: Portugal's and Galicia's eucalypt plantations (eucalypt_share); the regional rules by
+                      # RESOLVE's ecoregions (ecoregion.py) where boxes and climates stood: the Mediterranean's
+                      # trees, the creosote, the steppe junipers; the Cantabrian oak woods; the conifers' share
+                      # from the forests' leaf type (leaftype.py) where a coarse rule stood; the world's own groups
+                      # by biome (_world_groups: savanna, laurel, pine_maritime; the tropics' and the south's pines,
+                      # the south's beeches); the maquis by RESOLVE's Mediterranean biome
+                      # 36: fewer birches west of Belarus (continental_shares), the broadleaves mixed tree by tree
+                      # (BROAD_STAND_MIX); the broadleaves' shares everywhere outside the tropics (broad_shares:
+                      # North America's, East Asia's, Japan's, the oceanic climates' by latitude), the spruces' west
+                      # of Poland by SPRUCE_CENTRAL
+                      # 37: one top per broadleaf crown (crown_spacing: the thinning by the leaf type and biome)
+                      # 38: the conifer share kept to the leaf type map (conifer_odds), the beech belt,
+                      # the pine woods' birches
+                      # 39: Australia's forest broadleaves eucalypts, East Asia's conifers conical (sugi, Chinese fir)
+                      # 40: by EU-Forest's NFI plots: the Mediterranean's conifers kept, its evergreen share by
+                      # ecoregion; no spruce belt in dry climates; the Atlantic's spruces; the north's birches
+                      # 41: the leaf type the mean of LC100's and ESA CCI's (leaftype.PATHS)
+                      # 42: Europe's conifer share half ForestPaths' genus map's, its genera from it (treegenus.py)
+                      # 43: the species' stands one ragged grid (stand_cells); the maps read on a grid (_on_grid)
+                      # 44: North America's generic conifers spruces and pines (NA_SPRUCE_LAT)
+                      # 45: the tropics' shores' coconut palms (coast_palms); the thickets no-collide
+                      # 46: the Mediterranean coasts under a mountain ecoregion (eco_med, MED_FRINGE_*)
+                      # 47: a tile's biome carries its Koppen class (the ground cover's grasses by climate)
+                      # 48: the tropics' remote floor half dead wood (G_DEADWOOD_TROPICAL, THICKET_SHARE)
+                      # 49: more birches: Europe's north fewer conifers (NORTH_CONIFER_FACTOR), central Europe CONT_BIRCH_SOUTH
+                      # 50: dev's thinning back (its count of trees), the tall trunks at least TRUNK_MIN_M apart (_thin_trunks)
+                      # 51: 50's last two builds kept 50's spread cells (the same VERSION); the trunk distance by height
+                      # 52: the riverside poplars off the forest's land cover (regional)
+                      # 53: the far clumps at one of their trees, not the square's centroid (_unlattice: no lattice)
+                      # 54: the town palms by the sea and low only (palm_fit)
+                      # 55: the veteran oaks in loose woods (veteran_oaks), the tropics' giant filler (G_TRO_GIANT)
+                      # 59: this branch's 29-55 on dev's 30 (#1501's vineyards, the natural features' groups after
+                      # this branch's: their oak / beech / birch / redwood this branch's)
+                      # 60: the regional rules by RESOLVE ecoregions, not coordinate boxes (Japan, the Great Lakes, the
+                      # north's conifer factor, the eucalypt plantations by the Atlantic: the review of PR #1545)
 TREE_MIN_M = 3.0
+# The species rules' prebuilt maps (SOURCES.md: their recipes and sha256). VERSION keys the code, not these: a cell's
+# folder holds data_key too (the review of PR #1545), so a map rebuilt or replaced never serves the cells of the old.
+DATA_FILES = ("ecoregions_2017_0p05.png", "ecoregions_2017.json", "leaftype_2019.png", "leaftype_cci_2020.png",
+              "treegenus_2020.npz")
+_data_key = None
+
+
+def data_key(here=None):
+    """12 hex of the SHA-256 over DATA_FILES' contents (a missing file as such), computed once per process (here: another
+    folder's files, not kept: the tests)."""
+    global _data_key
+    if _data_key is None or here is not None:
+        import hashlib
+        h = hashlib.sha256()
+        folder = here or os.path.dirname(os.path.abspath(__file__))
+        for name in DATA_FILES:
+            h.update(name.encode() + b"\0")
+            try:
+                with open(os.path.join(folder, name), "rb") as f:
+                    h.update(hashlib.sha256(f.read()).digest())
+            except OSError:
+                h.update(b"missing")
+        if here is not None:
+            return h.hexdigest()[:12]
+        _data_key = h.hexdigest()[:12]
+    return _data_key
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
 # ground: at 69 N tops were searched and thinned over radii 2.1x too small and the bushes' grids were 4.6x as dense
@@ -63,24 +138,44 @@ TREE_MIN_M = 3.0
 # to what they were at MERC_REF_LAT, so the tuned look holds everywhere (and the tropics are no longer a little sparse).
 MERC_REF_LAT = 40.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
+# (36-49 thinned broadleaf cells at 1.0 crown radii, crown_spacing: the trunks in pairs gone with 35-45 % of their
+# trees; 50: dev's thinning again, the tall trunks spaced by _thin_trunks without losing them)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
           "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
-          "eucalyptus_clump", "poplar", "creosote", "vine_row")
-# the mapped natural features' groups (natural.py, BNE_NATURAL_*: in the tiles' group lists only while a switch is on,
-# groups_list): species of mapped trees, the rock faces along mapped cliffs, the bare winter broadleaves
-BASE_GROUPS = GROUPS
-NATURAL_GROUPS = ("oak", "beech", "birch", "pine", "fir", "redwood", "cypress", "olive", "holm_oak", "cliff",
-                  "leafoff_n", "leafoff_s")
-GROUPS = BASE_GROUPS + NATURAL_GROUPS
-(G_OAK, G_BEECH, G_BIRCH, G_PINE, G_FIR, G_REDWOOD, G_CYPRESS, G_OLIVE, G_HOLM_OAK, G_CLIFF, G_LEAFOFF_N,
- G_LEAFOFF_S) = range(len(BASE_GROUPS), len(GROUPS))
+          "eucalyptus_clump", "poplar", "creosote", "vine_row",
+          # (29, species_groups: new names only at the end, the older groups keep their numbers)
+          "birch", "oak", "beech", "pine_eu", "spruce", "snag_broad", "snag_conifer", "palm_dry",
+          "birch_clump", "oak_clump", "beech_clump",
+          # (30: the bushes' and forest floors' own, shrub_groups; the stock survey 2026-11-16)
+          "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood", "tro_thicket",
+          "deciduous_open", "oak_open", "birch_open", "beech_open", "pine_west_open", "mediterranean_open",
+          "tropical_open", "conifer_open", "spruce_open", "pine_eu_open", "redwood", "tro_understory",
+          "desert_shrub_hot",
+          # (35: the world's own, species_groups' biome rules)
+          "savanna", "laurel", "pine_maritime",
+          # (48: the tropics' dead wood: Jungle Rock Island's fallen fronds and branches, its fallen giant)
+          "deadwood_tropical",
+          # (55: a rare veteran oak inside loose broadleaf woods; the tropics' giant filler in remote forest)
+          "oak_veteran", "tro_giant")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
- G_POPLAR, G_CREOSOTE, G_VINE_ROW) = range(26)
+ G_POPLAR, G_CREOSOTE, G_VINE_ROW, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_SNAG_BROAD, G_SNAG_CONIFER,
+ G_PALM_DRY, G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
+ G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN, G_BIRCH_OPEN, G_BEECH_OPEN, G_PINE_WEST_OPEN, G_MEDITERRANEAN_OPEN,
+ G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN, G_REDWOOD, G_TRO_UNDERSTORY,
+ G_DESERT_SHRUB_HOT, G_SAVANNA, G_LAUREL, G_PINE_MARITIME, G_DEADWOOD_TROPICAL, G_OAK_VETERAN, G_TRO_GIANT) = range(62)
+# the mapped natural features' groups (natural.py, BNE_NATURAL_*: in the tiles' group lists only while a switch is on,
+# groups_list): species of mapped trees, the rock faces along mapped cliffs, the bare winter broadleaves. A mapped oak,
+# beech, birch or redwood is this branch's group of that name (the species rules' shapes); the rest are their own.
+BASE_GROUPS = GROUPS
+NATURAL_GROUPS = ("pine", "fir", "cypress", "olive", "holm_oak", "cliff", "leafoff_n", "leafoff_s")
+GROUPS = BASE_GROUPS + NATURAL_GROUPS
+(G_PINE, G_FIR, G_CYPRESS, G_OLIVE, G_HOLM_OAK, G_CLIFF, G_LEAFOFF_N,
+ G_LEAFOFF_S) = range(len(BASE_GROUPS), len(GROUPS))
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -88,8 +183,23 @@ GROUPS = BASE_GROUPS + NATURAL_GROUPS
 # holm_oak_filler_center, 4-8 trees each, the materials of the single trees they stand for). The mod shows the clump
 # beyond its near ring (trees.lua CLUMP_M) and the square's trees, flagged by a negative scale, only within it: a far
 # forest tile of ~900 single trees becomes ~150 clumps. Other groups (palms, junipers, tropical trees) stay single.
-CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_DECIDUOUS: G_DECIDUOUS_CLUMP,
-            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP}
+CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_REDWOOD: G_CONIFER_CLUMP,
+            G_DECIDUOUS: G_DECIDUOUS_CLUMP,
+            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP,
+            # (29) the Scots pines and spruces far off as the conifer clump (no stock pine group: a pine clump is for a
+            # shape of our own), the broadleaves as their own species' groups
+            G_BIRCH: G_BIRCH_CLUMP, G_OAK: G_OAK_CLUMP, G_BEECH: G_BEECH_CLUMP, G_PINE_EU: G_CONIFER_CLUMP,
+            G_SPRUCE: G_CONIFER_CLUMP,
+            # (35) the maritime pines as the other pines; the laurel forests as the cork oaks' filler (their shapes)
+            G_PINE_MARITIME: G_CONIFER_CLUMP, G_LAUREL: G_MEDITERRANEAN_CLUMP,
+            # (45) as dev's far forests: the trees by a country road (the open groups, OPEN_ROAD_M) and the tropics'
+            # rainforest trees (dev's generic broadleaves there, clumped) far off as their clumps again (before: a
+            # tile's clumps a half to none, Rio's 1106 -> 0; the town's trees stay single, clumps())
+            G_DECIDUOUS_OPEN: G_DECIDUOUS_CLUMP, G_OAK_OPEN: G_OAK_CLUMP, G_BIRCH_OPEN: G_BIRCH_CLUMP,
+            G_BEECH_OPEN: G_BEECH_CLUMP, G_PINE_WEST_OPEN: G_CONIFER_CLUMP,
+            G_MEDITERRANEAN_OPEN: G_MEDITERRANEAN_CLUMP, G_CONIFER_OPEN: G_CONIFER_CLUMP,
+            G_SPRUCE_OPEN: G_CONIFER_CLUMP, G_PINE_EU_OPEN: G_CONIFER_CLUMP,
+            G_TROPICAL: G_DECIDUOUS_CLUMP, G_TROPICAL_OPEN: G_DECIDUOUS_CLUMP}
 CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
 CLUMP_CELL_M = 18.0
 CLUMP_MIN = 3
@@ -107,23 +217,51 @@ CLUMP_ROAD_MARGIN_M = {"motorway": 3.0, "motorway_link": 2.0, "trunk": 2.5, "tru
                        "primary_link": 1.0, "secondary": 1.5, "tertiary": 1.0}
 CLUMP_ROAD_MARGIN_DEFAULT_M = 0.5
 CLUMP_SHIFT_M = 4.0
-# The Mediterranean basin's Cs climates (Beck et al.'s Koppen-Geiger classes 8-10: Csa, Csb, Csc) inside its box: holm
-# and cork oaks, olives, maritime pines, cypresses (Italy's stock trees, trees.lua's "mediterranean"; the asset survey
-# 2026-11-10 found them loaded with Italy's folder but unused). California's Cs keeps the West Coast's own groups.
-MED_KOPPEN = (8, 9, 10)
-MED_BOX = (28.0, -10.5, 46.5, 42.0)         # south, west, north, east
+# The Mediterranean basin's lowland ecoregions (35: RESOLVE's Ecoregions 2017, ecoregion.py; before, Beck et al.'s Cs
+# climates inside a box, which took Galicia's and northern Portugal's oak woods and the Black Sea's and missed North
+# Africa's and the Adriatic's maquis): holm and cork oaks, olives, maritime pines, cypresses (Italy's stock trees,
+# trees.lua's "mediterranean"; the asset survey 2026-11-10 found them loaded with Italy's folder but unused). The
+# Palearctic's Mediterranean biome without its montane forests (Corsica's, the Pindus's, the Apennines', northwest
+# Iberia's, inner Anatolia's: oaks, beeches, firs), and the southern hemisphere's outside Australia (whose are
+# eucalypts): Chile's matorral (quillay, peumo, litre: evergreen sclerophylls), the Cape's fynbos and renosterveld
+# (their trees the stone and cluster pines, oaks and olives planted since the 1650s). California's keeps the West
+# Coast's own groups.
+ECO_MED = (785, 787, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806, 596, 89, 90)
+# (46) The coast below a mountain ecoregion: RESOLVE's polygons are coarse, and where a range rises from the sea its
+# mountain ecoregion reaches the shore (the Dinaric Mountains' at Makarska, under Biokovo: its Aleppo pine park forest
+# came out Scots pines, beeches and ferns, and no cypress; the Pindus's, Corsica's, the South Apennines', western
+# Anatolia's coasts the same). A Csa point (Koppen: hot dry summers, the lowlands' climate there) outside ECO_MED with
+# one of them within MED_FRINGE_DEG is that one's (the nearer ring first, then the ring's order): Galicia's and northern
+# Portugal's summer-dry oceanic woods are Csb, so stay out.
+# The Koppen map is 0.1 degree: a coast's pixel averages the sea's and the mountain's (Makarska's northern half Cfb,
+# its quays the sea's class 0), so one of MED_FRINGE_NEAR_K next to a Csa pixel (MED_FRINGE_K_DEG) and by the sea
+# (a sea pixel within MED_FRINGE_SEA_DEG, or its own) counts as Csa: Makarska's north half, not Biokovo's summit.
+MED_FRINGE_DEG = (0.075, 0.15)
+MED_FRINGE_K = (8,)
+MED_FRINGE_NEAR_K = (0, 14, 15)         # the sea, Cfa, Cfb
+MED_FRINGE_K_DEG = 0.1
+MED_FRINGE_SEA_DEG = 0.05
+# The mountain and hill ecoregions whose foot is a Mediterranean coast or lowland (a world survey at 0.05 degrees,
+# 2026-11-19: the Dinaric Mountains', western Anatolia's, the Maghreb's, northwest Iberia's (the Douro's), the Pindus's,
+# the Apennines', Corsica's, the Balkans' and the Rhodopes' Thracian feet, the Marmara's, the Ligurian Alps', the
+# Cevennes', the Pyrenees' Roussillon, central Chile's Andean foot). Not the steppes' and the plains' that touch a
+# Csa pixel (central and eastern Anatolia's, the Zagros', Syria's, the Po's, the Karoo's, the High Atlas's): their
+# trees are deciduous oaks, pistachios and poplars, not the maquis.
+MED_FRINGE_ECO = (660, 786, 701, 800, 801, 802, 644, 788, 646, 665, 678, 689, 686, 676, 648, 563)
+_RING = ((0.0, 1.0), (0.7071, 0.7071), (1.0, 0.0), (0.7071, -0.7071), (0.0, -1.0), (-0.7071, -0.7071), (-1.0, 0.0),
+         (-0.7071, 0.7071))     # (south-north, west-east) unit steps
 # More regional trees (the asset survey 2026-11-10, the stock shapes the flora supports; earthfast.regional_groups):
 # - Australia: eucalypts most of its trees (West Coast USA's eucalyptus_double / _tall, eucalyptus_group far).
 # - Temperate Europe's river banks: a share of the broadleaves within RIPARIAN_M of water are poplars (Automation Test
 #   Track's s_poplar_large: the black and hybrid poplars along the Loire, the Po, the Danube; willows and alders have no
 #   stock shape).
-# - North America's hot deserts (Koppen BWh, Beck et al. class 4: the Mojave, Sonoran and Chihuahuan): most desert
-#   shrubs are creosote bushes (Automation Test Track's shrub_a-c, the creosote of West Coast USA's desert).
+# - North America's hot deserts (35: their ecoregions, the Mojave, Sonoran, Chihuahuan, Baja California's and the Gulf
+#   of California's; before, Koppen BWh in a box): most desert shrubs are creosote bushes (Automation Test Track's
+#   shrub_a-c, the creosote of West Coast USA's desert; Larrea tridentata's range).
 ZONE_MED, ZONE_RIPARIAN, ZONE_HOT_DESERT = 1, 2, 3
 RIPARIAN_BOX = (42.0, -10.0, 60.0, 30.0)
 RIPARIAN_M = 30.0
-HOT_DESERT_KOPPEN = (4,)
-HOT_DESERT_BOX = (22.0, -120.0, 38.5, -98.0)
+ECO_CREOSOTE = (426, 428, 431, 433, 435)
 ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width by class below)
 TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
                             # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
@@ -213,16 +351,21 @@ def _shift_max(a, r):
 
 
 def _dilate(m, r):
-    """Bool mask grown by r pixels (a square window, separable)."""
+    """Bool mask grown by r pixels (a square window, separable). (42) By doubling: a mask grown by d grown again by
+    s <= d + 1 is grown by d + s, so log2(r) passes an axis, not r (OPEN_ROAD_M's ~12 px: 4 passes for 12; the same
+    pixels)."""
     out = m.copy()
     for axis in (0, 1):
-        acc = out.copy()
-        for k in range(1, r + 1):
-            acc[tuple(slice(k, None) if a == axis else slice(None) for a in range(2))] |= \
-                out[tuple(slice(None, -k) if a == axis else slice(None) for a in range(2))]
-            acc[tuple(slice(None, -k) if a == axis else slice(None) for a in range(2))] |= \
-                out[tuple(slice(k, None) if a == axis else slice(None) for a in range(2))]
-        out = acc
+        d = 0
+        while d < r:
+            s = min(d + 1, r - d)
+            acc = out.copy()
+            acc[tuple(slice(s, None) if a == axis else slice(None) for a in range(2))] |= \
+                out[tuple(slice(None, -s) if a == axis else slice(None) for a in range(2))]
+            acc[tuple(slice(None, -s) if a == axis else slice(None) for a in range(2))] |= \
+                out[tuple(slice(s, None) if a == axis else slice(None) for a in range(2))]
+            out = acc
+            d += s
     return out
 
 
@@ -236,18 +379,76 @@ def regional(group, height, lat, lon, lcls, u, riparian=None):
     and desert bushes, Johnson Valley's rocks, Jungle Rock Island's palms and tropical trees) from the generic
     ones, by a coarse climate from the position and the land cover class at the item (until a species map): the Rust
     kernel earthfast.regional_groups (its rules there). u: a hashed [0, 1) per item; riparian: per item, within
-    RIPARIAN_M of water (None: none). Pure."""
+    RIPARIAN_M of water (None: none), counted only off the forest's land cover (51: the poplars are Automation Test
+    Track's Lombardy poplars, a planted columnar cultivar of the lowland rivers' farmland and towns: 8 % of the trees of
+    Bieszczady's beech forest, along its mountain streams, the model audit 2026-11-20). Pure."""
     fast.require(201, "regional_groups")
     f64 = np.float64
     n = np.size(group)
     bc = lambda a, t: np.ascontiguousarray(np.broadcast_to(np.asarray(a, t), (n,)))     # noqa: E731
     la, lo = bc(lat, f64), bc(lon, f64)
-    return np.asarray(fast._ef.regional_groups(
-        bc(group, np.uint8), bc(height, f64), la, lo, bc(lcls, np.uint8), bc(u, f64),
+    pre, lc, uu = bc(group, np.uint8), bc(lcls, np.uint8), bc(u, f64)
+    g = np.asarray(fast._ef.regional_groups(
+        pre, bc(height, f64), la, lo, lc, uu,
         [G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
          G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]],
-        zones(la, lo, None if riparian is None else bc(riparian, bool)),
+        zones(la, lo, None if riparian is None else bc(riparian, bool) & (lc != WC["tree"])),
         [G_MEDITERRANEAN, G_EUCALYPTUS, G_POPLAR, G_CREOSOTE]), np.uint8)
+    return _mediterranean_leaf(pre, g, la, lo, lc, uu)
+
+
+# (39) the Mediterranean's own trees by the forest inventories (EU-Forest, Mauri et al. 2017: the NFI plots' species,
+# each plot's species weighted 1/k): the kernel made MED_SHARE (0.75) of its broadleaves AND conifers Italy's
+# evergreen trees, which turned Spain's pine forests (its conifers 52 % of the plots' trees, 98 % of them pines) into
+# holm oaks and olives, and central Italy's deciduous oak woods (Q. cerris, pubescens: 90 % of its broadleaves) too.
+# Off town: a conifer stays a conifer (species_groups: the maritime and Mediterranean pines, the mountains' black and
+# Scots pines), a broadleaf is an evergreen one at the ecoregion's share (ECO_EVERGREEN, else MED_EVERGREEN), a
+# deciduous oak otherwise. The towns' trees keep the kernel's (their olives, holm oaks, cypresses).
+ECO_EVERGREEN = {793: 0.84, 799: 0.53, 792: 0.52, 805: 0.93, 795: 0.10, 806: 0.57, 803: 0.95, 787: 0.27,
+                 # (no plots: the ecoregion's own name) the Illyrian and southern Anatolian deciduous and montane
+                 # woods; the Chilean matorral's and the Cape's sclerophyll scrub and woods
+                 794: 0.4, 804: 0.3, 596: 0.9, 89: 0.9, 90: 0.9}
+TREEGENUS_MIN = 0.01        # (39) the genus map's conifers (broadleaves) at least this share of the trees for its split
+ECO_NO_BEECH = (785, 787, 789, 790, 791, 792, 793, 796, 797, 798, 799, 803, 804, 805)     # (39: no beech belt)
+MED_EVERGREEN = 0.6             # (Greece's, Anatolia's, the Maghreb's, Chile's, the Cape's: no plots)
+
+
+def _mediterranean_leaf(pre, g, lat, lon, lcls, u):
+    """regional's groups (g) with the Mediterranean ecoregions' trees off town by their leaf type (pre: the groups
+    before; ECO_EVERGREEN). Pure."""
+    cand = _in(pre, (G_CONIFER, G_DECIDUOUS)) & (lcls != WC["built"]) & _in(g, (G_CONIFER, G_DECIDUOUS,
+                                                                               G_MEDITERRANEAN))
+    if not cand.any():
+        return g
+    eco = eco_med(lat[cand], lon[cand])
+    med = _in(eco, ECO_MED)
+    if not med.any():
+        return g
+    g = g.copy()
+    idx = np.nonzero(cand)[0][med]
+    ev = np.full(len(idx), MED_EVERGREEN)
+    for e_, s in ECO_EVERGREEN.items():
+        ev[eco[med] == e_] = s
+    u2 = (u[idx] * 7919.0 + 0.31) % 1.0
+    p = pre[idx]
+    g[idx] = np.where(p == G_CONIFER, G_CONIFER, np.where(u2 < ev, G_MEDITERRANEAN, G_DECIDUOUS))
+    return g
+
+
+_LUTS = {}
+LUT_N = 1024        # (the ids the rules test: groups < 256, Koppen classes < 31, land cover < 101, ECO_IDs < 848)
+
+
+def _in(a, ids):
+    """np.isin(a, ids) for small non-negative integers (groups, Koppen classes, land cover classes, ECO_IDs, all under
+    LUT_N) by a cached lookup table: the species rules test ~30 sets a tile, np.isin sorted each (35: 3x faster)."""
+    key = tuple(int(i) for i in ids)
+    lut = _LUTS.get(key)
+    if lut is None:
+        lut = np.zeros(LUT_N, bool)
+        lut[list(key)] = True
+        _LUTS[key] = lut
+    return lut[np.asarray(a)]
 
 
 def _leaf_share(code, share):
@@ -272,30 +473,73 @@ def _in_box(lat, lon, box):
     return (lat >= box[0]) & (lat <= box[2]) & (lon >= box[1]) & (lon <= box[3])
 
 
+def _med_fringe(lat, lon):
+    """Per point: the ECO_MED ecoregion a Csa point's coast belongs to (MED_FRINGE_*), else 0. Pure."""
+    import climate
+    import ecoregion
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    out = np.zeros(len(lat), np.int64)
+    k = np.asarray(climate.koppen_many(lat, lon), np.int64)
+    csa = _in(k, MED_FRINGE_K)
+    near = np.flatnonzero(_in(k, MED_FRINGE_NEAR_K))
+    sea = k[near] == 0
+    for dy, dx in _RING:
+        if sea.all():
+            break
+        rest = np.flatnonzero(~sea)
+        sea[rest] = np.asarray(climate.koppen_many(lat[near[rest]] + dy * MED_FRINGE_SEA_DEG,
+                                                   lon[near[rest]] + dx * MED_FRINGE_SEA_DEG)) == 0
+    near = near[sea]
+    for dy, dx in _RING:
+        if not len(near):
+            break
+        kn = np.asarray(climate.koppen_many(lat[near] + dy * MED_FRINGE_K_DEG, lon[near] + dx * MED_FRINGE_K_DEG),
+                        np.int64)
+        hit = _in(kn, MED_FRINGE_K)
+        csa[near[hit]] = True
+        near = near[~hit]
+    todo = np.flatnonzero(csa)
+    for r in MED_FRINGE_DEG:
+        for dy, dx in _RING:
+            if not len(todo):
+                return out
+            e = ecoregion.eco_many(lat[todo] + dy * r, lon[todo] + dx * r)
+            hit = _in(e, ECO_MED)
+            out[todo[hit]] = e[hit]
+            todo = todo[~hit]
+    return out
+
+
+def eco_med(lat, lon):
+    """ecoregion.eco_many, a Mediterranean coast's points under a mountain ecoregion given the Mediterranean one's
+    (MED_FRINGE_*): the ecoregion the vegetation's Mediterranean rules read. Pure."""
+    import ecoregion
+    lat, lon = np.atleast_1d(np.asarray(lat, np.float64)), np.atleast_1d(np.asarray(lon, np.float64))
+    eco = ecoregion.eco_many(lat, lon)
+    cand = np.flatnonzero(_in(eco, MED_FRINGE_ECO))
+    if len(cand):
+        f = np.asarray(_on_grid(_med_fringe, lat[cand], lon[cand]), np.int64).reshape(-1)
+        hit = f > 0
+        if hit.any():
+            eco = eco.copy()
+            eco[cand[hit]] = f[hit]
+    return eco
+
+
 def zones(lat, lon, riparian=None):
     """Per point: its regional zone for earthfast.regional_groups (ZONE_*; 0 none)."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    z = np.where(mediterranean(lat, lon), ZONE_MED, 0).astype(np.uint8)
+    eco = eco_med(lat, lon)
+    z = np.where(_in(eco, ECO_MED), ZONE_MED, 0).astype(np.uint8)
     if riparian is not None:
         z[(z == 0) & np.asarray(riparian, bool) & _in_box(lat, lon, RIPARIAN_BOX)] = ZONE_RIPARIAN
-    box = _in_box(lat, lon, HOT_DESERT_BOX)
-    if box.any():
-        import climate
-        hot = np.zeros(len(lat), bool)
-        hot[box] = np.isin(climate.koppen_many(lat[box], lon[box]), HOT_DESERT_KOPPEN)
-        z[hot & (z == 0)] = ZONE_HOT_DESERT
+    z[(z == 0) & _in(eco, ECO_CREOSOTE)] = ZONE_HOT_DESERT
     return np.ascontiguousarray(z)
 
 
 def mediterranean(lat, lon):
-    """Per point: in the Mediterranean basin's Cs climates (MED_KOPPEN inside MED_BOX)."""
-    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    box = (lat >= MED_BOX[0]) & (lat <= MED_BOX[2]) & (lon >= MED_BOX[1]) & (lon <= MED_BOX[3])
-    out = np.zeros(lat.shape, bool)
-    if box.any():
-        import climate
-        out[box] = np.isin(climate.koppen_many(lat[box], lon[box]), MED_KOPPEN)
-    return np.ascontiguousarray(out)
+    """Per point: in the Mediterranean basin's lowland ecoregions (ECO_MED, eco_med)."""
+    return np.ascontiguousarray(_in(eco_med(lat, lon), ECO_MED))
 
 
 def _north_america(lat, lon):
@@ -303,9 +547,97 @@ def _north_america(lat, lon):
     return (lat > 24.0) & (lon > -170.0) & (lon < -50.0)
 
 
-def _conifer_share(lat, lon):
-    """The regional share of conifers (a coarse climate stand-in until a species map). Beyond North America
-    (2026-10-15: Douglas firs stood in Punjab's fields): few in the tropics and subtropics, the pines of the
+MAP_Q = 0.0025      # (42) the 0.05 degree maps read at this grid's points (~250 m): a tile's trees share a few hundred
+
+
+def _on_grid(fn, lat, lon):
+    """fn(lat, lon) (a smooth map's per point values, (n,) or (n, k)) read once per MAP_Q grid point the points round to,
+    not once per tree (a tile's 50-120 thousand trees, the maps read several times each: 13 ms a read). Pure."""
+    lat, lon = np.atleast_1d(np.asarray(lat, np.float64)), np.atleast_1d(np.asarray(lon, np.float64))
+    if len(lat) < 64:
+        return fn(lat, lon)
+    qi = np.round(lat / MAP_Q).astype(np.int64)
+    qj = np.round(lon / MAP_Q).astype(np.int64)
+    u, inv = np.unique(qi * 1000003 + qj, return_inverse=True)
+    first = np.zeros(len(u), np.int64)
+    first[inv[::-1]] = np.arange(len(inv))[::-1]
+    v = fn(qi[first] * MAP_Q, qj[first] * MAP_Q)
+    return np.asarray(v)[inv.reshape(-1)]
+
+
+def _conifer_share(lat, lon, north=True):
+    """The share of conifers among the trees: (35) the forests' leaf type around the point (leaftype.py: Copernicus
+    Land Cover 100 m's Forest Type, 2019), else the coarse rule below. South of the tropics no less than the coarse
+    rule: the map takes the radiata pine plantations of Chile, New Zealand and South Africa for evergreen
+    broadleaves (Kaingaroa's 0.27, Biobio's 0.0). north: Europe's north's birches (NORTH_CONIFER_FACTOR); without it
+    the maps' own share."""
+    import leaftype
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    m = np.reshape(_on_grid(leaftype.conifer_share, lat, lon), lat.shape)
+    coarse = _conifer_share_coarse(lat, lon)
+    m = np.where(lat < -23.5, np.fmax(m, coarse), m)
+    m = np.where(np.isnan(m), coarse, m)
+    return m * north_conifer_factor(lat, lon) if north else m
+
+
+# Rules tied to a region name its RESOLVE ecoregions (ecoregion.ids: the names checked when first used), not a box of
+# coordinates (the review of PR #1545): a rule follows the region's own edges.
+@functools.lru_cache(maxsize=None)
+def _eco_ids(names):
+    import ecoregion as er
+    return er.ids(*names)
+
+
+def _in_eco(lat, lon, names, eco=None):
+    """Per point: in one of the ecoregions named (eco: their ECO_IDs where the caller has them)."""
+    if eco is None:
+        import ecoregion as er
+        eco = er.eco_many(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    return _in(np.asarray(eco), _eco_ids(names))
+
+
+# (49) Fennoscandia's and the Baltic's forests have more broadleaves (their birches) than the leaf type maps give: EU-Forest's
+# plots 60-68 N 69-72 % conifers where the maps made 81-84 %, 68-70 N 39 % against 55 % (the user, 2026-11-19: "the
+# birch 10 % in the game, 15 % in the data"). The conifer share there times this factor by latitude, Europe only
+# (NORTH_CONIFER_ECO: Fennoscandia's and European Russia's boreal and hemiboreal ecoregions west of the Urals, where
+# the inventories are; Siberia's taiga as it was).
+NORTH_CONIFER_FACTOR = ((57.0, 1.0), (60.0, 0.86), (66.0, 0.86), (69.0, 0.72))
+NORTH_CONIFER_ECO = ("Scandinavian and Russian taiga", "Scandinavian coastal conifer forests",
+                     "Scandinavian Montane Birch forest and grasslands", "Sarmatic mixed forests", "Kola Peninsula tundra")
+
+
+def north_conifer_factor(lat, lon):
+    """Per point: the factor on the conifer share in Europe's north (NORTH_CONIFER_*), 1 elsewhere."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    f = dnp.interp(lat, [a for a, _ in NORTH_CONIFER_FACTOR], [b for _, b in NORTH_CONIFER_FACTOR])
+    north = lat >= NORTH_CONIFER_FACTOR[0][0]       # (no lookup where the factor is 1 anyway)
+    out = np.ones(len(np.atleast_1d(lat)))
+    if north.any():
+        idx = np.flatnonzero(np.atleast_1d(north))
+        la, lo = np.atleast_1d(lat)[idx], np.atleast_1d(lon)[idx]
+        out[idx] = np.where(_in_eco(la, lo, NORTH_CONIFER_ECO), np.atleast_1d(f)[idx], 1.0)
+    return out if np.ndim(lat) else out[0]
+
+
+CONIFER_TILT_H = 12.0           # (37) the taller trees more likely the conifers: a tree's weight its height over this,
+CONIFER_TILT = (0.5, 1.2)       # within these
+
+
+def conifer_odds(share, height, is_tree=None):
+    """Per tree: the chance that it is a conifer, the local share tilted by its height (the tall ones more likely, the
+    short ones the broadleaf scrub) with the cell's mean kept to the share: 1 - (1 - share) ** (w / mean w). (37:
+    was share * w, which took a third of the trees off every conifer forest: Bory Tucholskie's 0.97 pines made 66 %
+    conifers, Finland's 49 %.)"""
+    share = np.clip(np.asarray(share, np.float64), 0.0, 1.0)
+    w = np.clip(np.asarray(height, np.float64) / CONIFER_TILT_H, *CONIFER_TILT)
+    wt = w if is_tree is None else w[np.asarray(is_tree, bool)]
+    a = w / (math.fsum(wt.tolist()) / wt.size if wt.size else 1.0)     # (an exact sum: the same mean on every CPU)
+    return 1.0 - dnp.power(1.0 - share, a)
+
+
+def _conifer_share_coarse(lat, lon):
+    """The regional share of conifers (a coarse climate stand-in where the leaf type map has no forest). Beyond North
+    America (2026-10-15: Douglas firs stood in Punjab's fields): few in the tropics and subtropics, the pines of the
     Mediterranean, the boreal north."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     west = lon < -100.0
@@ -316,6 +648,756 @@ def _conifer_share(lat, lon):
     mediterranean = (lat > 30.0) & (lat < 46.0) & (lon > -10.0) & (lon < 40.0)
     other = np.where(mediterranean, 0.3, other)
     return np.where(_north_america(lat, lon), share, other)
+
+
+# Eurasia's species (29; the stock survey 2026-11-15: East Coast USA's "aspen" shapes wear the game's birch bark and
+# leaves, /assets/materials/tree/birch): outside the Americas, the tropics and the southern hemisphere, the generic
+# broadleaves become birches, oaks or beeches and the conifers Scots pines or spruces (Douglas firs stand in: no stock
+# spruce), by the Koppen class (climate.py), the latitude and the height above the sea, in stands (stand_u) with a
+# STAND_MIX share of single trees mixed in. Starting shares from the national inventories (Poland: pine first, oak
+# 8.0 %, birch 6.8 %; the mountains spruce, fir, beech): to be tuned on screenshots.
+EURASIA_BOX = (23.5, -25.0, 75.0, 180.0)        # south, west, north, east
+STAND_CELL_M = 80.0         # a stand's size about (ground m); its edges ragged by STAND_JITTER of it per tree
+STAND_JITTER = 0.35
+STAND_MIX = 0.3             # this share of the trees picks its species on its own (a stand's admixture; 0.15 made
+                            # one-species blocks, the user's test at Gorzyce 2026-11-17)
+BROAD_STAND_MIX = 0.55      # (35) the broadleaves' species more mixed than the conifers' stands: an oak-hornbeam or
+                            # beech wood is a mix tree by tree, its birches scattered pioneers, not blocks (the user's
+                            # test at Syrynka 2026-11-18: an 80 m wall of birches); pines and spruces are planted in
+                            # stands
+# Koppen classes (Beck et al.) -> (birch, oak, beech) shares of the broadleaves
+K_BOREAL = (19, 20, 23, 24, 27, 28, 29, 30)     # Dsc Dsd Dwc Dwd Dfc Dfd ET EF
+K_CONTINENTAL = (17, 18, 21, 22, 25, 26)        # Dsa Dsb Dwa Dwb Dfa Dfb
+K_OCEANIC = (12, 13, 15, 16)                    # Cwb Cwc Cfb Cfc
+K_MED = (8, 9, 10)                              # Csa Csb Csc
+K_SUBTROPICAL = (11, 14)                        # Cwa Cfa
+K_COLD_ARID = (5, 7)                            # BWk BSk
+K_HOT_ARID = (4, 6)                             # BWh BSh: the broadleaves Italy's (olives, holm oaks), not oaks
+BOREAL_LAT = 55.0           # (a Dfc / ET class south of this is a mountain's: continental shares)
+# (35) the continental climates' (Dfb, Dfa, Dwb...) by continental_shares, not one triple: the birches' share of the
+# broadleaves rises eastwards (the national inventories: Germany ~10 %: birch 4.5 % of the forest of ~45 % broadleaves;
+# Poland ~22 %: 6.8 % of ~31 %; Belarus and European Russia over half), lower in the forest steppe's south (Ukraine:
+# oaks); the beeches (standing in for the hornbeams, limes and maples too: smooth grey bark, oval crowns) end at their
+# range's eastern edge (Fagus sylvatica: eastern Poland, the Carpathians), the oaks take the rest. Was a flat 0.40
+# birches: walls of them in Silesia's oak-hornbeam woods (the user's test at Syrynka, 2026-11-18).
+CONT_BIRCH_LON = ((10.0, 0.10), (20.0, 0.20), (28.0, 0.45), (40.0, 0.60), (60.0, 0.60), (90.0, 0.45))
+# (49) more of them in central Europe: EU-Forest's 48-52 N, birch 16 % of the broadleaves, the rule's 9 %
+CONT_BIRCH_SOUTH = ((40.0, 0.1), (46.0, 0.45), (50.0, 0.85), (54.0, 1.0))  # (latitude, factor): fewer to the south
+                                            # (Anatolia's, the Balkans', Ukraine's forest steppe: oaks; Ukraine's
+                                            # birch ~8 % of a forest of ~57 % broadleaves)
+NORTH_BIRCH_LAT = ((55.0, 0.30), (58.0, 0.65), (60.0, 0.85), (62.0, 0.95))
+CONT_BEECH_LON = (20.0, 26.0)               # the beeches' part of the rest: CONT_BEECH up to the first, none east
+CONT_BEECH = 0.45                           # of the second (the uphill gain, BEECH_UPHILL, still adds them)
+BROAD_SHARES = {"boreal": (1.0, 0.0, 0.0), "continental": (0.20, 0.44, 0.36), "oceanic": (0.12, 0.48, 0.40),
+                "med": (0.05, 0.95, 0.0), "subtropical": (0.05, 0.70, 0.25), "cold_arid": (0.30, 0.70, 0.0)}
+# (36) the rest of the world's broadleaves by region (broad_shares; the stock shapes stand in: the beeches for the
+# maples, limes, hornbeams, tulip trees; the oaks for the hickories, ashes, elms):
+# - the oceanic climates: the birches' share by latitude (France ~5 %: birch 2-3 % of a forest of ~70 % broadleaves;
+#   Great Britain ~18 %: the NFI's birch beside oak, ash, sycamore, beech; Norway's coast mostly birch)
+OCEANIC_BIRCH_LAT = ((45.0, 0.05), (50.0, 0.10), (55.0, 0.20), (60.0, 0.40), (63.0, 0.75), (66.0, 0.95))
+# - East Asia's temperate forests (east of EAST_ASIA_LON: Manchuria, Korea, the Russian Far East: Mongolian oak,
+#   Asian white birch, maples, limes; Japan's cool temperate belt: Japanese beech first, Quercus crispula, birches)
+EAST_ASIA_LON = 100.0
+EAST_ASIA_BIRCH_LAT = ((35.0, 0.05), (40.0, 0.12), (45.0, 0.30), (50.0, 0.45))   # (Korea's and north China's oaks
+EAST_ASIA_BEECH = 0.35                      # and pines in the south; Manchuria's birches in the north), the beeches
+                                            # (maples, limes) this part of the rest
+# - the cold steppes' (BSk, BWk) broadleaves: the birch groves (kolki) of the forest steppe in the north, the planted
+#   poplars, elms and locusts (oaks stand in) of the south's towns and shelterbelts
+COLD_ARID_BIRCH_LAT = ((40.0, 0.05), (46.0, 0.15), (52.0, 0.50))
+JAPAN_ECO = ("Taiheiyo evergreen forests", "Taiheiyo montane deciduous forests", "Nihonkai evergreen forests",
+             "Nihonkai montane deciduous forests", "Hokkaido deciduous forests", "Hokkaido montane conifer forests",
+             "Honshu alpine conifer forests")     # (Japan's main islands; the Nansei Islands are subtropical)
+JAPAN_SHARES = (0.15, 0.40, 0.45)
+# - North America outside the dry West (the USFS FIA's eastern hardwoods: oak-hickory first, maples and beech, the
+#   birches only in the north's northern hardwoods and the boreal aspen-birch): the birches' share by latitude, the
+#   beeches (maples, beech, tulip tree, basswood) NA_BEECH of the rest
+NA_BIRCH_LAT = ((32.0, 0.02), (38.0, 0.04), (42.0, 0.10), (46.0, 0.30), (50.0, 0.60), (54.0, 0.90))
+NA_BEECH = 0.42
+# (43) the spruce-shaped share of North America's generic conifers by latitude: the mid-Atlantic's and the
+# Appalachians' conifers mostly pines (Virginia, pitch, shortleaf, eastern white pine) and hemlocks, the north's
+# spruces and firs (Canada's NFI: 85 %)
+NA_SPRUCE_LAT = ((38.0, 0.25), (42.0, 0.5), (45.0, 0.8), (48.0, 0.85))
+NA_SPRUCE_LAKES = 0.65              # (Minnesota, Wisconsin, Michigan, Ontario's south: the red, white and jack pines)
+GREAT_LAKES_ECO = ("Western Great Lakes forests", "Upper Midwest US forest-savanna transition",
+                   "Southern Great Lakes forests", "Eastern Great Lakes lowland forests")
+# - elsewhere outside the tropics and Eurasia (the pampas', the Highveld's, the Middle East's planted and riverside
+#   trees: oaks, planes, poplars, elms; birches hardly)
+OTHER_SHARES = (0.03, 0.62, 0.35)
+# (35) by the ecoregion where the Koppen class misleads: the Cantabrian and northwest Iberian oak woods (Galicia,
+# northern Portugal, Asturias: Quercus robur and pyrenaica, birches; beeches only in the mountains, BEECH_UPHILL)
+ECO_BROAD_SHARES = {648: (0.25, 0.75, 0.0), 800: (0.25, 0.75, 0.0)}
+BEECH_UPHILL = 0.85         # the beeches' share gained over the beech belt (from the birches and oaks)
+# (37) the beech belt (submontane and montane: the oak-hornbeam woods give way to beech, fir and sycamore; Bieszczady
+# NP: beech ~60 % of the forest, oaks hardly any above 500 m) from BEECH_BELT_M[0] below the spruce line, whole at
+# BEECH_BELT_M[1] below it (50 N: 334 to 734 m; 46 N, the Alps: 494 to 894; 36 N, Honshu: 894 to 1294). Was the
+# montane belt (700 m below the line to the line) and 0.5: the Bieszczady at 700 m half oaks.
+BEECH_BELT_M = (800.0, 400.0)
+PINE_WOOD_SHARE = (0.5, 0.9)    # (37) the forest's conifer share over which its beeches become birches and oaks
+PINE_WOOD_BIRCH = 0.6           # (of those: the rest oaks)
+# spruces (of the conifers): SPRUCE_LAT's share by latitude in the lowlands, rising over the montane belt (MONTANE_M
+# below the spruce line) to SPRUCE_MOUNTAIN halfway up it (the firs and spruces of the montane belt); the line
+# SPRUCE_LINE_M at 50 N, SPRUCE_LINE_PER_DEG lower a degree north. The mountains' effect fades out north of
+# MOUNTAIN_FADE (the boreal lowlands' own shares). Above the line SPRUCE_TAKES_BROAD of the broadleaves are spruces too
+# (the upper montane belt: the Tatras, the Alps).
+SPRUCE_LAT = ((45.0, 0.08), (50.0, 0.10), (55.0, 0.28), (60.0, 0.45), (65.0, 0.35), (70.0, 0.20))
+# (36) west of SPRUCE_LON[0] (Germany, Czechia, Austria, Switzerland, Scandinavia: Norway spruce planted and native
+# from the uplands down; the inventories: Germany's conifers ~46 % spruce, Czechia's ~70 %, Sweden's ~50 %) the
+# spruces' share by SPRUCE_CENTRAL, east of SPRUCE_LON[1] by SPRUCE_LAT (Poland's, Belarus' and Russia's pine lands:
+# Poland's conifers ~13 % spruce and fir)
+SPRUCE_CENTRAL = ((45.0, 0.20), (48.0, 0.45), (52.0, 0.35), (55.0, 0.35), (60.0, 0.50), (65.0, 0.40), (70.0, 0.20))
+SPRUCE_LON = (16.0, 21.0)
+SPRUCE_PLAIN_M = (120.0, 350.0)     # (37) SPRUCE_CENTRAL's share from nothing at the first height to whole at the second
+SPRUCE_PLAIN_LAT = 56.0
+CONICAL_JAPAN = 0.7                 # (38) the conical (spruce-shaped) share of Japan's conifers at least
+CONICAL_CHINA = 0.5                 # and of East Asia's south of CONICAL_CHINA_LAT
+CONICAL_CHINA_LAT = 32.0
+ATLANTIC_SPRUCE = 0.6               # (39) the spruces' share of the oceanic northwest's conifers at least
+ATLANTIC_SPRUCE_LAT = 50.0
+ATLANTIC_SPRUCE_LON = 13.0
+SPRUCE_MOUNTAIN = 0.85
+SPRUCE_LINE_M = 1100.0
+SPRUCE_LINE_PER_DEG = 40.0
+MONTANE_M = 700.0
+SPRUCE_RAMP_M = 300.0
+SPRUCE_TAKES_BROAD = 0.7
+MOUNTAIN_FADE = (55.0, 60.0)
+ELEV_ZOOM = 10              # the DEM's zoom for a tree's height above the sea (coarse: one tile serves a cell)
+# dead trees: SNAG_SHARE of the forest trees (land cover tree, not in town) SNAG_H tall, outside the tropics
+SNAG_SHARE = 0.015
+SNAG_H = (6.0, 18.0)
+SNAG_FROM = None            # (set below: the groups a dead tree may stand in for, broadleaf / conifer)
+# warm towns' palms outside the tropics and North America (its own, earthfast.regional_groups): Koppen class ->
+# (the share in town, outside town, the latitude they stop at); date and fan palms (Italy's, West Coast USA's)
+DRY_PALMS = {8: (0.15, 0.0, 44.0), 4: (0.45, 0.15, 36.0), 6: (0.30, 0.03, 36.0), 14: (0.08, 0.0, 35.0)}
+# (54) ... but by the sea and low: palms need mild winters, and a fan palm in a street is a coast's sight (Nice, Split),
+# not a plateau's (Valensole, 550 m, 100 km inland: two of them by its car park, the user's 2026-11-24). Their share
+# times palm_fit: the sea (Koppen class 0 on its 0.1 degree grid) within PALM_COAST_DEG (full) or PALM_INLAND_DEG
+# (3/4), else PALM_INLAND_KEEP, outside the deserts' and steppes' classes (their oases: any distance); and full below
+# PALM_ELEV_M[0], none from PALM_ELEV_M[1] up, linear between (the winters' mildness: the height decides most)
+PALM_COAST_DEG = 0.2
+PALM_INLAND_DEG = 0.4
+PALM_ELEV_M = (200.0, 450.0)
+PALM_INLAND_KEEP = 0.5      # (farther from the sea: Seville, Cordoba, Murcia, low and mild, have palms in plenty)
+K_DRY_PALMS = (4, 6)             # BWh, BSh: the hot deserts' and steppes' palms are their oases', inland too
+PALM_FROM = None
+# the rainforests (Koppen Af, Am): every generic broadleaf a tropical tree (the shapes span 5-33 m since the stock
+# survey), and fewer palms outside town (regional_groups' 20 % of the tropics' trees: RAINFOREST_PALM_KEEP of them)
+K_RAINFOREST = (1, 2)
+K_TROPICS = (1, 2, 3)             # Af Am Aw: the coconut palms' (34)
+REDWOOD_MIN_M = 25.0
+STEPPE_JUNIPER = 0.6
+# (35) the juniper woodlands' ecoregions: Anatolia's steppes and Taurus, the Elburz, the Kopet Dag, eastern Iran,
+# Baluchistan and Afghanistan, the Alai and western Tian Shan, Oman's Al-Hajar, the Asir, the High Atlas, Spain's
+# Meseta (J. thurifera)
+# (35) the world beyond Eurasia's and the dry West's rules, by RESOLVE's biomes and realms (ecoregion.py) and the
+# forests' leaf type (leaftype.py), species_groups:
+# - the tropics' broadleaves (the tropical biomes, and any land within 23.5 degrees outside the montane, temperate,
+#   Mediterranean and desert ones): the rainforest's trees (G_TROPICAL; before, only Koppen Af / Am: the savanna
+#   climates' woods were East Coast USA's oaks and beeches); the savannas' (biome 7) and the dry forests' and hot
+#   deserts' open country (biomes 2, 13 within SAVANNA_LAT, off the Mediterranean) the umbrella-crowned acacias'
+#   (G_SAVANNA: Jungle Rock Island's umbrella filler and ceiba, Italy's feathery scraggly trees, Johnson Valley's
+#   mesquite / acacia bush); town trees there the rainforest's (mangoes, figs).
+# - the conifers of the tropics and the southern hemisphere: pines (Caribbean, Mexican, chir, Benguet pines; Chile's,
+#   New Zealand's, South Africa's and Australia's radiata and patula plantations): West Coast USA's Monterey pine
+#   (Pinus radiata itself), not Douglas firs.
+# - the subtropics' and the south's evergreen broadleaf (laurel) forests (southern China, Taiwan, southern Japan and
+#   Korea, the Himalaya's foothills, Madeira; Valdivia, New Zealand): G_LAUREL (Italy's evergreen cork oaks, the
+#   island's young and lianad trees) for the forest's evergreen broadleaf share (leaftype), at least ECO_LAUREL_SHARE
+#   in the ECO_LAUREL ecoregions (the map reads Japan's and Korea's laurel woods as deciduous); not in Australia (its
+#   evergreen broadleaves are eucalypts) or the Mediterranean (its own).
+# - the south's temperate broadleaves (Chile, Argentina, New Zealand, Tasmania south of SOUTH_BEECH_LAT): southern
+#   beeches (Nothofagus), East Coast USA's beeches.
+# - the maritime and Mediterranean pines (Pinus pinaster, pinea, halepensis, brutia: Italy's maritime pines and, for
+#   the tall forest grown ones, its Scots pine) for the conifers of the Mediterranean's lowland ecoregions and the
+#   Atlantic's Cantabrian and northwest Iberian ones (Galicia, Portugal, the Landes) below MARITIME_PINE_M.
+SAVANNA_LAT = 35.0
+ECO_LAUREL = (233, 236, 251, 268, 283, 643, 657, 659, 668, 670, 680, 681, 682)
+ECO_LAUREL_SHARE = 0.6
+SOUTH_BEECH_LAT = -35.0
+ECO_MARITIME_PINE = (648, 800)
+MARITIME_PINE_M = 1000.0
+ECO_JUNIPER = (59, 652, 694, 695, 721, 723, 727, 730, 756, 757, 758, 792, 804, 814, 816, 834)
+# (35) the eucalypt plantations of Portugal and Galicia (Eucalyptus globulus; E. nitens higher up in Galicia): a
+# quarter of both forests (Portugal's IFN6 2015: 845 000 ha of 3.2 M, its first species; Galicia's IFN4: about 30 %),
+# most of them in the Atlantic lowlands north of the Tagus, few in the Alentejo's cork and holm oak montado or on the
+# interior's uplands (E. globulus is frost-tender: rare above ~700 m). West Coast USA's eucalyptus shapes, whole stands
+# (stand_u, no admixture: a plantation is one species) of the forest's trees (land cover tree, not in town).
+EUC_ECO = ("Cantabrian mixed forests", "Northwest Iberian montane forests",
+           "Iberian sclerophyllous and semi-deciduous forests",
+           "Southwest Iberian Mediterranean sclerophyllous and mixed forests")     # (western Iberia's)
+EUC_SHARE = 0.45            # of the forest stands in the western lowlands north of EUC_SOUTH
+EUC_SEA_DEG = (0.8, 1.6)    # the Atlantic within the first (degrees): the full share; within the second: half; farther:
+                            # none (the interior's Iberian ecoregions, the meseta's, have none: was a longitude band)
+EUC_SOUTH = ((38.5, 0.3), (39.5, 1.0))      # (latitude, the share's factor): the Alentejo's few
+EUC_ELEV = (300.0, 700.0)   # the share falls to nothing between these heights above the sea (m)
+EUC_FROM = None             # (set below: the groups a plantation replaces)
+
+
+def redwood_belt(lat, lon):
+    """The coast redwoods' fog belt (Big Sur to the Oregon line, ~40-60 km inland): a strip east of the coast, its
+    edge from -122.0 at 37 N to -124.25 at 42 N. (35: kept over RESOLVE's Northern California coastal forests, which
+    leave out Muir Woods' and Big Sur's canyons at 0.05 degrees.)"""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    return (lat > 35.8) & (lat < 42.3) & (lon < -122.0 - 0.45 * (lat - 37.0)) & (lon > -125.0)
+RAINFOREST_PALM_KEEP = 0.4
+# (45) the tropics' shores: the coconut palms' belt behind the beach (Bali's, Goa's, Kerala's, Zanzibar's, the
+# Caribbean's, Sri Lanka's). Before, a shore's trees were palms at the climate's share as anywhere (the regional
+# kernel's 20 % off town, the rainforests' RAINFOREST_PALM_KEEP of them: Porto Seguro's beach 3 %, Phuket's 12 %, Bali's
+# 24 %; dev 21-31 %). Within COAST_PALM_M of the sea's or a lake's shore (the water layer's polygons, not the rivers)
+# in the tropics' climates (Af Am Aw), COAST_PALM_SHARE of the broadleaves palms (the rainforests' thinning not there);
+# the casuarinas (pine_west), the mangroves' trees and the towns' (the kernel's 60 % already) kept.
+COAST_PALM_M = 120.0
+COAST_PALM_SHARE = 0.6
+COAST_PALM_LAT = 28.0
+COAST_PALM_FROM = None          # (set below)
+
+
+def coast_palms(group, lat, lon, lcls, coast, u):
+    """Per tree: the shore's broadleaves (coast: within COAST_PALM_M) in the tropics' climates palms at
+    COAST_PALM_SHARE (u: a hashed [0, 1)). Pure."""
+    import climate
+    g = np.array(group, np.uint8, copy=True)
+    lc = np.asarray(lcls)
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    cand = np.asarray(coast, bool) & _in(g, COAST_PALM_FROM) & (lc != WC["mangrove"]) & (lc != WC["built"]) \
+        & (np.abs(lat) < COAST_PALM_LAT)
+    if cand.any():
+        k = climate.koppen_many(lat[cand], lon[cand])
+        idx = np.flatnonzero(cand)[_in(k, K_TROPICS)]
+        g[idx[np.asarray(u)[idx] < COAST_PALM_SHARE]] = G_PALM
+    return g
+
+
+def eucalypt_share(lat, lon, elev=None):
+    """Per point: the share of the forest's stands that are eucalypt plantations (Portugal and Galicia, EUC_*)."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    z = np.zeros(len(lat)) if elev is None else np.asarray(elev, np.float64)
+    out = np.zeros(len(lat))
+    cand = np.flatnonzero(_in_eco(lat, lon, EUC_ECO))
+    if not len(cand):
+        return out
+    la, lo = lat[cand], lon[cand]
+    inland = np.where(_sea_within(la, lo, EUC_SEA_DEG[0]), 1.0, np.where(_sea_within(la, lo, EUC_SEA_DEG[1]), 0.5, 0.0))
+    south = dnp.interp(la, [a for a, _ in EUC_SOUTH], [b for _, b in EUC_SOUTH])
+    up = np.clip((EUC_ELEV[1] - z[cand]) / (EUC_ELEV[1] - EUC_ELEV[0]), 0.0, 1.0)
+    out[cand] = EUC_SHARE * inland * south * up
+    return out
+
+
+def stand_u(mx, my, gx, gy, lat, salt):
+    """Per tree: a hashed [0, 1) shared by the trees of a stand (STAND_CELL_M squares of the Web Mercator grid at the
+    ground length of lat, their edges ragged by a hashed jitter per tree). mx, my: Web Mercator m; gx, gy: the trees'
+    global pixels (their own hashes). Pure: the same tree gets the same value from every cell build."""
+    cx, cy = stand_cells(mx, my, gx, gy, lat, salt)
+    return _hash01(cx, cy, salt)
+
+
+STAND_SHARED_SALT = 50      # (42) the species' stands (salts 51, 61, 91) share one ragged grid (stand_cells)
+
+
+def stand_cells(mx, my, gx, gy, lat, salt):
+    """Per tree: its stand's (cx, cy) on STAND_CELL_M squares, the edges ragged by the tree's hashed jitter (salt + 1,
+    salt + 2). (42) The species' stands share STAND_SHARED_SALT's (one grid, three hashes of it: 9 hashes a tile were
+    5; their own values still independent)."""
+    s = STAND_CELL_M * _merc_k(lat)
+    j = STAND_JITTER * s
+    cx = np.floor((np.asarray(mx, np.float64) + (_hash01(gx, gy, salt + 1) - 0.5) * j) / s).astype(np.int64)
+    cy = np.floor((np.asarray(my, np.float64) + (_hash01(gx, gy, salt + 2) - 0.5) * j) / s).astype(np.int64)
+    return cx, cy
+
+
+def _mixed(stand, single, u_mix, mix=None):
+    return np.where(u_mix < (STAND_MIX if mix is None else mix), single, stand)
+
+
+def continental_shares(lat, lon):
+    """Per tree: the continental climates' (birch, oak, beech) shares of the broadleaves (CONT_*), an (n, 3) array."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    birch = dnp.interp(lon, [a for a, _ in CONT_BIRCH_LON], [b for _, b in CONT_BIRCH_LON]) * \
+        dnp.interp(lat, [a for a, _ in CONT_BIRCH_SOUTH], [b for _, b in CONT_BIRCH_SOUTH])
+    # (39) the north's broadleaves birches whatever the longitude (EU-Forest's plots: southern Finland's 99 %, central
+    # Sweden's 88 %, the Baltic states' 40 %)
+    birch = np.maximum(birch, dnp.interp(lat, [a for a, _ in NORTH_BIRCH_LAT], [b for _, b in NORTH_BIRCH_LAT]))
+    beech = CONT_BEECH * np.clip((CONT_BEECH_LON[1] - lon) / (CONT_BEECH_LON[1] - CONT_BEECH_LON[0]), 0.0, 1.0)
+    rest = 1.0 - birch
+    return np.stack([birch, rest * (1.0 - beech), rest * beech], axis=1)
+
+
+def broad_shares(lat, lon, koppen, eco, montane=None, conifer=None):
+    """Per tree: the (birch, oak, beech) shares of the broadleaves anywhere outside the tropics (the constants above:
+    Eurasia's by its climates, East Asia's, Japan's, North America's, the rest's; ECO_BROAD_SHARES; more beeches
+    uphill: montane, the beech belt's [0, 1] at each tree; fewer in the conifer forests: conifer, the forest's
+    conifer share there), an (n, 3) array."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    k = np.asarray(koppen)
+    n = len(lat)
+    ea = eurasia(lat, lon)
+    na = _north_america(lat, lon)
+    sh = np.tile(np.array(OTHER_SHARES), (n, 1))
+    sh[ea] = continental_shares(lat, lon)[ea]
+    boreal = _in(k, K_BOREAL) & (lat >= BOREAL_LAT)
+    oceanic = _in(k, K_OCEANIC)
+    for name, m in (("oceanic", oceanic), ("med", _in(k, K_MED)), ("subtropical", _in(k, K_SUBTROPICAL)),
+                    ("cold_arid", _in(k, K_COLD_ARID))):
+        sh[ea & m] = BROAD_SHARES[name]
+    ob = dnp.interp(lat, [a for a, _ in OCEANIC_BIRCH_LAT], [b for _, b in OCEANIC_BIRCH_LAT])
+    m = ea & oceanic
+    sh[m] = np.stack([ob, (1.0 - ob) * 0.5, (1.0 - ob) * 0.5], axis=1)[m]
+    cb = dnp.interp(lat, [a for a, _ in COLD_ARID_BIRCH_LAT], [b for _, b in COLD_ARID_BIRCH_LAT])
+    m = ea & _in(k, K_COLD_ARID)
+    sh[m] = np.stack([cb, 1.0 - cb, np.zeros(n)], axis=1)[m]
+    eb = dnp.interp(lat, [a for a, _ in EAST_ASIA_BIRCH_LAT], [b for _, b in EAST_ASIA_BIRCH_LAT])
+    m = ea & (lon >= EAST_ASIA_LON) & ~_in(k, K_MED + K_COLD_ARID)
+    sh[m] = np.stack([eb, (1.0 - eb) * (1.0 - EAST_ASIA_BEECH), (1.0 - eb) * EAST_ASIA_BEECH], axis=1)[m]
+    sh[ea & _in_eco(lat, lon, JAPAN_ECO, eco)] = JAPAN_SHARES
+    nb = dnp.interp(lat, [a for a, _ in NA_BIRCH_LAT], [b for _, b in NA_BIRCH_LAT])
+    sh[na] = np.stack([nb, (1.0 - nb) * (1.0 - NA_BEECH), (1.0 - nb) * NA_BEECH], axis=1)[na]
+    sh[boreal] = BROAD_SHARES["boreal"]
+    for e_, share in ECO_BROAD_SHARES.items():
+        sh[np.asarray(eco) == e_] = share
+    if conifer is not None:
+        # (37) the broadleaves of a pine or spruce forest (the lowlands' sands and bogs, the boreal and hemiboreal
+        # forests: Bory Tucholskie, the Landes, Brandenburg, the Great Lakes' pinelands) its pioneers, birches and
+        # aspens, and oaks: the beeches (maples, limes, hornbeams) want the richer soils of the mixed and broadleaf
+        # woods. Not in the warm climates (the Mediterranean's and the subtropics' pine woods: oaks already).
+        cold = _in(k, K_BOREAL + K_CONTINENTAL + K_OCEANIC + K_COLD_ARID)
+        f = np.clip((np.asarray(conifer, np.float64) - PINE_WOOD_SHARE[0]) / (PINE_WOOD_SHARE[1] - PINE_WOOD_SHARE[0]),
+                    0.0, 1.0) * cold
+        if montane is not None:
+            f = f * (1.0 - montane)          # (the mountains' spruce-fir-beech woods keep their beeches)
+        moved = sh[:, 2] * f
+        sh[:, 2] -= moved
+        sh[:, 0] += moved * PINE_WOOD_BIRCH
+        sh[:, 1] += moved * (1.0 - PINE_WOOD_BIRCH)
+    if montane is not None:
+        uphill = np.where(boreal, 0.0, montane)
+        gain = np.minimum(BEECH_UPHILL * uphill, sh[:, 0] + sh[:, 1])
+        rest = np.maximum(sh[:, 0] + sh[:, 1], 1e-9)
+        sh[:, 0] -= gain * sh[:, 0] / rest
+        sh[:, 1] -= gain * sh[:, 1] / rest
+        sh[:, 2] += gain
+    return sh
+
+
+def eurasia(lat, lon):
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    return _in_box(lat, lon, EURASIA_BOX)
+
+
+def spruce_line(lat):
+    """The height above the sea (m) from which the conifers are mostly spruces, at latitude lat."""
+    return np.clip(SPRUCE_LINE_M + (50.0 - np.asarray(lat, np.float64)) * SPRUCE_LINE_PER_DEG, 500.0, 1700.0)
+
+
+def _sea_within(lat, lon, deg):
+    """Per point: the sea (Koppen class 0) at the point or on the 8-direction rings of deg / 2 and deg. Pure."""
+    import climate
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    sea = np.asarray(climate.koppen_many(lat, lon)) == 0
+    for r in (0.5 * deg, deg):
+        for dy, dx in _RING:
+            rest = np.flatnonzero(~sea)
+            if not len(rest):
+                return sea
+            sea[rest] = np.asarray(climate.koppen_many(lat[rest] + dy * r, lon[rest] + dx * r)) == 0
+    return sea
+
+
+def palm_fit(lat, lon, elev, k):
+    """(54) Per point: the town palms' share factor 0..1 by the sea's nearness and the height (PALM_*); the hot
+    deserts' and steppes' classes (K_DRY_PALMS) by the height only. elev None: as at the sea's level. Pure."""
+    lat, lon = np.atleast_1d(np.asarray(lat, np.float64)), np.atleast_1d(np.asarray(lon, np.float64))
+    n = len(lat)
+    f = np.ones(n)
+    dry = _in(np.atleast_1d(np.asarray(k)), K_DRY_PALMS)
+    rest = np.flatnonzero(~dry)
+    if len(rest):
+        coast = np.asarray(_on_grid(lambda a, b: _sea_within(a, b, PALM_COAST_DEG), lat[rest], lon[rest]), bool)
+        part = np.asarray(_on_grid(lambda a, b: _sea_within(a, b, PALM_INLAND_DEG), lat[rest], lon[rest]), bool)
+        f[rest] = np.where(coast, 1.0, np.where(part, 0.75, PALM_INLAND_KEEP))
+    if elev is not None:
+        e = np.atleast_1d(np.asarray(elev, np.float64))
+        lo, hi = PALM_ELEV_M
+        f *= np.clip((hi - e) / (hi - lo), 0.0, 1.0)
+    return f
+
+
+def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conifer, u_snag, u_palm, u_alt=None,
+                   u_stand=None):
+    """The groups after regional(): Eurasia's species (birch / oak / beech, pine_eu / spruce), dead trees, the warm
+    towns' palms and the rainforests' trees (the constants above). koppen: the class at each tree (climate.koppen_many);
+    elev: its height above the sea (m) or None (no DEM: as in the lowlands); u_broad, u_conifer: the species choices'
+    [0, 1) (stand_u, mixed); u_snag, u_palm, u_alt: hashed [0, 1) per tree (u_alt None: u_snag's); u_stand: a stand's
+    [0, 1) for the eucalypt plantations and the laurel forests (stand_u, not mixed; None: neither). Pure."""
+    g = np.array(group, np.uint8, copy=True)
+    h = np.asarray(height, np.float64)
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    k = np.asarray(koppen)
+    built = np.asarray(lcls) == WC["built"]
+    ea = eurasia(lat, lon)
+    eco = eco_med(lat, lon)
+    z = np.zeros(len(g)) if elev is None else np.asarray(elev, np.float64)
+    line = spruce_line(lat)
+    fade = np.clip((MOUNTAIN_FADE[1] - lat) / (MOUNTAIN_FADE[1] - MOUNTAIN_FADE[0]), 0.0, 1.0)
+    # (39) the dry climates' mountains (Iberia's, the Atlas', Anatolia's, Central Asia's: Csa Csb Csc, BSk BWk BSh BWh)
+    # keep their pines (black, Scots, Aleppo, Brutia pines; EU-Forest: Spain's conifers 2 % firs) and their oaks: no
+    # spruce or beech belt (before: a third of Spain's mountain conifers spruces, León's broadleaves 30 % beeches)
+    # spruce belt; the beech belt kept in the Mediterranean's own beech mountains (the Apennines', Calabria's, the
+    # Balkans': EU-Forest's Calabria 30 % beeches), not in ECO_NO_BEECH (Iberia's, the Maghreb's, Anatolia's)
+    dry = _in(k, K_COLD_ARID + K_HOT_ARID)
+    beech_fade = fade * ~(dry | (_in(k, K_MED) & _in(eco, ECO_NO_BEECH)))
+    fade = fade * ~(dry | _in(k, K_MED))
+    montane = np.clip((z - (line - MONTANE_M)) / MONTANE_M, 0.0, 1.0) * fade
+    upper = np.clip((z - line) / SPRUCE_RAMP_M, 0.0, 1.0) * fade
+    ua = np.asarray(u_snag if u_alt is None else u_alt)
+    # the upper montane belt's broadleaves: most of them spruces
+    g[ea & (g == G_DECIDUOUS) & (ua < SPRUCE_TAKES_BROAD * upper)] = G_CONIFER
+    # (39) Europe's genera where ForestPaths' map has a say (treegenus.py): the conifers' pines against spruces, firs and
+    # larches, the broadleaves' beeches and oaks from it, its other broadleaves by the rules below
+    import treegenus
+    tg = _on_grid(treegenus.shares, lat, lon) if ea.any() else np.full((len(g), 7), np.nan)
+    con = ea & (g == G_CONIFER)
+    if con.any():
+        east = dnp.interp(lat, [a for a, _ in SPRUCE_LAT], [b for _, b in SPRUCE_LAT])
+        west = dnp.interp(lat, [a for a, _ in SPRUCE_CENTRAL], [b for _, b in SPRUCE_CENTRAL])
+        t = np.clip((lon - SPRUCE_LON[0]) / (SPRUCE_LON[1] - SPRUCE_LON[0]), 0.0, 1.0)
+        # (37) central Europe's spruces are its uplands' (Bavaria, Bohemia, the Harz): its plain's conifers
+        # (Brandenburg's, Pomerania's, the Netherlands') pines, as Poland's; north of SPRUCE_PLAIN_LAT the lowland
+        # spruces are the boreal forest's own
+        upland = np.clip((z - SPRUCE_PLAIN_M[0]) / (SPRUCE_PLAIN_M[1] - SPRUCE_PLAIN_M[0]), 0.0, 1.0)
+        upland = np.where(lat >= SPRUCE_PLAIN_LAT, 1.0, upland)
+        base = east + (west - east) * (1.0 - t) * upland
+        # (38) East Asia's warm temperate conifers are mostly conical ones (Japan's sugi and hinoki plantations, ~40 %
+        # of its forest, against its red and black pines; southern China's and Taiwan's Chinese fir beside the Masson
+        # pine): the spruces' shapes (Douglas firs) for them, not the Scots pines'
+        japan = _in_eco(lat, lon, JAPAN_ECO, eco)
+        base = np.where(japan, np.maximum(base, CONICAL_JAPAN), base)
+        # (39) the Atlantic's oceanic north (Ireland, Great Britain, Denmark, the Low Countries): its conifers the
+        # planted Sitka and Norway spruces first (EU-Forest's plots: Ireland's conifers 77 % spruces, Scotland's
+        # 64 %, Denmark's 67 %, England's 51 %, the Netherlands' 37 %)
+        atl = _in(k, K_OCEANIC) & (lat > ATLANTIC_SPRUCE_LAT) & (lon < ATLANTIC_SPRUCE_LON)
+        base = np.where(atl, np.maximum(base, ATLANTIC_SPRUCE), base)
+        base = np.where((lon >= EAST_ASIA_LON) & (lat < CONICAL_CHINA_LAT) & ~japan,
+                        np.maximum(base, CONICAL_CHINA), base)
+        p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
+        needle = tg[:, [treegenus.LARIX, treegenus.PICEA, treegenus.PINUS, treegenus.OTHER_NEEDLE]].sum(axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            p_tg = (tg[:, treegenus.LARIX] + tg[:, treegenus.PICEA] + tg[:, treegenus.OTHER_NEEDLE]) / needle
+        p = np.where(~np.isnan(p_tg) & (needle > TREEGENUS_MIN), p_tg, p)
+        g[con] = np.where(np.asarray(u_conifer)[con] < p[con], G_SPRUCE, G_PINE_EU)
+    # (43) North America's remaining generic conifers (the regional kernel's dry West, Pacific coast and Southeast pines
+    # aside: the boreal forest, the Rockies' north, the Great Lakes, New England): spruces' shapes for its spruces,
+    # firs, hemlocks, Douglas firs, cedars and larches, the pines' for its jack, lodgepole, red and white pines (Canada's
+    # NFI 2020, growing stock: spruce 44.3 %, pine 11.7 %, fir 8.3 %, hemlock 6.2 %, Douglas fir 3.5 %, cedar and other
+    # 3.0 %, larch 1.5 %: pines 15 % of the conifers; Maine: spruce/fir 33 % of the forest, pines 7 %); the Great Lakes'
+    # sands more pines (NA_SPRUCE_LAKES), the mid-Atlantic's mostly pines (NA_SPRUCE_LAT). Before, all of them Douglas firs (the generic conifer).
+    nac = _north_america(lat, lon) & (g == G_CONIFER)
+    if nac.any():
+        p = dnp.interp(lat, [a for a, _ in NA_SPRUCE_LAT], [b for _, b in NA_SPRUCE_LAT])
+        p = np.where(_in_eco(lat, lon, GREAT_LAKES_ECO, eco), np.minimum(p, NA_SPRUCE_LAKES), p)
+        g[nac] = np.where(np.asarray(u_conifer)[nac] < p[nac], G_SPRUCE, G_PINE_EU)
+    # broadleaves: Italy's in the hot deserts and steppes; birch / oak / beech by the climate, more beeches uphill
+    g[ea & (g == G_DECIDUOUS) & _in(k, K_HOT_ARID)] = G_MEDITERRANEAN
+    # (36) everywhere outside the tropics (before, Eurasia only: elsewhere the generic group, a quarter of whose
+    # shapes are birches, chose by height alone)
+    dec = (g == G_DECIDUOUS) & (np.abs(lat) >= 23.5)
+    if dec.any():
+        beech_up = np.clip((z - (line - BEECH_BELT_M[0])) / (BEECH_BELT_M[0] - BEECH_BELT_M[1]), 0.0, 1.0) * beech_fade
+        sh = broad_shares(lat, lon, k, eco, beech_up, _conifer_share(lat, lon))
+        broad = tg[:, [treegenus.FAGUS, treegenus.QUERCUS, treegenus.OTHER_BROAD]].sum(axis=1)
+        ok = ~np.isnan(broad) & (broad > TREEGENUS_MIN)
+        if ok.any():
+            with np.errstate(invalid="ignore", divide="ignore"):
+                f, q, o = (tg[:, i] / broad for i in (treegenus.FAGUS, treegenus.QUERCUS, treegenus.OTHER_BROAD))
+                r = sh / np.maximum(sh.sum(axis=1), 1e-9)[:, None]
+            sh_tg = np.stack([o * r[:, 0], q + o * r[:, 1], f + o * r[:, 2]], axis=1)
+            sh = np.where(ok[:, None], sh_tg, sh)
+        u = np.asarray(u_broad)
+        pick = np.where(u < sh[:, 0], G_BIRCH, np.where(u < sh[:, 0] + sh[:, 1], G_OAK, G_BEECH)).astype(np.uint8)
+        g[dec] = pick[dec]
+    # the rainforests: no temperate broadleaves, fewer palms in the forest
+    rain = _in(k, K_RAINFOREST) & (np.abs(lat) < 23.5)
+    g[rain & (g == G_DECIDUOUS)] = G_TROPICAL
+    # (30) a mangrove's trees (WorldCover 95, any climate: the Red Sea's, the Indus delta's) tropical broadleaves
+    mangrove = np.asarray(lcls) == WC["mangrove"]
+    g[mangrove & _in(g, (G_DECIDUOUS, G_MEDITERRANEAN, G_PALM, G_OAK, G_BIRCH, G_BEECH))] = G_TROPICAL
+    sparse = rain & (g == G_PALM) & ~built & (np.asarray(u_palm) >= RAINFOREST_PALM_KEEP)
+    g[sparse] = G_TROPICAL
+    # warm towns' date and fan palms
+    na = (lat > 24.0) & (lon > -170.0) & (lon < -50.0)
+    cand = ~na & (np.abs(lat) >= 23.5) & _in(g, PALM_FROM)
+    if cand.any():
+        up = np.asarray(u_palm)
+        fit = np.zeros(len(g))
+        ci = np.flatnonzero(cand & _in(k, tuple(DRY_PALMS)))
+        if len(ci):             # (54: the sea near and low, palm_fit)
+            fit[ci] = palm_fit(lat[ci], lon[ci], None if elev is None else np.asarray(elev)[ci], k[ci])
+        for kk, (p_town, p_out, lat_max) in DRY_PALMS.items():
+            m = cand & (k == kk) & (np.abs(lat) < lat_max)
+            g[m & (up < np.where(built, p_town, p_out) * fit)] = G_PALM_DRY
+    # (34) coconut-type palms only in the tropics' climates (Af, Am, Aw): any other palm (California's, Florida's north,
+    # the Mediterranean's, the Gulf's) the fan and date palms (the gallery 2026-11-17: the palm group mixed both)
+    g[(g == G_PALM) & ~_in(k, K_TROPICS)] = G_PALM_DRY
+    # (34) the Old World's juniper woodlands' open country (35: their ecoregions, ECO_JUNIPER; before, any BSk / BWk
+    # outside North America, which put junipers on the Kazakh and Mongolian steppes): its low trees junipers
+    # (Juniperus excelsa / polycarpos / seravschanica / thurifera / procera; Utah's shapes, as regional_groups does in
+    # the dry West), STEPPE_JUNIPER of them
+    c_ = np.asarray(lcls)
+    steppe = _in(eco, ECO_JUNIPER) & _in(c_, (WC["shrub"], WC["grass"], WC["bare"])) & (h < 9.0)
+    g[steppe & _in(g, (G_DECIDUOUS, G_OAK, G_BIRCH, G_CONIFER, G_PINE_EU, G_SPRUCE))
+      & (np.asarray(u_palm) < STEPPE_JUNIPER)] = G_JUNIPER
+    # (34) the coast redwoods only in their fog belt (the gallery 2026-11-17: pine_west's tallest were redwoods, drawn
+    # for any 25 m+ conifer from Washington to the Southeast's loblolly pines)
+    g[(g == G_PINE_WEST) & redwood_belt(lat, lon) & (h >= REDWOOD_MIN_M)] = G_REDWOOD
+    g = _world_groups(g, lat, lon, c_, eco, z, u_stand)
+    # (35) Portugal's and Galicia's eucalypt plantations: whole stands of the forest's trees
+    if u_stand is not None:
+        wood = (np.asarray(lcls) == WC["tree"]) & _in(g, EUC_FROM) & _in(k, K_MED + K_OCEANIC)
+        if wood.any():
+            g[wood & (np.asarray(u_stand) < eucalypt_share(lat, lon, elev))] = G_EUCALYPTUS
+    # dead trees in the forests outside the tropics
+    forest = (np.asarray(lcls) == WC["tree"]) & (np.abs(lat) >= 23.5) & (h >= SNAG_H[0]) & (h <= SNAG_H[1])
+    snag = forest & (np.asarray(u_snag) < SNAG_SHARE)
+    broad, conif = SNAG_FROM
+    g[snag & _in(g, broad)] = G_SNAG_BROAD
+    g[snag & _in(g, conif)] = G_SNAG_CONIFER
+    return g
+
+
+BROAD_FROM = (G_DECIDUOUS, G_OAK, G_BIRCH, G_BEECH)
+CONIFER_FROM = (G_CONIFER, G_PINE_EU, G_SPRUCE)
+
+
+def _world_groups(g, lat, lon, lcls, eco, elev, u_stand):
+    """species_groups' biome rules (35; the constants by SAVANNA_LAT): the tropics' rainforest and savanna trees,
+    the tropics' and the south's pines, the laurel forests, the south's beeches, the maritime pines. g changed in
+    place and returned."""
+    import ecoregion as er
+    import leaftype
+    bio, realm = er.biome_of(eco), er.realm_of(eco)
+    alat = np.abs(lat)
+    med = _in(eco, ECO_MED)
+    laurel_eco = _in(eco, ECO_LAUREL)
+    built = lcls == WC["built"]
+    hot = ~laurel_eco & (_in(bio, (er.B_TROP_MOIST, er.B_TROP_DRY, er.B_TROP_GRASS, er.B_MANGROVE))
+                         | ((alat < 23.5) & ~_in(bio, (er.B_TROP_CONIFER, er.B_TEMP_BROAD, er.B_TEMP_CONIFER,
+                                                          er.B_MONTANE_GRASS, er.B_MEDITERRANEAN, er.B_DESERT,
+                                                          er.B_TEMP_GRASS))))
+    broad = _in(g, BROAD_FROM) | ((g == G_MEDITERRANEAN) & ~med)
+    # savannas and the dry country's open land: acacias (also of the trees regional_groups made the tropics' own);
+    # the rest of the tropics' broadleaves: the rainforest's
+    # (the hot deserts' woods too: the Kalahari's camelthorns, the Sahel's; not the oases' and the Nile's, which
+    # Eurasia's rule made Italy's: olives, carobs)
+    desert = (bio == er.B_DESERT) & (alat < SAVANNA_LAT) & ~med
+    open_dry = _in(bio, (er.B_TROP_DRY, er.B_DESERT)) & (lcls != WC["tree"]) & (alat < SAVANNA_LAT) & ~med
+    acacia_from = _in(g, BROAD_FROM + (G_TROPICAL,))
+    savanna = (~built & (lcls != WC["mangrove"])
+               & (((acacia_from | broad) & (((bio == er.B_TROP_GRASS) & hot) | open_dry)) | (acacia_from & desert)))
+    g[savanna] = G_SAVANNA
+    g[broad & ~savanna & hot] = G_TROPICAL
+    # the conifers of the tropics, the hot deserts and the south: pines
+    g[_in(g, CONIFER_FROM) & (hot | desert | (bio == er.B_TROP_CONIFER) | (lat < -23.5))] = G_PINE_WEST
+    # the laurel forests
+    australia = (realm == er.R_AUSTRALASIA) & (lon > 110.0) & (lon < 155.0)
+    if u_stand is not None:
+        cand = _in(g, BROAD_FROM) & ~hot & ~med & ~australia & (alat < 45.0)
+        if cand.any():
+            evb = np.nan_to_num(_on_grid(leaftype.evergreen_broad_share, lat, lon), nan=0.0)
+            share = np.maximum(evb, np.where(laurel_eco, ECO_LAUREL_SHARE, 0.0))
+            g[cand & (np.asarray(u_stand) < share)] = G_LAUREL
+    # the south's beeches (Nothofagus)
+    south = (lat < SOUTH_BEECH_LAT) & ((realm == er.R_NEOTROPIC) | ((realm == er.R_AUSTRALASIA)
+                                                                   & ((lon > 160.0) | (lat < -39.5))))
+    g[south & _in(g, BROAD_FROM)] = G_BEECH
+    # (38) Australia's other broadleaves (the regional kernel's eucalypts take most): its forests' and woodlands' are
+    # eucalypts too (mountain ash, messmate, stringybarks, boxes; the wattles below them), not East Coast USA's oaks
+    # and beeches (the reality check at the Victorian Alps' foothills: 11 %); the towns' planted oaks and planes kept
+    g[australia & ~built & ~south & _in(g, BROAD_FROM)] = G_EUCALYPTUS
+    # the maritime and Mediterranean pines
+    g[_in(g, CONIFER_FROM) & (med | _in(eco, ECO_MARITIME_PINE)) & (elev < MARITIME_PINE_M)] = G_PINE_MARITIME
+    return g
+
+
+COAST_PALM_FROM = (G_DECIDUOUS, G_TROPICAL, G_SAVANNA, G_LAUREL, G_MEDITERRANEAN, G_OAK, G_BEECH, G_BIRCH)
+EUC_FROM = (G_DECIDUOUS, G_CONIFER, G_MEDITERRANEAN, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_PINE_MARITIME)
+SNAG_FROM = ((G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_OAK_WEST), (G_CONIFER, G_PINE_EU, G_SPRUCE, G_PINE_WEST))
+OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_DECIDUOUS_OPEN, G_BIRCH: G_BIRCH_OPEN, G_BEECH: G_BEECH_OPEN,
+             G_PINE_WEST: G_PINE_WEST_OPEN, G_MEDITERRANEAN: G_MEDITERRANEAN_OPEN, G_TROPICAL: G_TROPICAL_OPEN,
+             G_CONIFER: G_CONIFER_OPEN, G_SPRUCE: G_SPRUCE_OPEN, G_PINE_EU: G_PINE_EU_OPEN,
+             G_SNAG_BROAD: G_DECIDUOUS_OPEN, G_SNAG_CONIFER: G_CONIFER_OPEN}
+
+
+# (55) The veteran oaks (the user, 2026-11-24: "the veteran should be there but rare inside loose forests"): East
+# Coast USA's tree_oak_large_a, a broad old oak with a flared, buttressed trunk, out since 2026-11-20 (scaled to a 20 m
+# forest tree its trunk was a 3-4 m boulder of bark, and it stood in roadside rows of clones). Now its own group, for
+# VETERAN_SHARE of the broadleaf woods' oaks and broadleaves VETERAN_H tall (near its own 13.2 m: the trunk ~2-3 m
+# across, an old oak's) where the canopy is loose (under VETERAN_COVER of the pixels within VETERAN_WIN_M are canopy:
+# an old oak grew up in the open, a wood pasture's, a forest edge's or a glade's), in the temperate latitudes, never
+# in the open (by a road, in town: their _open twins are not taken).
+VETERAN_SHARE = 0.03
+VETERAN_H = (11.0, 17.0)
+VETERAN_COVER = 0.6
+VETERAN_WIN_M = 15.0
+VETERAN_LAT = (30.0, 62.0)
+
+
+def _cover_at(m, r, jj, ii):
+    """The share of m's pixels in the (2r+1)^2 window around the pixels (jj, ii), the window clipped at the grid's
+    edges. Pure, exact (integer sums)."""
+    m = np.asarray(m)
+    n_r, n_c = m.shape
+    c = np.zeros((n_r + 1, n_c + 1), np.int64)
+    c[1:, 1:] = m.astype(np.int64).cumsum(0).cumsum(1)
+    jj, ii = np.asarray(jj, np.int64), np.asarray(ii, np.int64)
+    r0, r1 = np.clip(jj - r, 0, n_r), np.clip(jj + r + 1, 0, n_r)
+    c0, c1 = np.clip(ii - r, 0, n_c), np.clip(ii + r + 1, 0, n_c)
+    s = c[r1, c1] - c[r0, c1] - c[r1, c0] + c[r0, c0]
+    return s / np.maximum(1, (r1 - r0) * (c1 - c0))
+
+
+def veteran_oaks(group, height, lat, lcls, cover, u):
+    """group with the veteran oaks (VETERAN_*) in G_OAK_VETERAN: the forest's (land cover tree) oaks and broadleaves
+    VETERAN_H tall where the canopy cover is under VETERAN_COVER, u (hashed [0, 1) per tree) under VETERAN_SHARE.
+    Pure."""
+    g = np.array(group, np.uint8, copy=True)
+    h, a = np.asarray(height), np.abs(np.asarray(lat))
+    v = _in(g, (G_OAK, G_DECIDUOUS)) & (np.asarray(lcls) == WC["tree"]) & (h >= VETERAN_H[0]) & (h <= VETERAN_H[1])         & (a >= VETERAN_LAT[0]) & (a <= VETERAN_LAT[1]) & (np.asarray(cover) < VETERAN_COVER)         & (np.asarray(u) < VETERAN_SHARE)
+    g[v] = G_OAK_VETERAN
+    return g
+
+
+def open_groups(group, open_):
+    """group with the trees in the open (per item, open_) in their OPEN_FROM twins. Pure."""
+    g = np.array(group, np.uint8, copy=True)
+    o = np.asarray(open_, bool)
+    for a, b in OPEN_FROM.items():
+        g[o & (g == a)] = b
+    return g
+PALM_FROM = (G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_MEDITERRANEAN)
+
+# The bushes by the climate (30; the stock survey 2026-11-16): the same bushes in the same places (the canopy's 1-3 m
+# tops, the scatter, the forest edges, the field hedges), their shapes from the climate at each one (Koppen, climate.py)
+# instead of East Coast USA's broadleaf bushes everywhere:
+# - Cs (summer-dry): maquis and garrigue (Italy's cork and holm oak bushes, its scraggly and fluffy bushes, Utah's
+#   junipers and low grey bushes for the rosemary / thyme scrub); in North America (California's chaparral of scrub
+#   oaks, chamise and manzanita, the same look) CHAPARRAL_SHARE of them, the rest the coastal sage scrub's grey desert
+#   bushes as regional_groups made them (West Coast USA's own trees_shrub are creosote bushes: the creosote group's);
+# - the north (Koppen ET / EF anywhere, the boreal D classes from BOREAL_SHRUB_LAT) and the tundra's moss and lichen:
+#   birch and willow scrub (the aspen / birch bushes), spruce saplings (the fir bushes), junipers;
+# - the rainforests, the mangroves and TROPICAL_SAVANNA_SHARE of the savannas' (Aw): Jungle Rock Island's bushes and
+#   wide-leaved plants;
+# - the deserts and steppes (B classes): the desert bushes wherever the land cover is (regional_groups made them only
+#   on shrubland or bare ground below 42 degrees and in the dry West);
+# - the forest floor (the understory scatter under the canopy): FERN_SHARE of its bushes ferns in the humid temperate
+#   and boreal climates.
+# Dead wood (logs, fallen trees, branches, stumps) is not one of the bushes but added (_remote_floor): one on
+# DEADWOOD_P of a DEADWOOD_CELL_M grid's squares inside the forest, only DEADWOOD_ROAD_M or more from any road, with no
+# built-up land within DEADWOOD_BUILT_M and on level ground (the DEM's slope under DEADWOOD_MAX_SLOPE: no log on an
+# embankment) (remote woods: a fallen beech lay across a road, the user's test 2026-11-16); not in the deserts. In
+# the tropics (Af, Am, Aw) the same places get a vine-draped thicket instead (Jungle Rock Island's tro_bush_2_small,
+# a 9 m dome of aerial roots: it stood by a road like a hut, the user's test 2026-11-16).
+K_HUMID = (12, 13, 14, 15, 16, 17, 18, 21, 22, 25, 26, 27, 28)     # Cwb Cwc Cfa Cfb Cfc Dsa Dsb Dwa Dwb Dfa Dfb Dfc Dfd
+K_POLAR = (29, 30)                                                  # ET EF
+K_ARID = (4, 5, 6, 7)                                               # BWh BWk BSh BSk
+K_SAVANNA = (3,)                                                    # Aw / As
+BOREAL_SHRUB_LAT = 50.0
+CHAPARRAL_SHARE = 0.7
+TROPICAL_SAVANNA_SHARE = 0.5
+FERN_SHARE = {"humid": 0.35, "boreal": 0.15}
+DEADWOOD_CELL_M = 20.0
+DEADWOOD_P = 0.1            # (2.5 a hectare of remote forest)
+DEADWOOD_ROAD_M = 40.0      # ground m (a fallen beech is 10 m long)
+DEADWOOD_BUILT_M = 150.0
+DEADWOOD_H = (1.0, 3.0)     # m: a dead-wood item's height drawn in this range (the shapes' 1.0-3.0 m, M.pick's)
+DEADWOOD_MAX_SLOPE = 0.12   # rise over run (7 degrees)
+THICKET_H = (5.5, 7.5)
+# (48) the tropics' remote floor: this share of its items the vine thicket, the rest dead wood (fallen palm fronds and
+# branches, now and then a fallen giant: Jungle Rock Island's, unused before; the user, 2026-11-19: "use as many of the
+# available assets as possible"), DEADWOOD_H tall as the temperate dead wood
+THICKET_SHARE = 0.5
+# (55) and TRO_GIANT_SHARE of the thickets Jungle Rock Island's giant filler (tro_tree_2_filler_04: a 24 m dome of aerial
+# roots and vines, 27 m across; the user, 2026-11-24: "only far away from roads"), TRO_GIANT_ROAD_M or more from any road
+TRO_GIANT_SHARE = 0.25
+TRO_GIANT_H = (22.0, 26.0)
+TRO_GIANT_ROAD_M = 80.0
+# Trees in the open (OPEN_ROAD_M from a road's edge, or on built-up land): no forest-interior shapes there (the
+# forest trees and fillers by their names, *_forest*, *filler*: tall, thin, sparse; East Coast USA's mossy oaks,
+# tree_oak_large_*: moss on a trunk by an asphalt road, the user's test 2026-11-16, and a veteran's huge gnarled
+# trunk in a roadside row of clones, 2026-11-17; trees.lua M.FOREST_ONLY). An oak in the open takes the open
+# broadleaves (deciduous_open: oak_open was left two young oaks).
+# and no dead trees (taken down by the road): the group's _open twin (OPEN_FROM above; the mod's catalog without
+# those shapes).
+OPEN_ROAD_M = 15.0
+FERN_MAX_M = 1.6            # (ferns only for the low bushes)
+SHRUB_FROM = (G_SHRUB, G_DESERT_SHRUB)
+
+
+def shrub_groups(group, height, lat, lon, lcls, koppen, u, u_floor, understory=None):
+    """The bushes' groups by the climate (the constants above): group's G_SHRUB / G_DESERT_SHRUB items (the rest as
+    they are) become maquis, northern, tropical or desert bushes; understory (per item: a forest floor
+    bush, the scatter under the canopy; None: none) ferns. koppen: the class at each item (climate.koppen_many);
+    u, u_floor: hashed [0, 1) per item. (groups, heights; the heights as given). Pure."""
+    g = np.array(group, np.uint8, copy=True)
+    h = np.array(height, np.float32, copy=True)
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    k = np.asarray(koppen)
+    c = np.asarray(lcls)
+    u, uf = np.asarray(u, np.float64), np.asarray(u_floor, np.float64)
+    bush = _in(g, SHRUB_FROM)
+    if not bush.any():
+        return g, h
+    na = (lat > 24.0) & (lon > -170.0) & (lon < -50.0)
+    alat = np.abs(lat)
+    # (35) the maquis where RESOLVE's Mediterranean biome is (the Mediterranean's, California's chaparral, Chile's
+    # matorral, the Cape's fynbos, Australia's mallee; before, Koppen Cs: Galicia's and the Pacific Northwest's
+    # summer-dry oceanic woods and the Central Asian mountains' Cs pockets too)
+    import ecoregion
+    med = ecoregion.biome_of(eco_med(lat, lon)) == ecoregion.B_MEDITERRANEAN
+    north = (_in(k, K_POLAR) | (_in(k, K_BOREAL) & (alat >= BOREAL_SHRUB_LAT)) | (c == WC["moss"])) & ~med
+    tropical = (_in(k, K_RAINFOREST) | (c == WC["mangrove"])
+                | (_in(k, K_SAVANNA) & (u < TROPICAL_SAVANNA_SHARE))) & (alat < 30.0)
+    arid = _in(k, K_ARID) & ~tropical
+    g[bush & med & (~na | (u < CHAPARRAL_SHARE))] = G_MAQUIS
+    g[bush & north] = G_SHRUB_NORTH
+    g[bush & tropical] = G_SHRUB_TROPICAL
+    g[bush & arid & (g == G_SHRUB)] = G_DESERT_SHRUB
+    # (34) the hot deserts and steppes (BWh, BSh): no junipers (Utah's: the cold deserts', the Great Basin's, Central
+    # Asia's and Iran's mountains'), desert_shrub_hot (the mod's desert_shrub without them; the gallery 2026-11-17)
+    g[(g == G_DESERT_SHRUB) & _in(k, (4, 6))] = G_DESERT_SHRUB_HOT
+    if understory is not None:
+        # (34) the tropics' forest floor: the wide-leaved shade plants (monstera, the island's tropical_plant_*), not
+        # in the open (a monstera on a savanna or a field's hedge; the gallery 2026-11-17)
+        g[bush & tropical & np.asarray(understory, bool)] = G_TRO_UNDERSTORY
+        floor = bush & np.asarray(understory, bool) & ~tropical & ~arid
+        humid = np.isin(k, K_HUMID) & ~north & ~med     # (46: a Mediterranean coast's Cfb pixel: no ferns)
+        p = np.where(humid, FERN_SHARE["humid"], np.where(north & ~np.isin(k, K_POLAR), FERN_SHARE["boreal"], 0.0))
+        fern = floor & (uf < p) & (h <= FERN_MAX_M)
+        g[fern] = G_FERN
+    return g, h
+
+
+def climate_shrubs(it, lcls, understory=None):
+    """Items it with its bushes' groups by the climate (shrub_groups; the Koppen class from climate.koppen_many at
+    each, the hashes from its position, so the same bush gets the same shape from every build). lcls: the land cover
+    class per item; understory: per item, a forest floor bush (None: none)."""
+    if not len(it) or not np.isin(it.group, SHRUB_FROM).any():
+        return it
+    import climate
+    qx = np.rint(np.asarray(it.lon, np.float64) * 1e6).astype(np.int64)
+    qy = np.rint(np.asarray(it.lat, np.float64) * 1e6).astype(np.int64)
+    g, h = shrub_groups(it.group, it.height, it.lat, it.lon, lcls, climate.koppen_many(it.lat, it.lon),
+                        _hash01(qx, qy, 71), _hash01(qx, qy, 72), understory)
+    return Items(it.lon, it.lat, h, it.radius, it.kind, g, it.rank, it.yaw, it.scale)
+
+
+def _coarse_near(m, r_px, b=8):
+    """(mask, b): m reduced to b x b pixel blocks (any set) and grown by r_px pixels rounded up to blocks: a pixel
+    (r, c) is within r_px of a set pixel of m (or a little farther) where mask[r // b, c // b]."""
+    H, W = m.shape
+    h, w = -(-H // b), -(-W // b)
+    p = np.zeros((h * b, w * b), bool)
+    p[:H, :W] = m
+    return _dilate(p.reshape(h, b, w, b).any(axis=(1, 3)), int(math.ceil(r_px / b))), b
 
 
 class Vegetation:
@@ -438,7 +1520,8 @@ class Vegetation:
         return False
 
     def _path(self, x, y):
-        rel = f'{getattr(self.md, "release", "x")}{natural.veg_key()}'     # (a switch's cells their own folder)
+        rel = f'{getattr(self.md, "release", "x")}{natural.veg_key()}-d{data_key()}'     # (a switch's cells their own
+        # folder; the species maps' contents too, data_key)
         return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
 
     def _load(self, x, y):
@@ -502,6 +1585,7 @@ class Vegetation:
         lon0_, lat0_, lon1_, lat1_ = cd.bounds
         near_water = np.zeros(h.shape, bool) if _in_box((lat0_ + lat1_) / 2, (lon0_ + lon1_) / 2, RIPARIAN_BOX) \
             else None                       # (within RIPARIAN_M of a river, lake or shore: riverside poplars)
+        near_coast = np.zeros(h.shape, bool) if abs((lat0_ + lat1_) / 2) < COAST_PALM_LAT else None    # (45)
         road_cells = []
         clump_roads = []                    # (the carriageways the far clumps keep off: clumps)
         lands = {}                          # (the natural features, natural.py: each cell's land layer; switches on)
@@ -524,6 +1608,8 @@ class Vegetation:
                     clump_roads.append(got)
                 if near_water is not None:
                     _mask_near(c2.layers.get("water"), near_water, chm, RIPARIAN_M)
+                if near_coast is not None:
+                    _mask_near(c2.layers.get("water"), near_coast, chm, COAST_PALM_M, kinds=(3,))
                 road_cells.append(c2.layers.get("roads"))
                 if natural.VEG_ON and (natural.TREES or (dx, dy) == (0, 0)):
                     lands[(dx, dy)] = self._land(kk)
@@ -569,7 +1655,13 @@ class Vegetation:
         gx0 = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy0 = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         tie = (_hash01(gx0, gy0, 29) * 1e-3).astype(np.float32)
+        # (50) thinned as dev (CROWN_SPACING: dev's count of trees), then the tall trees' trunks at least TRUNK_MIN_M
+        # apart (_thin_trunks: only where they stood closer, the shorter one goes; none moved)
         jj, ii = _thin(jj, ii, hs[jj, ii] + tie, chm.dx, k)
+        valid = (hs >= TRUNK_TALL_M) & ~blocked        # (where a tall top may stand: as the tops above)
+        valid[~rj, :] = False
+        valid[:, ~ci] = False
+        jj, ii = _thin_trunks(jj, ii, hs, valid, chm.dx, (lat0 + lat1) / 2.0, mx, my)
         th = hs[jj, ii]
         tlon, tlat = _to4326(mx[ii], my[jj])
         is_tree = th >= TREE_MIN_M
@@ -607,22 +1699,43 @@ class Vegetation:
         gx = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
-        share = _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
+        # (29) in Eurasia the conifers and broadleaves in stands (stand_u), each tree's own hash elsewhere
+        tmx, tmy, clat = mx[ii], my[jj], (lat0 + lat1) / 2
+        u_mix = _hash01(gx, gy, 31)
+        ea = eurasia(tlat, tlon)
+        if ea.any():
+            u1 = np.where(ea, _mixed(stand_u(tmx, tmy, gx, gy, clat, 41), u1, u_mix), u1)
+        share = _conifer_share(tlat, tlon)
         code = leaf[jj, ii] if leaf is not None else None
-        if code is not None:
+        if code is not None:                # (dev's natural features: the mapped forests' leaf type, BNE_NATURAL_LEAF)
             share = _leaf_share(code, share)
-        conifer = u1 < share
+        conifer = u1 < conifer_odds(share, th, is_tree)
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
                          riparian=None if near_water is None else near_water[jj, ii])
-        if code is not None:
+        group = self._species(group, th, tlat, tlon, lcls, tmx, tmy, gx, gy, clat, u_mix)
+        if code is not None:                # (a mapped evergreen / leafless broadleaf forest's generic broadleaves)
             group = _leaf_groups(group, code, tlat)
+        if near_coast is not None and near_coast.any():
+            group = coast_palms(group, tlat, tlon, lcls, near_coast[jj, ii], _hash01(gx, gy, 36))
+        # (31) the trees in the open: by a road (OPEN_ROAD_M from its edge) or on built-up land
+        open_ = lcls == WC["built"]
+        if curb.any():
+            sec = 1.0 / max(0.05, dmath.cos(dmath.radians(clat)))
+            near = _dilate(curb, max(1, int(round(OPEN_ROAD_M * sec / chm.dx))))
+            open_ |= near[jj, ii]
+        group = open_groups(group, open_)
+        # (55) a rare veteran oak inside loose broadleaf woods (veteran_oaks: never in the open, the twins above)
+        vsec = 1.0 / max(0.05, dmath.cos(dmath.radians(clat)))
+        cover = _cover_at(hs >= TREE_MIN_M, max(1, int(round(VETERAN_WIN_M * vsec / chm.dx))), jj, ii)
+        group = veteran_oaks(group, th, tlat, lcls, cover, _hash01(gx, gy, 39))
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
         tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
+        tree = climate_shrubs(tree, lcls)     # (30: the canopy's 1-3 m tops by the climate too)
         # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays).
         # An orchard keeps its planted rows and loses the canopy's trees inside it.
         paved = np.zeros(h.shape, bool)
@@ -658,6 +1771,7 @@ class Vegetation:
             if got:
                 nat_ground = natural.code_raster(got, h.shape, (chm.x0, chm.y0, chm.dx, chm.dy))
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs, nat_ground)
+        dead = self._remote_floor(cd, lc, blocked | paved | orchard | vines, road, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
         planted = orchard_items(lu, chm, blocked, bounds)
@@ -680,11 +1794,12 @@ class Vegetation:
             _sourced(tree, S.S_MEASURED, gs, S.S_MEASURED)      # (the canopy model's tops)
             _sourced(scatter, S.S_PRIOR)                        # (hashed by the land cover's class)
             _sourced(edge, S.S_PRIOR)
+            _sourced(dead, S.S_PRIOR)                           # (remote forest floor, hashed)
             for part in (planted, hedges, rows):                # (rules on mapped land use: orchards, fields, vines)
                 _sourced(part, S.S_DERIVED, S.S_DERIVED, S.S_DEFAULT)
             _sourced(bales, S.S_PRIOR)
             extra = [p if p.source is not None else _sourced(p, S.S_MAPPED) for p in extra]
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales] + extra)
+        return _concat_all([tree, scatter, dead, edge, planted, hedges, rows, bales] + extra)
 
     # --- the mapped natural features (natural.py) ---------------------------------------------------------------
     def _land(self, key):
@@ -860,11 +1975,118 @@ class Vegetation:
         GI, GJ, lon, lat, cls = GI[forest], GJ[forest], lon[forest], lat[forest], cls[forest]
         size = 1.2 + 1.8 * _hash01(GI, GJ, 24)
         n = len(lon)
-        return Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
-                     np.full(n, KIND_BUSH, np.uint8),
-                     regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25)),
-                     _hash01(GI, GJ, 26).astype(np.float32), (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
-                     (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32))
+        return climate_shrubs(Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
+                                    np.full(n, KIND_BUSH, np.uint8),
+                                    regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25)),
+                                    _hash01(GI, GJ, 26).astype(np.float32),
+                                    (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
+                                    (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32)), cls)
+
+    def _remote_floor(self, cd, lc, blocked, road, chm, hs):
+        """Dead wood (the tropics: thickets) in remote forest on level ground (DEADWOOD_*): added items, not bushes
+        changed."""
+        if lc is None:
+            return _empty()
+        lon0, lat0, lon1, lat1 = cd.bounds
+        clat = (lat0 + lat1) / 2
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        sec = 1.0 / max(0.05, dmath.cos(dmath.radians(clat)))      # (Web Mercator m per ground m)
+        s = DEADWOOD_CELL_M * sec
+        GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
+                             np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
+        GI, GJ = GI.ravel(), GJ.ravel()
+        px = (GI + _hash01(GI, GJ, 81)) * s
+        py = (GJ + _hash01(GI, GJ, 82)) * s
+        c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+        r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+        ok = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1) & (c_ >= 0) & (c_ < hs.shape[1]) \
+            & (r_ >= 0) & (r_ < hs.shape[0]) & (_hash01(GI, GJ, 83) < DEADWOOD_P)
+        ok[ok] &= ~blocked[r_[ok], c_[ok]] & (hs[r_[ok], c_[ok]] >= TREE_MIN_M)      # under the forest's canopy
+        if ok.any() and road.any():
+            near, b = _coarse_near(road, DEADWOOD_ROAD_M * sec / chm.dx)
+            ok[ok] &= ~near[r_[ok] // b, c_[ok] // b]
+        if not ok.any():
+            return _empty()
+        GI, GJ, px, py = GI[ok], GJ[ok], px[ok], py[ok]
+        lon, lat = _to4326(px, py)
+        keep = lc.sample(lon, lat) == WC["tree"]
+        d = DEADWOOD_BUILT_M * sec          # no built-up land around: 8 points at d, 4 at d / 2
+        for r, step in ((d, 45), (d / 2, 90)):
+            for a in range(0, 360, step):
+                if not keep.any():
+                    return _empty()
+                lo2, la2 = _to4326(px + r * dmath.cos(dmath.radians(a)), py + r * dmath.sin(dmath.radians(a)))
+                keep &= lc.sample(lo2, la2) != WC["built"]
+        import climate
+        k = climate.koppen_many(lat, lon)
+        keep &= ~np.isin(k, K_ARID)
+        if keep.any() and self.dem is not None:       # level ground only (no DEM: as it is)
+            sl = self._slope(px[keep], py[keep])
+            if sl is not None:
+                keep[np.flatnonzero(keep)[sl >= DEADWOOD_MAX_SLOPE]] = False
+        if not keep.any():
+            return _empty()
+        GI, GJ, lon, lat, k = GI[keep], GJ[keep], lon[keep], lat[keep], k[keep]
+        px, py = px[keep], py[keep]
+        n = len(lon)
+        tro = np.isin(k, K_RAINFOREST + K_SAVANNA) & (np.abs(lat) < 23.5)
+        thicket = tro & (_hash01(GI, GJ, 88) < THICKET_SHARE)
+        giant = thicket & (_hash01(GI, GJ, 89) < TRO_GIANT_SHARE)
+        if giant.any() and road.any():
+            near, b = _coarse_near(road, TRO_GIANT_ROAD_M * sec / chm.dx)
+            gc = np.clip(np.floor((px - chm.x0) / chm.dx).astype(np.int64), 0, road.shape[1] - 1)
+            gr = np.clip(np.floor((chm.y0 - py) / chm.dy).astype(np.int64), 0, road.shape[0] - 1)
+            giant &= ~near[gr // b, gc // b]
+        thicket &= ~giant
+        lo_h = np.where(giant, TRO_GIANT_H[0], np.where(thicket, THICKET_H[0], DEADWOOD_H[0]))
+        hi_h = np.where(giant, TRO_GIANT_H[1], np.where(thicket, THICKET_H[1], DEADWOOD_H[1]))
+        h = (lo_h + (hi_h - lo_h) * _hash01(GI, GJ, 84)).astype(np.float32)
+        group = np.where(giant, G_TRO_GIANT,
+                         np.where(thicket, G_TRO_THICKET, np.where(tro, G_DEADWOOD_TROPICAL, G_DEADWOOD)))
+        r_m = np.where(giant, 0.5 * h, np.where(thicket, 0.6 * h, 1.5 * h))
+        return Items(lon, lat, h, r_m.astype(np.float32), np.where(giant, KIND_TREE, KIND_BUSH).astype(np.uint8),
+                     group.astype(np.uint8), _hash01(GI, GJ, 85).astype(np.float32),
+                     (_hash01(GI, GJ, 86) * 360.0).astype(np.float32),
+                     (0.85 + 0.3 * _hash01(GI, GJ, 87)).astype(np.float32))
+
+    def _elev(self, lat, lon):
+        """Heights above the sea (m) at the points from the DEM at ELEV_ZOOM; None without a DEM or when it cannot say
+        (then the cell is not kept, as for the rocks' slopes)."""
+        if self.dem is None or not len(lat):
+            return None
+        try:
+            return np.asarray(self.dem.sample(lat, lon, ELEV_ZOOM), np.float64).reshape(len(lat))
+        except Exception as e:
+            log.debug("vegetation: no heights above the sea: %s", e)
+            self._tl.dem_failed = True
+            return None
+
+    def _species(self, group, th, tlat, tlon, lcls, tmx, tmy, gx, gy, clat, u_mix):
+        """species_groups for a cell's canopy tops (their DEM heights only where Eurasia's conifers or broadleaves
+        need them)."""
+        if not len(group):
+            return group
+        import climate
+        k = climate.koppen_many(tlat, tlon)
+        need = eurasia(tlat, tlon) & np.isin(group, (G_CONIFER, G_DECIDUOUS))
+        need |= _north_america(tlat, tlon) & (group == G_DECIDUOUS)      # (36) the Appalachians' beeches uphill
+        euc = np.isin(group, EUC_FROM) & ~need
+        if euc.any():               # (35) the plantations' uplands
+            need[np.flatnonzero(euc)[_in_eco(tlat[euc], tlon[euc], EUC_ECO)]] = True
+        elev = None
+        if need.any():
+            e = self._elev(tlat[need], tlon[need])
+            if e is not None:
+                elev = np.zeros(len(group))
+                elev[need] = e
+        u_single = _hash01(gx, gy, 32)
+        cx, cy = stand_cells(tmx, tmy, gx, gy, clat, STAND_SHARED_SALT)
+        u_broad = _mixed(_hash01(cx, cy, 51), u_single, u_mix, BROAD_STAND_MIX)
+        u_con = _mixed(_hash01(cx, cy, 61), u_single, u_mix)
+        return species_groups(group, th, tlat, tlon, lcls, k, elev, u_broad, u_con, _hash01(gx, gy, 33),
+                              _hash01(gx, gy, 34), _hash01(gx, gy, 35),
+                              u_stand=_hash01(cx, cy, 91))
 
     def _slope(self, px, py):
         """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side
@@ -967,16 +2189,19 @@ class Vegetation:
         sel = rock | bush
         n = int(sel.sum())
         size = 0.4 + 1.6 * dnp.sq(_hash01(GI[sel], GJ[sel], 14))
-        return Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
+        if not n:
+            return _empty()
+        it = Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
                      np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8),
                      regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
                               _hash01(GI[sel], GJ[sel], 18)),
                      _hash01(GI[sel], GJ[sel], 15).astype(np.float32),
                      (_hash01(GI[sel], GJ[sel], 16) * 360.0).astype(np.float32),
-                     (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
+                     (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32))
+        return climate_shrubs(it, cls[sel], understory=cls[sel] == UNDERSTORY)
 
 
-def _thin(jj, ii, h, px, k=1.0):
+def _thin(jj, ii, h, px, k=1.0, spacing=None):
     """Non-maximum suppression: the tallest tops first, each removing the others within its crown
     radius (0.12 h + 1 m, times CROWN_SPACING). Deterministic (ties broken by position). earthfast thin_tops
     (2026-10-23: the same tops as the Python loop it replaced). k (_merc_k): the pixels judged at the tuned scale, their
@@ -987,8 +2212,88 @@ def _thin(jj, ii, h, px, k=1.0):
     fast.require(64, "thin_tops")
     sj, si = (jj, ii) if k == 1.0 else (np.rint(jj / k), np.rint(ii / k))
     keep = fast._ef.thin_tops(np.ascontiguousarray(sj, np.int64), np.ascontiguousarray(si, np.int64),
-                              np.ascontiguousarray(h, np.float32), float(CROWN_SPACING), float(px))
+                              np.ascontiguousarray(h, np.float32),
+                              float(CROWN_SPACING if spacing is None else spacing), float(px))
     return jj[keep], ii[keep]
+
+
+TRUNK_MIN_M = 3.0       # (50) two trees of TRUNK_TALL_M or more at least this far apart (ground m): a flat canopy
+TRUNK_PER_H = 0.14      # ... and taller ones TRUNK_PER_H of their height (a 25 m oak: 3.5 m; its stock shape, a 16 m one
+#                         scaled up 1.6-1.8 times, has a trunk 2-2.6 m wide at the ground)
+TRUNK_TALL_M = 8.0      # plateau's tops are a lattice of the thinning radius, 2 m apart (Rogowska, the user's 2026-11-20)
+TRUNK_BLOCK_M = 40.0    # dev's count of tall trees kept in every square this big (ground m)
+TRUNK_CAND_M = 2.5      # a removed tree's replacement: one canopy pixel at a hashed spot of every square this big
+
+
+def _trunk_v(h, u):
+    """(50) _thin_trunks' heights for thin_tops: 0.12 v + 1 = the trunk distance (ground m) of a tree of height h
+    (TRUNK_MIN_M, or TRUNK_PER_H x h when more), plus h / 1000 and u (a hash 0..1) / 10000 so the taller rank first
+    and equal heights by the hash (exact in float32 up to ~60 m: 4e-6)."""
+    h = np.asarray(h, np.float64)
+    return (np.maximum(TRUNK_MIN_M, TRUNK_PER_H * h) - 1.0) / 0.12 + h * 1e-3 + np.asarray(u, np.float64) * 1e-4
+
+
+def _thin_trunks(jj, ii, hs, valid, dx, lat, mx, my):
+    """(50) The thinned tops (pixel rows jj, columns ii of the smoothed canopy hs) with the trees of TRUNK_TALL_M or
+    more re-chosen so no two stand within their trunk distance on the ground (TRUNK_MIN_M, TRUNK_PER_H of the taller's
+    height when more), and as many of them in every TRUNK_BLOCK_M
+    square as dev's thinning had where the canopy has room. Dev's tops are kept tallest first (ties by a hash of the
+    pixel, as _thin's); in a square that lost some, canopy pixels (valid: tall canopy, not blocked; one at a hashed spot of
+    every TRUNK_CAND_M square) fill the free spots, the taller first. No tree moves and none stands off the canopy. Dev's
+    thinning left a flat canopy's tops a lattice 2 m apart (Rogowska, the user's 2026-11-20); pushing them apart
+    filled clearings and packed dense patches into grids, and thinning alone dropped ~57 % of the trees
+    (Pennsylvania at 3 m). Shorter tops untouched. earthfast thin_tops, its radius the trunk distance (_trunk_v)."""
+    h = hs[jj, ii]
+    tall = h >= TRUNK_TALL_M
+    if tall.sum() < 2:
+        return jj, ii
+    fast.require(64, "thin_tops")
+    px_m = dx * max(0.05, dmath.cos(dmath.radians(min(abs(float(lat)), 85.0))))    # (a pixel on the ground)
+    blk = max(1, int(round(TRUNK_BLOCK_M / px_m)))
+    dj, di = jj[tall], ii[tall]
+    # thin_tops' radius spacing x (0.12 v + 1) / px set to the trunk distance by the height: v from it, the height and
+    # a hash added so the taller go first and equal heights by the hash (not by position: a lattice)
+    tx = np.floor((mx[di] + 20037508.342789244) / dx).astype(np.int64)
+    ty = np.floor((20037508.342789244 - my[dj]) / dx).astype(np.int64)
+    v_d = _trunk_v(h[tall], _hash01(tx, ty, 29))
+    first = fast._ef.thin_tops(np.ascontiguousarray(dj, np.int64), np.ascontiguousarray(di, np.int64),
+                               np.ascontiguousarray(v_d, np.float32), float(1.0 / px_m), 1.0)
+    # the blocks short of dev's count after it: there, one canopy pixel (valid) at a hashed spot of every
+    # TRUNK_CAND_M square is a candidate
+    kj, ki = dj[first], di[first]
+    n_r, n_c = valid.shape
+    bw = n_c // blk + 2
+    nb = (n_r // blk + 2) * bw
+    quota = np.bincount((dj // blk) * bw + di // blk, minlength=nb)
+    short = quota > np.bincount((kj // blk) * bw + ki // blk, minlength=nb)
+    if not short.any():
+        return np.concatenate([jj[~tall], kj]), np.concatenate([ii[~tall], ki])
+    c = max(1, int(round(TRUNK_CAND_M / px_m)))
+    sy, sx = np.meshgrid(np.arange(0, n_r, c), np.arange(0, n_c, c), indexing="ij")
+    sy, sx = sy.ravel(), sx.ravel()
+    gx = np.floor((mx[sx] + 20037508.342789244) / dx).astype(np.int64) // c
+    gy = np.floor((20037508.342789244 - my[sy]) / dx).astype(np.int64) // c
+    cj = np.minimum(sy + (_hash01(gx, gy, 37) * c).astype(np.int64), n_r - 1)
+    ci_ = np.minimum(sx + (_hash01(gx, gy, 38) * c).astype(np.int64), n_c - 1)
+    ok = valid[cj, ci_] & short[(cj // blk) * bw + ci_ // blk]
+    cj, ci_ = cj[ok], ci_[ok]
+    u = _hash01(gx[ok], gy[ok], 39)
+    dj, di, v_d = kj, ki, v_d[first]          # (the kept ones: no conflict among them)
+    nd, nc = len(dj), len(cj)
+    pri = np.concatenate([v_d, _trunk_v(hs[cj, ci_].astype(np.float64), u)])
+    aj, ai = np.concatenate([dj, cj]), np.concatenate([di, ci_])
+    keep = fast._ef.thin_tops(np.ascontiguousarray(aj, np.int64), np.ascontiguousarray(ai, np.int64),
+                              np.ascontiguousarray(pri, np.float32), float(1.0 / px_m), 1.0)
+    # each block keeps as many as dev had there, the highest priorities first
+    bkey = (aj // blk) * bw + ai // blk
+    k_idx = np.flatnonzero(keep)
+    o = k_idx[np.lexsort((-pri[k_idx], bkey[k_idx]))]
+    kb = bkey[o]
+    grp = np.r_[0, np.flatnonzero(kb[1:] != kb[:-1]) + 1]
+    start = np.repeat(grp, np.diff(np.r_[grp, len(o)]))
+    sel = o[(np.arange(len(o)) - start) < quota[kb]]
+    sel.sort()
+    return np.concatenate([jj[~tall], aj[sel]]), np.concatenate([ii[~tall], ai[sel]])
 
 
 SOURCE_FIELDS = ("source", "gsource", "hsource")
@@ -1101,6 +2406,61 @@ CLUMP_STATS = {"clear": 0, "split": 0, "moved": 0, "single": 0}     # (counts fo
 _clump_stats_lock = threading.Lock()
 
 
+MERC_HALF_WORLD = 20037508.342789244     # (earthfast vegclumps' HALF_WORLD: its squares' keys)
+
+
+def _unlattice(cx, cy, ch, cu, x, y, member, cell, merc_per_m, roads):
+    """(53) The far clumps a square's trees' centroid stood at (earthfast veg_clumps: the squares clear of the roads)
+    moved to one of their own trees, picked by the clump's hash cu: the centroid of a full square's 4-8 tops is nearly
+    its middle, a lattice of ~18 m up a forested slope, rows as only an orchard has (the user's hills over Split,
+    2026-11-23; Syrynka's clumps: 43 % within a tenth of a square of its middle, 3 % for random spots). A tree's spot is
+    on the canopy, off buildings and water, in the square's own map cell; kept at the centroid when the clump there
+    would reach a road (roads: ClumpRoads' segments and half widths). The road-split and moved clumps stay as placed."""
+    if len(cx) == 0 or not member.any():
+        return cx, cy
+    ids = np.flatnonzero(member)
+    ki = np.floor((x[ids] + MERC_HALF_WORLD) / cell).astype(np.int64)
+    kj = np.floor((y[ids] + MERC_HALF_WORLD) / cell).astype(np.int64)
+    key = ki * (1 << 31) + kj
+    order = np.argsort(key, kind="stable")
+    ids, key = ids[order], key[order]
+    start = np.r_[0, np.flatnonzero(key[1:] != key[:-1]) + 1]
+    count = np.diff(np.r_[start, len(key)])
+    ukey = key[start]
+    sx = np.add.reduceat(x[ids], start) / count
+    sy = np.add.reduceat(y[ids], start) / count
+    ck = np.floor((cx + MERC_HALF_WORLD) / cell).astype(np.int64) * (1 << 31)         + np.floor((cy + MERC_HALF_WORLD) / cell).astype(np.int64)
+    pos = np.searchsorted(ukey, ck)
+    pos = np.minimum(pos, len(ukey) - 1)
+    found = ukey[pos] == ck
+    clear = found & (np.abs(sx[pos] - cx) < 1e-3) & (np.abs(sy[pos] - cy) < 1e-3)
+    if not clear.any():
+        return cx, cy
+    k = np.flatnonzero(clear)
+    pick = ids[start[pos[k]] + np.minimum((cu[k] * count[pos[k]]).astype(np.int64), count[pos[k]] - 1)]
+    nx, ny = x[pick], y[pick]
+    if roads is not None and len(roads.segs):
+        r = (CLUMP_R_K * ch[k].astype(np.float64) + CLUMP_R_C) * merc_per_m
+        ok = np.ones(len(k), bool)
+        # (the segments in the CHM grid's pixels: to Web Mercator as earthfast veg_clumps reads them, roads.grid)
+        gx0, gy0, gdx, gdy = roads.grid
+        segs, hws = roads.segs, roads.hws * gdx
+        for a in range(0, len(segs), 512):          # (in chunks: clumps x segments)
+            sg, hw = segs[a:a + 512], hws[a:a + 512]
+            ax, ay = gx0 + sg[:, 0] * gdx, gy0 - sg[:, 1] * gdy
+            bx, by = gx0 + sg[:, 2] * gdx, gy0 - sg[:, 3] * gdy
+            dx, dy = bx - ax, by - ay
+            l2 = np.maximum(dx * dx + dy * dy, 1e-12)
+            t = np.clip(((nx[:, None] - ax) * dx + (ny[:, None] - ay) * dy) / l2, 0.0, 1.0)
+            qx, qy = ax + t * dx - nx[:, None], ay + t * dy - ny[:, None]
+            d = np.sqrt(qx * qx + qy * qy)
+            ok &= ~(d < hw[None, :] + r[:, None]).any(axis=1)
+        k, nx, ny = k[ok], nx[ok], ny[ok]
+    cx, cy = cx.copy(), cy.copy()
+    cx[k], cy[k] = nx, ny
+    return cx, cy
+
+
 def clumps(tree, lcls, lat, roads=None):
     """tree (a cell's canopy Items) with the far clumps added (CLUMP_OF, earthfast.veg_clumps) and the trees they
     stand for flagged (a negative scale: trees.lua shows them only within its near ring). lcls: the land cover class
@@ -1130,6 +2490,8 @@ def clumps(tree, lcls, lat, roads=None):
     if not len(cx):
         return tree
     member = np.asarray(member, bool)
+    cx, cy = _unlattice(np.asarray(cx, np.float64), np.asarray(cy, np.float64), np.asarray(ch, np.float32),
+                        np.asarray(cu, np.float64), x, y, member, clump_cell(lat), merc_per_m, roads)
     scale = tree.scale.copy()
     scale[member] = -np.abs(scale[member])
     tree = Items(tree.lon, tree.lat, tree.height, tree.radius, tree.kind, tree.group, tree.rank, tree.yaw, scale)
@@ -1732,9 +3094,11 @@ def farm_foliage(feats, chm, blocked, bounds=None):
         keep = np.sort(np.argsort(rank, kind="stable")[:FARM_BUSH_CELL])
         lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
     group = np.full(len(lon), G_SHRUB, np.uint8)
-    group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
-    return Items(lon, lat, height, (0.4 * height).astype(np.float32),
-                 np.full(len(lon), KIND_BUSH, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
+    crop = np.full(len(lon), WC["crop"], np.uint8)
+    group = regional(group, height, lat, lon, crop, u)
+    return climate_shrubs(Items(lon, lat, height, (0.4 * height).astype(np.float32),
+                                np.full(len(lon), KIND_BUSH, np.uint8), group, rank, yaw,
+                                np.ones(len(lon), np.float32)), crop)
 
 
 def _edge_axis(xy):
@@ -1851,13 +3215,14 @@ def _mask_decks(f, mask, chm, specs):
                                 np.ascontiguousarray(np.concatenate(hws), np.float64))
 
 
-def _mask_near(f, mask, chm, dist_m):
+def _mask_near(f, mask, chm, dist_m, kinds=(2, 3)):
     """Mark the CHM-grid pixels within dist_m (ground m) of Features f's lines and polygon outlines (water: its rivers'
-    lines and its lakes' and the sea's shores; inside a polygon is water, masked as such)."""
+    lines and its lakes' and the sea's shores; inside a polygon is water, masked as such). kinds: the feature kinds
+    (2 lines, 3 polygons; (3,): the sea's and the lakes' shores, not the rivers)."""
     if f is None or not len(f.kind):
         return
     fast.require(63, "road_segments")
-    sel = np.flatnonzero((f.kind == 2) | (f.kind == 3)).astype(np.int64)
+    sel = np.flatnonzero(np.isin(f.kind, kinds)).astype(np.int64)
     if not len(sel):
         return
     n_r, n_c = mask.shape
@@ -1948,13 +3313,14 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_CLIFF, G_VINE_ROW) + CLUMP_GROUPS
-               + BALE_GROUPS]
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_VINE_ROW, G_CLIFF, G_DEADWOOD,
+                                                         G_DEADWOOD_TROPICAL) + CLUMP_GROUPS + BALE_GROUPS]
 
 
 def _ambience(group, e, n, z, height, lat, lon):
     """(audio, biome) of a tile's items: audio its sound nodes as one flat list of [x, y, z, depth, size, count] rows
-    (earthfast.audio_nodes), biome its ambience set and variant (earthfast.audio_biome)."""
+    (earthfast.audio_nodes), biome its ambience set and variant (earthfast.audio_biome) and the Koppen class at the
+    tile (climate.koppen_at: the ground cover's climate)."""
     fast.require(80, "audio_nodes")
     f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
     g = np.ascontiguousarray(group, np.uint8)
@@ -1963,9 +3329,10 @@ def _ambience(group, e, n, z, height, lat, lon):
     nodes[:, :4] = np.round(nodes[:, :4], 1)
     nodes[:, 4] = np.round(nodes[:, 4], 2)
     import climate
-    biome = fast._ef.audio_biome(g, float(lat), float(lon), [G_DESERT_SHRUB, G_DESERT_ROCK, G_JUNIPER],
-                                 climate.koppen_at(float(lat), float(lon)))
-    return nodes.ravel().tolist(), list(biome)
+    k = int(climate.koppen_at(float(lat), float(lon)))
+    biome = fast._ef.audio_biome(g, float(lat), float(lon), [G_DESERT_SHRUB, G_DESERT_ROCK, G_JUNIPER], k)
+    # (47) the tile's Koppen class third: the mod's ground cover picks its grasses and flowers by it (groundcover.lua)
+    return nodes.ravel().tolist(), list(biome) + [k]
 
 
 def _no_items(as_json, lat, lon):

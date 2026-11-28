@@ -26,7 +26,7 @@ class ClassifyTest(unittest.TestCase):
         classes = np.array([[0, 10, 20, 30], [40, 50, 60, 70], [80, 90, 95, 100]], np.uint8)
         idx = sf.classify(classes, np.zeros(classes.shape), 2.0)
         self.assertEqual(idx.tolist(), [[sf.DIRT, sf.FOREST, sf.DUSTY, sf.GRASS], [sf.CROP, sf.DIRT, sf.LOOSE, sf.SNOW],
-                                        [sf.MUD, sf.MUD, sf.MUD, sf.GRASS]])
+                                        [sf.MUD, sf.WET, sf.MUD, sf.GRASS]])
 
     def test_arid_grassland_is_dry_grass(self):
         """Grassland in Koppen B (arid) is dry grass, elsewhere grass (2026-11-16); without positions, grass."""
@@ -37,11 +37,25 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(idx.tolist(), [[sf.DRYGRASS, sf.DRYGRASS], [sf.GRASS, sf.GRASS]])
         self.assertEqual(sf.classify(classes, np.zeros(classes.shape), 2.0).tolist(), [[sf.GRASS] * 2] * 2)
 
+    def test_lavender_fields_by_their_tags(self):
+        """Farmland tagged crop=lavender (or lavandin) is the lavender layer; other farmland, a lavender-named shop's
+        meadow without a crop tag, a park: not (2026-11-19)."""
+        import json as js
+        feats = type("F", (), {"attrs": {
+            "class": np.array(["farmland", "farmland", "meadow", "park", "orchard"]),
+            "tags": np.array([js.dumps({"crop": "lavender"}), js.dumps({"crop": "wheat"}),
+                              js.dumps({"name": "Lavender meadow"}), js.dumps({"crop": "lavender"}),
+                              js.dumps({"crop": "lavandin;olives"})])}})()
+        self.assertEqual(sf._lavender(feats).tolist(), [True, False, False, False, True])
+        self.assertEqual(sf.MATERIALS[sf.LAVENDER], ("bngEarthGroundLavender", "DIRT"))
+        self.assertIn((sf.LAVENDER, sf.CROP), sf.LOOKALIKE)
+
     def test_new_layers_fold_like_their_kin(self):
         """Forest floor, dry grass, crop soil and sand fold like the land cover they replaced; the look-alike merges
         keep one ground model per pair."""
-        for m in (sf.FOREST, sf.DRYGRASS, sf.CROP, sf.SAND):
+        for m in (sf.FOREST, sf.DRYGRASS, sf.CROP, sf.SAND, sf.WET):
             self.assertIn(m, sf.FOLD_FROM)
+        self.assertIn(sf.WET, sf.VERGE_FROM)     # (no cattails on a road's edge)
         for a, b in sf.LOOKALIKE:
             self.assertEqual(sf.MATERIALS[a][1], sf.MATERIALS[b][1], (sf.MATERIALS[a], sf.MATERIALS[b]))
         self.assertEqual(sf.MATERIALS[sf.DIRT], ("beamngEarthDirt", "DIRT"))
