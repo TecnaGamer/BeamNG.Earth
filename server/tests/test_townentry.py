@@ -417,6 +417,54 @@ class CommuneTest(unittest.TestCase):
         self.assertTrue(np.array_equal(a.mask, b.mask))
         self.assertAlmostEqual(a.lat0 / a.dlat, round(a.lat0 / a.dlat), places=6)
 
+    def test_scattered_islands_make_no_continent_sized_grid(self):
+        """A commune of small islands far apart (the Bahamas' Bimini district: 14 islands of 26.6 km2 in a 126 x 255
+        km box over Miami's map cells, 2026-11-27) is no grid of its whole box: it asked the land cover for 81 M points
+        (619 MiB a float64 array; 14.8 GB in the process) and took a 16 GB Windows PC's server out of memory. Its
+        area passes the commune rules; the grid's own size is what is bounded."""
+        isle = np.array([(0.0, 0.0), (0.01, 0.0), (0.01, 0.01), (0.0, 0.01)])
+        ll = [[isle + (-79.3, 25.7)], [isle + (-80.5, 23.5)], [isle + (-79.27, 25.1)]]
+        c = ts.Commune("Bimini", ll, ll, None, "bs", country="BS")
+        self.assertLess(ts._km2(ll), ts.ALONE_MAX_KM2)
+        asked = []
+
+        def urban(lat, lon):
+            asked.append(np.size(lat))
+            return np.ones(np.shape(lat), bool)
+        self.assertIsNone(ts.commune_agglomeration(c, urban))
+        self.assertEqual(asked, [])                 # (no point of it read: before, one call of ~81 M points)
+        # (a whole commune of WHOLE_MAX_KM2, even three times as long as it is wide, is still one grid)
+        side = np.sqrt(ts.WHOLE_MAX_KM2 * 1e6 / 3.0)
+        cells = (3.0 * side + 2 * ts.AGGLO_MARGIN_M) * (side + 2 * ts.AGGLO_MARGIN_M) / ts.AGGLO_CELL_M ** 2
+        self.assertLess(cells, ts.AGGLO_MAX_CELLS)
+
+    def test_the_grid_read_in_chunks_is_the_same(self):
+        """The land cover is read AGGLO_CHUNK points at a time (each a function of its point alone): the same
+        agglomeration as one call of the whole grid, bit for bit, and no call larger than a chunk (or a row)."""
+        ll = [[np.array([(0.001, 0.001), (0.03, 0.001), (0.03, 0.02), (0.001, 0.02)])]]
+
+        def built(lat, lon):
+            lat, lon = np.asarray(lat), np.asarray(lon)
+            return (np.sin(lat * 3000.0) + np.cos(lon * 2300.0) > 0.6) | (np.hypot(lat - 0.01, lon - 0.02) < 0.004)
+        sizes = []
+
+        def counted(lat, lon):
+            sizes.append(np.size(lat))
+            return built(lat, lon)
+        with mock.patch.object(ts, "AGGLO_CHUNK", 1 << 40):
+            whole = ts.agglomeration(ll, counted)
+        self.assertEqual(len(sizes), 1)
+        n = sizes.pop()
+        with mock.patch.object(ts, "AGGLO_CHUNK", 1000):
+            parts = ts.agglomeration(ll, counted)
+        self.assertGreater(len(sizes), 10)
+        self.assertEqual(sum(sizes), n)
+        self.assertLessEqual(max(sizes), max(1000, whole.mask.shape[1]))
+        self.assertEqual((whole.lat0, whole.lon0, whole.dlat, whole.dlon), (parts.lat0, parts.lon0, parts.dlat,
+                                                                           parts.dlon))
+        self.assertTrue(np.array_equal(whole.mask, parts.mask))
+        self.assertTrue(whole.mask.any() and not whole.mask.all())
+
     def test_communes_of_each_id_once_in_sign_countries(self):
         """The town_areas layer's features of several cells: each commune once (a commune is listed in every cell it
         touches), only where SIGN_COUNTRIES' rules apply, names with their spaces tidied."""

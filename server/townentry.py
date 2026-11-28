@@ -112,6 +112,15 @@ KIT_BOARDS = {"FR", "MC"}
 M_PER_DEG = 111320.0
 AGGLO_CELL_M = 20.0             # m, the agglomeration grid's step (the land cover's pixels are 10 m)
 AGGLO_MARGIN_M = 400.0          # m around a commune its grid reaches (a town across the boundary is one area)
+# cells: a commune's grid larger is not made (agglomeration: None, too large for one grid). The area rules
+# (WHOLE_MAX_KM2, ALONE_MAX_KM2) measure the commune's land, the grid its parts' box: the Bahamas' Bimini district,
+# 14 islands of 26.6 km2 from North Bimini to the Cay Sal Bank, has a 126 x 255 km box over Miami's map cells, an
+# 81 M cell grid whose land cover sampling took a 16 GB Windows PC's server out of memory (a road tile's process at
+# 14.8 GB on the PC, 2026-11-27). A square commune of WHOLE_MAX_KM2 is ~2.6 M cells (~160 MB while it is made)
+AGGLO_MAX_CELLS = 16_000_000
+# points: the land cover is read this many grid points at a time (each point's class is its own: the same grid in
+# fewer, smaller arrays; surface.classes holds ~180 bytes a point while it reads them)
+AGGLO_CHUNK = 1 << 19
 CLOSE_M = 60.0                  # m the built-up land is grown and shrunk back by: gaps up to ~2x closed
 OPEN_M = 20.0                   # m the closed area is shrunk and grown back by: strips up to ~3 cells wide out
 MIN_AGGLO_M2 = 50000.0          # m2: a smaller piece of built-up land is no agglomeration (5 ha)
@@ -428,9 +437,11 @@ def _pieces(m):
 
 def agglomeration(lonlat_parts, urban_fn, box=None):
     """The Agglo of a commune (lonlat_parts: its parts in lon/lat, as inside's), or None when the land cover has no
-    built-up land in or near it (the whole commune is then its agglomeration). urban_fn(lat, lon) -> bool array: the
-    land cover's built-up class (roads.road_specs'). box: (lon0, lat0, lon1, lat1) of the commune's part the grid
-    covers (a village's, commune_agglomeration), the commune's own box when None."""
+    built-up land in or near it (the whole commune is then its agglomeration) or its grid would be larger than
+    AGGLO_MAX_CELLS (urban_fn never called). urban_fn(lat, lon) -> bool array: the land cover's built-up class
+    (roads.road_specs'), a function of each point alone (read AGGLO_CHUNK points at a time). box: (lon0, lat0, lon1,
+    lat1) of the commune's part the grid covers (a village's, commune_agglomeration), the commune's own box when
+    None."""
     pts = np.concatenate([r for rings in lonlat_parts for r in rings[:1] if len(r)]) if lonlat_parts else None
     if pts is None or not len(pts):
         return None
@@ -445,10 +456,15 @@ def agglomeration(lonlat_parts, urban_fn, box=None):
     i1 = math.ceil((float(pts[:, 1].max()) + mlat) / dlat)
     j0 = math.floor((float(pts[:, 0].min()) - mlon) / dlon)
     j1 = math.ceil((float(pts[:, 0].max()) + mlon) / dlon)
+    if (i1 - i0) * (j1 - j0) > AGGLO_MAX_CELLS:
+        return None
     lat = (np.arange(i0, i1) + 0.5) * dlat
     lon = (np.arange(j0, j1) + 0.5) * dlon
-    la, lo = np.meshgrid(lat, lon, indexing="ij")
-    built = np.asarray(urban_fn(la.ravel(), lo.ravel()), bool).reshape(la.shape)
+    built = np.empty((len(lat), len(lon)), bool)
+    rows = max(1, AGGLO_CHUNK // max(1, len(lon)))
+    for r in range(0, len(lat), rows):      # (the grid's rows a few at a time: their points' classes are their own)
+        la, lo = np.meshgrid(lat[r:r + rows], lon, indexing="ij")
+        built[r:r + rows] = np.asarray(urban_fn(la.ravel(), lo.ravel()), bool).reshape(la.shape)
     if not built.any():
         return None
     r = max(1, int(round(CLOSE_M / AGGLO_CELL_M)))
