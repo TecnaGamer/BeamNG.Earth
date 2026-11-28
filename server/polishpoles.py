@@ -19,6 +19,7 @@ def _signature():
     return "pl-poles-v1-" + hashlib.sha256(SNAPSHOT.read_bytes()).hexdigest()[:16]
 
 
+SOUTH, WEST, NORTH, EAST = 48.75, 14., 55.75, 24.25
 LIVE_MARGIN = 2060.0  # powerlines.NEAR_M plus its 10 m matching margin
 
 
@@ -38,7 +39,7 @@ def _data():
 
 
 def inside(lat, lon):
-    if not (48.75 <= lat < 55.75 and 14 <= lon < 24.25):
+    if not (SOUTH <= lat < NORTH and WEST <= lon < EAST):
         return False
     cells, offsets, border = _data()[:3]
     cell = cells.get(f"{math.floor(lon*4)},{math.floor(lat*4)}")
@@ -55,9 +56,17 @@ def bounds(frame, box, margin=0):
     lat, lon, _ = frame.enu_to_geodetic(
         np.array([x0-margin, x0-margin, x1+margin, x1+margin]),
         np.array([y0-margin, y1+margin, y0-margin, y1+margin]), np.zeros(4))
-    if max(lat) < 48.75 or min(lat) >= 55.75 or max(lon) < 14 or min(lon) >= 24.25:
+    if not (np.isfinite(lat).all() and np.isfinite(lon).all()):
         return None
-    west, south, east, north = min(lon), min(lat), max(lon), max(lat)
+    west, east = min(lon), max(lon)
+    # A local tile straddling +/-180 has corners on both sides of the date line.
+    # Its occupied arc is the short one across the Pacific, far from Poland.
+    if east - west >= 180:
+        return None
+    south, west = max(min(lat), SOUTH), max(west, WEST)
+    north, east = min(max(lat), NORTH), min(east, EAST)
+    if south > north or west > east:
+        return None
     cells = _data()[0]
     if any(f"{x},{y}" in cells for x in range(math.floor(4*west), math.floor(4*east)+1)
            for y in range(math.floor(4*south), math.floor(4*north)+1)):

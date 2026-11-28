@@ -23,6 +23,18 @@ class PolishPolesTest(unittest.TestCase):
         mock.start()
         self.addCleanup(mock.stop)
 
+    def test_foreign_tiles_never_query_polish_survey_or_mapillary(self):
+        box = (-256., -256., 256., 256.)
+        with patch("polishpoles._data", side_effect=AssertionError("foreign survey lookup")), \
+                patch("mapillarypoles.enabled", return_value=True), \
+                patch("mapillarypoles.signature", side_effect=AssertionError("foreign Mapillary lookup")):
+            for lat in (-90., -65., 0., 49., 52., 55., 70., 90.):
+                for lon in (-180., -179.999, -120., -30., 0., 30., 120., 179.999, 180.):
+                    with self.subTest(lat=lat, lon=lon):
+                        frame = geodesy.EnuFrame(lat, lon)
+                        self.assertIsNone(polishpoles.bounds(frame, box, polishpoles.LIVE_MARGIN))
+                        self.assertEqual(polishpoles.cache_parts(frame, box), ())
+
     def test_border_and_roadside_guesses(self):
         self.assertTrue(polishpoles.inside(52.35, 14.56))    # Słubice
         self.assertFalse(polishpoles.inside(52.34, 14.54))   # Frankfurt (Oder)
