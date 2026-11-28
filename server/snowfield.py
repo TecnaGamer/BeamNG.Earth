@@ -50,7 +50,14 @@ BLOCK_DEG = 1.0
 NEAR_KM = 90.0
 FAR_KM = 450.0
 REFRESH_NEAR_S = 3600.0
-REFRESH_FAR_S = 6 * 3600.0      # (an Alpine anchor: 48 near cells hourly + 90 far points every 6 h = 1,814 of 2,000)
+REFRESH_FAR_S = 6 * 3600.0
+# The near ring's priority (Codex on a656188c: Tromso's 96 near cells hourly were 2,765 a day, the anchor's own cell held
+# till midnight after ~17 h): its CORE_CELLS nearest (the anchor's own first) every hour, their weight for the rest of
+# the UTC day reserved before anything else; the rest of the near ring every REFRESH_REST_S as the budget allows, then
+# the far ring every REFRESH_FAR_S, each only with the core's reserve kept
+CORE_CELLS = 16
+REFRESH_REST_S = 3 * 3600.0
+SLOT_S = {"near": REFRESH_NEAR_S, "core": REFRESH_NEAR_S, "rest": REFRESH_REST_S, "far": REFRESH_FAR_S}
 WEIGHT_CAP = 2000.0             # Open-Meteo weighted calls a day (PLAN_FINAL D-3: Experimental parts)
 LOCATIONS_MAX = 200             # locations a request (Open-Meteo allows 1,000; a near ring holds ~40)
 TABLE_TTL_S = 24 * 3600.0
@@ -449,7 +456,7 @@ class SnowField:
 
     # -- forcing and tables
     def _slot(self, ring):
-        return int(self.clock() // (REFRESH_NEAR_S if ring == "near" else REFRESH_FAR_S))
+        return int(self.clock() // SLOT_S[ring])
 
     @staticmethod
     def _pkey(point):
@@ -461,19 +468,20 @@ class SnowField:
         slot = self._slot(ring)
         return [q for q in points if (self._pkey(q), ring, slot) not in self.fcache]
 
-    def _admit(self, ring, n_new, n_near):
-        """May a ring ask Open-Meteo for n_new locations now (the day's weight cap; the far ring only while the near
-        ring's weight for the rest of the UTC day stays reserved: n_near locations an hour)? Checked before any of the
-        ring's work (the IMS days, the ground, the kernel)."""
+    def _admit(self, group, n_new, n_core, extra=0.0):
+        """May a group ("core": the anchor's nearest cells, "rest": the rest of the near ring, "far") ask Open-Meteo
+        for n_new locations now? The core within the day's weight cap; the rest and the far ring only with the core's
+        hourly weight (n_core locations) reserved for the hours left in the UTC day after this one. extra: weight this
+        update spends first (the core's). Checked before any of the ring's work (the IMS days, the ground, the kernel)."""
         now = self.clock()
         today = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).date()
         day, used = self.weight_day
         if day != today:
             used = 0.0
-        w = om_weight(n_new) if n_new else 0.0
-        if ring == "far":
-            left_h = math.ceil((86400.0 - now % 86400.0) / REFRESH_NEAR_S)
-            w += om_weight(n_near) * left_h if n_near else 0.0
+        w = (om_weight(n_new) if n_new else 0.0) + extra
+        if group != "core" and n_core:
+            left_h = math.ceil((86400.0 - now % 86400.0) / REFRESH_NEAR_S) - 1
+            w += om_weight(n_core) * max(0, left_h)
         return used + w <= WEIGHT_CAP
 
     def _defer(self, ring, why):
@@ -583,19 +591,46 @@ class SnowField:
         self._prune_gibs(datetime.datetime.fromtimestamp(now, datetime.timezone.utc).date())
         if self.refreshed.get(ring) == staged["key"] or now < self.retry.get(ring, (0.0, 0))[0]:
             return staged if staged["gone"] else None
-        pts = [self.cells[k].point for k in near] if ring == "near" else list(far)
-        if not self._admit(ring, len(self._missing(pts, ring)), len(near)):
-            self._defer(ring, f"{len(self._missing(pts, ring))} new locations")
-            return staged if staged["gone"] else None
+        core_pts = [self.cells[k].point for k in near[:CORE_CELLS]]
+        rest_pts = [self.cells[k].point for k in near[CORE_CELLS:]]
+        rest_ok = False
+        if ring == "near":
+            n_core = len(self._missing(core_pts, "core"))
+            if not self._admit("core", n_core, len(core_pts)):
+                self._defer(ring, f"{n_core} new locations")
+                return staged if staged["gone"] else None
+            n_rest = len(self._missing(rest_pts, "rest"))
+            # (the rest of the near ring: when the budget allows with the core's reserve, else its last forcing)
+            rest_ok = not n_rest or self._admit("rest", n_rest, len(core_pts),
+                                                om_weight(n_core) if n_core else 0.0)
+            pts = core_pts
+        else:
+            pts = list(far)
+            if not self._admit("far", len(self._missing(pts, "far")), len(core_pts)):
+                self._defer(ring, f"{len(self._missing(pts, 'far'))} new locations")
+                return staged if staged["gone"] else None
         try:
             box = self._ims_box(lat, lon)
             obs = self._ims_newest(box) if box is not None else []
             if ring == "near":
-                cells = [self.cells[k] for k in near]
-                forcing = self._forcing(pts, ring, "demand")
-                self._make(cells, forcing, obs, staged)
+                core = [self.cells[k] for k in near[:CORE_CELLS]]
+                forcing = self._forcing(core_pts, "core", "demand")
+                rest = [self.cells[k] for k in near[CORE_CELLS:]]
+                rforcing = None
+                if rest and rest_ok:
+                    try:
+                        rforcing = self._forcing(rest_pts, "rest", "demand")
+                    except _Deferred:
+                        rforcing = None
+                if rforcing is None and rest:
+                    # (not admitted: the rest's cells refreshed from forcing still had for this slot, the others kept)
+                    had = [(c, self.fcache.get((self._pkey(c.point), "rest", self._slot("rest")))) for c in rest]
+                    rest = [c for c, h in had if h is not None]
+                    rforcing = [h for _c, h in had if h is not None]
+                # (one seed region for the whole near ring: the core's and the rest's model cells together)
+                self._make(core + rest, forcing + list(rforcing or []), obs, staged)
             elif pts:
-                forcing = self._forcing(pts, ring, "background")
+                forcing = self._forcing(pts, "far", "background")
                 for bc, f in zip(pts, forcing):
                     cells = [self.cells[k] for k in far[bc]]
                     self._make(cells, [f] * len(cells), obs, staged)
@@ -619,7 +654,10 @@ class SnowField:
         same step: Service._publish)."""
         changed = []
         with self.lock:
+            tables = staged.get("tables", {})
             for k in staged.get("gone", ()):
+                if k in tables:
+                    continue            # (its fresh table replaces the expired one: Codex on a656188c)
                 c = self.cells.pop(k, None)
                 if c is not None and c.table is not None:
                     changed.append(k)

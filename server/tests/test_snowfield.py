@@ -352,30 +352,84 @@ class FieldTest(unittest.TestCase):
         self.now = (self.now // 86400 + 1) * 86400 + 60
         self.assertTrue(f.due(39.9, -105.1))
 
-    def test_a_stationary_alpine_day_stays_under_the_cap(self):
-        """Codex on 70e2880b: at 46.5 N 10.5 E the real rings (48 near cells, ~90 far points) every 10 min for a day:
-        the near ring hourly, the far ring as the reserve allows, under the day's weight cap; forcing reused within its
-        slot (a move inside the hour asks only for the new points)."""
+    def stationary_day(self, lat, lon):
+        """A day of poses every 10 min at (lat, lon) with the production rings and cap: (the field, requests by group
+        (core, rest, far) as location counts, the anchor cell's table times)."""
         import snowfield
         sf, f = self.field(2.0, 0.0, 2, near_km=snowfield.NEAR_KM, far_km=snowfield.FAR_KM)
+        near, far = sf.rings(lat, lon, sf.NEAR_KM, sf.FAR_KM)
+        n_core, n_rest, n_far = min(sf.CORE_CELLS, len(near)), max(0, len(near) - sf.CORE_CELLS), len(far)
+        self.assertEqual(len({n_core, n_rest, n_far}), 3, "the groups' sizes tell their requests apart")
         day0 = (self.T0 // 86400) * 86400
-        self.now = day0 + 30
-        near_fetches = 0
+        anchor = sf.cell_of(lat, lon)
+        made = []
         for step in range(144):
             self.now = day0 + 30 + step * 600
-            n0 = len(self.calls)
             for ring in ("near", "far"):
-                if f.due(46.5, 10.5):
-                    self.run_ring(f, 46.5, 10.5, ring)
-            near_fetches += sum(1 for c in self.calls[n0:] if c < 60)
-        used = f.weight_day[1]
-        self.assertLessEqual(used, sf.WEIGHT_CAP, f"{used} weighted calls")
-        self.assertEqual(near_fetches, 24, self.calls)
-        self.assertGreaterEqual(sum(1 for c in self.calls if c >= 60), 1)
+                if f.due(lat, lon):
+                    self.run_ring(f, lat, lon, ring)
+            c = f.cells.get(anchor)
+            if c is not None and (not made or made[-1] != c.made):
+                made.append(c.made)
+        groups = {"core": [x for x in self.calls if x == n_core], "rest": [x for x in self.calls if x == n_rest],
+                  "far": [x for x in self.calls if x == n_far]}
+        return sf, f, groups, made, (n_core, n_rest, n_far), day0
+
+    def test_a_stationary_alpine_day_stays_under_the_cap(self):
+        """Codex on 70e2880b: at 46.5 N 10.5 E the real rings (48 near cells, ~90 far points) every 10 min for a day:
+        under the day's weight cap; the anchor's nearest cells hourly, the rest of the near ring every 3 h, the far ring
+        every 6 h; forcing reused within its slot (a move inside the hour asks only for the new points)."""
+        sf, f, groups, made, (n_core, n_rest, n_far), day0 = self.stationary_day(46.5, 10.5)
+        self.assertLessEqual(f.weight_day[1], sf.WEIGHT_CAP)
+        self.assertEqual(len(groups["core"]), 24)
+        self.assertEqual(len(groups["rest"]), 8)
+        self.assertEqual(len(groups["far"]), 4)
+        self.assertEqual(len(made), 24, "the anchor's table made every hour")
         # a move within the hour into the next cell asks only for the new points
         n0 = len(self.calls)
         self.run_ring(f, 46.5, 10.75, "near")
-        self.assertLess(sum(self.calls[n0:]), 20, self.calls[n0:])
+        self.assertLess(sum(self.calls[n0:]), n_core + n_rest, self.calls[n0:])
+
+    def test_a_stationary_day_at_tromso_keeps_the_anchor_hourly(self):
+        """Codex on a656188c: at Tromso (69.65 N, 18.96 E) the near ring has 96 cells (2,765 a day hourly): with the
+        production cap the anchor and its nearest cells are refreshed every hour all day, the rest of the near ring and
+        the far ring as the reserve allows, the day under the cap."""
+        sf, f, groups, made, (n_core, n_rest, n_far), day0 = self.stationary_day(69.65, 18.96)
+        self.assertGreaterEqual(n_core + n_rest, 90)
+        used = f.weight_day[1]
+        self.assertLessEqual(used, sf.WEIGHT_CAP, f"{used}")
+        self.assertEqual(len(groups["core"]), 24, "the core's request every hour")
+        self.assertEqual(len(made), 24, "the anchor's table made every hour")
+        self.assertTrue(all(m - day0 < (i + 1) * 3600 for i, m in enumerate(made)), "each in its own hour")
+        self.assertGreaterEqual(len(groups["rest"]), 1)
+        print(f"  (Tromso: {used:.1f} weighted calls; core {len(groups['core'])} x {n_core}, rest "
+              f"{len(groups['rest'])} x {n_rest}, far {len(groups['far'])} x {n_far})")
+
+    def test_a_refresh_replaces_an_expired_snowy_table(self):
+        """Codex on a656188c: a kept cell whose table is past TABLE_TTL_S, refreshed in the same update: the fresh
+        table is published (it was dropped as expired, then its replacement skipped: snow vanished as it came in)."""
+        sf, f = self.field(2.0, 0.0, 4)
+        self.run_ring(f, 39.9, -105.1, "near")
+        k = sf.cell_of(39.9, -105.1)
+        fresh = f.cells[k].table
+        self.assertIsNotNone(fresh)
+        import snowcover
+        old = snowcover.Table(((1500, 8, 6, 8, 6, 3),), snowcover.NO_ROAD, 0)
+        f.cells[k].table, f.cells[k].made = old, self.now - sf.TABLE_TTL_S - 60
+        self.now += 3600.0
+        st = f.update(39.9, -105.1, "near")
+        self.assertIn(k, st["gone"])
+        self.assertIn(k, st["tables"])
+        changed = f.publish(st)
+        self.assertIn(k, changed)
+        self.assertIn(k, f.cells)
+        self.assertEqual(f.cells[k].table, fresh)
+        self.assertIn(k, f.provider(39.0, -106.0, 41.0, -104.0).cells)
+        # an expired cell that is not refreshed (its forcing failed) goes
+        f.cells[k].made = self.now - sf.TABLE_TTL_S - 60
+        st = {"ring": "near", "key": None, "tables": {}, "gone": [k]}
+        self.assertIn(k, f.publish(st))
+        self.assertNotIn(k, f.cells)
 
 
 class WiringTest(unittest.TestCase):
