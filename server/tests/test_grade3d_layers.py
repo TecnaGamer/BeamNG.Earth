@@ -96,6 +96,33 @@ def test_a_path_coming_back_to_its_own_node_is_joined_there():
     assert x.upper is None and x.why == "joined"
 
 
+def _noded(key, line, kind, level, nodes, cls="service"):
+    return Member(key, np.asarray(line, np.float64), kind, cls, None, level, 3.0, None,
+                  frozenset(c for c, _x, _y in nodes), node_xy=tuple(nodes))
+
+
+def test_two_roads_joined_through_a_third_too_near_their_crossing_are_joined_there():
+    # (La Defense: a service tunnel starts at a node of a street, and 9 m on passes 5.25 m under the street's junction
+    # piece, the two joined only through that street: held there and 5.25 m apart at once, its block had no answer)
+    street = _noded("street", _line(-200, 0, 200, 0, 41), "ground", 0.0,
+                    [("w", -200.0, 0.0), ("a", 0.0, 0.0), ("b", 10.0, 0.0), ("e", 200.0, 0.0)])
+    piece = _noded("piece", _line(10, 0, 10, 60, 7), "ground", 0.0, [("b", 10.0, 0.0), ("pn", 10.0, 60.0)])
+    tube = _noded("tube", np.array([[0.0, 0.0], [8.0, 4.0], [12.0, 6.0], [100.0, 6.0]]), "tunnel", -1.0,
+                  [("a", 0.0, 0.0), ("tn", 100.0, 6.0)])
+    net = network.build([street, piece, tube])
+    xs = [y for y in layers.order(net) if {str(net.members[y.a].key), str(net.members[y.b].key)} == {"piece", "tube"}]
+    assert xs and all(y.upper is None and y.why == "joined" for y in xs)
+    # (the tube starting 400 m along the street instead: its grade parts them, the clearance kept)
+    linenet.reset()
+    street = _noded("street", _line(-500, 0, 200, 0, 71), "ground", 0.0,
+                    [("w", -500.0, 0.0), ("a", -400.0, 0.0), ("b", 10.0, 0.0), ("e", 200.0, 0.0)])
+    tube = _noded("tube", np.array([[-400.0, 0.0], [-400.0, -40.0], [8.0, -40.0], [8.0, 4.0], [12.0, 6.0],
+                                    [100.0, 6.0]]), "tunnel", -1.0, [("a", -400.0, 0.0), ("tn", 100.0, 6.0)])
+    net = network.build([street, piece, tube])
+    xs = [y for y in layers.order(net) if {str(net.members[y.a].key), str(net.members[y.b].key)} == {"piece", "tube"}]
+    assert xs and all(y.upper is not None for y in xs)
+
+
 def test_two_tunnels_at_one_level_are_left_apart():
     ms = [_m("road", _line(-200, 0, 200, 0), "tunnel", level=-1.0), _m("track", _line(0, -200, 0, 200), "tunnel", level=-1.0)]
     net = network.build(ms)
