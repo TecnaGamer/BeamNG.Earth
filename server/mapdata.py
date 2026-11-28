@@ -1044,6 +1044,11 @@ class MapData:
         if not parquet and MapData._pmt(self, layer):
             source = f"overture-pmt{pmtiles.FORMAT}"
         lv = LAYER_VERSIONS.get(layer)
+        if layer == "roads":
+            import pedestrianlighting
+            import furniture
+            if pedestrianlighting.enabled() or furniture.strict_lighting():
+                lv = 11  # explicit way lighting is distinguished from name-based inference
         name = layer if lv is None else f"{layer}.{lv}"
         return os.path.join(self.cache_dir, "mapdata", f"v{VERSION}", source, release, name,
                             str(key.z), str(key.x), f"{key.y}.npz")

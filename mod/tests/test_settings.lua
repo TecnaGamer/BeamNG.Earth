@@ -765,6 +765,7 @@ files[settings.FILE] = nil
 do
   local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
     'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expTerrainBumps', 'expCliffWalls',
+    'strictOsmLighting', 'osmPedestrianLighting',
     'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
     'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads', 'expPuddlesV2',
     'expLeafCycle' }

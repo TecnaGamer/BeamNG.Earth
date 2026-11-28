@@ -48,6 +48,10 @@ M.SCHEMA = {
     label = 'Tree density' },
   treeDistance = { kind = 'enum', default = 'normal', values = { 'nearest', 'near', 'medium', 'normal', 'far', 'farther', 'max' },
     label = 'Tree draw distance' },
+  halfStreetLamps = { kind = 'bool', default = false, label = 'Every other procedural street lamp' },
+  streetLampBeam = { kind = 'number', default = 100, min = 50, max = 150, label = 'Street lamp beam width' },
+  streetLampBrightness = { kind = 'number', default = 100, min = 0, max = 100, label = 'Street Lamp Brightness' },
+  streetLampGlow = { kind = 'number', default = 100, min = 0, max = 100, label = 'Street Lamp Glow' },
   nightLights = { kind = 'enum', default = 'normal', values = { 'few', 'normal', 'many' }, label = 'Street lamp lights' },
   -- the road surface's wear (server roadwear.py, the message road_wear): off; basic (a concrete road's joints, grassy
   -- edges on country roads); full (also crack lines, patches, potholes, oil spots, autumn leaves; the tyre polish, crack
@@ -199,6 +203,8 @@ M.SCHEMA = {
   expNlRoadSigns = { kind = 'bool', default = false, label = 'Dutch road signs' },
   expEuScenery = { kind = 'bool', default = false, label = 'French and European road scenery' },
   expDropRails = { kind = 'bool', default = false, label = 'Guard rails at drops' },
+  osmPedestrianLighting = { kind = 'bool', default = false, label = 'OSM Pedestrian and Recreational Lighting' },
+  strictOsmLighting = { kind = 'bool', default = false, label = 'Strict OSM Lighting' },
   expEntranceFlares = { kind = 'bool', default = false, label = 'Widened entrances' },
   expPriorityStops = { kind = 'bool', default = false, label = 'Right of way by road class' },
   expRoadBumps = { kind = 'bool', default = false, label = 'Bumpy road surfaces' },
@@ -286,7 +292,7 @@ M.SCHEMA = {
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
 M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTextures', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
-  'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
+  'halfStreetLamps', 'streetLampBeam', 'streetLampBrightness', 'streetLampGlow', 'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'weatherStormLight',
   'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherWetGrip', 'weatherPuddleLook', 'weatherSoundSource', 'weatherThunderSound', 'weatherRainSound', 'weatherWindSound', 'realClouds',
@@ -299,6 +305,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
   'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
   'expWearStrips', 'expGradeGuard', 'expTerrainBumps', 'expRoadFollow', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
+  'strictOsmLighting', 'osmPedestrianLighting',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads', 'expPuddlesV2',
   'expLeafCycle' }
@@ -754,6 +761,10 @@ M.APPLY = {
   grassDistance = function(v) require('beamngEarth/groundcover').setDistance(v) end,
   terrainShadows = function(v) require('beamngEarth/terrain').setCastShadows(v) end,
   objectDetail = function(v) require('beamngEarth/enginepref').setLevel(v, inOurLevel()) end,
+  halfStreetLamps = function(v) require('beamngEarth/nightlights').setHalfDensity(v) end,
+  streetLampBeam = function(v) require('beamngEarth/nightlights').setBeam(v) end,
+  streetLampBrightness = function(v) require('beamngEarth/nightlights').setBrightness(v) end,
+  streetLampGlow = function(v) require('beamngEarth/nightlights').setGlow(v) end,
   nightLights = function(v) require('beamngEarth/nightlights').setLightCount(v) end,
   distantTraffic = function(v) require('beamngEarth/trafficvisuals').setEnabled(v) end,
   distantTrafficWithoutTraffic = function(v) require('beamngEarth/trafficvisuals').setWithoutTraffic(v) end,

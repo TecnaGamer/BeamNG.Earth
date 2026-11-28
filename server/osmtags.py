@@ -624,5 +624,13 @@ def join(feats, tags, geometry=None):
     ids = fast._ef.osm_join(feats.attrs, tags, len(feats), feats.part_off, feats.ring_off, feats.coord_off,
                             feats.lonlat, list(FLOATS), list(TEXTS), sorted(roadlanes.HIGHWAYS), list(ONEWAY_YES),
                             way_id, mg.text_column)
+    feats.attrs["osm_way_lit"] = mg.text_column([str(tags.get(w, {}).get("lit", "")) for w in ids])
+    sources = feats.rules.get("src_ways")
+    if sources is not None:
+        spans = []
+        for i, record, start, end in zip(sources.feature, sources.value, sources.start, sources.end):
+            value = tags.get(way_id(str(record)), {}).get("lit", "")
+            spans.append((i, str(value).strip().lower(), (start, end)))
+        feats.rules["osm_lighting"] = mg.rule_table(spans)
     roadlanes.join(feats, tags, ids, geometry)
     return feats

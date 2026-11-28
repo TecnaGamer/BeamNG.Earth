@@ -119,6 +119,44 @@ class WorldPropsTest(unittest.TestCase):
         _, out = self.lamps(FakeMD({"infrastructure": lamps, "roads": road_feats}))
         self.assertAlmostEqual(next(r for r in out if r[0] == "streetlight")[4], 0., places=1)
 
+    def test_mapped_path_lamp_prefers_adjacent_street_but_not_a_remote_street(self):
+        from unittest.mock import patch
+        lamps = feats("infrastructure", [
+            ("roadside", (104., 60.), {"class": "street_lamp", "src_record": "n120@1"}),
+            ("park", (130., 100.), {"class": "street_lamp", "src_record": "n121@1"}),
+        ], mg.POINT)
+        lines = feats("roads", [
+            ("street", [(100., 0.), (100., 220.)], {"class": "residential"}),
+            ("walk", [(106., 0.), (106., 220.)], {"class": "footway"}),
+            ("cycle", [(132., 0.), (132., 220.)], {"class": "cycleway"}),
+        ], mg.LINE)
+        with patch.dict(os.environ, BNE_PEDESTRIAN_LIGHTING="on"):
+            _, posts = self.lamps(FakeMD({"infrastructure": lamps, "roads": lines}))
+        self.assertEqual([(r[1], r[4]) for r in sorted(posts)], [(104., 180.), (130., 0.)])
+
+    def test_opposite_carriageways_at_tile_seam(self):
+        from unittest.mock import patch
+        import furniture
+        # West road heads north, east road heads south. The median crosses x=256.
+        nodes = feats("infrastructure", [
+            (str(i), (x, 90.), {"class": "street_lamp", "src_record": f"n{700+i}@1",
+                                  "tags": json.dumps({"lamp_mount": mount})})
+            for i, (x, mount) in enumerate([(246., ""), (256., "double_arm"), (266., "")])
+        ], mg.POINT)
+        roads = feats("roads", [
+            ("west", [(251., 0.), (251., 200.)], {"class": "primary"}),
+            ("east", [(261., 200.), (261., 0.)], {"class": "primary"}),
+            ("walk", [(245., 0.), (245., 200.)], {"class": "footway"}),
+        ], mg.LINE)
+        md = FakeMD({"roads": roads, "infrastructure": nodes})
+        with patch.dict(os.environ, BNE_PEDESTRIAN_LIGHTING="on"):
+            tiles = [sorted(self.lamps(md, tx)[1]) for tx in (0, 1)]
+        self.assertEqual(tiles[0], tiles[1])
+        posts = sorted(tiles[0], key=lambda r: r[1])
+        self.assertEqual([r[4] for r in posts], [0., 0., 180.])
+        heads = furniture.lamp_lenses([posts[1]])[::2]
+        self.assertEqual(sorted((r[1], r[4]) for r in heads), [(251.1, 180.), (260.9, 0.)])
+
     def test_lamp_rotation_curved_road_double_arm_and_layers(self):
         import fast
         fast.require(199, "test")

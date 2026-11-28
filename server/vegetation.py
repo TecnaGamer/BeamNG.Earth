@@ -327,6 +327,9 @@ class Vegetation:
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
+        import pedestrianlighting
+        if self.dir and pedestrianlighting.enabled():
+            self.dir = os.path.join(self.dir, "osm-pedestrian-lighting-v3")
         self._tl = threading.local()    # per build thread: .dem_failed (the DEM could not answer: _load keeps no cell)
         self._warm_at, self._warm_thread = None, None   # warm_around's latest (lat, lon, radius_m), for the warm thread
         self._warm_cv = threading.Condition()
@@ -529,6 +532,9 @@ class Vegetation:
                     lands[(dx, dy)] = self._land(kk)
         # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
+        import pathlayout
+        path_frame = path_box = path_parts = None
+        path_blockers = []
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
@@ -562,6 +568,15 @@ class Vegetation:
             tops |= moved
         solid = blocked.copy()              # (buildings, water, decks: no mapped tree there, natural_trees)
         blocked |= road
+        import pedestrianlighting
+        if pedestrianlighting.enabled():
+            if path_frame is None:
+                path_frame, path_box, path_parts = pathlayout.cell_parts(
+                    cd.bounds, road_cells, getattr(self.surface, "urban", None), self.widths)
+            keys = mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)
+            sites = list(pedestrianlighting.path_sites(path_parts, road_cells, path_box, path_frame, self.md))
+            sites.extend(pedestrianlighting.area_sites(path_frame, path_box, self.md, keys))
+            path_blockers.extend((np.array([[px-.15, py], [px+.15, py]]), .35) for _, px, py, _, _ in sites)
         jj, ii = np.nonzero(tops)
         # one top per crown (flat crowns had several); a crown's radius in pixels as at MERC_REF_LAT (chm.dx / k), and
         # equal heights (a canopy raster upsampled into flat plateaus) ranked by a hash of the global pixel, not by
@@ -646,6 +661,9 @@ class Vegetation:
         if orchard.any():
             keep = _keep_off_mask(tree, orchard, chm)
             tree, lcls = tree.take(keep), lcls[keep]
+        if path_blockers:
+            keep = _off_paths(tree, path_frame, path_blockers)
+            tree, lcls = tree.take(keep), lcls[keep]
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
@@ -684,7 +702,8 @@ class Vegetation:
                 _sourced(part, S.S_DERIVED, S.S_DERIVED, S.S_DEFAULT)
             _sourced(bales, S.S_PRIOR)
             extra = [p if p.source is not None else _sourced(p, S.S_MAPPED) for p in extra]
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales] + extra)
+        items = _concat_all([tree, scatter, edge, planted, hedges, rows, bales] + extra)
+        return items.take(_off_paths(items, path_frame, path_blockers)) if path_blockers else items
 
     # --- the mapped natural features (natural.py) ---------------------------------------------------------------
     def _land(self, key):
@@ -1054,6 +1073,21 @@ FARM_BUSH_ALONG = 6.0
 FARM_BUSH_POLY = 500
 FARM_BUSH_CELL = 2000
 FARM_MIN_M2 = 800.0
+
+
+def _off_paths(items, frame, blockers):
+    """Keep trunks and low vegetation off paths, allowing individual tree crowns to overhang."""
+    import pathlayout
+    e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, 0.)
+    # A far clump represents several trunks spread over its footprint, not one
+    # trunk at its centre. Its individual near trees are tested separately.
+    single_tree = (items.kind == KIND_TREE) & ~np.isin(items.group, CLUMP_GROUPS)
+    radius = np.where(single_tree, 0.0, items.radius)
+    import pathfootprints
+    for group in np.unique(items.group[~single_tree]):
+        sel = (~single_tree) & (items.group == group)
+        radius[sel] = pathfootprints.radii(GROUPS[int(group)], items.height[sel], radius[sel])
+    return pathlayout.keep_outside(np.column_stack((e, n)), blockers, radius)
 
 
 def _keep_off_mask(items, mask, chm):

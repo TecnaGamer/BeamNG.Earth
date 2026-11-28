@@ -7019,8 +7019,11 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
     import fast
     if not built:
         return []
+    stride = furniture.lamp_stride()
     table = furniture.lamp_spacing(region)
     hw = "na" if furniture._na(region) else None
+    span_by_line = []
+    import lightingranges
     pts, off, spacing, phase, side, lit_any = [], [0], [], [], [], []
     for f in road_layers:
         if f is None or len(f.kind) == 0:
@@ -7033,6 +7036,11 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
             sp = specs[i]
             if sp is None:
                 continue
+            spans = None
+            if furniture.strict_lighting():
+                spans = lightingranges.ranges(f, i, frame)
+                if not (spans.has_yes if spans else furniture.way_lighting(f, i) == "yes"):
+                    continue
             highway = sp.cls in furniture.HIGHWAY_CLASSES
             if highway and not furniture.highway_lit(region, sp.link, True):
                 continue
@@ -7061,9 +7069,10 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
                 for every, sd, shift in rules:
                     pts.append(xy)
                     off.append(off[-1] + len(xy))
-                    spacing.append(every)
+                    spacing.append(every * stride)
                     phase.append(ph0 * every + shift)
                     side.append(sd * reach)
+                    span_by_line.append(spans)
                     lit_any.append(bool(highway and sp.link))
     if not pts:
         return []
@@ -7075,6 +7084,9 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
         return []
     keep = [k for k in range(len(st)) if lit_any[int(st[k, 2])]
             or (int((st[k, 0] - x0) // sq), int((st[k, 1] - y0) // sq)) in built]
+    if any(span_by_line):
+        keep = [k for k in keep if span_by_line[int(st[k, 2])] is None
+                or span_by_line[int(st[k, 2])].at(st[k, :2]) == "yes"]
     st = st[keep]
     if own is not None and len(st):
         st = st[np.asarray(own.owns(st[:, 0], st[:, 1]), bool)]

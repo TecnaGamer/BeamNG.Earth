@@ -257,7 +257,7 @@ _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassifi
             "living_street": 0}         # which arm gives way at a Swedish junction
 # The Nordic countries' junctions (Sweden's rule, junction_controls, the same in its neighbours): a lower road gives way
 # to the road through (a give-way triangle), roads of one class meet by the right-hand rule (no sign), a stop sign only
-# where the map has one. Norway: trafikkreglene §7 (vikeplikt for kjørende fra høyre; skilt 202 where a road joins a
+# where the map has one. Norway: trafikkreglene Ă„â€šĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â§7 (vikeplikt for kjÄ‚â€žĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â¸rende fra hÄ‚â€žĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â¸yre; skilt 202 where a road joins a
 # main road), a stop sign (206) only where the view is poor (GitHub #1064: Harstad's minor junctions had STOP signs,
 # two back to back on one island); Finland's, Denmark's and Iceland's road traffic acts the same.
 GIVE_WAY_COUNTRIES = {"SE", "NO", "FI", "DK", "IS", "AX", "FO"}
@@ -447,8 +447,8 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     (islands.ring_fids): a junction on a ring (two of its arms) has give-way signs on incoming external arms.
     The AI graph handles their priority, without installing stop controllers on the ring. signals: the mapped
     traffic signals near (mapped_signals; None: guessed by the roads' classes). Sweden (country): give-way on the
-    arms lower than the road through and nothing between roads of a class, as trafikförordningen (1998:1276): the
-    right-hand rule is 3 kap. 18 §, give-way entering a main road 21 §, and a stop sign is a local exception "där väjningsplikt
+    arms lower than the road through and nothing between roads of a class, as trafikfÄ‚â€žĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â¶rordningen (1998:1276): the
+    right-hand rule is 3 kap. 18 Ă„â€šĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â§, give-way entering a main road 21 Ă„â€šĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â§, and a stop sign is a local exception "dÄ‚â€žĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â¤r vÄ‚â€žĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â¤jningsplikt
     inte fungerar" (Transportstyrelsen's decision TSV 2011-1541, 2012-01-09); priority: the signs the map has
     (secrossings.nodes), on top of those, as a stop sign is only ever the map's."""
     if ring and sum(1 for a in arms if a[0] in ring) >= 2:
@@ -780,11 +780,15 @@ TOWN_POLE_SPACING = 40.0
 POLE_LAMP_EVERY = {"trunk", "primary", "secondary"}
 
 
-def pole_lamp(cls, k, region):
+def lamp_stride():
+    return 2 if os.environ.get("BNE_HALF_STREET_LAMPS") == "on" else 1
+
+
+def pole_lamp(cls, k, region, stride=1):
     """Does the k-th utility pole along a road of class cls carry a lamp? (the sparse states: every third)"""
     if cls in POLE_LAMP_EVERY or not _na(region):
-        return True
-    return k % (3 if region == "na:sparse" else 2) == 0
+        return k % stride == 0
+    return k % (stride * (3 if region == "na:sparse" else 2)) == 0
 # a town street without a mapped sidewalk: its lamps at the carriageway's edge (on its poles, or posts where the lines
 # are buried) LAMP_EDGE_M beyond it (the user, 2026-10-27: lamps only near the camera; Potee Street's streets had
 # lamps on a quarter of their length: only where a sidewalk was mapped)
@@ -1134,6 +1138,58 @@ def roads_with_points(roads, points, extra_m, least=MAPPED_ALONG_MIN):
     return {roads[i][0] for i in np.flatnonzero(count >= least)}
 
 
+def _opposite_lamp_exclusions(roads, lamps):
+    """Which mapped poles exclusively serve the other half of a divided road.
+
+    Compare the actual heads, so a median double arm can serve both sides.
+    Roads at a crossing or on another deck do not compete for a head.
+    """
+    ways = [(fid, sp, line) for fid, sp, line, _ in roads if sp.oneway and sp.dir and len(line) >= 2]
+    if len(ways) < 2 or not lamps:
+        return {}
+    poles, heads = [], []
+    for i, row in enumerate(lamps):
+        if row[0] == "streetlight_high_mast":
+            continue
+        for lens in lamp_lenses([row])[::2]:
+            poles.append(i)
+            heads.append(lens[1:3])
+    if not heads:
+        return {}
+    xy = np.asarray(heads)
+    matches = [[] for _ in heads]
+    overlaps = np.zeros(len(xy), dtype=int)
+    nearby = []
+    for fid, sp, line in ways:
+        reach = sp.width / 2 + MAPPED_ALONG_M
+        lo, hi = line[:, :2].min(axis=0) - reach, line[:, :2].max(axis=0) + reach
+        ids = np.flatnonzero(np.all((xy >= lo) & (xy <= hi), axis=1))
+        if len(ids):
+            overlaps[ids] += 1
+            nearby.append((fid, sp, line, reach, ids))
+    # If either head is ambiguous, include its sibling even if only one
+    # carriageway is within reach of that sibling.
+    poles = np.asarray(poles)
+    ambiguous = np.isin(poles, poles[overlaps > 1])
+    for fid, sp, line, reach, ids in nearby:
+        for head in ids[ambiguous[ids]]:
+            point = xy[head:head + 1]
+            centre, tangent = _at(line, _project(line, point))
+            distance = np.linalg.norm(centre[0, :2] - point[0])
+            if distance <= reach and abs(centre[0, 2] - lamps[poles[head]][3]) <= 4:
+                matches[head].append((distance, fid, tangent[0] * sp.dir))
+    excluded, served = {}, {}
+    for pole, candidates in zip(poles, matches):
+        if not candidates:
+            continue
+        _, nearest, forward = min(candidates, key=lambda c: (c[0], c[1]))
+        served.setdefault(nearest, set()).add(pole)
+        for _, fid, direction in candidates:
+            if direction @ forward < -.85:
+                excluded.setdefault(fid, set()).add(pole)
+    return {fid: ids - served.get(fid, set()) for fid, ids in excluded.items()}
+
+
 def _stations(run, line, spacing, phase, clear, side):
     """[(point (3,), away-from-the-road unit (2,), arc length (the point's _project on the road line))] on a sidewalk
     run at the road's stations phase + k spacing (arc length along the road line, so every tile and anchor gets the
@@ -1247,11 +1303,21 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
     return [r for i, r in enumerate(rows) if i not in drop]
 
 
+def strict_lighting():
+    return os.environ.get("BNE_STRICT_LIGHTING", "").lower() in {"on", "1", "true"}
+
+
+def way_lighting(f, i, direct=False):
+    column = "osm_way_lit" if direct or strict_lighting() else "osm_lit"
+    values = f.attrs.get(column)
+    return str(values[i]).strip().lower() if values is not None else ""
+
+
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None, pole_profile=None, pole_frame=None,
           sign_obstacles=None, defer_gore=False, obstacles=(), mapped_poles=None, de_on=False, de_ctx=None,
-          de_ctl=None, mapped_lamps=None):
+          de_ctl=None, mapped_lamps=None, lamp_coverage=None, light_ranges=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -1270,12 +1336,66 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     become those), and a road with MAPPED_ALONG_MIN of them along it guesses no lamps (lit=no)."""
     pole_at = poleprofiles.selector(pole_profile, pole_frame)
     kit_at = poleprofiles.kit_selector(pole_profile, pole_frame)
+    stride = lamp_stride()
     spacing_of = lamp_spacing(region, dense=not town)
     lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
+    if strict_lighting():
+        lighting = {fid: "yes" if lighting.get(fid) == "yes" else "no" for fid, *_ in roads}
+    light_ranges = light_ranges or {}
+    if light_ranges:
+        lighting = dict(lighting)
+    for fid, spans in light_ranges.items():
+        lighting[fid] = "yes" if spans.has_yes else ("no" if strict_lighting() else "")
     mapped_lamps = list(mapped_lamps or ())
     # (the mapped lamps stand instead of guessed ones along their road, which keeps its utility poles, without their
     # lamps; the other roads keep their rules)
     lamps_mapped = roads_with_points(roads, [r[1:3] for r in mapped_lamps], MAPPED_ALONG_M)
+
+    mapped_cover = None
+    carriageway_cover = {}
+    if mapped_lamps and (lamp_coverage is not None or strict_lighting()):
+        from pedestrianlighting import Neighbors
+        mapped_cover = Neighbors()
+        for row in mapped_lamps:
+            mapped_cover.add(*row[1:3])
+        excluded = _opposite_lamp_exclusions(roads, mapped_lamps)
+        if any(excluded.values()):
+            for r in roads:
+                fid = r[0]
+                skip = excluded.get(fid)
+                if not skip:
+                    continue
+                cover = Neighbors()
+                own = [row[1:3] for i, row in enumerate(mapped_lamps) if i not in skip]
+                for xy in own:
+                    cover.add(*xy)
+                carriageway_cover[fid] = cover
+                if fid in lamps_mapped and not roads_with_points([r], own, MAPPED_ALONG_M):
+                    lamps_mapped.remove(fid)
+        lamps_mapped = {fid for fid in lamps_mapped if lighting.get(fid) != "yes"}
+
+    strict = strict_lighting()
+
+    def site_open(fid, centre, q):
+        spans = light_ranges.get(fid)
+        if spans is not None:
+            value = spans.at(centre)
+            if value == "no" or (strict and value != "yes"):
+                return False
+            if not value and not strict:
+                spec = by_fid[fid][0]
+                inferred = (spec.urban or
+                            (spec.cls in HIGHWAY_CLASSES and highway_lit(region, spec.link, spec.urban)))
+                if not inferred:
+                    return False
+        cover = carriageway_cover.get(fid, mapped_cover)
+        if fid in carriageway_cover and mapped_cover.near(*q, 1.5):
+            return False
+        return cover is None or not cover.near(*q, 18.)
+
+    def record_site(q):
+        if lamp_coverage is not None and box[0]-24 <= q[0] <= box[2]+24 and box[1]-24 <= q[1] <= box[3]+24:
+            lamp_coverage.append((float(q[0]), float(q[1])))
 
     def lamp_ok(fid):           # may this road get guessed lamps (posts or on its poles)?
         return lighting.get(fid) != "no" and fid not in lamps_mapped
@@ -1337,6 +1457,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         def put(group, spacing, phase, curb_off, height, yaw_fn, clear=END_CLEAR_M, optional=False):
             for p, out, s_line in _stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
+                if group == G_LAMP:
+                    if not site_open(fid, p, q):
+                        continue
+                    record_site(q)
                 if _owns(box, q[0], q[1]) and not on_bed(q):
                     if optional:
                         k = int(round((s_line - phase) / spacing))
@@ -1373,8 +1497,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
                     lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                              round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
-                            if lamp_ok(fid) and pole_lamp(spec.cls, k, region) else None)
+                            if lamp_ok(fid) and site_open(fid, p, q) and pole_lamp(spec.cls, k, region, stride) else None)
                     # (with its arm: the next tile's span to it goes when the arm culls the pole there)
+                    if lamp is not None:
+                        record_site(q)
                     run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
                     if _owns(box, q[0], q[1]):
                         rows.append(pole)
@@ -1390,7 +1516,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 lit.add(fid)            # (a mapped-lamp road too: lit by its own, nothing at its edge)
                 phase = _h01(fid, "phase") * spacing + (spacing / 2 if (both and side < 0) else 0.0)
                 if fid not in lamps_mapped:
-                    put(G_LAMP, spacing, phase, LAMP_CURB_M, 9.0, lambda out: _yaw(-out[0], -out[1]))
+                    put(G_LAMP, spacing * stride, phase, LAMP_CURB_M, 9.0, lambda out: _yaw(-out[0], -out[1]))
         if (development is not None or spec.urban) and spec.cls in STREET_TREE_CLASSES \
                 and _h01(fid, "trees") < STREET_TREE_SHARE:
             # street trees in pits along the curb (the photos' dense streets have rows of them; the canopy
@@ -1465,7 +1591,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 run = []
                 continue
             if not poles:                   # buried lines: lamp posts, their arms over the road
-                if inside and drawn:
+                if k % stride or not drawn or not site_open(fid, p, q):
+                    continue
+                record_site(q)
+                if inside:
                     h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link
                          else LAMP_H[G_LAMP])
                     group = G_LAMP
@@ -1486,7 +1615,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 continue
             lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                      round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
-                    if drawn and pole_lamp(spec.cls, k, region) else None)
+                    if drawn and site_open(fid, p, q) and pole_lamp(spec.cls, k, region, stride) else None)
+            if lamp is not None:
+                record_site(q)
             run.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
             if inside:
                 rows.append(pole)

@@ -80,6 +80,9 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               "BNE_ROADSYS", "BNE_ROADSYS_AREAS", "BNE_ROADSYS_XSEC")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
+    "BNE_PEDESTRIAN_LIGHTING": "selects direct-source lighting road cells and changes generated props",
+    "BNE_HALF_STREET_LAMPS": "changes generated lamp assemblies and distant lamp tiles",
+    "BNE_STRICT_LIGHTING": "selects direct-source lighting road cells",
     "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "
                       "earthd.Server._base_in) stores into the server's own state and drives the photo pipeline whose "
@@ -110,6 +113,7 @@ NOT_LISTED = {
                          "platforms); not yet proven plan-neutral both ways, so it stays keyed with the Revamped "
                          "roads setting",
 }
+
 # Functions of the planning closure that read the environment by a computed name: the keys' own (they hash the
 # switches' names and values), the proxy settings (a fixed list of proxy variables)
 ENV_BY_COMPUTED_NAME = {("revisit", "_switch_keys"), ("revisit", "code_key"), ("bakepack", "switches"),
@@ -466,6 +470,8 @@ def _clean_env():
 
 
 EXPERIMENTAL_VARS = sorted({k for _sid, env, _n in experimental.FEATURES for k in env})
+if "BNE_STANDALONE_PATHS" in EXPERIMENTAL_VARS:
+    NOT_LISTED["BNE_STANDALONE_PATHS"] = "changes path surfaces and vegetation cells"
 
 
 def _switch_env(var):
