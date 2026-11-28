@@ -99,6 +99,9 @@ impl<'py> Pose<'_, 'py> {
         intent.call_method1("feed", (now, vx, vy))?;
         let speed = crate::py_hypot(vx, vy);
         s.setattr("speed", speed)?;
+        // (the Steam Deck's GPU gate: kernels only while parked or a teleport loads; two atomic stores, gpu.rs)
+        let loading = c.getattr("teleport_pending").map(|v| v.is_truthy().unwrap_or(false)).unwrap_or(false);
+        crate::gpu::note_pose(speed, loading);
         if speed > self.threshold("FAST_BASE_V")? {
             s.setattr("fast_at", now)?;
         }

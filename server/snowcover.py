@@ -5,7 +5,9 @@ read, keyed or applied and every photo and key is today's.
 The block's base photo and every far tile take the same snow term (earthfast.SnowLook, snowlook.rs), after their roads
 and rock, so the two agree at their seam: white where the snow state says so at the texel's own height (our DEM, the
 texture's height grid), lower on slopes facing the pole, none on steep rock, the forest's dark crowns mostly kept,
-already-white texels left alone, permanent snow above the climatic snowline in polar / alpine climates.
+already-white texels left alone. Permanent snow above the climatic snowline in polar / alpine climates only with a
+preset (the user, 2026-11-27: "snow should only be shown when its actually snowed"): the real state shows snow only
+where the kernel's forcing put it; mapped glaciers and ice are the terrain's own layer (natural.py, surface.py).
 
 The snow state: a FIELD of band tables per forcing cell (the interface with W1's kernel and W5's pack). A Table is up to
 8 rows (band elevation m, cover 0..8, depth bin 0..6, age 0..3), lowest first, linear in elevation between rows and
@@ -142,14 +144,16 @@ def _has_cover(t):
 
 
 _provider = None
+_provider_climate = False       # the provider is a preset's (W1's BNE_WINTER=light / heavy / ice): climatic snow too
 
 
-def set_provider(fn):
+def set_provider(fn, climate=False):
     """W1's snow state: fn(south, west, north, east) -> Field (or None: no snow known there) for BNE_SNOW=real. The
     Field it gives for a box must not change while a spec made from it is in use (the server makes a spec once per
-    texture); a change of state is a new spec, and the server re-renders what is shown (W1 / W5)."""
-    global _provider
-    _provider = fn
+    texture); a change of state is a new spec, and the server re-renders what is shown (W1 / W5). climate: a preset's
+    provider (permanent snow above the climatic snowline too, as BNE_SNOW's presets); the real state's is never."""
+    global _provider, _provider_climate
+    _provider, _provider_climate = fn, bool(climate) and fn is not None
 
 
 def set_mode(mode):
@@ -311,6 +315,13 @@ def deep_possible():
     return ON
 
 
+def climate_snow():
+    """Is permanent snow above the climatic snowline (snow_ela, polar / alpine Koppen classes) drawn? Only with a preset
+    (BNE_SNOW's, or W1's preset provider): the real state draws snow only where its forcing put it (the user,
+    2026-11-27: "snow should only be shown when its actually snowed"; a Koppen class is the climate, not the day)."""
+    return ON and (MODE in PRESETS or (MODE == "real" and _provider is not None and _provider_climate))
+
+
 def perm_possible(south, west, north, east):
     """Can permanent snow lie in the box (a polar / alpine Koppen class within a pixel of it)?"""
     import climate
@@ -324,7 +335,7 @@ def spec_for_box(south, west, north, east):
     if not ON or MODE == "none":
         return None
     win = _window(field_for(south, west, north, east), south, west, north, east)
-    perm = perm_possible(south, west, north, east)
+    perm = climate_snow() and perm_possible(south, west, north, east)
     if win is None and not perm:
         return None
     leaf, wsh, credits, versions, trees = _pack_grids(south, west, north, east)
@@ -338,6 +349,35 @@ def spec_for_box(south, west, north, east):
         h.update(tables.tobytes())
         h.update(counts.tobytes())
     return Spec(("snow", h.hexdigest()[:20]), win, perm, leaf, wsh, credits, trees)
+
+
+def _look_of(win, roads):
+    """What of a field window (_window) a texture's snow look reads: the window as it is, or (roads False: texels too
+    coarse for the roads' plow classes, no road mask) without its road shares. None: no cover there."""
+    if win is None:
+        return None
+    res, ci0, cj0, idx, tables, counts = win
+    if not roads:
+        counts = counts.copy()
+        counts[:, 1:16] = 0
+    return (res, ci0, cj0, idx.shape, idx.tobytes(), tables.tobytes(), counts.tobytes())
+
+
+def look_changes(old, new, box, roads):
+    """Does a texture over box (south, west, north, east deg) look different under Field new than under Field old
+    (either None: no snow known)? Its spec's other parts (the permanent snow, the winter packs) are the same under both:
+    only the tables round it count, the road shares only with roads (its texels fine enough for them). No cover before
+    and after: no change (the server's snow_changed re-renders only where this is True)."""
+    return _look_of(_window(old, *box), roads) != _look_of(_window(new, *box), roads)
+
+
+def uniform_changes(old, new):
+    """(with roads, without) look_changes for two fields with one table everywhere (or None): the same for every
+    texture. None when either has tables by cell (then per texture)."""
+    if any(f is not None and f.uniform is None for f in (old, new)):
+        return None
+    box = (0.0, 0.0, 0.0, 0.0)          # (a uniform window's cell is the box's: the same one under both)
+    return look_changes(old, new, box, True), look_changes(old, new, box, False)
 
 
 def key_parts(spec):

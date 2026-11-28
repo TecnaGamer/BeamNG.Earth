@@ -96,7 +96,12 @@ function M.onResult(msg)
   if type(msg) ~= 'table' then return end
   if msg.street ~= nil then loc.street = tostring(msg.street) end
   if msg.place ~= nil or msg.country ~= nil then
+    local was = loc.place
     loc.place, loc.region, loc.country = msg.place or '', msg.region or '', msg.country or ''
+    if loc.place ~= was and loc.place ~= '' then         -- (add-ons: api contentChanged's 'town')
+      local api = rawget(_G, 'beamngEarth_api')
+      if api and api._contentChanged then pcall(api._contentChanged, 'town', nil) end
+    end
   end
 end
 

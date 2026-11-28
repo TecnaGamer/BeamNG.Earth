@@ -513,6 +513,18 @@ do
   jsonEncode = function(t) return 'code=' .. tostring(t.code) end
   ms.sendHostWeather({ code = 3, lat = 1, tz = 'X' })
   T.check(#sent == 1 and sent[1][1] == 'bngeWeather' and sent[1][2] == 'code=3', 'the host sends its weather (checked)')
+  -- the new puddle look on: its wet state rides along (the puddle plan 1.5: late joiners start from it)
+  local got = nil
+  jsonEncode = function(t) got = t; return 'x' end
+  local wl0, ws0 = package.loaded['beamngEarth/wetlook'], package.loaded['beamngEarth/wetstate']
+  package.loaded['beamngEarth/wetlook'] = { v2 = true }
+  package.loaded['beamngEarth/wetstate'] = { snapshot = function() return { t = 9, w = 800, i = 3000, h = 120000 } end }
+  ms.sendHostWeather({ code = 63, rainMmH = 3 })
+  T.check(got and got.wet and got.wet.t == 9 and got.wet.h == 120000, 'the host\'s wet state sent with its weather')
+  package.loaded['beamngEarth/wetlook'] = { v2 = false }
+  ms.sendHostWeather({ code = 63, rainMmH = 3 })
+  T.check(got and got.wet == nil, 'the look off: no wet state sent')
+  package.loaded['beamngEarth/wetlook'], package.loaded['beamngEarth/wetstate'] = wl0, ws0
   beamngEarth_weather, TriggerServerEvent, jsonDecode, jsonEncode = wx0, ev0, dec0, enc0
 end
 T.done('test_mpsession')

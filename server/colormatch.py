@@ -240,14 +240,19 @@ def _seams_gpu(w, Lw, n_ang, half, depth, offs, nseg, gate):
     float32; the CPU path's sums are float64, so a few borderline cells differ), or None: no GPU (or BNGE_GPU=0),
     or it failed (logged once; the CPU path then)."""
     global _GPU_FAILED
-    if _GPU_FAILED or not fast.gpu():
+    if _GPU_FAILED or not fast.gpu_now("seam"):
         return None
+    import time
+    t0, c0 = time.perf_counter(), time.thread_time()
     try:
         src = np.ascontiguousarray(np.concatenate([w[None], np.moveaxis(Lw, -1, 0)]), np.float32)
-        return fast._ef.seam_detect_gpu(src, n_ang, half, depth, [int(o) for o in offs],
-                                        0.3 * depth * (2 * half + 1), gate, AGREE, max(2, nseg - 2))
+        out = fast._ef.seam_detect_gpu(src, n_ang, half, depth, [int(o) for o in offs],
+                                       0.3 * depth * (2 * half + 1), gate, AGREE, max(2, nseg - 2))
+        fast.gpu_note("seam", time.perf_counter() - t0, time.thread_time() - c0)
+        return out
     except Exception as e:
         _GPU_FAILED = True
+        fast.gpu_fallback("seam", "failed")
         log.warning("colormatch: GPU seam detection failed (%s); the CPU from now on", e)
         return None
 

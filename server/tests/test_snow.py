@@ -157,10 +157,10 @@ class FakeCover:
         return ("Table", rows, road, ice)
 
     def __init__(self):
-        self.provider = None
+        self.provider, self.climate = None, None
 
-    def set_provider(self, fn):
-        self.provider = fn
+    def set_provider(self, fn, climate=False):
+        self.provider, self.climate = fn, climate
 
 
 @unittest.skipUnless(NATIVE, "needs earthfast 624 (the snow kernel)")
@@ -173,7 +173,7 @@ class W2InterfaceTest(unittest.TestCase):
         def __init__(self):
             self.changes, self.connections = 0, []
 
-        def snow_changed(self):
+        def snow_changed(self, fields=None):
             self.changes += 1
 
     class Conn:

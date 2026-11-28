@@ -192,11 +192,16 @@ end
 
 -- Pure: the tinted clones (loadJsonMaterialsFile's table) of the stock leaf materials of each tinted species, from
 -- the stock folders' material files (stock[species] = that folder's decoded main.materials.json): the same textures and
--- fields, the base colour factor blended towards the tint by its step (seasonlook.blend).
+-- fields, the base colour factor blended towards the tint by its step (seasonlook.blend). tints: { [species] = tint }
+-- (one per species) or a list of tints, each with its species (tn.sp: the leaf cycle's every kind and step).
 function M.tintMaterials(tints, stock)
   local S = require('beamngEarth/seasonlook')
   local out = {}
-  for sp, tn in pairs(tints or {}) do
+  local list = {}
+  if tints and tints[1] then list = tints
+  else for sp, tn in pairs(tints or {}) do list[#list + 1] = { sp = sp, tint = tn.tint, step = tn.step, kind = tn.kind } end end
+  for _, tn in ipairs(list) do
+    local sp = tn.sp
     local file = stock and stock[sp]
     for _, old in ipairs(M.leafNames(sp)) do
       local src = type(file) == 'table' and file[old]
@@ -268,6 +273,93 @@ function M.amountFor(mode, doy, lat, snow, state, factor)
   return math.max(0, math.min(1, a))
 end
 
+-- The leaf cycle (server BNE_LEAF_CYCLE, the Experimental page's "Leaf cycle" under Winter; the user, 2026-11-27: "trees
+-- should gradually lose their leaves"): the place's leaf calendar (anchor_ready.leaf: server leafcycle.py, Rust
+-- phenology.rs: per species bud break, full leaf, first colour, leaf fall, midpoint and bare, by latitude, elevation
+-- and climate) and each tree its own dates about it (its rank's draws: a spread of SPREAD days, the same for every
+-- player), so a wood colours and thins over weeks tree by tree, and leafs out in spring the same way, instead of one
+-- share of bare trees for the whole season. A tree's look is still one of its shapes at every distance: the stock tree,
+-- a tinted copy (its stage's colour: spring's fresh green, autumn's species colour in TINT_STEPS) or its bare copy.
+-- Without the calendar (the switch off): the season's amount as before.
+M.LEAF_SPECIES = { oak = 1, beech = 2, birch = 3, poplar = 4 }   -- (phenology.rs SPECIES)
+M.LEAFY_AT = 0.5        -- a tree with this share of its leaves or more draws them, below it its bare copy
+M.SPRING_TINT_DAYS = 14 -- the fresh green lasts this long after full leaf
+M.RELEAF_DAYS = 3       -- a new anchor's calendar this many days off the one taken: taken for the trees placed from then on
+
+-- Pure: a standard normal-like draw (Irwin-Hall of four MurmurHash3 draws: mean 0, sd 1, within +-3.5) of a tree's rank
+-- and a salt (each salt its own independent draw)
+function M.normal(rank, salt)
+  local r, s = tonumber(rank) or 0, 0
+  for i = 1, 4 do s = s + M.draw((r + (salt or 0) * 0.137 + i * 0.2113) % 1) end
+  return (s - 2) * math.sqrt(3)
+end
+
+-- Pure: a tree's leaves on (northern-equivalent) day d from its species' calendar row {bud, full, colour, drop, half,
+-- bare} shifted by its own spring and autumn days (ds, da): the share of its leaves (0..1), their tint's kind ('s' the
+-- spring flush, 'f' the autumn colour, nil none) and step (0..TINT_STEPS).
+function M.leafState(row, d, ds, da)
+  local bud, full = row[1] + (ds or 0), row[2] + (ds or 0)
+  local col, drop, half, bare = row[3] + (da or 0), row[4] + (da or 0), row[5] + (da or 0), row[6] + (da or 0)
+  local L
+  if d < bud or d >= bare then L = 0
+  elseif d < full then L = (d - bud) / math.max(full - bud, 1)
+  elseif d < drop then L = 1
+  else L = (bare - d) / math.max(bare - drop, 1) end
+  local kind, t = nil, 0
+  if d >= bud and d < full + M.SPRING_TINT_DAYS then
+    kind, t = 's', 1 - (d - bud) / math.max(full + M.SPRING_TINT_DAYS - bud, 1)
+  elseif d >= col and d < bare then
+    kind, t = 'f', math.min(1, (d - col) / math.max(half - col, 1))
+  end
+  local step = kind and math.floor(t * M.TINT_STEPS + 0.5) or 0
+  if step <= 0 then kind, step = nil, 0 end
+  return L, kind, step
+end
+
+-- Pure: the northern-equivalent day of year (the southern hemisphere's seasons half a year later: season.py)
+function M.leafDay(doy, lat) return (lat or 0) < 0 and (doy + 182) % 365 or doy end
+
+-- Pure: what a tree of species sp (young: a young beech) and rank draws on northern-equivalent day d under the place's
+-- leaf calendar (anchor_ready.leaf {share, cal = 4 rows, spread = {spring, autumn}}): 'stock', 'bare' or 'tint' with
+-- the tint's kind and step ('w' at full step: a marcescent crown, dead leaves from leaf fall to bud break).
+function M.treeLeaf(leaf, sp, young, rank, d)
+  local i = M.LEAF_SPECIES[sp]
+  local row = i and type(leaf) == 'table' and type(leaf.cal) == 'table' and leaf.cal[i]
+  if type(row) ~= 'table' or #row < 6 then return 'stock' end
+  local r = tonumber(rank) or 0
+  if M.draw((r + 0.5) % 1) >= (tonumber(leaf.share) or 1) then return 'stock' end      -- (not in the cycle: evergreen-ish)
+  local spread = type(leaf.spread) == 'table' and leaf.spread or {}
+  local ds = M.normal(r, 1) * (tonumber(spread[1]) or 6)
+  local L, kind, step = M.leafState(row, d, ds, M.normal(r, 2) * (tonumber(spread[2]) or 9))
+  if L >= M.LEAFY_AT then
+    if kind then return 'tint', kind, step end
+    return 'stock'
+  end
+  -- (leafless: a marcescent crown keeps its dead leaves until its own leaves come out)
+  local keep = M.KEEP[young and 'beech_young' or sp] or 0
+  if keep > 0 and M.draw((r + 0.25) % 1) < keep and not (d >= row[1] + ds and d < row[2] + ds) then
+    return 'tint', 'w', M.TINT_STEPS
+  end
+  return 'bare'
+end
+
+-- Pure: every tint the leaf cycle can ask for (each tinted species' spring, autumn and winter tints at every step), as
+-- tintMaterials' list
+function M.leafTints()
+  local S = require('beamngEarth/seasonlook')
+  local out = {}
+  local sps = {}
+  for sp in pairs(M.TINT_SPECIES) do sps[#sps + 1] = sp end
+  table.sort(sps)
+  for _, sp in ipairs(sps) do
+    local spec = S.SPECIES[M.TINT_SPECIES[sp]]
+    for _, k in ipairs({ { 's', S.SPRING }, { 'f', spec.tint }, { 'w', spec.winter } }) do
+      for step = 1, M.TINT_STEPS do out[#out + 1] = { sp = sp, tint = k[2], step = step, kind = k[1] } end
+    end
+  end
+  return out
+end
+
 -- state
 M.ROOT = nil            -- the copies' folder (set with the game's build: a game update recompiles its shapes)
 local active = false    -- winter on and the textures there
@@ -277,7 +369,9 @@ local inputs = {}       -- mode, lat, snow, state, koppen: the latch's
 local copies = {}       -- stock shape -> its copy's path, or false (none possible)
 local tints = nil       -- the latch's tints (M.tintsFor), nil before it
 local tintRoot = nil    -- the tinted copies' folder for them (its materials loaded), false: none possible
-local tcopies = {}      -- stock shape -> its tinted copy's path, or false
+local tcopies = {}      -- stock shape (| kind step) -> its tinted copy's path, or false
+local leaf = nil        -- the leaf cycle's calendar taken (anchor_ready.leaf), nil: the season's amount
+local leafD = nil       -- the (northern-equivalent) day its trees are drawn for
 M.stats = { copied = 0, bare = 0, kept = 0, failed = 0, stock = {}, tinted = 0 }  -- (stock: shapes with no copy possible)
 
 local function root()
@@ -338,6 +432,27 @@ function M.map(shape, rank)
   end
   if not k then return shape end
   local sp, young = k[1], k[2]
+  if leaf then
+    if leafD == nil then
+      if not inputs.lat then return shape end
+      leafD = M.leafDay(tonumber(os.date('*t').yday), inputs.lat)
+      local cal = leaf.cal[2] or {}
+      log('I', 'beamngEarth.baretrees', string.format('leaf cycle: day %d at lat %.2f, share %s, beech %s',
+        leafD, inputs.lat, tostring(leaf.share), table.concat(cal, ' ')))
+      latchedAt, reported = os.clock(), false
+    end
+    local what, kind, step = M.treeLeaf(leaf, sp, young, rank, leafD)
+    if what == 'bare' then
+      local c = copyOf(shape)
+      if c then M.stats.bare = M.stats.bare + 1; return c end
+    end
+    M.stats.kept = M.stats.kept + 1
+    if what == 'tint' then
+      local t = M._tintCopyOf(shape, sp, kind, step)
+      if t then M.stats.tinted = M.stats.tinted + 1; return t end
+    end
+    return shape
+  end
   if latched == nil then
     if inputs.mode == 'auto' and not inputs.lat then return shape end      -- (no anchor yet: none placed anyway)
     local doy, f = tonumber(os.date('*t').yday), M.climateFactor(inputs.koppen)
@@ -368,8 +483,9 @@ end
 local function tintFolder()
   if tintRoot ~= nil then return tintRoot end
   tintRoot = false
+  local list = leaf and M.leafTints() or tints     -- (the leaf cycle: every kind and step, one folder for good)
   local stock = {}
-  for sp in pairs(tints or {}) do
+  for sp in pairs(M.TINT_SPECIES) do
     for _, f in ipairs(M.FOLDERS) do
       if f[2] == sp and jsonReadFile then
         local ok, t = pcall(jsonReadFile, f[1] .. 'main.materials.json')
@@ -377,7 +493,7 @@ local function tintFolder()
       end
     end
   end
-  local mats = M.tintMaterials(tints, stock)
+  local mats = M.tintMaterials(list, stock)
   if next(mats) == nil then return false end
   local text = jsonEncode(mats)
   local b = tostring(rawget(_G, 'beamng_versionb') or rawget(_G, 'beamng_version') or 'x'):gsub('[^%w%.]', '_')
@@ -390,17 +506,19 @@ local function tintFolder()
   return dir
 end
 
--- The tinted copy of a stock shape of a tinted species (made once per tint: kept in the user folder), or nil.
-function M._tintCopyOf(shape, sp)
-  local c = tcopies[shape]
+-- The tinted copy of a stock shape of a tinted species (made once per tint: kept in the user folder), or nil; kind and
+-- step: the leaf cycle's tint, else the latch's for the species.
+function M._tintCopyOf(shape, sp, kind, step)
+  local key = kind and (shape .. '|' .. kind .. step) or shape
+  local c = tcopies[key]
   if c ~= nil then return c or nil end
-  tcopies[shape] = false
-  local tn = tints and tints[sp]
+  tcopies[key] = false
+  local tn = kind and M.TINT_SPECIES[sp] and { kind = kind, step = step } or (not kind and tints and tints[sp])
   local dir = tn and tintFolder()
   if not dir then return nil end
   local renames = {}
   for _, old in ipairs(M.leafNames(sp)) do renames[old] = { M.tintName(old, tn.step, tn.kind) } end
-  local out = dir .. shape:match('[^/]+$') .. '.cdae'
+  local out = dir .. shape:match('[^/]+$') .. (kind and ('_' .. kind .. step) or '') .. '.cdae'
   if not FS:fileExists(out) then
     local bytes = M.patchCdae(readBin(shape .. '.cdae'), renames)
     if not bytes then return nil end        -- (no leaf cards: the stock shape, untinted as its far picture)
@@ -408,7 +526,7 @@ function M._tintCopyOf(shape, sp)
     if not FS:fileExists(out) then M.stats.failed = M.stats.failed + 1; return nil end
     M.stats.copied = M.stats.copied + 1
   end
-  tcopies[shape] = out
+  tcopies[key] = out
   return out
 end
 
@@ -459,6 +577,7 @@ function M.reportLine()
   local tl = {}
   for s, tn in pairs(tints or {}) do tl[#tl + 1] = s .. ' ' .. tn.kind .. tn.step end
   table.sort(tl)
+  if leaf then tl[#tl + 1] = 'leaf cycle day ' .. tostring(leafD) end
   return string.format('bare trees: amount %s at lat %s (climate %s), %d bare, %d kept leafy (%d tinted: %s), %d copies '
     .. 'made, %d failed, %d imposter files, no copy: %s', latched and string.format('%.2f', latched) or 'none',
     inputs.lat and string.format('%.2f', inputs.lat) or '-', tostring(inputs.koppen), M.stats.bare, M.stats.kept,
@@ -492,6 +611,16 @@ end
 -- The anchor's climate class (seasonlook.lua, with the latitude): taken at the next latch.
 function M.setClimate(k) inputs.koppen = tonumber(k) end
 function M.setState(state) if type(state) == 'table' then inputs.state = state end end
+-- The anchor's leaf calendar (seasonlook.lua, anchor_ready.leaf; nil without BNE_LEAF_CYCLE): taken for the trees placed
+-- from then on when there was none or its beech dates moved RELEAF_DAYS or more (a teleport; not a rebase nearby).
+function M.setLeaf(l)
+  if type(l) ~= 'table' or type(l.cal) ~= 'table' or type(l.cal[2]) ~= 'table' then return end
+  local function off(a, b, i) return math.abs((tonumber(a.cal[2][i]) or 0) - (tonumber(b.cal[2][i]) or 0)) end
+  if leaf == nil or off(l, leaf, 1) >= M.RELEAF_DAYS or off(l, leaf, 6) >= M.RELEAF_DAYS then
+    if leaf == nil then tintRoot, tcopies = nil, {} end     -- (the leaf cycle's tint folder from now on)
+    leaf, leafD = l, nil
+  end
+end
 
 -- The level ended or winter went off: the trees placed after this are the stock ones (those placed stay until made
 -- again); the next level takes its amount anew (winter's snow kept: resume).
@@ -505,16 +634,22 @@ function M.restore()
   end
   active, latched, inputs.lat, inputs.state, latchedAt = false, nil, nil, nil, nil
   tints, tintRoot, tcopies = nil, nil, {}
+  leaf, leafD = nil, nil
 end
 
 function M.status()
   return { active = active, amount = latched, root = M.ROOT, copied = M.stats.copied, bare = M.stats.bare,
-    kept = M.stats.kept, failed = M.stats.failed, tinted = M.stats.tinted, tints = tints, tintRoot = tintRoot }
+    kept = M.stats.kept, failed = M.stats.failed, tinted = M.stats.tinted, tints = tints, tintRoot = tintRoot,
+    leaf = leaf, leafDay = leafD }
 end
+
+-- (tests and look checks: the leaf cycle's trees drawn for day d from now on; nil: today again)
+function M._setDay(d) leafD = d end
 
 function M._reset()      -- (tests)
   active, latched, inputs, copies = false, nil, {}, {}
   tints, tintRoot, tcopies = nil, nil, {}
+  leaf, leafD = nil, nil
   M.ROOT = nil
 end
 

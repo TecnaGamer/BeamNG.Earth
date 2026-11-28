@@ -54,8 +54,8 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 8,
-  'version 1.8 (routeSteps, rebase from 1.7; cachedPlaces)')
+T.check(api.version() == 1 and select(2, api.version()) == 12,
+  'version 1.12 (contentChanged, loadedBuildings, towns, collisionReady; 1.9-1.11 taken by open pull requests)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -347,5 +347,122 @@ T.near(bo, 7.01, 1e-8, 'toGeo round trip')
 st.inOurLevel = false
 T.check(api.toGame(45.0, 7.0) == nil and api.toGeo(0, 0) == nil, 'another level: nil')
 st.inOurLevel = true
+
+-- 1.12: the streamed world. The content notice is rate limited (one hook per CONTENT_GAP_S, the notes between merged:
+-- their kinds and the box round them), not fired with nothing changed, dropped off our level; a rebase between loses
+-- the box (its frame is gone)
+do
+  api._reset()
+  hooks = {}
+  T.check(api.has('contentChanged') and api.has('loadedBuildings') and api.has('towns') and api.has('collisionReady'),
+    'the streamed world: has()')
+  local heard = {}
+  api.on('contentChanged', function(info) heard[#heard + 1] = info end)
+  local function fired()
+    local n = 0
+    for _, h in ipairs(hooks) do if h[1] == 'onBeamNGEarthContentChanged' then n = n + 1 end end
+    return n
+  end
+  api.onUpdate(1)
+  T.check(fired() == 0 and #heard == 0, 'content: nothing changed, nothing heard')
+  api._contentChanged('buildings', { 10, 20, 0, 30, 40, 5 })
+  api._contentChanged('roads', { -5, 25, 0, 12, 60, 1 })
+  api.onUpdate(0.016)
+  T.check(fired() == 1 and #heard == 1, 'content: heard once (the hook and the listener)')
+  local i1 = heard[1]
+  T.check(i1.kinds.buildings and i1.kinds.roads and not i1.kinds.graph and i1.changes == 2, 'content: the kinds merged')
+  T.check(i1.x0 == -5 and i1.y0 == 20 and i1.x1 == 30 and i1.y1 == 60, 'content: the box round both')
+  T.check(i1.lat0 and i1.lat1 and i1.lat0 < i1.lat1 and i1.lon0 < i1.lon1 and math.abs(i1.lat0 - 45.0) < 0.01,
+    'content: the box in lat / lon too')
+  for k = 1, 40 do api._contentChanged('buildings', { k, k, 0, k + 1, k + 1, 1 }) api.onUpdate(0.05) end
+  T.check(fired() == 1, 'content: 40 more notes within ' .. api.CONTENT_GAP_S .. ' s: not yet')
+  api.onUpdate(1.5)
+  T.check(fired() == 2 and heard[2].changes == 40 and heard[2].x0 == 1 and heard[2].x1 == 41,
+    'content: at most once every CONTENT_GAP_S, the notes between merged: ' .. tostring(heard[2] and heard[2].changes))
+  api.onUpdate(10)
+  T.check(fired() == 2, 'content: nothing new, nothing heard')
+  api._contentChanged('town', nil)
+  api.onUpdate(0.016)
+  T.check(fired() == 3 and heard[3].kinds.town and heard[3].x0 == nil,
+    'content: long after the last one: heard at once; a town change has no box')
+  api._contentChanged('collision', { 0, 0, 0, 1, 1, 1 })
+  api._event('rebased', { lat = 45.1, lon = 7.0 })
+  api.onUpdate(10)
+  T.check(fired() == 4 and heard[4].kinds.collision and heard[4].x0 == nil, 'content: a rebase between: no box')
+  api._contentChanged('graph', { 0, 0, 0, 100, 100, 0 })
+  st.inOurLevel = false
+  api.onUpdate(10)
+  st.inOurLevel = true
+  api.onUpdate(10)
+  T.check(fired() == 4, 'content: noted off our level: dropped')
+  -- a listener's error is contained; the hook still goes
+  api.on('contentChanged', function() error('broken') end)
+  api._contentChanged('roads', { 0, 0, 0, 1, 1, 0 })
+  api.onUpdate(10)
+  T.check(fired() == 5, 'content: a failing listener contained')
+end
+
+-- loadedBuildings: roads.lua's boxes round a point (the player's by default), nearest first, capped; nil off our level
+do
+  local asked = nil
+  local boxes = { { x = 50, y = 0, z = 2, top = 14, sizeX = 10, sizeY = 8, dist = 45 },
+    { x = 10, y = 0, z = 1, top = 9, sizeX = 6, sizeY = 6, dist = 7 },
+    { x = -10, y = 0, z = 1, top = 30, sizeX = 6, sizeY = 6, dist = 7 } }
+  package.loaded['beamngEarth/roads'] = {
+    buildingBoxesNear = function(x, y, r, out)
+      asked = { x, y, r }
+      for i, b in ipairs(boxes) do out[i] = b end
+      return out
+    end,
+    readyAround = function(aid, x, y, r) asked = { aid, x, y, r } return x < 100 end }
+  st.player = { lat = 45.0, lon = 7.0, x = 1, y = 2, z = 3 }
+  local l = api.loadedBuildings()
+  T.check(asked[1] == 1 and asked[2] == 2 and asked[3] == api.BUILDINGS_RADIUS_DEFAULT_M,
+    'loadedBuildings: round the player, 300 m')
+  T.check(#l == 3 and l[1].x == -10 and l[2].x == 10 and l[3].x == 50, 'loadedBuildings: nearest first, ties by x')
+  T.check(l[1].height == 29 and l[3].z == 2 and l[3].top == 14 and l[3].sizeX == 10, 'loadedBuildings: its box and height')
+  l[1].x = 999
+  T.check(boxes[3].x == -10, 'loadedBuildings: a copy')
+  T.check(#api.loadedBuildings(0, 0, 1e6, 2) == 2 and asked[3] == api.BUILDINGS_RADIUS_MAX_M,
+    'loadedBuildings: the limit and the radius capped')
+  st.inOurLevel = false
+  T.check(api.loadedBuildings(0, 0) == nil, 'loadedBuildings: another level: nil')
+  st.inOurLevel = true
+  -- collisionReady: roads.readyAround for the anchor
+  st.anchorId = 4
+  T.check(api.collisionReady(5, 6, 20) == true and asked[1] == 4 and asked[4] == 20, 'collisionReady: the point')
+  T.check(api.collisionReady(500, 6) == false and asked[4] == 0, 'collisionReady: not yet')
+  T.check(api.collisionReady() == true and asked[2] == 1, 'collisionReady: the player by default')
+  st.inOurLevel = false
+  T.check(api.collisionReady(1, 1) == nil, 'collisionReady: another level: nil')
+  st.inOurLevel = true
+  package.loaded['beamngEarth/roads'] = nil
+  st.player = nil
+end
+
+-- towns: the request sent, its one answer to its own callback (rows to tables), a places answer for its id ignored,
+-- timed out once
+do
+  api._reset()
+  sent = {}
+  local got = {}
+  local id = api.towns(39.28, -76.59, { radius = 30000, limit = 10 }, function(r) got[#got + 1] = r end)
+  local q = sent[#sent]
+  T.check(id and q.type == 'towns' and q.id == id and q.radius == 30000 and q.limit == 10, 'towns: the request sent')
+  api._onPlaces({ id = id, places = {}, complete = true })
+  T.check(#got == 0, 'towns: a places answer for its id is not its answer')
+  api._onTowns({ id = id, complete = true, towns = { { 'Baltimore', 39.29, -76.61, 'city', 585708, 2100 },
+    { 'Towson', 39.40, -76.60, 'town', 0, 13000 }, { 7, 1, 2 } } })
+  T.check(#got == 1 and #got[1].towns == 2 and got[1].towns[1].name == 'Baltimore' and got[1].towns[1].class == 'city'
+    and got[1].towns[1].population == 585708 and got[1].towns[2].dist == 13000 and got[1].complete,
+    'towns: the answer, its rows as tables (a bad row left out)')
+  api._onTowns({ id = id, towns = {} })
+  T.check(#got == 1, 'towns: one answer only')
+  T.check(api.towns(1, 200, print) == nil and api.towns(1, 2) == nil, 'towns: bad coordinates / no callback')
+  local late = nil
+  api.towns(1, 2, function(r) late = r end)
+  api.onUpdate(api.PLACES_TIMEOUT_S + 1)
+  T.check(late and late.error == 'timed out' and late.towns and #late.towns == 0, 'towns: timed out once')
+end
 
 T.done('test_api')

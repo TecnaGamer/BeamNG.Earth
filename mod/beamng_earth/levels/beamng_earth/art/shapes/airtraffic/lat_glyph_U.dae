@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+<asset><contributor><authoring_tool>BeamNG.Earth tools/build_airtraffic_shapes.py (models: devo343, Live Air Traffic)</authoring_tool></contributor><unit meter="1" name="meter"/><up_axis>Z_UP</up_axis></asset>
+<library_effects>
+<effect id="lat_text-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>0.07 0.09 0.17 1</color></diffuse></lambert></technique></profile_COMMON></effect>
+</library_effects>
+<library_materials>
+<material id="lat_text-mat" name="lat_text"><instance_effect url="#lat_text-fx"/></material>
+</library_materials>
+<library_geometries>
+<geometry id="lat_glyph_U8-g"><mesh>
+<source id="lat_glyph_U8-g-p"><float_array id="lat_glyph_U8-g-p-a" count="66">0 0.384 1 0 0.126 1 0 0.126 0.401 0 0.153 0.215 0 0.232 0.084 0 0.367 0.006 0 0.557 -0.02 0 0.747 0.006 0 0.881 0.084 0 0.961 0.215 0 0.988 0.401 0 0.988 1 0 0.73 1 0 0.73 0.401 0 0.72 0.294 0 0.69 0.223 0 0.636 0.184 0 0.384 0.401 0 0.557 0.17 0 0.478 0.184 0 0.424 0.223 0 0.394 0.294</float_array><technique_common><accessor source="#lat_glyph_U8-g-p-a" count="22" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+<vertices id="lat_glyph_U8-g-v"><input semantic="POSITION" source="#lat_glyph_U8-g-p"/></vertices>
+<triangles count="20" material="lat_text-mat"><input semantic="VERTEX" source="#lat_glyph_U8-g-v" offset="0"/><p>0 1 2 0 2 3 0 3 4 0 4 5 5 6 7 5 7 8 5 8 9 5 9 10 10 11 12 10 12 13 10 13 14 10 14 15 10 15 16 17 0 5 5 10 16 5 16 18 5 18 19 5 19 20 5 20 21 5 21 17</p></triangles>
+</mesh></geometry>
+</library_geometries>
+<library_visual_scenes><visual_scene id="scene" name="scene">
+<node id="base00" name="base00"><node id="start01" name="start01">
+<node id="lat_glyph_U8" name="lat_glyph_U8"><instance_geometry url="#lat_glyph_U8-g"><bind_material><technique_common><instance_material symbol="lat_text-mat" target="#lat_text-mat"/></technique_common></bind_material></instance_geometry></node>
+</node><node id="collision-1" name="collision-1"/></node>
+</visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>

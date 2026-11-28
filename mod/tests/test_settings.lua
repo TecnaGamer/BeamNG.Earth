@@ -766,7 +766,8 @@ do
   local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
     'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expTerrainBumps', 'expCliffWalls',
     'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
-    'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads' }
+    'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads', 'expPuddlesV2',
+    'expLeafCycle' }
   local inOrder = {}
   for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
   for _, k in ipairs(exp) do

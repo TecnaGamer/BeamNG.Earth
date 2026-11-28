@@ -92,6 +92,11 @@ NOT_LISTED = {
                   "on the ground photos is keyed by its specs in the items it changes (snowcover.key_parts: far "
                   "textures, base photos), never in plans or facts; nothing the planning reaches imports snowcover",
     "BNE_WET_ROADS": "no build switch at all (revisit.NOT_SWITCHES): a live snowstate message only (snow.py)",
+    "BNE_LEAF_CYCLE": "no build switch at all (revisit.NOT_SWITCHES): a field of the anchor_ready message only "
+                      "(leafcycle.py); only earthd's anchor reply imports leafcycle, nothing the planning reaches",
+    "BNE_PUDDLES": "the puddle plan: R1 only adds the rain history to the live weather message (weather.PUDDLES_V2); "
+                   "R2 on will change the skins' puddle geometry (roadwear), so it stays keyed and is not proven "
+                   "plan-neutral",
     "BNE_TUNNEL_ROAD_OVER": "road tiles' tunnel entrances only (portals.fit: the headwall's top under a road crossing "
                             "over the mouth); not yet proven plan-neutral both ways, so it stays keyed with the "
                             "Revamped roads setting",

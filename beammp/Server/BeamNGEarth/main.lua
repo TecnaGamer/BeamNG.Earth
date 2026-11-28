@@ -551,7 +551,9 @@ end
 -- Pure: a client's weather message reduced to the weather's own fields, each a number in its range (or the fog flag);
 -- nil when it is not a table. (The mod's weather.lua sanitizeMsg does the same on the receiving side.)
 local WX_NUM = { code = { 0, 99 }, visM = { 0, 1e6 }, rainMmH = { 0, 500 }, snowCmH = { 0, 100 }, hailCmH = { 0, 100 },
-  slTempC = { -90, 60 }, tempC = { -90, 60 }, baseAglM = { 0, 20000 } }
+  slTempC = { -90, 60 }, tempC = { -90, 60 }, baseAglM = { 0, 20000 }, et0Umh = { 0, 5000 } }
+-- the host's wet state (the mod's wetstate.lua snapshot: the new puddle look), integers in these ranges
+local WX_WET = { t = { 0, 2 ^ 40 }, w = { 0, 1000 }, i = { 0, 500000 }, h = { 0, 1800000 } }
 local function inRange(v, r)
   v = tonumber(v)
   if not v or v ~= v then return nil end
@@ -572,6 +574,14 @@ function G.weatherMsg(t)
     end
   end
   if t.fog == true then m.fog = true end
+  if type(t.wet) == 'table' and tonumber(t.wet.t) then
+    local w = {}
+    for k, r in pairs(WX_WET) do
+      local v = inRange(t.wet[k], r)
+      w[k] = v and math.floor(v) or r[1]
+    end
+    m.wet = w
+  end
   return m
 end
 

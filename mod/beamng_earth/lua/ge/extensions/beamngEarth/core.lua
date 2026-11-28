@@ -677,6 +677,8 @@ local function commitTeleport(msg)
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
   st.koppen = tonumber(msg.koppen)  -- (anchor_ready.koppen: the place's Koppen-Geiger class, server climate.py; nil when not
                                     -- sent: the full leaf cycle; seasonlook.climateFactor, baretrees.lua)
+  st.leaf = type(msg.leaf) == 'table' and msg.leaf or nil  -- (anchor_ready.leaf: the place's leaf calendar, server
+                                    -- leafcycle.py, only with BNE_LEAF_CYCLE; baretrees.lua's trees by their own dates)
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
   require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)
@@ -741,6 +743,7 @@ local function finishRebase()
   local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
   st.koppen = tonumber(msg.koppen) or st.koppen    -- (a rebase nearby: the same climate when not sent)
+  if type(msg.leaf) == 'table' then st.leaf = msg.leaf end
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(st.anchor.lat, st.anchor.lon)
   M._apiRebased(oldAnchor, rb.purpose)
@@ -1422,6 +1425,8 @@ local function onMessage(msg)
       la.reset()
       la.setSender(function(m) if st.sessionId and net.isConnected() then net.send(m) return true end return false end)
     end
+    -- the live air traffic: a test server's switch (BNE_AIRTRAFFIC_TEST, the person who started it: airtraffic.onHello)
+    if rawget(_G, 'beamngEarth_airtraffic') then beamngEarth_airtraffic.onHello(msg) end
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
     -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
@@ -1755,6 +1760,9 @@ local function onMessage(msg)
   elseif t == 'places_result' then           -- the modding API's places (api.lua; server places.py)
     local api = rawget(_G, 'beamngEarth_api')
     if api and api._onPlaces then api._onPlaces(msg) end
+  elseif t == 'towns_result' then            -- the modding API's towns (api.lua; server placenames.py)
+    local api = rawget(_G, 'beamngEarth_api')
+    if api and api._onTowns then api._onTowns(msg) end
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
     pcall(places.syncLevel)
   elseif t == 'random_place_result' then
@@ -1775,6 +1783,9 @@ local function onMessage(msg)
   elseif t == 'stations_result' then         -- the station finder's answer (finder.lua: Nearest, the prompt, the map)
     local f = rawget(_G, 'beamngEarth_finder')
     if f and f.onStations then f.onStations(msg) end
+  elseif t == 'air_traffic_result' then      -- the live air traffic's aircraft (airtraffic.lua; server airtraffic.py)
+    local at = rawget(_G, 'beamngEarth_airtraffic')
+    if at and at.onResult then at.onResult(msg) end
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error, text = msg.text } end
   elseif t == 'areas' then
@@ -3085,7 +3096,7 @@ local function onUpdate(dtReal, dtSim)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
-  seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat, st.koppen)
+  seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat, st.koppen, st.leaf)
   if terrain.wetDirty then pcall(M._rewetBlock) end        -- (the wet streets' step: a flag test otherwise)
   t = mark('ui', t)
   local frameMs = frameMs0
@@ -3647,6 +3658,8 @@ teleportTo = function(lat, lon, name, kind, heading)
     M._trafficvisuals.onTeleport()
     do local ok, err = pcall(farcars.onTeleport) if not ok then log('W', 'beamngEarth', 'far cars: ' .. tostring(err)) end end
     pcall(mpsession.onTeleport)      -- (BeamMP: the camera is ours to put at the target, commitTeleport)
+    do local w = rawget(_G, 'beamngEarth_weather') if w and w.onTeleport then pcall(w.onTeleport) end end   -- (wet roads stay behind)
+    do local wm = package.loaded['beamngEarth/winter'] if wm and wm.onTeleport then pcall(wm.onTeleport) end end   -- (the origin's road state too)
     if kind ~= 'tool' then
       statusbar.reset()
       local ok, err = pcall(places.noteTeleport, lat, lon, name, kind)
