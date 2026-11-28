@@ -471,12 +471,30 @@ local function hook(on)
   if not on then aggression(false) end
 end
 
--- The place the states are for: a number that changes when a state comes from more than PLACE_M away from the last
--- one's site (a teleport), not with the hourly states of one place (wetlook.lua: a new place's road wetness is shown
--- at once, one place's changes over minutes).
+-- The place the states are for: a number that changes with the first state after a teleport (onTeleport: the
+-- server sends the destination's state after the new anchor, snow.py Tracker) and with one from more than PLACE_M
+-- away from the last one's site, not with the hourly states of one place (wetlook.lua: a new place's road wetness is
+-- shown at once, one place's changes over minutes).
 M.PLACE_M = 25000
-local place, placeAt = 0, nil
+local place, placeAt, teleported = 0, nil, false
 function M.place() return place end
+
+-- core.lua: a teleport starts. The origin's state no longer holds (its wet road, its snow): the grip and the readout
+-- go back to stock (or the weather shown's) until the destination's state comes, which is then a new place (Codex on
+-- 17fb1d0e: a 5-25 km teleport's dry destination kept the origin's place and dried slowly from its wet road).
+function M.onTeleport()
+  teleported = true
+  if state == nil then return end
+  state = nil                     -- (W3's road materials keep their look until the destination's: winterroad.lua)
+  if shown or forced then
+    M.apply()                     -- (the weather shown's wet road or the forced condition stays)
+    refreshReadout()
+    return
+  end
+  M.restore()
+  readoutText = ''
+  hook(false)
+end
 
 -- Pure: is (lat, lon) more than m from at {lat, lon} (nil: yes)? Equirectangular, enough for tens of km.
 function M.farFrom(at, lat, lon, m)
@@ -491,8 +509,8 @@ end
 -- core.lua: a snowstate from the server.
 function M.onState(msg)
   if type(msg) ~= 'table' or type(msg.roads) ~= 'table' then return end
-  if M.farFrom(placeAt, msg.lat, msg.lon, M.PLACE_M) then
-    place = place + 1
+  if teleported or M.farFrom(placeAt, msg.lat, msg.lon, M.PLACE_M) then
+    place, teleported = place + 1, false
     placeAt = (tonumber(msg.lat) and tonumber(msg.lon)) and { tonumber(msg.lat), tonumber(msg.lon) } or nil
   end
   state, pendingSince = msg, nil

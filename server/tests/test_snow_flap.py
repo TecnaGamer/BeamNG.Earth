@@ -122,6 +122,50 @@ class BareRoadsTest(unittest.TestCase):
         self.assertEqual(server.changes, 2)
 
 
+@unittest.skipUnless(fast._ef is not None and getattr(fast._ef, "VERSION", 0) >= snow.NATIVE, "earthfast 624")
+class NewAnchorTest(unittest.TestCase):
+    """Codex on 17fb1d0e: the mod drops the origin's state at a teleport (winter.lua onTeleport) and takes the next one
+    as the destination's; the server sends a state for here after every new anchor, and one still in flight for the
+    last anchor is dropped."""
+
+    def test_a_state_after_every_new_anchor(self):
+        import geodesy
+        loop = asyncio.new_event_loop()
+        try:
+            a = (61.13, -146.36, 100.0)
+            b = (61.24, -146.36, 100.0)         # (12 km north: under NEW_PLACE_M and the mod's PLACE_M)
+            c = (61.33, -146.36, 100.0)
+            fetch = ByCell({a: "davos", b: "davos", c: "davos"})
+            now = [last_hour(RESPONSES["davos"]) - 24 * 3600 + 600]
+            svc = snow.Service(fetch=fetch, mode="real", clock=lambda: now[0], cover=FakeCover(), winter=True)
+            server = Recorder(svc)
+            conn, tr = Conn(server, loop), snow.Tracker()
+
+            def states():
+                return [m for m in conn.sent if m["type"] == "snowstate"]
+            pose(tr, conn, a)
+            conn.settle()
+            self.assertEqual((len(states()), len(fetch.calls)), (1, 1))
+            pose(tr, conn, a)                   # (the same anchor, the same place: nothing new)
+            conn.settle()
+            self.assertEqual(len(states()), 1)
+            # a rebase (a new anchor, the car where it was): this place's state again, from the cached forcing
+            f2 = geodesy.EnuFrame(a[0] + 0.002, a[1])
+            x, y, _ = f2.geodetic_to_enu(a[0], a[1], 0.0)
+            tr.on_pose(conn, f2, float(x), float(y), a[2])
+            conn.settle()
+            self.assertEqual((len(states()), len(fetch.calls)), (2, 1), "sent again, no new fetch")
+            # a teleport to b, then on to c before b's state is in: b's is dropped, c's sent
+            pose(tr, conn, b)
+            pose(tr, conn, c)
+            conn.settle()
+            got = states()
+            self.assertEqual(len(got), 3, [m["lat"] for m in got])
+            self.assertLess(abs(got[-1]["lat"] - c[0]), 0.1)
+        finally:
+            loop.close()
+
+
 def table(rows, road=(8,) * 15, ice=0):
     return snowcover.Field(0.1, uniform=snowcover.Table(rows, road, ice))
 
@@ -158,11 +202,11 @@ class LookChangeTest(unittest.TestCase):
         def info(tile):
             return SimpleNamespace(material="m", texture="t.dds", stale=False, tile=tile, tex_px=0, retex_repeat=0)
         tiles = {(1, "far"): info(tile_far), (1, "near"): info(tile_near), (1, "hidden"): info(tile_near),
-                 (1, "busy"): info(tile_near), (1, "bare"): SimpleNamespace(material=None, texture=None, stale=False)}
+                 (1, "bare"): SimpleNamespace(material=None, texture=None, stale=False)}
         queued = []
         srv = SimpleNamespace(tiles=tiles, near_visual="detail", hm={(1, 0, 0): {}, (2, 0, 0): {}},
-                              anchors={1: object()}, base_stale=set(), tile_inflight={(1, "busy"): object()},
-                              tex_size=lambda level: 1024, map_on=lambda: False)
+                              anchors={1: object()}, base_stale=set(), tex_size=lambda level: 1024,
+                              map_on=lambda: False)
         srv.retex_request = lambda ck, pump=True: queued.append(ck)
         srv._retex_pump = lambda: None
         srv._retex_viewers = lambda ck: ck[1] != "hidden"
@@ -172,34 +216,75 @@ class LookChangeTest(unittest.TestCase):
         self.assertEqual(earthd.Server.snow_changed(srv, fields=(None, None)), 0)
         self.assertEqual((queued, srv.base_stale), ([], set()))
         # a road share: the tiles fine enough for the roads and the block photos; the far one keeps its texture
-        self.assertEqual(earthd.Server.snow_changed(srv, fields=(a, b)), 3)
-        self.assertEqual(sorted(queued), [(1, "busy"), (1, "near")], "nobody shows 'hidden': stale, not queued")
+        self.assertEqual(earthd.Server.snow_changed(srv, fields=(a, b)), 2)
+        self.assertEqual(queued, [(1, "near")], "nobody shows 'hidden': stale, not queued")
         self.assertFalse(tiles[(1, "far")].stale)
         self.assertTrue(tiles[(1, "hidden")].stale)
-        self.assertEqual(srv.snow_redo, {(1, "busy")}, "rendering through the change: again once in")
         self.assertEqual(srv.base_stale, {(1, 0, 0)})
+        self.assertEqual((srv.snow_gen, sorted(srv.snow_hist)), (2, [1, 2]), "each change a generation")
         # snow gone: everything with a texture
         queued.clear()
-        self.assertEqual(earthd.Server.snow_changed(srv, fields=(b, None)), 4)
+        self.assertEqual(earthd.Server.snow_changed(srv, fields=(b, None)), 3)
         self.assertTrue(tiles[(1, "far")].stale)
         self.assertNotIn((1, "bare"), queued)
 
-    def test_a_tile_rendered_through_the_change_is_made_again(self):
+    def server(self, tiles=None):
         import earthd
-        new = SimpleNamespace(material="m", texture="t2.dds", stale=False, retex_repeat=0, cm_pending=frozenset())
-        fut = Future()
-        fut.set_result(new)
-        queued, pumped = [], []
-        srv = SimpleNamespace(tile_inflight={(1, "k"): fut}, tiles={}, snow_redo={(1, "k")}, degraded=set(),
-                              matslots=SimpleNamespace(short=lambda: False), tile_cache=10 ** 6)
+        queued = []
+        srv = SimpleNamespace(tile_inflight={}, tiles=dict(tiles or {}), degraded=set(), near_visual="far", hm={},
+                              anchors={}, base_stale=set(), matslots=SimpleNamespace(short=lambda: False),
+                              tile_cache=10 ** 6, tex_size=lambda level: 1024, map_on=lambda: False)
         srv.note_lod_err = lambda ck, info: None
         srv.retex_request = lambda ck, pump=True: queued.append(ck)
-        srv._retex_pump = lambda: pumped.append(1)
-        earthd.Server._tile_done(srv, (1, "k"), fut)
-        self.assertEqual(queued, [(1, "k")])
-        self.assertTrue(new.stale)
-        self.assertEqual(srv.snow_redo, set())
-        self.assertTrue(pumped)
+        srv._retex_pump = lambda: None
+        return earthd.Server, srv, queued
+
+    def built(self, tile):
+        fut = Future()
+        fut.set_result(SimpleNamespace(material="m", texture="t.dds", stale=False, retex_repeat=0,
+                                       cm_pending=frozenset(), tile=tile))
+        return fut
+
+    def test_a_first_render_through_a_change_is_made_again(self):
+        """Codex on 17fb1d0e: a FIRST build (nothing cached yet) submitted before a snow change read the old state;
+        when it is in it is stale (the far stream sends it and asks for its re-render, farstate.rs), unless the change
+        leaves its look as it was."""
+        near, far = SimpleNamespace(level=0, size=256.0), SimpleNamespace(level=6, size=16384.0)
+        a = table(self.ROWS, (0, 5, 5, 5, 8) * 3)
+        b = table(self.ROWS, (0, 5, 5, 6, 8) * 3)
+        for tile, fields, stale in ((near, (None, a), True), (far, (None, a), True), (near, (a, b), True),
+                                    (far, (a, b), False), (near, (None, None), False)):
+            S, srv, queued = self.server()
+            ck = (1, "k")
+            S._note_snow_gen(srv, ck)               # (tile(): its build submitted)
+            fut = self.built(tile)
+            srv.tile_inflight[ck] = fut
+            self.assertEqual(S.snow_changed(srv, fields=fields), 0, "not cached: nothing to mark yet")
+            S._tile_done(srv, ck, fut)
+            self.assertIs(srv.tiles[ck], fut.result())
+            self.assertEqual(srv.tiles[ck].stale, stale, (tile.size, fields is None))
+            self.assertEqual(queued, [ck] if stale else [])
+            self.assertEqual(srv.tile_gen, {}, "its generation forgotten once in")
+        # submitted after the change: as fresh as it is
+        S, srv, queued = self.server()
+        S.snow_changed(srv, fields=(None, a))
+        S._note_snow_gen(srv, (1, "k"))
+        fut = self.built(near)
+        S._tile_done(srv, (1, "k"), fut)
+        self.assertFalse(fut.result().stale)
+        # older than the kept generations: made again
+        S, srv, queued = self.server()
+        S._note_snow_gen(srv, (1, "k"))
+        for _ in range(earthd_hist_max() + 1):
+            S.snow_changed(srv, fields=(a, b))
+        fut = self.built(far)
+        S._tile_done(srv, (1, "k"), fut)
+        self.assertTrue(fut.result().stale)
+
+
+def earthd_hist_max():
+    import earthd
+    return earthd.SNOW_HIST_MAX
 
 
 class ReskinTest(unittest.TestCase):

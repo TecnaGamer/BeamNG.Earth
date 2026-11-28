@@ -264,6 +264,52 @@ do
   package.loaded['beamngEarth/roads'] = nil
   package.loaded['beamngEarth/winter'] = nil
 end
+-- Codex on 17fb1d0e: a 5-25 km teleport (under winter.PLACE_M) from a wet road to a dry one. The origin's state is
+-- dropped when the teleport starts (winter.onTeleport: neither the look nor the grip keeps it) and the destination's,
+-- the first state after it, is a new place: shown at once, not dried from the origin's over DRY_S.
+do
+  package.loaded['beamngEarth/winter'] = nil
+  local WM = require('beamngEarth/winter')
+  WM.reset()
+  W.reset()
+  local function st(lat, cond)
+    local r = { cond, 0, 5, cond, 0, 0, 1 }
+    return { type = 'snowstate', v = 1, lat = lat, lon = -76.6, roads = { r, r, r, r, r }, bridges = { r, r, r, r, r },
+      ground = { 0, 0, 0, 0, 0, 0, 0 } }
+  end
+  local function settle()
+    for _ = 1, 3 do
+      for _ = 1, 50 do W.update(0.016, 0, true) end
+      W.update(W.CHECK_S, 0, true)
+    end
+    for _ = 1, 50 do W.update(0.016, 0, true) end
+  end
+  WM.onState(st(39.28, 'wet'))
+  settle()
+  check(W.level() == W.levelOf(0.8), 'the origin: wet')
+  local p = WM.place()
+  WM.onTeleport()
+  W.onTeleport()
+  check(select(1, WM._state()) == nil, 'a teleport: the origin\'s state dropped')
+  settle()
+  check(W.level() == 0 and W.roadWetness() == nil, 'while the destination\'s state is on its way: not the origin\'s wet road')
+  WM.onState(st(39.39, 'dry'))         -- (12 km north)
+  check(WM.place() == p + 1, 'the first state after a teleport: a new place')
+  settle()
+  check(W.level() == 0 and W.roadWetness() == 0, 'the dry destination: dry at once')
+  WM.onTeleport()
+  W.onTeleport()
+  WM.onState(st(39.50, 'wet'))
+  settle()
+  check(W.level() == W.levelOf(0.8), 'a wet destination: wet at once')
+  WM.onState(st(39.50, 'dry'))         -- (its next hour, no teleport: the same place, drying)
+  check(WM.place() == p + 2, 'the next hour: the same place')
+  settle()
+  check(W.level() == W.levelOf(0.8), 'one place\'s next state: drying over minutes')
+  WM.reset()
+  package.loaded['beamngEarth/winter'] = nil
+  W.reset()
+end
 check(W.puddleRefV2(0, 12) == 255 and W.puddleRefV2(1, 12) == W.V2_REF[1] and W.puddleRefV2(12, 12) == W.V2_REF[2],
   'new steps: thresholds')
 check(W.skyCube({ rainMmH = 1 }, true) == 'bne_wetsky_overcast_city' and W.skyCube({ cover = { low = 10 } }, false)

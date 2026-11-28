@@ -316,6 +316,19 @@ do
   T.check(W.place() == p0 + 1, 'the next hour\'s state of the place: the same place')
   W.onState({ type = 'snowstate', v = 1, lat = 35.46, lon = -118.77, roads = list, bridges = list, ground = st.ground })
   T.check(W.place() == p0 + 2, 'a teleport\'s state: a new place')
+  -- Codex on 17fb1d0e: a teleport drops the origin's state at once (the grip, the readout), and the first state after
+  -- it is a new place however near (a 5-25 km teleport refetches without crossing PLACE_M)
+  W.onTeleport()
+  local gms = core_environment.groundModels
+  T.check(select(1, W._state()) == nil and byName().ASPHALT_OLD == gms.ASPHALT_OLD.cdata and W.readout() == '',
+    'a teleport: the origin\'s wet road off the grip and the readout')
+  W.onState({ type = 'snowstate', v = 1, lat = 35.55, lon = -118.77, roads = list, bridges = list, ground = st.ground })
+  T.check(W.place() == p0 + 3 and byName().ASPHALT_OLD.staticFrictionCoefficient == 0.80,
+    'the destination\'s state, 10 km on: a new place, its own road')
+  W.setShown('wet')
+  W.onTeleport()
+  T.check(byName().ASPHALT_OLD.staticFrictionCoefficient == 0.80, 'a teleport under the shown rain: wet from it')
+  W.setShown(nil)
   W.reset()
 end
 

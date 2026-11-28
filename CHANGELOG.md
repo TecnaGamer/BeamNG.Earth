@@ -91,7 +91,8 @@ What changed in each release of BeamNG.Earth, newest first.
   changes, instead of every distant tile.
 - Wet roads: the whole road should no longer switch between wet and dry when you turn onto another kind of street.
   It now stays as wet as the wettest street nearby, and as the road dries over the hour the wet look fades over
-  minutes instead of switching at once.
+  minutes instead of switching at once. After a teleport the road should no longer keep the last place's wetness:
+  it shows the new place's at once.
 - Reduced the chance of the game's terrain texture cache (`temp/art/terrainmaterialcache` in BeamNG's user folder)
   filling up with old ground photos: they now go with their session, and a one-time clean-up at the next start removes
   the ones earlier versions left behind (several GB on long-time test machines).
