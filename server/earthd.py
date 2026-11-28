@@ -3531,6 +3531,7 @@ class Server:
         pads = [p for p in pads_near if roadsmod.box_owns(box, float(p[1][0]), float(p[1][1]))]
         parapets = roadmeshmod.parapet_runs(chunks, ctx, ground=cover, pads=pads_near)
         import guardrails as guardrailsmod
+        import bridgerailings
         infra_fn = lambda key: self.mapdata.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
         low_parapet_decks = set()
         deck_parts = []                 # the bridges' parts near the tile (the median barriers' on joined decks too)
@@ -3582,7 +3583,9 @@ class Server:
             anchor.bridges.beams_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else ())
         dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), _piers, ctx, _beams,
                                  ground=cover, parapets=parapets,
-                                 low_parapet_decks=low_parapet_decks, pads=pads)
+                                 low_parapet_decks=low_parapet_decks, pads=pads,
+                                 railing_decks=bridgerailings.railing_decks(anchor.frame, parapets, low_parapet_decks,
+                                                                            roads=near_roads))
         import fences
         try:                        # the mapped stone walls (GitHub #938), in the retaining walls' stone
             rwalls = rwalls + fences.stone_walls(anchor.frame, infra_fn, box, elev, roads=near_roads)

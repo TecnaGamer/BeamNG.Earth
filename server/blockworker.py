@@ -1474,12 +1474,14 @@ def _stack_watch(what):
 
 def _radar_key():
     """PR #505's French speed cameras in the road tiles' revisit keys: their catalogue's digest while they are on
-    (BNE_FR_ROADS), and the drop side's estimated rails' version while they are on (BNE_DROP_RAILS); nothing otherwise
+    (BNE_FR_ROADS), the drop side's estimated rails' version while they are on (BNE_DROP_RAILS) and the bridge
+    railings' (BNE_BRIDGE_RAILINGS); nothing otherwise
     (the keys of every tile built without them unchanged)."""
     import radars
     sig = radars.signature()
     import droprails
-    return (() if sig is None else (sig,)) + droprails.key()
+    import bridgerailings
+    return (() if sig is None else (sig,)) + droprails.key() + bridgerailings.key()
 
 
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
@@ -2081,6 +2083,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     pads = [p for p in pads_near if roadsmod.box_owns(box, float(p[1][0]), float(p[1][1]))]
     parapets = roadmeshmod.parapet_runs(chunks, ctx, ground=cover, pads=pads_near)
     import guardrails as guardrailsmod
+    import bridgerailings
     infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
     low_parapet_decks = set()
     deck_parts = []                 # the bridges' parts near the tile (the median barriers' on joined decks too)
@@ -2121,7 +2124,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     if _bridge_fps:
         _piers, _beams = buildingsmod.bridge_stub_piers(_bridge_fps, _piers, _beams)
     P.dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), _piers, ctx, _beams, ground=cover,
-                               parapets=parapets, low_parapet_decks=low_parapet_decks, pads=pads)
+                               parapets=parapets, low_parapet_decks=low_parapet_decks, pads=pads,
+                               railing_decks=bridgerailings.railing_decks(frame, parapets, low_parapet_decks,
+                                                                          roads=near_roads))
     mark("deck_mesh")
     import fences
     try:                            # the mapped stone walls (GitHub #938), in the retaining walls' stone

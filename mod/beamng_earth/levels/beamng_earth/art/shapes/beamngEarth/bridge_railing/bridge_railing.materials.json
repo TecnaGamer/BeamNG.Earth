@@ -1,0 +1,28 @@
+{
+  "bne_bridge_railing_steel": {
+    "name": "bne_bridge_railing_steel",
+    "mapTo": "bne_bridge_railing_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1a5f934f-5f31-55a7-8bc4-b41d5c287af7",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/metal/metal_paint/metal_paint_d.color.dds",
+        "normalMap": "/assets/materials/tileable/metal/metal_paint/metal_paint_nm.normal.dds",
+        "roughnessFactor": 0.45,
+        "metallicFactor": 0.6,
+        "baseColorFactor": [
+          0.66,
+          0.68,
+          0.69,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  }
+}
