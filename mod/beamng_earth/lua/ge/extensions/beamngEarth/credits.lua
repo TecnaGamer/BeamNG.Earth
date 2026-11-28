@@ -42,6 +42,30 @@ M.measures = 0            -- CalcTextSize calls
 
 local function nonEmpty(s) return type(s) == 'string' and s ~= '' end
 
+-- Credit lines of features other than the world's tiles (setExtra: the live air traffic's sources), after them.
+local extras, extraKeys = {}, {}
+local function withExtras(base)
+  if #extraKeys == 0 then return base end
+  local parts = {}
+  for _, k in ipairs(extraKeys) do parts[#parts + 1] = extras[k] end
+  local ex = table.concat(parts, ' | ')
+  if nonEmpty(base) then return base .. '\n' .. ex end
+  return ex
+end
+
+-- key: who it is ('airtraffic'); text: its credit line, nil / '' to take it away.
+function M.setExtra(key, text)
+  if type(key) ~= 'string' then return end
+  local had = extras[key]
+  extras[key] = nonEmpty(text) and text or nil
+  if had == extras[key] then return end
+  extraKeys = {}
+  for k in pairs(extras) do extraKeys[#extraKeys + 1] = k end
+  table.sort(extraKeys)
+  layout = nil
+end
+function M.extraText() return withExtras(nil) end
+
 -- A 'credits' message from the server. Returns true if it was usable.
 function M.onMessage(msg)
   if type(msg) ~= 'table' or type(msg.near) ~= 'string' then return false end
@@ -62,9 +86,9 @@ function M.serverText() return joined end
 
 -- The text shown: the server's credits, else `fallback` (a string, or a function returning one).
 function M.text(fallback)
-  if joined then return joined end
-  if type(fallback) == 'function' then return fallback() end
-  return fallback
+  if joined then return withExtras(joined) end
+  if type(fallback) == 'function' then return withExtras(fallback()) end
+  return withExtras(fallback)
 end
 
 function M.setEnabled(on) M.enabled = on and true or false; return M.enabled end
@@ -175,6 +199,7 @@ function M.draw(active, fallback)
   if not text then
     if type(fallback) == 'function' then text = fallback() else text = fallback end
   end
+  text = withExtras(text)
   if not nonEmpty(text) then return false end
   local im = rawget(_G, 'ui_imgui')
   if not im or not im.GetMainViewport then return false end

@@ -147,6 +147,7 @@ mod roadlanes;
 mod propassembly;
 mod waytags;
 mod pmtiles;
+mod airtraffic;
 mod underdeck;
 mod deckground;
 mod railseam;
@@ -7852,6 +7853,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
     // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
     // tunnels' and the roads' branches)
+    // 647: airtraffic::adsb_compact / adsbdb_route (live air traffic: an ADS-B network's answer as the mod's rows, an
+    // adsbdb route; server/airtraffic.py; 645 snow, 646 power plants are taken on other branches)
+    m.add_function(wrap_pyfunction!(airtraffic::adsb_compact, m)?)?;
+    m.add_function(wrap_pyfunction!(airtraffic::adsbdb_route, m)?)?;
     // 648 (645-647 are taken by the snow S1, power plant and air traffic branches): phenology::leaf_calendar (the trees' leaf cycle at a place); texdds derive "coverage:REF[:SCALE]" (the winter
     // twig cards' opacity mips keep their drawn share: no LOD pop)
     m.add("VERSION", 648)?;

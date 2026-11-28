@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+<asset><contributor><authoring_tool>BeamNG.Earth tools/build_airtraffic_shapes.py (models: devo343, Live Air Traffic)</authoring_tool></contributor><unit meter="1" name="meter"/><up_axis>Z_UP</up_axis></asset>
+<library_effects>
+<effect id="lat_text-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>0.07 0.09 0.17 1</color></diffuse></lambert></technique></profile_COMMON></effect>
+</library_effects>
+<library_materials>
+<material id="lat_text-mat" name="lat_text"><instance_effect url="#lat_text-fx"/></material>
+</library_materials>
+<library_geometries>
+<geometry id="lat_glyph_W8-g"><mesh>
+<source id="lat_glyph_W8-g-p"><float_array id="lat_glyph_W8-g-p-a" count="39">0 0.288 1 0 0.041 1 0 0.279 0 0 0.937 0 0 1.234 0 0 1.47 1 0 1.225 1 0 1.052 0.273 0 0.881 1 0 0.632 1 0 0.461 0.273 0 0.576 0 0 0.756 0.76</float_array><technique_common><accessor source="#lat_glyph_W8-g-p-a" count="13" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+<vertices id="lat_glyph_W8-g-v"><input semantic="POSITION" source="#lat_glyph_W8-g-p"/></vertices>
+<triangles count="11" material="lat_text-mat"><input semantic="VERTEX" source="#lat_glyph_W8-g-v" offset="0"/><p>0 1 2 3 4 5 5 6 7 7 8 9 10 0 2 10 2 11 10 11 12 3 5 7 9 10 12 12 3 7 12 7 9</p></triangles>
+</mesh></geometry>
+</library_geometries>
+<library_visual_scenes><visual_scene id="scene" name="scene">
+<node id="base00" name="base00"><node id="start01" name="start01">
+<node id="lat_glyph_W8" name="lat_glyph_W8"><instance_geometry url="#lat_glyph_W8-g"><bind_material><technique_common><instance_material symbol="lat_text-mat" target="#lat_text-mat"/></technique_common></bind_material></instance_geometry></node>
+</node><node id="collision-1" name="collision-1"/></node>
+</visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>

@@ -12,6 +12,12 @@ What changed in each release of BeamNG.Earth, newest first.
   loaded round a point, the towns round a point and whether the collision round a point is in (docs/ADDONS.md).
   The AI road graph is no longer applied again when it has not changed, which should reduce the hitches and the
   reloads that mods listening for it went through.
+- **Live air traffic** (off by default; Settings, Air traffic): the real aircraft around you from live ADS-B data,
+  built in from devo343's Live Air Traffic add-on (no separate window or program to run). Aircraft models with airline
+  colours, lights, contrails that follow the real weather, engine sounds, labels, a follow camera and a seat view, and
+  the aircraft on the 2D and 3D maps (click one to set the GPS). Turning it on first says what is sent and to whom:
+  only your approximate area, about every 15 seconds while you are in the world. Keys: Ctrl+Alt+A on / off,
+  Ctrl+Alt+K labels, Ctrl+Alt+C contrails, Ctrl+Alt+I what is that plane, Ctrl+Alt+S sounds, Ctrl+Alt+F follow.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
