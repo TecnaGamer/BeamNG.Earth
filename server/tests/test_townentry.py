@@ -1189,6 +1189,35 @@ class RegionalNameTest(unittest.TestCase):
 
 
 class FaceTest(unittest.TestCase):
+    def test_polish_locality_board(self):
+        entry = np.array(ts.face_image("Łódź", ts.G_ENTRY, country="PL"))
+        plain = np.array(ts.face_image("Lodz", ts.G_ENTRY, country="PL"))
+        out = np.array(ts.face_image("Łódź", ts.G_EXIT, country="PL"))
+        self.assertEqual(entry.shape, (64, 256, 3))
+        self.assertFalse(np.array_equal(entry, plain))
+        np.testing.assert_array_equal(entry[53, 128], (0, 110, 60))
+        for x in (40, 128, 215):
+            y = round(60 - (x - 3) * 57 / 250)
+            self.assertGreater(int(out[y, x, 0]) - int(out[y, x, 1]), 90)
+
+    def test_polish_locality_requires_a_roadside_position_in_poland(self):
+        village = commune("Chojnice", 0, -1500, 2000, 1500, east_of(200))._replace(country="PL")
+        candidates = signs([road("r")], [village])
+        self.assertEqual(len(candidates), 2)
+        self.assertAlmostEqual(abs(candidates[0][2]) - 3.5 - ts.PLATES["PL"] / 2, 0.6)
+        towns = ts.Towns(None, None)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(towns, "communes", return_value=[village]), \
+             mock.patch.object(ts, "town_signs", return_value=candidates):
+            faces = {}
+            for lat, lon, count in [(53.695, 17.557, 2), (52.52, 13.405, 0)]:
+                frame = mock.Mock()
+                frame.enu_to_geodetic.return_value = (lat, lon, 0)
+                rows = towns.maker(frame, [], folder, "/vfs", faces)([], BOX, False)
+                self.assertEqual(len(rows), count)
+            from imagery import read_dds_info
+            for g in faces:
+                self.assertEqual(read_dds_info(Path(folder, g + ".dds").read_bytes())[:2], (256, 64))
+
     def test_the_name_in_capitals_without_accents(self):
         self.assertEqual(ts.sign_text("Saint-Christol-lez-Alès"), "SAINT-CHRISTOL-LEZ-ALES")
         self.assertEqual(ts.sign_text("Générargues"), "GENERARGUES")
@@ -1413,7 +1442,8 @@ class InStepTest(unittest.TestCase):
                              / f"sign_town_body_{cc.lower()}.dae").exists(), cc)
             self.assertTrue(ts.face_group("X", ts.G_ENTRY, "", cc).startswith(f"townin_{cc.lower()}_"))
             img = ts.face_image("X", ts.G_ENTRY, "", cc)
-            self.assertEqual(img.size, (round(ts.PLATES[cc] * ts.FACE_PX_PER_M), round(ts.PLATE_H * ts.FACE_PX_PER_M)))
+            self.assertEqual(img.size, (256, 64) if cc == "PL" else
+                             (round(ts.PLATES[cc] * ts.FACE_PX_PER_M), round(ts.PLATE_H * ts.FACE_PX_PER_M)))
 
 
 class BodyGeometryTest(unittest.TestCase):

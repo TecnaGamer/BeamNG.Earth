@@ -89,10 +89,20 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
     # German Autobahn signs: a tile in Germany (real borders, behind a box) whose shards carry the German block
     german = _german(source, frame, tx, ty)
     autobahn = _autobahn(md, frame, tx, ty, elev, context, left_hand) if german else None
-    speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us), dej, towns)
+    import plsigns
+    pl = None
+    if rsigns and plsigns.covers(frame, (x0, y0, x1, y1)):
+        import plstock
+        try:
+            pl = plstock.sign_stream(md, frame, (x0, y0, x1, y1), elev, context, left_hand, mph)
+        except (OSError, ValueError) as error:
+            _short()
+            pl = plstock.Nearby([])
+            log.warning("Using the road rules for Polish signs on this tile: %s", error)
+    speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us), dej, towns, pl)
     dir_mesh, dir_faces = (_dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid,
                                  autobahn=german) if dirs else (None, {}))
-    rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if rsigns else None
+    rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country, pl) if rsigns else None
     import busstationsign               # the bus stations' name signs (on whether or not the direction boards are)
     bus_mesh, bus_faces = _optional('Bus station signs', busstationsign.sign_tile, md, frame, tx, ty, elev, out_dir,
                                     vfs_dir, country)
@@ -130,13 +140,13 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
 _warned = -float('inf')
 
 
-def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=False, towns=None):
+def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=False, towns=None, pl=None):
     """speedsigns.build_tile, or None: optional scenery never stops the other signs (towns: the town signs' towns,
     townentry.Towns.town_state, when they are on)."""
     global _warned
     try:
         return speedsigns.build_tile(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=de_on,
-                                     towns=towns)
+                                     towns=towns, pl=pl)
     except Exception as error:
         _short()
         now = time.monotonic()
@@ -146,11 +156,11 @@ def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=Fal
         return None
 
 
-def _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country):
+def _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country, pl=None):
     """roadsigns.build_tile, or None: optional scenery never stops the other signs."""
     global _warned_rsigns
     try:
-        return roadsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, country)
+        return roadsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, country, pl=pl)
     except Exception as error:
         _short()
         now = time.monotonic()

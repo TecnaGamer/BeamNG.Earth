@@ -379,6 +379,8 @@ POLICIES = {
     "bulkdata.csdi.gov.hk": HostPolicy(rate=1.0, burst=4.0, max_conc=4, daily_budget=1000, daily_hard=2000,
                                        allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True, timeout=120.0,
                                        max_attempts=3, base_delay=2.0, optional=True),
+    "graph.mapillary.com": HostPolicy(rate=2, burst=3, max_conc=2, shared=True, timeout=4,
+                                      connect_timeout=2, max_wait=2, max_attempts=1, optional=True),
     # Enter-only bounded category searches, never terrain/bulk downloads. No retries on shared query services.
     "overpass-api.de": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
                                    cache_ttl=DAY, max_wait=1.0, timeout=4.0, max_attempts=1, optional=True,
@@ -544,6 +546,7 @@ ROLES = {
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",
     "www.wikidata.org": "landmarks in the map's search",
+    "graph.mapillary.com": "additional mapped road signs in Poland",
     "overpass-api.de": "nearby category search on Enter",
     "query.wikidata.org": "notable category search on Enter",
     "routing.openstreetmap.de": "GPS routes",

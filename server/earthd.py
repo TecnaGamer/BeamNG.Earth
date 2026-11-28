@@ -3054,7 +3054,7 @@ class Server:
             "/temp/beamngEarth/stale_scratch", self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor), self.gas_stations, buried, lamps, country,
             Server.pole_profile(self), designsmod.enabled(self.dej_on), Server.towns_enabled(self),
-            Server.wear_arg(self)), ROAD_TILE_TIMEOUT_S, abandon=lambda: Server.is_abandoned(self, anchor.id))
+            Server.wear_arg(self), roadsignsmod.enabled(self)), ROAD_TILE_TIMEOUT_S, abandon=lambda: Server.is_abandoned(self, anchor.id))
         return bool(got and got.get("content") and got.get("skin"))
 
     def build_roads_geo(self, aid, gx, gy, content=True, skin=True, exact=None):
@@ -3074,7 +3074,7 @@ class Server:
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
             country, content, skin, exact, Server.pole_profile(self), designsmod.enabled(self.dej_on),
-            Server.towns_enabled(self), Server.wear_arg(self))
+            Server.towns_enabled(self), Server.wear_arg(self), roadsignsmod.enabled(self))
         t0, waited = time.perf_counter(), []
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited, abandon=lambda: Server.is_abandoned(self, aid)
@@ -3125,7 +3125,7 @@ class Server:
                                             md=self.mapdata.versions(buildings=bool(self.buildings)),
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
                                             de_junctions=designsmod.enabled(self.dej_on),
-                                            towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self),
+                                            towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self), rsigns=roadsignsmod.enabled(self),
                                             rules=Server.ground_rules(self),
                                             cache_dir=getattr(self.mapdata, "cache_dir", None))
 
@@ -3186,7 +3186,7 @@ class Server:
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
             lamps, country, "/temp/beamngEarth/areas_scratch", pole_profile=Server.pole_profile(self),
             wait_gaps=fast is not None, de_junctions=designsmod.enabled(self.dej_on),
-            towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self)), timeout)
+            towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self), rsigns=roadsignsmod.enabled(self)), timeout)
 
     LATE_TIMEOUT_S = 1200.0         # s a late build may take (its process waits for the lidar it lacks itself)
 
@@ -3250,7 +3250,7 @@ class Server:
                 blockworker.prebuild_geo, gx, gy, gzoom, os.path.join(self.root, "late_scratch"), self.buildings, lh,
                 mph, self.gas_stations, buried, lamps, country, "/temp/beamngEarth/late_scratch",
                 pole_profile=Server.pole_profile(self), wait_gaps=True, de_junctions=designsmod.enabled(self.dej_on),
-                towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self))
+                towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self), rsigns=roadsignsmod.enabled(self))
         else:
             fut = self.late_pool.submit(blockworker.late_plan, *item[1:4])
         try:
@@ -3300,7 +3300,7 @@ class Server:
                 self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                 self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor),
                 self.gas_stations, self.buried(anchor), self.lamp_region(anchor), self.country(anchor), Server.pole_profile(self, anchor),
-                designsmod.enabled(self.dej_on), Server.towns_enabled(self), Server.wear_arg(self))
+                designsmod.enabled(self.dej_on), Server.towns_enabled(self), Server.wear_arg(self), roadsignsmod.enabled(self))
             try:
                 # bounded: a worker that never answered held this thread and its roads.Tracker slot for good (4
                 # slots: four hung tiles and no road tile ever again, the loading line at "roads & buildings 0/26")
@@ -3710,6 +3710,10 @@ class Server:
             except Exception as ex:
                 log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import radars
+        if roadsignsmod.enabled(self):
+            import plsigns
+            props = plsigns.road_layer(anchor.frame, box, near_roads, elev, self.mapdata, props, guardrail_rows,
+                                       urban, self.road_widths, self.left_hand(anchor), self.mph(anchor))
         radar_props, speed_traps = radars.tile_rows(anchor.frame, box, self.mapdata, elev, self.road_widths, urban)
         if radar_props:
             props = (props or []) + radar_props
@@ -9881,7 +9885,13 @@ class Connection:
                 self.signs.refresh()
         elif kind == "road_signs":              # the settings page's switch: the sign tiles again, with or without
             if self.s.set_rsigns(msg.get("on")):
-                self.signs.refresh()
+                if roadsignsmod.ON:
+                    for conn in getattr(self.s, "connections", ()) or (self,):
+                        conn.roads.close()
+                        conn.roads = road_tracker(conn)
+                        conn.signs.refresh()
+                else:
+                    self.signs.refresh()
         elif kind == "town_signs":              # the settings page's switch: the road and sign tiles again, with or without
             if self.s.set_towns(msg.get("on")):
                 self.roads.close()

@@ -784,6 +784,13 @@ do
   T.check(v.expRoadBumps == true, 'a version-2 file: another experimental switch is the player\'s')
   files[settings.FILE] = { version = 3, roadSigns = true }
   T.check(settings.load().roadSigns == true, 'a version-3 file: the player turned road signs on')
+  files[settings.FILE] = { version = 3, roadSigns = false, expPlRoadSigns = true }
+  local merged, warnings = settings.load()
+  T.check(merged.roadSigns and #warnings == 0, 'an existing Polish signs selection enables Road signs')
+  settings.set('roadSigns', false)
+  settings.save()
+  T.check(files[settings.FILE].expPlRoadSigns == nil and settings.load().roadSigns == false,
+    'turning off the merged setting survives saving and loading')
   files[settings.FILE] = nil
   settings.load()
 end
@@ -808,4 +815,8 @@ for name, detail in pairs({ low = 'low', medium = 'medium', high = 'normal', ult
     'presets preserve cliff category choices')
   T.check(settings.PRESETS[name].cliffTextures == nil, 'presets never opt into a texture download')
 end
+T.check(settings.uiMapillaryStatus() == 'default', 'no token initially')
+T.check(settings.uiMapillarySet('MLY|test|example').ok and settings.uiMapillaryStatus() == 'saved', 'save client token')
+T.check(not settings.uiMapillarySet('bad token').ok and settings.uiMapillaryStatus() == 'saved', 'reject invalid replacement')
+T.check(settings.uiMapillarySet('').ok and settings.uiMapillaryStatus() == 'rules', 'remove saved token')
 T.done('test_settings')

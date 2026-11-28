@@ -478,6 +478,37 @@ M.CATALOG.kantstolpe = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_kant
 M.GROUP_MAX_M.kantstolpe = 800
 M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_giveway_b1', 2.30 } }   -- (Sweden's yellow give-way)
 M.GROUP_MAX_M.giveway_b1 = 300
+local PL_SIGNS = {
+  'pl_a_11', 'pl_a_11a', 'pl_a_12b', 'pl_a_12c', 'pl_a_14', 'pl_a_16', 'pl_a_17', 'pl_a_18b', 'pl_a_2', 'pl_a_24',
+  'pl_a_29', 'pl_a_3', 'pl_a_30', 'pl_a_4', 'pl_a_5', 'pl_a_6a', 'pl_a_7', 'pl_a_8', 'pl_b_1', 'pl_b_16_3_5m',
+  'pl_b_18_3_5t', 'pl_b_2', 'pl_b_20', 'pl_b_21', 'pl_b_22', 'pl_b_23', 'pl_b_25', 'pl_b_33_20', 'pl_b_33_30',
+  'pl_b_35', 'pl_b_42', 'pl_c_12', 'pl_c_16', 'pl_c_2', 'pl_c_9', 'pl_d_1', 'pl_d_15', 'pl_d_2', 'pl_d_3',
+  'pl_d_40', 'pl_d_41', 'pl_d_6', 'pl_d_6a', 'pl_d_6b', 'pl_b_33_50', 'pl_d_42', 'pl_d_43', 'pl_b_9', 'pl_f_12a',
+  'pl_a_1', 'pl_a_12a', 'pl_a_6b', 'pl_a_6c'
+}
+for _, g in ipairs(PL_SIGNS) do
+  M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/' .. g .. '_plate', 2.75 } }
+  M.GROUP_MAX_M[g] = 450
+  M.ONE_SPELLING[g] = true
+end
+local roundaboutPost = 'pl_a_7_c_12'
+M.CATALOG[roundaboutPost] = { { '/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/' .. roundaboutPost .. '_plate', 3.6 } }
+M.GROUP_MAX_M[roundaboutPost] = 450
+M.ONE_SPELLING[roundaboutPost] = true
+PL_SIGNS[#PL_SIGNS + 1] = roundaboutPost
+local plExtraDir = '/levels/beamng_earth/art/shapes/beamngEarth/pl_signs_extra/'
+if jsonReadFile and FS and FS.fileExists and FS:fileExists(plExtraDir .. 'ready.json') then
+  local ready = jsonReadFile(plExtraDir .. 'ready.json') or {}
+  for _, entry in pairs(ready) do
+    local g = entry.group
+    if type(g) == 'string' and g:match('^pl_[a-z0-9_]+$') and not M.CATALOG[g] then
+      PL_SIGNS[#PL_SIGNS + 1] = g
+      M.CATALOG[g] = { { plExtraDir .. g .. '_plate', 2.75 } }
+      M.GROUP_MAX_M[g] = 450
+      M.ONE_SPELLING[g] = true
+    end
+  end
+end
 -- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
 local SE_SIGNS = { se_f17 = 2.70, se_f17_400 = 2.78, se_f17_300 = 2.78, se_f17_200 = 2.78, se_f18_11 = 2.70, se_f18_12 = 2.70,
   se_f18_21 = 2.70, se_f2 = 3.50, se_c1 = 2.10, se_b3 = 2.60, se_e1 = 2.70, se_e2 = 2.70,
@@ -649,7 +680,7 @@ M.SEASON = { straw_n = { 7, 8, 9 }, straw_s = { 1, 2, 3 }, silage_n = { 5, 6, 7,
 -- below the tile cap.
 function M.isBarrier(g)
   return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
-    or g:sub(1, 3) == 'se_' or g:sub(1, 3) == 'de_')      -- (a sign thinned away is a rule gone, not a tree fewer)
+    or g:sub(1, 3) == 'se_' or g:sub(1, 3) == 'de_' or g:sub(1, 3) == 'pl_')      -- (a sign thinned away is a rule gone, not a tree fewer)
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
@@ -849,6 +880,10 @@ function M.setGroupEnabled(groups, on)
   return changed
 end
 
+function M.setPolishSignsEnabled(on)
+  return M.setGroupEnabled(PL_SIGNS, on)
+end
+
 -- Pure: the n-th pool Forest's name.
 -- (tests: .claude/devtools/floattrees.py reads the tiles' made items and their Forests' transforms)
 function M.debugTiles() return tiles end
@@ -954,6 +989,12 @@ local function setup()
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
   end
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
+  if FS and FS.fileExists and FS:fileExists('/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_signs.materials.json') then
+    pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_signs.materials.json')
+  end
+  if FS and FS.fileExists and FS:fileExists(plExtraDir .. 'extra.materials.json') then
+    pcall(loadJsonMaterialsFile, plExtraDir .. 'extra.materials.json')
+  end
   if FS and readFile and writeFile then
     local ok, made = pcall(staticSignal)
     if ok and made then M.CATALOG.signal[1][1] = M.STATIC_SIGNAL

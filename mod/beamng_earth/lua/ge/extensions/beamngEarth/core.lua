@@ -1439,6 +1439,7 @@ local function onMessage(msg)
       local settings = rawget(_G, 'beamngEarth_settings')
       local v = settings and settings.get and settings.get('roadSigns')
       if v ~= nil then M.roadSigns = v == true end
+      trees.setPolishSignsEnabled(M.roadSigns ~= false)
       net.send({ type = 'road_signs', on = M.roadSigns ~= false })
     end
     -- the German junction signs' switch (settings germanJunctionSigns, off by default until its performance check)
@@ -4241,6 +4242,7 @@ function M.setRoadSigns(on)
   on = on == true
   if M.roadSigns == on then return end
   M.roadSigns = on
+  trees.setPolishSignsEnabled(on)
   net.send({ type = 'road_signs', on = on })
 end
 

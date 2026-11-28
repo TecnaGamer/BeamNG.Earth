@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="B-22" xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
+  <circle cx="400" cy="400" r="400" fill="#d40000"/>
+  <circle cx="400" cy="400" r="320" fill="#fff"/>
+  <path d="M220,400v240h80v-200c0-22.09,17.91-40,40-40h200v40l120-80-120-80v40h-240c-44.18,0-80,35.82-80,80Z"/>
+  <line x1="145.44" y1="145.44" x2="654.56" y2="654.56" fill="none" stroke="#d40000" stroke-width="60"/>
+</svg>

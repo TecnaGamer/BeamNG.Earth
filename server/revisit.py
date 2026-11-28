@@ -682,7 +682,7 @@ _switches = []
 # though the planning never reads it: BNE_GEN_GROUND, whose gated code drives the photo pipeline that feeds planning
 # inputs; tests/test_plan_neutral.py NOT_LISTED says why for each.)
 PLAN_NEUTRAL = {
-    "BNE_ROADSIGNS": "roadsigns.ON: the sign tiles' road signs (signstream), never the roads layer, plans or facts",
+    "BNE_ROADSIGNS": "roadsigns.ON: ordinary and surveyed sign graphics, after roads and ground have been planned",
     "BNE_NL_ROADSIGNS": "roadsigns.NL_ON: the Dutch sign system in the sign tiles (roadsigns.system), as above",
     "BNE_WATERTIGHT": "shells.ON: closed collision / building / deck meshes (cdae, buildings, roadmesh): tiles only",
     "BNE_CATENARY": "catenary.ENABLED: masts and wires in the road tiles (blockworker), nothing planned",

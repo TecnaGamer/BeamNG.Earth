@@ -154,6 +154,10 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
   The file retains the source credits, snapshot hashes and calibrated 0.2-mile stations. It identifies
   the custom median treatments; placement uses the currently generated pavement.
 
+## Experimental Polish road signs
+
+The position layers use OpenStreetMap, Mapillary (`graph.mapillary.com`), the Wrocław municipal sign inventory and the Polish national boundary from Geoportal. The sign models use individually credited SVG originals from Wikimedia Commons. [Sources and licences](server/data/pl_signs/NOTICE.md) · [Coverage and import](docs/POLISH_ROAD_SIGNS.md).
+
 ## Never contacted
 
 The server never asks OSM's vector tiles or Protomaps at runtime. Overpass is used only for category searches,
