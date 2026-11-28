@@ -1,0 +1,186 @@
+{
+  "bne_gse_white": {
+    "name": "bne_gse_white",
+    "mapTo": "bne_gse_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7f7c24fa-1152-5afb-9037-56059b2585b2",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.88,
+          0.88,
+          0.86,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_gse_yellow": {
+    "name": "bne_gse_yellow",
+    "mapTo": "bne_gse_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "86428aec-3014-56ef-86b3-9a13dc3a1386",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.94,
+          0.74,
+          0.06,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_gse_grey": {
+    "name": "bne_gse_grey",
+    "mapTo": "bne_gse_grey",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "da723752-7bf6-5a6c-b1f9-6b8bc6f88623",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.57,
+          0.6,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_gse_blue": {
+    "name": "bne_gse_blue",
+    "mapTo": "bne_gse_blue",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9f5c5027-92a4-5c85-a932-9e1f77d10a25",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.14,
+          0.28,
+          0.48,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_gse_frame": {
+    "name": "bne_gse_frame",
+    "mapTo": "bne_gse_frame",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ee0ea12d-d074-5ab5-b6e3-c4d34b535038",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.26,
+          0.27,
+          0.29,
+          1.0
+        ],
+        "metallicFactor": 0.2,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_gse_dark": {
+    "name": "bne_gse_dark",
+    "mapTo": "bne_gse_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5a04ae89-ee52-5be2-a4ef-b1e4eb5638d9",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.07,
+          0.1,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_gse_tyre": {
+    "name": "bne_gse_tyre",
+    "mapTo": "bne_gse_tyre",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8f81476b-c9b1-523a-9626-0b6b0ad87bf6",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.03,
+          0.03,
+          0.03,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_gse_orange": {
+    "name": "bne_gse_orange",
+    "mapTo": "bne_gse_orange",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "456a988d-bbe9-54c0-905f-e3ab9f86b0c0",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.38,
+          0.04,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.7
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  }
+}

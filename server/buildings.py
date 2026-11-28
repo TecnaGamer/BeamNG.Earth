@@ -21,6 +21,8 @@ import numpy as np
 
 import fast
 import dmath
+import airportbuildings
+import airportroles
 import dnp
 import landmarks
 import mapgeom
@@ -705,6 +707,16 @@ BAND_OFFICE = (0, 5)        # m_highrise_metal: curtain wall
 BAND_OFFICE2 = (1, 4)
 BAND_SHOP = (2, 2)          # shopfront with awnings
 BANDS = 4
+# An airport's airside buildings (airportbuildings.Context.airside: piers, satellites, walkways, whatever their size and
+# whether the map gives them a height) take the terminal's look: glass curtain walls (OFFICE's tints) or light panels
+# (white or grey plaster with square windows), by the seed, never brick, siding or a house's rules
+AIRSIDE_GLASS_SHARE = 0.6
+# silver and pale grey metal panels, on the curtain wall's own sheet: never FACADE's plaster window sheet, whose sash
+# windows read as a house's (Brisbane's jet bridge cabs and stair blocks, 2026-11-14)
+AIRSIDE_PANEL_TINTS = (f"{OFFICE}|0", f"{OFFICE}|6", f"{OFFICE}|0")
+AIRPORT_ROOFS = (ROOF_FLAT, ROOF_METAL)         # (a terminal's or a pier's roof: membrane or metal, never tiles)
+AIRPORT_ROOF_TINTS = {ROOF_FLAT: (0, 1, 3), ROOF_METAL: (0, 1, 4)}     # (ROOF_TINTS' pale and mid greys: no red or green)
+AIRSIDE_CLUTTER_MIN_M2 = 1500.0     # m2: the roof plant of a bigger airside roof; a smaller one is bare
 
 # Overture "bridge_structure" (OSM man_made=bridge parts with a height: the Queensboro Bridge's towers, 110 m) was a
 # glass tower the decks ran through (the user's report, 2026-10-17)
@@ -848,8 +860,8 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "terminal", "gring", "ship", "fr_house", "across", "hi",
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "airside")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1047,16 +1059,26 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         return ships.spec(ring, attrs, seed)
     if attrs.get("pier"):           # a quay structure alongside one (ships.pier_alongside): a low deck
         return ships.pier_spec(ring, seed)
+    if attrs.get("_pillar"):        # a support of a raised airside part (airportbuildings.pillars): a plain concrete column
+        return Spec(ring=ring, floors=1, floor_h=float(attrs.get("height") or 3.0), height=float(attrs.get("height") or 3.0),
+                    roof="flat", roof_mat="bne_precast", facade="bne_precast", band=None, shop=False, plain=True, seed=seed,
+                    min_h=0.0, wall=None, windows=False, steeple=False, porch=False, cls=airportbuildings.PILLAR_CLASS,
+                    deck=False, pitch=None)
     style = region_style(lat, lon)
     _, _, hl, hw = oriented_box(ring)
     box_fill = area / max(4 * hl * hw, 1e-6)
     cls = (attrs.get("class") or "").lower()
     name = str(attrs.get("name") or "").lower()
-    terminal = any(w in name for w in ("terminal", "concourse"))
+    terminal = any(w in name for w in ("terminal", "concourse")) or bool(attrs.get("_terminal"))
     # a building part (tile_buildings passes the building's top with each): judged as a piece of its building, not by
     # its own footprint (streets.gl comparison 2026-11-14: the Capitol's marble lantern rings under 40 m² came out sheds
     # in vinyl siding, the Chrysler Building's 185 m wings on under 100 m² windowless steel masts)
     part = attrs.get("building_height") is not None
+    airside = bool(attrs.get("_airside")) and not terminal      # (an airport's pier, satellite or walkway: the terminal look)
+    # (an airport's terminal, pier, satellite, walkway or tower: a flat roof of membrane or metal, never tiles or a pitch,
+    # and none of a house's features, whatever the map says of its roof; Brisbane's domestic concourse came out under
+    # a terracotta hipped roof from its mapped roof shape and colour, 2026-11-14)
+    civic = terminal or airside or bool(attrs.get("_tower"))
     church = cls in CHURCH_CLASSES or any(w in name for w in ("church", "chapel", "cathedral"))
     if "hangar" in name:
         cls = "hangar"
@@ -1066,20 +1088,27 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         "garage" in name and area > 800) or (bool(attrs.get("garage")) and cls in GARAGE_TAG_CLASSES)
     narrow = hw < 4.2 and hl > 2.2 * hw                 # a row house: ~4-8 m wide, deep
     # in a dense core small buildings are row houses even where the footprints leave gaps (Fells Point)
-    row = cls in ROW_CLASSES or (not west_town and not part and ((narrow and (neighbours >= 1 or dense)) or (
-        dense and area < 260 and cls not in SHOP_CLASSES)))
-    shed = (cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)
-    shop = cls in SHOP_CLASSES
+    row = (cls in ROW_CLASSES or (not west_town and not part and ((narrow and (neighbours >= 1 or dense)) or (
+        dense and area < 260 and cls not in SHOP_CLASSES)))) and not (airside or terminal)
+    shed = ((cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)) and not attrs.get("_tower") \
+        and not (airside or terminal)
+    shop = cls in SHOP_CLASSES and not airside      # (an airside box has no shopfront: the terminal look)
     industrial = cls in INDUSTRIAL_CLASSES or (area > 2500 and cls in ("", "commercial"))
     # (on industrial land, industrial_rings: a refinery's or a port's control rooms and stores, not houses with porches
     # and chimneys; Pernis, Rotterdam, against its aerial photo, 2026-11-10)
     industrial = industrial or (attrs.get("_land") == "industrial" and cls in INDUSTRIAL_LAND_CLASSES)
-    industrial = industrial and not (garage or terminal)
+    industrial = industrial and not (garage or terminal or airside)
 
     h = attrs.get("height")
     nf = attrs.get("num_floors")
     if terminal and (h is None or not np.isfinite(h)) and (nf is None or not np.isfinite(nf)):
         h, nf = 13.0, 2                                 # an airport terminal: two tall glass storeys
+        if attrs.get("_terminal"):                      # (one at an airport: by its size, airportbuildings; two or three)
+            h = airportbuildings.terminal_height(area)
+            nf = 2 if h < 16.0 else 3
+    if airside and (h is None or not np.isfinite(h)) and (nf is None or not np.isfinite(nf)):
+        lo_, hi_ = airportbuildings.AIRSIDE_H_M            # (a pier's or a walkway's scale: two or three storeys)
+        h = lo_ + (hi_ - lo_) * _hash01(seed, "airside h")
     if garage and (h is None or not np.isfinite(h)) and (nf is None or not np.isfinite(nf)):
         nf = 4 + int(seed * 2)
     if cls == "hangar" and (h is None or not np.isfinite(h)):
@@ -1151,6 +1180,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # stacks and turrets, 86-93 m on 17-81 m² over its 85 m roof, were bare steel masts; streets.gl / Google Earth
     # comparison 2026-11-14)
     if area <= MAST_MAX_M2 and h is not None and np.isfinite(h) and h >= MAST_MIN_H and not attrs.get("bridge_part") \
+            and not attrs.get("_tower") \
             and ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower()) \
             not in ("skillion", "gabled", "hipped", "half-hipped") \
             and (str(attrs.get("facade_material") or "").lower() in MAST_MATERIALS
@@ -1192,7 +1222,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if church:
         floor_h = 7.5
     # (a big shed is a barn; a row of garages, a carport or a canopy is not)
-    barn = cls in BARN_CLASSES or (shed and area >= 150 and cls not in ("garage", "garages", "carport", "roof", "shelter"))
+    barn = (cls in BARN_CLASSES or (shed and area >= 150 and cls not in ("garage", "garages", "carport", "roof", "shelter"))) \
+        and not (airside or terminal)
     if barn:
         floor_h = 5.5 if area >= 150 else 3.5          # one tall storey; the gable above it
     if h is None and nf is None:
@@ -1222,7 +1253,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     measured_rise = float(measured_rise) if measured_rise is not None and np.isfinite(measured_rise) else None
     h_src = str(attrs.get("height_src") or "")
     holed = bool(attrs.get("_holes"))           # (a block round a yard: tile_buildings' inner rings)
-    if roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
+    if civic:
+        roof = "flat"               # (whatever the map gives: a terminal's, a pier's or a tower's roof is flat)
+    elif roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
         roof = roof_given
     elif roof_given in DOME_ROOFS:
         roof = roof_given
@@ -1238,6 +1271,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             # under tiled pitched roofs, predicted flat as a block before)
             roof = "flat" if measured_rise < RISE_FLAT_M else \
                 ("gabled" if seed < 1.0 - style.hipped else "hipped")
+        elif airside:
+            roof = "flat"           # (a pier's or a walkway's roof: flat; a mapped one is kept above)
         elif church and neighbours == 0:
             roof = "gabled"
         elif neighbours >= 1:
@@ -1385,8 +1420,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         plain = False
     wall = None
     house = (cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)) and not row and not shed \
-        and not part \
-        and neighbours == 0 and area < 300         # a long "residential" block is not a house (Fells Point)
+        and not part and neighbours == 0 and area < 300 and not (airside or terminal)  # a long "residential" block is not a house (Fells Point)
     if house and band is not BAND_BRICK and nf <= 3:
         # detached houses: siding in the East and South, stucco in the West; windows laid over the wall
         u = _hash01(seed, "wall")
@@ -1485,26 +1519,40 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             facade = custom_look(FACADE, fc)
     if terminal:
-        facade, band, plain = OFFICE, BAND_OFFICE, False
+        facade, band, plain, wall = OFFICE, BAND_OFFICE, False, None
     elif garage:
         facade, band, plain = FACADE_TINTS[3], BAND_PANEL, False
-    windows = True
-    if not (shed or barn or row or house or terminal or garage or church) and nf <= 2 and roof == "flat" \
+    elif airside:
+        # (glass or light panels by the seed, whatever the map says of the walls: never brick, siding or stucco)
+        wall, plain = None, False
+        if _hash01(seed, "airside look") < AIRSIDE_GLASS_SHARE:
+            facade = f"{OFFICE}|{int(_hash01(seed, 'glass tint') * len(WALL_TINTS[OFFICE]))}"
+            band = BAND_OFFICE if _hash01(seed, "airside band") < 0.5 else BAND_OFFICE2
+        else:
+            facade = AIRSIDE_PANEL_TINTS[int(_hash01(seed, "airside tint") * len(AIRSIDE_PANEL_TINTS))]
+            band = BAND_OFFICE2
+    windows = attrs.get("_tower") not in ("shaft", "cap")      # (a control tower's concrete: no rows of windows)
+    if not (shed or barn or row or house or terminal or garage or church or airside) and nf <= 2 and roof == "flat" \
             and (area >= BIG_BOX_M2 or industrial) \
             and cls not in HOUSE_CLASSES and cls != "apartments":
         kind = METALWALL if industrial else PANEL
         wall = f"{kind}|{int(_hash01(seed, 'wc') * len(WALL_TINTS[kind]))}"
         facade, windows = wall, False
     rmat = str(attrs.get("roof_material") or "").lower()
+    airport_roof = terminal or airside
     # a dome with no roof material, or "slate" over stone walls (Overture's roof_material has no stone or marble: the
     # US Capitol's marble dome, OSM roof:material=marble, comes as slate; a flat "slate" roof there too, its drum's and
     # lantern's rings), takes its walls' light look, or a pale metal
     # (it came out in the region's dark slate, or a tall building's dark metal: the Capitol's white dome dark, the
     # 2026-11-14 in-game check; real domes are painted metal, stone, copper or lead, mapped where they are)
-    slate_on_stone = rmat in ("slate", "stone", "marble") and str(attrs.get("facade_material") or "").lower() \
-        in STONE_FACADES
+    slate_on_stone = rmat in ("slate", "stone", "marble") and str(attrs.get("facade_material") or "").lower()         in STONE_FACADES
     dome_walls = (roof in DOME_ROOFS and (not rmat or slate_on_stone)) or (roof == "flat" and slate_on_stone)
-    if dome_walls:
+    if airport_roof:
+        # (membrane or metal in a grey, by the seed: the mapped material and colour and the aerial's tint are ignored)
+        mat = AIRPORT_ROOFS[int(_hash01(seed, "airport roof") * len(AIRPORT_ROOFS))]
+        tints = AIRPORT_ROOF_TINTS[mat]
+        roof_mat = f"{mat}|{tints[int(_hash01(seed, 'roof') * len(tints))]}"
+    elif dome_walls:
         roof_mat = dome_look(facade, band)
     elif rmat in ("metal", "tin", "steel", "zinc", "corrugated_iron", "sheet"):
         roof_mat = f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_METAL]))}"
@@ -1545,14 +1593,14 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     else:       # the region's pitched roofs (the US: slate or shingle by the seed, their first four tints)
         mat, tints = style.roofs[min(int(seed * len(style.roofs)), len(style.roofs) - 1)]
         roof_mat = f"{mat}|{tints[int(_hash01(seed, 'roof') * len(tints))]}"
-    rc = parse_color(attrs.get("roof_color"))
+    rc = None if airport_roof else parse_color(attrs.get("roof_color"))
     if rc is not None:
         base_rmat = roof_mat.split("|")[0]
         if base_rmat == ROOF_TILES:         # (terracotta already: the mapped colour over the texture's mean)
             roof_mat = custom_look(base_rmat, photo_tint(ROOF_TILES, rc))
         else:
             roof_mat = custom_look(base_rmat, rc)
-    elif attrs.get("_roof_photo") is not None and not rmat:
+    elif attrs.get("_roof_photo") is not None and not rmat and not airport_roof:
         # (the roof's colour in the aerial photo, RoofPhoto: a mapped colour or material wins)
         base_rmat = roof_mat.split("|")[0]
         if roof == "flat" and base_rmat == ROOF_FLAT and \
@@ -1599,7 +1647,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 pitch=math.degrees(dmath.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
                 else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
                 across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")), hf=hf, skel=skel,
-                skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")))
+                skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")), airside=airside)
     if skel:
         spec.pitch = skel_pitch
     return francehouses.adapt(spec, attrs, lat, lon)
@@ -2257,8 +2305,10 @@ def _roof_kit_kind(spec):
 
 def _clutter(m, spec, ring, z_eave, mat_idx):
     if spec.roof != "flat" or spec.plain or spec.cls in CHURCH_CLASSES or len(ring) < 3 \
-            or spec.cls in ("mast", "tank", "greenhouse"):
+            or spec.cls in ("mast", "tank", "greenhouse", airportbuildings.TOWER_CLASS):
         return
+    if spec.airside and _area2(np.asarray(ring, np.float64)[:, :2]) / 2 < AIRSIDE_CLUTTER_MIN_M2:
+        return                          # (a small airside roof, a pier's or a walkway's: bare)
     import fast
     fast.require(187, "roof_kit")
     ring = np.asarray(ring, np.float64)[:, :2]
@@ -4655,7 +4705,7 @@ def _split_passages(items, split, seg, half, frame, x0, y0, elev, count, drop):
             gs = [next(grounds) for _ in ps]
             tall = (spec.height or 0.0) >= ROAD_CLEAR_PASSAGE_H + ROAD_CLEAR_LINTEL_M
             if failed[j]:
-                if tall:            # (crossed all over: the whole of it over the roads)
+                if tall and not spec.terminal:      # (crossed all over: the whole of it over the roads; not a terminal's)
                     items[k] = (_spec_copy(spec, min_h=ROAD_CLEAR_PASSAGE_H, height=spec.height - ROAD_CLEAR_PASSAGE_H,
                                            door=None, porch=False, stoop=None, sign=None), g0, g1)
                     count(spec, "passage")
@@ -4760,6 +4810,7 @@ class _PartsOf:
         own = {k: (a[k][i] if k in a else None) for k in PART_OWN}
         if self.colours is not None and "src_record" in a:
             own = self.colours.fill(own, a["src_record"][i])
+        own["_pid"] = str(f.ids[i])         # (airportroles' id of the part)
         return np.stack([e, n], 1), _part_heights(a, i), own
 
     def get(self, bid, default=None):
@@ -5020,6 +5071,12 @@ PARTS_COVER_MIN = 0.5           # share of the outline the parts cover (grid sam
 PARTS_COVER_SAMPLES = 400       # about this many samples inside an outline
 PARTS_COVER_MIN_H = 2.5         # m: an outline mapped lower than this is a base or an area, not drawn under its parts
 PARTS_GROUND_M = 0.5            # m: a part whose bottom is higher than this is off the ground
+# An airport terminal or pier mapped with parts that cover less than TERMINAL_PARTS_COVER_MIN of it (Brisbane's curved domestic
+# terminal: a dozen roof strips and a few blocks over a fraction of a big footprint) is drawn as its own mass as well, on the
+# ground, the parts on it (the rule above does not reach it: its roof strips are off the ground, and it may map no height).
+TERMINAL_PARTS_COVER_MIN = 0.6
+CANOPY_UNDERSIDE_M = 6.0        # m: an airport's roof footprint mapped with no height: its underside this high ...
+CANOPY_THICK_M = 1.0            # ... and this thick
 
 
 def parts_cover(outline, part_rings):
@@ -5116,12 +5173,33 @@ def _small_rows(f, frame, a, min_size):
     return ok & (h < SMALL_MARGIN * min_size[0]) & (area < SMALL_MARGIN * min_size[1])
 
 
+def _role_attrs(roles, uid):
+    """The look plan draws the footprint or part uid in, from its airportroles role: a terminal or pier takes the terminal look
+    (_terminal: a height by its size), a jet bridge or walkway the airside look (_airside), a raised block, canopy or other
+    building the airside look where it stands on the airside; a tower, hangar or landside building none; whatever lies mostly
+    inside a terminal's or pier's outline (Roles.inside) the terminal look."""
+    role = roles.get(uid)
+    if role in (airportroles.TERMINAL, airportroles.PIER) or uid in roles.inside:
+        return {"_terminal": True}         # (inside: mostly inside a terminal's outline, Roles.inside)
+    if role in (airportroles.JET_BRIDGE, airportroles.WALKWAY) or (
+            role in (airportroles.RAISED_BLOCK, airportroles.CANOPY, airportroles.OTHER) and roles.units[uid].airside):
+        return {"_airside": True}
+    return {}
+
+
+def _on_pillars(roles, uid):
+    """Does the raised footprint or part uid float on pillars: a jet bridge or a walkway, or a canopy on the airside?"""
+    role = roles.get(uid)
+    return role in (airportroles.JET_BRIDGE, airportroles.WALKWAY) or (
+        role == airportroles.CANOPY and roles.units[uid].airside)
+
+
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
                    passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
                    industrial=None, parts_min_top=None, nyc=None, carriageways=None, clear_stats=None, years=None,
-                   colours=None):
+                   colours=None, airport=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -5139,9 +5217,17 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     takes the record's parts (its setbacks), drawn as the map's parts are. carriageways: carriageway_segments' roads,
     the footprints kept off them (road_clearance; clear_stats its counts). years: osmyears.Fetch, OSM's construction
     years by way (a building's _year, its parts' too: era, tower_era). colours: osmcolours.Fetch, OSM's colours by way
-    or relation, a building's or a part's facade_color / roof_color where Overture's is empty."""
+    or relation, a building's or a part's facade_color / roof_color where Overture's is empty. airport:
+    airportbuildings.context of the cells' infrastructure (None: no airport): a control tower without parts of its own
+    is drawn as a shaft, a cab and a cap (a building with parts is left as it is). Every other footprint and part has
+    its airportroles role (classified from the cells' buildings, parts and infrastructure): a terminal or pier the
+    terminal look, standing on the ground (but for a storey on a lower part of its building), a raised block extended
+    down to the ground, a jet bridge or walkway raised on pillars in the airside look, a canopy as mapped (a canopy part
+    keeps its own heights too). A terminal or pier whose parts cover less than TERMINAL_PARTS_COVER_MIN of it is drawn
+    as well, on the ground, the parts on it; what lies mostly inside one has its look."""
     year_idx = years.years() if years is not None else None
     col_idx = osmcolours.Index(colours.colours()) if colours is not None else None
+    roles = airportroles.classify(layers, part_layers, airport.layers, frame, x0, y0) if airport is not None else None
     # building id -> [(ring in the anchor frame, (own height, bottom), own attrs)]
     parts_of = _PartsOf(frame, part_layers, col_idx if col_idx is not None and col_idx.c is not None else None)
     nyc_idx = nyc.index() if nyc is not None else None
@@ -5262,6 +5348,16 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         if pr_ is not None:
                             ship_parts.append((pr_, p[1]))
                     bparts = None
+            tower = False
+            if airport is not None and not edge and not bparts and ship_parts is None and nyc_group is None \
+                    and not (a.get("has_parts") is not None and bool(a["has_parts"][i])):
+                # (a control tower mapped as one footprint, no parts: a shaft, a cab and a cap; the map's own stacks of
+                # parts, Heathrow's, are left alone. Its parts through the path below, the outline not drawn under them)
+                ring_ = clean_ring(np.stack([e - x0, n - y0], 1))
+                tp_ = airport.tower_parts(ring_, at) if ring_ is not None else None
+                if tp_ is not None:
+                    bparts = [(r_ + [x0, y0], hh_, own_) for r_, hh_, own_ in tp_]
+                    tower = True
             outline_h = None
             if bparts and all(p[1] is None for p in bparts):
                 # parts without heights (a dome's, a tower's) on a building whose height is theirs, the levels its
@@ -5283,6 +5379,18 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 if not bparts and sky_body_h is not None:   # (no part over it: the outline at its parts' height)
                     at = dict(at, height=sky_body_h, roof_height=None, roof_shape="flat", _parts_drawn=True)
                     sky_body_h = None
+            frole = roles.get(str(key)) if roles is not None and key is not None else None
+            term_h = None
+            if bparts and frole in (airportroles.TERMINAL, airportroles.PIER) and not tower and nyc_group is None \
+                    and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < TERMINAL_PARTS_COVER_MIN:
+                # (a terminal or pier whose parts cover too little of it: its own mass too, at its mapped height, else the
+                # top of its parts that are no canopy (a roof is no mass), else a terminal's by its size; the parts on it)
+                bh_ = at.get("height")
+                tops_ = [p[1][0] + p[1][1] for p in bparts if p[1] is not None and len(p) > 2
+                         and roles.get(p[2].get("_pid")) != airportroles.CANOPY]
+                term_h = float(bh_) if bh_ is not None and np.isfinite(bh_) and bh_ > 0 else \
+                    float(max(tops_)) if tops_ else airportbuildings.terminal_height(abs(_area2(np.stack([e, n], 1))) / 2)
+                term_ring = np.stack([e - x0, n - y0], 1)
             if bparts and any(p[1] is not None for p in bparts):
                 # drawn as its parts, with the building's class and one look for all of them; a part
                 # without a height takes the building's (else its lowest known part's)
@@ -5313,6 +5421,11 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     pring, hh = ppart[0], ppart[1]
                     pat = ppart[2] if len(ppart) > 2 else {}
                     ph, pmh = hh if hh is not None else (fill, 0.0)
+                    pid = pat.get("_pid") if roles is not None else None
+                    prole = roles.get(pid) if pid is not None else None
+                    if pmh > 0 and (prole == airportroles.RAISED_BLOCK or (
+                            prole in (airportroles.TERMINAL, airportroles.PIER) and not roles.stacked(pid))):
+                        ph, pmh = ph + pmh, 0.0                 # (on the ground, as a terminal; not a storey on a part)
                     if ph + pmh < FLAT_FOOTPRINT_M:
                         continue        # (a part taking a flat area's height: FLAT_FOOTPRINT_M)
                     r = clean_ring(pring - np.array([x0, y0]))
@@ -5320,6 +5433,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     # Chrysler Building's top 47 m on 0.8 m²)
                     if r is None or _area2(r) / 2 < (PART_TINY_M2 if ph >= PART_TINY_TALL_M else PART_MIN_M2):
                         continue
+                    if term_h is not None and pmh <= 0.0 and abs(ph - term_h) < 0.05 \
+                            and str(pat.get("roof_shape") or "flat").lower() == "flat" \
+                            and parts_cover(r, [term_ring]) >= 0.9:
+                        continue        # (on the terminal's own mass, as tall: its walls and roof would z-fight with it)
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
                     # (its own colour or the building's; else a stone colour its parts carry by area, plan's
@@ -5350,18 +5467,35 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                                   .lower() not in STEEL_MATERIALS else None})
                     if nyc_group is not None:
                         attrs[-1]["_photo_group"] = nyc_group
+                    if prole is not None:
+                        attrs[-1]["_uid"] = pid
+                    if pat.get("_tower"):       # (a control tower's part: plan's, and no plant on its roof, _clutter)
+                        attrs[-1].update(_tower=pat["_tower"], **{"class": airportbuildings.TOWER_CLASS})
                     looks.append(look)
                     mins.append(pmh)
+                    if prole is not None and pmh > airportbuildings.AIRSIDE_RAISED_M and not pat.get("_tower") \
+                            and _on_pillars(roles, pid):
+                        # (a raised airside part, a walkway or a bridge over a stand: it floats, as mapped, on pillars
+                        # to its underside, drawn through this path as any part)
+                        for pr_ in airportbuildings.pillars(r):
+                            rings.append(pr_)
+                            attrs.append({"class": at["class"], "height": pmh - 0.02, "num_floors": None,
+                                          "roof_shape": "flat", "building_height": top, "_pillar": True})
+                            looks.append(look)
+                            mins.append(0.0)
                 if key is not None:
                     seen.add(key)
                 # (the outline kept with its parts is no building of its own: no steeple of ours on it, its parts
                 # have their tower's, steeple_part; Codex review of a92a4828)
                 if sky_body_h is not None:      # (the skyline's body under its tall parts: sky_body)
                     at = dict(at, height=sky_body_h, roof_height=None, roof_shape="flat", _parts_drawn=True)
-                elif not (PARTS_COVER_ON and _outline_under_parts(at, bparts)
-                          and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
+                elif tower or not (term_h is not None or (PARTS_COVER_ON and _outline_under_parts(at, bparts)
+                                   and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN)):
                     continue
-                # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
+                # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN; a terminal's
+                # mass under sparse parts: term_h)
+                elif term_h is not None:
+                    at = dict(at, height=term_h, num_floors=None, roof_height=None, _parts_drawn=True)
                 elif outline_h is not None:
                     at = dict(at, height=outline_h, roof_height=None, _parts_drawn=True)
                 else:
@@ -5378,6 +5512,14 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 seen.add(key)
             mh = at.get("min_height")
             mh = float(mh) if mh is not None and np.isfinite(mh) and mh > 0 else 0.0
+            if frole in (airportroles.TERMINAL, airportroles.PIER, airportroles.RAISED_BLOCK):
+                mh = 0.0                # (a terminal or a block stands on the ground, whatever its mapped underside)
+            if frole == airportroles.CANOPY and str(at.get("class") or "").lower() in airportroles.CANOPY_CLASS \
+                    and not (at.get("height") is not None and np.isfinite(at["height"]) and at["height"] > 0):
+                # (a roof footprint at an airport with no height of its own, Brisbane's strips along its domestic terminal: a
+                # canopy's, its underside CANOPY_UNDERSIDE_M up and CANOPY_THICK_M thick, never the terminal's height)
+                mh = mh if mh > 0.5 else CANOPY_UNDERSIDE_M
+                at = dict(at, height=mh + CANOPY_THICK_M, num_floors=None)
             if mh <= 0.5 and roads_xy and _area2(ring) / 2 >= SITE_M2 and road_through(ring, roads_xy) >= ROAD_THROUGH_M:
                 continue                # a mapped site, not a building (SITE_M2)
             flat = str(at.get("roof_shape") or "flat").lower() == "flat"
@@ -5415,13 +5557,16 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
                 rings.append(ring)
-                if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= through_m or road_across(ring, roads_xy)):
+                if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= through_m or road_across(ring, roads_xy)) \
+                        and frole not in (airportroles.TERMINAL, airportroles.PIER):
+                    # (not an airport terminal: its forecourt roads and tunnels under it, Heathrow's Terminal 1 floated
+                    # as a 3 m slab 7.5-15 m over the apron with nothing under it; it stands on the ground)
                     mh = OVER_ROAD_CLEAR_M
                     h = at.get("height")
                     if h is None or not np.isfinite(h) or h < mh + 3.0:
                         at = dict(at, height=mh + 3.0)      # keeps its top; at least a slab's worth over the clearance
                 if mh < OVER_TUNNEL_CLEAR_M and tunnels_xy and road_through(ring, tunnels_xy) >= TUNNEL_THROUGH_M \
-                        and not (deck_lines and road_through(ring, deck_lines) >= TUNNEL_THROUGH_M):
+                        and not (deck_lines and road_through(ring, deck_lines) >= TUNNEL_THROUGH_M)                         and frole not in (airportroles.TERMINAL, airportroles.PIER):        # (as above: not a terminal)
                     # over a tunnel: its floor OVER_TUNNEL_CLEAR_M over the road at the mouth near it (the lowest ground
                     # along the tunnel's line round it), from its own lowest ground (base_z); none where its ground is
                     # that high already (a house on the hill over the tube: Wabash's floated ~10 m, 2026-10-17). Over
@@ -5456,9 +5601,19 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 elif on is None and mh <= 0.5 and (ship_parts is not None or ships.is_ship(
                         ring, at, lambda: ships.on_water(ring.mean(0), water_xy))):     # (the water test asked last)
                     at = dict(at, ship=True, ship_parts=ship_parts)
+                if frole is not None:
+                    at = dict(at, _uid=str(key))
                 attrs.append(at)
                 looks.append(None)
                 mins.append(mh)
+                if frole is not None and mh > airportbuildings.AIRSIDE_RAISED_M and not at.get("ship") \
+                        and _on_pillars(roles, str(key)):
+                    for pr_ in airportbuildings.pillars(ring):        # (a bridge or walkway over a stand, as a part's)
+                        rings.append(pr_)
+                        attrs.append({"class": at.get("class") or "", "height": mh - 0.02, "num_floors": None,
+                                      "roof_shape": "flat", "building_height": mh, "_pillar": True})
+                        looks.append(_hash01(str(key), "look"))
+                        mins.append(0.0)
     if not rings:
         return []
     # a quay structure alongside a moored ship: a low deck (its scanned height is the ship's flank). The ship may be
@@ -5564,6 +5719,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             cxy = np.asarray(ring, np.float64)[:, :2].mean(0)
             if any(lp.contains_points(cxy[None])[0] for lp in land_paths):
                 at = dict(at, _land="industrial")
+        if roles is not None and at.get("_uid") is not None \
+                and not (at.get("ship") or at.get("pier") or at.get("landmark") or at.get("_pillar")):
+            at = dict(at, **_role_attrs(roles, at["_uid"]))   # (an airport's terminal, pier, bridge, walkway: its look)
         if tank_paths is not None and look is None and str(at.get("class") or "") not in TANK_CLASSES:
             cxy = np.asarray(ring, np.float64)[:, :2].mean(0)
             for t_, tp in enumerate(tank_paths):
@@ -5600,6 +5758,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 and not spec.deck and not spec.fr_house and spec.cls != landmarks.LANDMARK:
             spec.holes = at["_holes"]
         spec.portal = bool(at.get("portal"))
+        spec.terminal = bool(at.get("_terminal"))      # (an airport terminal: never stood whole over a road, road_clearance)
         spec.ml = bool(at.get("ml"))
         i0, i1 = (ends[k - 1] if k else 0), ends[k]
         if not ok[i0:i1].all():
@@ -6638,6 +6797,7 @@ def road_tile_items(
         carriageways=carriageway_segments(frame, [c.layers.get("roads") for c in cds], x0, y0, x1 - x0,
                                           urban_fn=urban_fn, widths=widths, left_hand=left_hand),
         clear_stats=clear_stats,
+        airport=airportbuildings.context(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
     )
     custom = []
     if cache_dir is not None:
@@ -7135,7 +7295,9 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None, urban_fn=None, widt
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
                            carriageways=carriageway_segments(frame, [c.layers.get("roads") for c in cds], x0, y0,
                                                              x1 - x0, urban_fn=urban_fn, widths=widths,
-                                                             left_hand=left_hand))
+                                                             left_hand=left_hand),
+                           airport=airportbuildings.context(frame, [c.layers.get("infrastructure") for c in cds],
+                                                            x0, y0))
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
                       built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)

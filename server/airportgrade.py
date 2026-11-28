@@ -16,6 +16,7 @@ import threading
 import numpy as np
 import dnp
 
+import airportsmooth
 import dem as demmod
 import geodesy
 import geotiles
@@ -32,13 +33,21 @@ MARK_PIECE_M = 50.0         # strokes cut into pieces this long, each in the til
 MARK_NODE_M = 10.0          # ... with a node this often (they follow the graded ground)
 RUNWAY_PAD_SHOULDER_M = 1.5    # m of paved shoulder painted each side of a runway (runway_pads)
 MARK_LOOK = {"white": {"m": "line_runway_white", "tl": 6.4, "p": 2},      # mod: levels/beamng_earth/art/runway
-             "yellow": {"m": "line_runway_yellow", "tl": 6.4, "p": 2}}
+             "yellow": {"m": "line_runway_yellow", "tl": 6.4, "p": 2},
+             "black": {"m": "line_runway_black", "tl": 6.4, "p": 2},      # (the stand marks' borders and lettering, taxiwaymarks)
+             "text": {"m": "line_runway_text", "tl": 6.4, "p": 2},        # (black too, drawn after the yellow: the taxiways' name boxes, over their centreline)
+             # (the lettering: the font sheet's opacity over a solid colour, drawn last: tools/make_font_atlas.py, standmarks.text_quads)
+             "font_black": {"m": "line_runway_font_black", "tl": 6.4, "p": 2},
+             "font_yellow": {"m": "line_runway_font_yellow", "tl": 6.4, "p": 2},
+             "font_white": {"m": "line_runway_font_white", "tl": 6.4, "p": 2},
+             "red": {"m": "line_runway_red", "tl": 6.4, "p": 2}}          # (the equipment restraint lines and the bridges' hatching)
 
 
 class AirportGrader:
     def __init__(self, db, dem):
         self.db, self.dem = db, dem
         self._plans = {}                # frozenset of runway ids -> [Plan]
+        self._surfaces = {}             # frozenset of runway ids -> airportsmooth.Surface
         self._group_locks = {}          # frozenset of runway ids -> the lock its planning holds
         self._mark_cache = {}           # runway id -> its markings in lat/lon (_marks)
         self._pad_cache = {}            # runway id -> its rectangle in lat/lon (runway_pads)
@@ -80,8 +89,11 @@ class AirportGrader:
     def _plan(self, key, group):
         rw0 = min(group, key=lambda r: r.id)
         zoom = demmod.zoom_for(rw0.center[0], PLAN_ZOOM_M)
-        p = runwaygeom.plan_group(group, lambda la, lo: self.dem.sample(la, lo, zoom))
+        raw = lambda la, lo: self.dem.sample(la, lo, zoom)
+        surf = airportsmooth.Surface(group, raw)
+        p = runwaygeom.plan_group(group, lambda la, lo: surf.apply(la, lo, raw(la, lo)))   # (fitted on the smoothed)
         with self._lock:
+            self._surfaces[key] = surf
             self._plans[key] = p
             self.stats["plans"] += 1
         log.info("airports: planned %s (%d runway(s))", ", ".join(sorted({r.airport_ident for r in group})), len(group))
@@ -98,6 +110,10 @@ class AirportGrader:
             return z
         plans = [p for g in groups for p in self.plans_for(g)]
         self.stats["graded_calls"] += 1
+        for g in groups:            # (the ground round each airport smoothed first: airportsmooth)
+            surf = self._surfaces.get(frozenset(r.id for r in g))
+            if surf is not None:
+                z = surf.apply(lat, lon, z)
         return runwaygeom.apply(plans, lat, lon, z)[0]
 
     def tile_chunks(self, frame, tx, ty, elev, tile_bbox):
@@ -143,6 +159,16 @@ class AirportGrader:
                         "n": [[round(float(x), 3), round(float(y), 3), round(float(z), 3)]
                               for x, y, z in zip(px, py, zs[i:i + m])]})
             i += m
+        return out
+
+    def runways_in_box(self, lat0, lon0, lat1, lon1):
+        """[(le lat, le lon, he lat, he lon, width m)] of the open runways whose map-data cells the box touches (runwaysnap.set_provider:
+        the mapped runway lines and the taxiways' ends are laid onto these)."""
+        out = []
+        for g in self._groups(np.array([lat0, lat1]), np.array([lon0, lon1])):
+            for rw in g:
+                if not rw.closed and rw.surface != "water":
+                    out.append((rw.le.lat, rw.le.lon, rw.he.lat, rw.he.lon, rw.width_m))
         return out
 
     def runway_pads(self, lat, lon):

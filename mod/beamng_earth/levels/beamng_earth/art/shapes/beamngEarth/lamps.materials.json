@@ -251,5 +251,39 @@
       {}
     ],
     "castShadows": false
+  },
+  "bne_apron_pool": {
+    "name": "bne_apron_pool",
+    "mapTo": "bne_apron_pool",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1203557a-3589-59cc-a668-985b85e8abca",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ],
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_apron_pool_o.data.dds",
+        "opacityFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "AddAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
   }
 }

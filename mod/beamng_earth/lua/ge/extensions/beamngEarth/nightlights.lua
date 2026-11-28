@@ -1,4 +1,4 @@
--- Night lighting (the user, 2026-10-27: "work on night lighting"; GitHub #3): after dusk the buildings' windows light
+﻿-- Night lighting (the user, 2026-10-27: "work on night lighting"; GitHub #3): after dusk the buildings' windows light
 -- up. Their materials carry night emissive maps (tools/build_night_windows.py: about half the plaster sheet's windows,
 -- the curtain walls and shopfronts with some bays dimmed), dark by day (emissiveFactor 0 in buildings.materials.json);
 -- this turns them on and off with the stock environment's own day / night (core_environment.getLightState, the switch
@@ -29,6 +29,9 @@ M.MATERIALS = {
   -- lit from behind: whiter
   bne_lm_floodlit = { '1 0.86 0.66', 25 },
   bne_lm_dial = { '1 0.97 0.88', 160 },
+  -- the apron masts' pools of light on the ground (airsideprops.py G_POOL; tools/build_apron_glow.py): a flat, soft-edged
+  -- glow, added to the ground's own colour; warm white, as the masts' floodlights (APRON_MAST)
+  bne_apron_pool = { '1 0.86 0.62', 18 },
 }
 -- the street lamps' far glow balls (tools/build_lamp_glow.py, nearest first: bne_lamp_glow0 ..): each carries the
 -- lens's light over its disc, so a far lamp dims with its distance squared, down to 25 nits (all at the lens's 4000
@@ -37,6 +40,25 @@ M.MATERIALS = {
 M.GLOW_NITS = { 20400, 7970, 3020, 1160, 454, 169, 66.6, 26 }
 for k, nits in ipairs(M.GLOW_NITS) do
   M.MATERIALS['bne_lamp_glow' .. (k - 1)] = { M.MATERIALS.bne_lamp_lens[1], nits }
+end
+-- the airfield lights' glow balls (tools/build_airfield_lights.py: server airfieldlights.py's rows in the groups
+-- afl_<colour>, the same balls as the lamps' glow at 0.9 of their size, bne_afl_<colour>0 ..; AFL_SCALE there): each
+-- colour's emissive colour, the balls' light the lamps' by AFL_NITS_FACTOR (a runway's fittings are dimmer than a sodium head, and
+-- there are thousands of them in a row); the groups are on at night with the lamps' glow (AFL_GROUPS, below)
+M.AFL_COLOURS = { white = '1 0.95 0.85', green = '0.2 1 0.35', red = '1 0.12 0.08', blue = '0.2 0.4 1', yellow = '1 0.75 0.15' }
+-- (0.7 read as specks from a car's height at Brisbane, 2026-11-14; 1.3 still pinpoints from 100 m off at night, with the
+-- balls at 0.6 of the lamps': "make all the lights a bit brighter and larger, the ground based ones", 2026-11-17)
+M.AFL_NITS_FACTOR = 2.0
+-- by colour, on top: a runway's edge, threshold and end lights are high intensity, far brighter than the taxiways'
+-- blue edge lights (Brisbane at dusk, 2026-11-12: the runway's white read fainter than the blue)
+M.AFL_COLOUR_GAIN = { white = 3.5, yellow = 3.5, green = 3.5, red = 3.5, blue = 2.5 }
+M.AFL_GROUPS = { 'afl_white', 'afl_green', 'afl_red', 'afl_blue', 'afl_yellow' }
+-- the other groups drawn at night only (trees.lua groupOff): the lamps' far glow, and the apron masts' pools of light
+M.NIGHT_GROUPS = { 'lampglow', 'apron_glow' }
+for colour, rgb in pairs(M.AFL_COLOURS) do
+  for k, nits in ipairs(M.GLOW_NITS) do
+    M.MATERIALS['bne_afl_' .. colour .. (k - 1)] = { rgb, nits * M.AFL_NITS_FACTOR * (M.AFL_COLOUR_GAIN[colour] or 1) }
+  end
 end
 
 -- Late at night fewer windows are lit (the user, 2026-11-08: "have less lit windows depending on how late it is, peaking
@@ -108,8 +130,33 @@ M.MAKE_PER_STEP = 4
 -- lamp's arm), a soft edge (inner .. outer); before, a hard-edged 50 m disc centred under the head.
 M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.66 0.33 1', drop = 0.12, tilt = 12 }
 
-M.HIGH_MAST = { range = 70, inner = 70, outer = 150, brightness = 12.0, color = '1 0.82 0.60 1', drop = 0.12, tilt = 0 }
+-- A road mast's floodlight (furniture.py G_HIGH_MAST_LENS; the apron masts' is APRON_MAST, below): wide and even. At range 70 and brightness 12 it was
+-- blinding white under the mast and died away within a few tens of metres, leaving focused blotches (the user, 2026-11-17:
+-- "need to be larger but less intense ... much wider range would be ideal"): over twice the range, under half the
+-- brightness, and a wider full-strength cone (inner 110: the pool under the head flat to about 26 m out, the edge soft to
+-- 150 degrees, 67 m from an 18 m mast). The same light count: only each light's reach grew.
+M.HIGH_MAST = { range = 160, inner = 110, outer = 150, brightness = 4.5, color = '1 0.82 0.60 1', drop = 0.12, tilt = 0 }
 M.LANTERN = { range = 20, inner = 65, outer = 150, brightness = 4.0, color = '1 0.68 0.12 1', drop = 0.12, tilt = 0 }
+
+-- An apron mast's floodlight (airsideprops.py G_LENS): a real apron is one even wash of white-orange light, every mast lit
+-- (the user, 2026-11-17: ours were a few bright puddles with dark gaps, the far aprons dark). One spot per mast, made flat
+-- the way a real mast's heads, aimed outward, make it: raised APRON_LIFT_M over the head (drop is negative: the light sits
+-- 48 m up on an 18 m mast). The ground half way between two masts 90 m apart (45 m out) then gets about 0.4 of what is under
+-- the mast (cosine of the angle over the distance squared), as 18 m up it got 0.05: a puddle under each, dark between. The
+-- cone: full strength to 50 degrees off the vertical (57 m out), soft to 65 (103 m), past the next mast. Range 150, past
+-- the cone's slant edge (113 m): no light volume the cone does not fill. Brightness 5, a little over the road masts' 4.5:
+-- two or three pools overlap on an apron, so the middle of it is about as bright as under a mast.
+M.APRON_LIFT_M = 30
+M.APRON_MAST = { range = 150, inner = 100, outer = 130, brightness = 5.0, color = '1 0.88 0.66 1',
+                 drop = -M.APRON_LIFT_M, tilt = 0 }
+-- The pool's share for the apron masts (the quality setting's count of lights: LIGHTS_MAX): the nearest APRON_SHARE of it
+-- at most, within APRON_NEAR_M ahead of the camera (APRON_AROUND_M all round), taken before the street lamps and the rest
+-- of the lights, which have the others. (Before, a mast was one of the lenses by distance only: a mast 150 m off could lose its
+-- light to the street lamps nearer, and the apron lit up one mast at a time.) Past the real lights' reach the flat
+-- glow on the ground under each mast (apron_glow: tools/build_apron_glow.py, drawn from its NEAR_M out) lights the apron.
+M.APRON_SHARE = 0.4
+M.APRON_NEAR_M = 450
+M.APRON_AROUND_M = 200
 
 local lastCheck = -1e9
 local shown = {}         -- material name -> the factor and nits set (set again only when they change)
@@ -159,9 +206,15 @@ local function apply(night, step)
     end
   end
   if night ~= M.night then
-    -- the lamps' far glow (trees.lua's lampglow group, off by day)
+    -- the lamps' far glow (trees.lua's lampglow group, off by day), the apron pools' and the airfield lights' (NIGHT_GROUPS,
+    -- AFL_GROUPS: one refresh)
     local okt, trees = pcall(require, 'beamngEarth/trees')
-    if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow' }, night) end
+    if okt and trees.setGroupEnabled then
+      local on = {}
+      for _, g in ipairs(M.NIGHT_GROUPS) do on[#on + 1] = g end
+      for _, g in ipairs(M.AFL_GROUPS) do on[#on + 1] = g end
+      pcall(trees.setGroupEnabled, on, night)
+    end
   end
   M.night = night
   M.nightStep = night and step or nil
@@ -171,13 +224,17 @@ end
 function M.onRows(key, items, groups)
   local groupsById = {}
   for i, g in ipairs(type(groups) == 'table' and groups or {}) do
-    if g == 'lamplens' or g == 'high_mast_light' or g == 'fr_lantern_light' then groupsById[i - 1] = g end
+    if g == 'lamplens' or g == 'high_mast_light' or g == 'fr_lantern_light' or g == 'apron_mast_light' then
+      groupsById[i - 1] = g
+    end
   end
   if type(items) ~= 'table' then lenses[key] = nil; return end
   local out = {}
   for _, r in ipairs(items) do
     if type(r) == 'table' and groupsById[r[1]] and r[2] and r[3] and r[4] then
-      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light', groupsById[r[1]] == 'high_mast_light' }
+      local g = groupsById[r[1]]
+      -- (x, y, z, yaw, a lantern's, a road high mast's, an apron mast's)
+      out[#out + 1] = { r[2], r[3], r[4], r[5], g == 'fr_lantern_light', g == 'high_mast_light', g == 'apron_mast_light' }
     end
   end
   lenses[key] = #out > 0 and out or nil
@@ -194,13 +251,15 @@ function M.transform(xf)
 end
 
 -- Pure: the n nearest lenses (and providers' places) to (x, y) within r (their tables, nearest first). With a heading
--- (fx, fy) (unit): those within `around` all round, the others only within VIEW_COS of it.
-function M.nearest(x, y, r, n, fx, fy, around)
+-- (fx, fy) (unit): those within `around` all round, the others only within VIEW_COS of it. kind: 'apron' only the apron
+-- masts', 'other' all but those (and the providers' places), nil all.
+function M.nearest(x, y, r, n, fx, fy, around, kind)
   local cand, r2 = {}, r * r
   local limit = math.max(0, math.floor(n))
   if limit == 0 then return cand end
   local a2 = (around or r) ^ 2
   local function consider(l)
+    if kind and (kind == 'apron') ~= (l[7] == true) then return end
     local dx, dy = l[1] - x, l[2] - y
     local d = dx * dx + dy * dy
     if d <= r2 and (d <= a2 or not fx or dx * fx + dy * fy >= M.VIEW_COS * math.sqrt(d)) then
@@ -231,9 +290,11 @@ function M.nearest(x, y, r, n, fx, fy, around)
   for _, list in pairs(lenses) do
     for _, l in ipairs(list) do consider(l) end
   end
-  for _, fn in pairs(M.providers) do
-    local ok, pts = pcall(fn)
-    if ok and type(pts) == 'table' then for _, l in ipairs(pts) do consider(l) end end
+  if kind ~= 'apron' then
+    for _, fn in pairs(M.providers) do
+      local ok, pts = pcall(fn)
+      if ok and type(pts) == 'table' then for _, l in ipairs(pts) do consider(l) end end
+    end
   end
   table.sort(cand, function(a, b) return a[2] < b[2] end)
   local out = {}
@@ -262,7 +323,7 @@ local function place(e, l)
   local o = scenetree.findObjectById(e.id)
   if not o then return end
   if l then
-    local L = l[6] and M.HIGH_MAST or l[5] and M.LANTERN or M.LIGHT
+    local L = l[7] and M.APRON_MAST or l[6] and M.HIGH_MAST or l[5] and M.LANTERN or M.LIGHT
     -- Reapply on reuse: a light previously serving a lantern can serve a stock lamp.
     if e.profile ~= L then
       for field, value in pairs({ range = L.range, innerAngle = L.inner, outerAngle = L.outer,
@@ -300,7 +361,10 @@ local function stepLights(night)
     local h = math.sqrt(f.x * f.x + f.y * f.y)
     if h > 0.3 then fx, fy = f.x / h, f.y / h end     -- (looking nearly straight down: all round)
   end
-  local want = M.nearest(cx, cy, M.NEAR_M, M.LIGHTS_MAX, fx, fy, M.AROUND_M)
+  -- the apron masts first (their share of the pool), the street lamps and the rest the others' places
+  local want = M.nearest(cx, cy, M.APRON_NEAR_M, math.floor(M.LIGHTS_MAX * M.APRON_SHARE), fx, fy, M.APRON_AROUND_M, 'apron')
+  local rest = M.nearest(cx, cy, M.NEAR_M, M.LIGHTS_MAX - #want, fx, fy, M.AROUND_M, 'other')
+  for _, l in ipairs(rest) do want[#want + 1] = l end
   local made = 0
   while #pool < #want and made < M.MAKE_PER_STEP do
     local id = newLight()

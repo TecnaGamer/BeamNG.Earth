@@ -180,6 +180,22 @@ class FollowTest(unittest.TestCase):
                                            q=1 / 32)
         self.assertGreater(len(T), 0)
 
+    def test_the_airports_paint_is_listed_in_paint_order_though_the_mesh_has_no_strip(self):
+        """The sort by PAINT_ORDER sat past the return of a mesh without frontage asphalt or a dirt strip: a plain airport tile listed the
+        materials as its chunks named them (the user, 2026-11-17: the yellow centreline ran through the taxiway names' black boxes)."""
+        box = {"m": "line_runway_text", "tl": 6.4, "layer": "glyph", "poly": [(2.0, -2.0), (6.0, -2.0), (6.0, 2.0), (2.0, 2.0)], "n": []}
+        yellow = {**chunk("line_runway_yellow", 0.15, [(0.0, 0.0, 0), (10.0, 0.0, 0)]), "layer": "edge"}
+        black = {**chunk("line_runway_black", 0.4, [(0.0, 0.0, 0), (10.0, 0.0, 0)]), "layer": "edge"}
+        P, T, UV, mats, M = roadmesh.build(FRAME, [box, yellow, black], lambda la, lo: np.full(len(la), 5.0), (0.0, 0.0, 0.0), 0.0)
+        self.assertEqual(mats, ["line_runway_black", "line_runway_yellow", "line_runway_text"])
+        names = [mats[m] for m in M]                       # (every triangle keeps its own material)
+        self.assertEqual(sorted(set(names)), sorted(mats))
+        # (and a mesh with no paint in it keeps its own order)
+        _, _, _, plain, _ = roadmesh.build(FRAME, [chunk("road_asphalt_2lane", 9.0, [(0.0, 0.0, 0), (10.0, 0.0, 0)]),
+                                                  chunk("line_runway_white", 0.15, [(0.0, 0.0, 0), (10.0, 0.0, 0)])],
+                                           lambda la, lo: np.full(len(la), 5.0), (0.0, 0.0, 0.0), 0.0)
+        self.assertEqual(plain, ["road_asphalt_2lane", "line_runway_white"])
+
     def test_paved_frontage_covers_the_gravel_edge_on_uneven_ground(self):
         from roads import EDGE_DECAL
         from streetfront import _paving

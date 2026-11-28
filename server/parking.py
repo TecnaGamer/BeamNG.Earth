@@ -8,6 +8,9 @@ is grass or gravel) gets a divider and a line across the head of each stall. A l
 only as its aisles (road subclass parking_aisle) gets the same lines along both sides of each aisle.
 The asphalt under them is the ground itself (surface.paint_lots, surface.photo_lots).
 
+No car parks and no stall is marked on an airport's apron or in its mapped airside parking (airside_rings: the stands'
+paving, not a car park): the lot code leaves those out (tile_lot_spots, finish_markings). Non-airport lots are as before.
+
 The stock system spawns its parked cars onto the spots of a sites object and moves them to spots near the
 player as the player drives (the mod's parking.lua feeds it these). Each spot is a row [x, y, z, heading]:
 the anchor frame's position of the spot's centre on the road surface, and the direction the parked car
@@ -207,6 +210,21 @@ def lot_spots(rings, box, z_at, blockers=(), roads_xy=()):
     return [[round(x, 2), round(y, 2), round(float(zz), 2), round(h, 1), 1] for (x, y, h), zz in zip(cand, z)]
 
 
+def airside_rings(frame, infra_layers):
+    """[(k, 2)] in the anchor frame: the aprons of the airports in the infrastructure Features and their mapped parking
+    lots that lie mostly inside one (airportroles.airside_rings); [] where there is no airport. No car, no stall there."""
+    import airportroles
+    return airportroles.airside_rings(infra_layers, frame)
+
+
+def _airside(frame, infra_layers):
+    """airside_rings, [] if the airport's ground cannot be told (the lots are drawn as any lot's then)."""
+    try:
+        return airside_rings(frame, infra_layers)
+    except Exception:
+        return []
+
+
 def lot_unpaved(feats, i):
     """A parking polygon whose mapped surface is not a hard lot (grass, gravel, dirt): no asphalt, no stall
     lines. No surface mapped: a paved lot, as the ones the map leaves blank."""
@@ -258,10 +276,12 @@ def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None, separate_
     blockers = [spec.ring + np.array(box[:2]) for spec, *_ in (items or ())]
     roads_xy = []
     bays = [] if separate_bays else None
+    air = []
     try:
         cells = [md.cell(k, layers=("infrastructure", "roads"), kind="demand")
                  for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
         rings = lot_rings(frame, [c.layers.get("infrastructure") for c in cells], bay_rings=bays)
+        air = _airside(frame, [c.layers.get("infrastructure") for c in cells])
         if rings:
             import buildings
             roads_xy = [ln + np.array(box[:2]) for ln in
@@ -278,8 +298,16 @@ def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None, separate_
             drop |= pa.contains_points(pts)
         existing = [r for r, d in zip(existing, drop)
                     if not (d and (separate_bays or len(r) > 4 and r[4] == 1))]
+    if air and existing:            # (the stands' ground: no parked car of any kind, curbside or aisle)
+        apaths = [Path(np.asarray(r, np.float64)) for r in air if len(r) >= 3]
+        pts = np.array([r[:2] for r in existing], np.float64)
+        drop = np.zeros(len(existing), bool)
+        for pa in apaths:
+            drop |= pa.contains_points(pts)
+        existing = [r for r, d in zip(existing, drop) if not d]
     if not rings:
         return existing
+    blockers.extend(air)
 
     def z_at(x, y):                 # the anchor frame's up, as the ground drawn (the Earth's curve: raw heights stood a
         la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)    # spot ~6 m up 10 km from the anchor, 18 m at 15 km)
@@ -626,13 +654,16 @@ def finish_markings(frame, tx, ty, md, elev, items=None, marks=(), separate_bays
     box = roads.tile_bbox(tx, ty)
     blockers = [spec.ring + np.array(box[:2]) for spec, *_ in (items or ()) if getattr(spec, "ring", None) is not None]
     bays = [] if separate_bays else None
+    air = []
     try:
         feats = [md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
                  for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
         rings = lot_rings(frame, feats, paved_only=True, bay_rings=bays)
+        air = _airside(frame, feats)
     except Exception:
         rings = []
     blockers.extend(bays or [])
+    blockers.extend(air)                # (the aprons and airside lots: no stall lines, aisle or lot)
 
     def z_at(x, y):
         la, lo, _ = frame.enu_to_geodetic(np.asarray(x, np.float64), np.asarray(y, np.float64), 0.0)

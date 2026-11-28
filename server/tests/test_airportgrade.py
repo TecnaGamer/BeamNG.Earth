@@ -66,9 +66,13 @@ class AirportGradeTest(unittest.TestCase):
         self.assertGreater(np.abs(out - z).max(), 0.1, "the bumps are graded away on the runways")
         plans = self.ag.stats["plans"]
         self.assertGreater(plans, 0)
-        # the same as runwaygeom with the group's plans
+        # the same as runwaygeom with the group's plans, on the ground smoothed round the airport (airportsmooth)
         groups = self.ag._groups(la, lo)
-        want = runwaygeom.apply([p for g in groups for p in self.ag.plans_for(g)], la, lo, z)[0]
+        zs = z
+        for g in groups:
+            self.ag.plans_for(g)
+            zs = self.ag._surfaces[frozenset(r.id for r in g)].apply(la, lo, zs)
+        want = runwaygeom.apply([p for g in groups for p in self.ag.plans_for(g)], la, lo, zs)[0]
         np.testing.assert_array_equal(out, want)
         # a smaller box over the same runway: same heights there, no new plans
         sub = self.ag.apply(la[30:50, 30:50], lo[30:50, 30:50], z[30:50, 30:50])

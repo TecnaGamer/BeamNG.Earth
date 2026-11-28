@@ -1,6 +1,11 @@
 {
  "_": "The mod's DDS textures made at install time (modtextures.py, tools/mod_textures_dds.py): DDS path in the mod -> its lossless source under mod/texture_sources, DXGI format, mip role, and for a normal / roughness map computed from a colour map how (native texdds.rs derive_map).",
  "textures": {
+  "levels/beamng_earth/art/runway/bne_paint_font_o.data.dds": {
+   "source": "levels/beamng_earth/art/runway/bne_paint_font_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
   "levels/beamng_earth/art/runway/t_paint_white_b.color.dds": {
    "source": "levels/beamng_earth/art/runway/t_paint_white_b.color.webp",
    "format": "BC7_SRGB",
@@ -10,6 +15,11 @@
    "source": "levels/beamng_earth/art/runway/t_paint_yellow_b.color.webp",
    "format": "BC7_SRGB",
    "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bne_apron_pool_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_apron_pool_o.data.webp",
+   "format": "BC4",
+   "role": "data"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_b.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_b.color.webp",

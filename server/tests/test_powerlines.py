@@ -254,6 +254,31 @@ class TowerFootprintTest(unittest.TestCase):
             np.testing.assert_array_equal(a, b)
             self.assertEqual(ar, br)
 
+    def airside(self, x0, x1):
+        import airsidekeep
+        import furniture
+        clearance = furniture.RoadClearance([], (), bounds=(0., 0., 256., 256.))
+        pad = square(x0, 80., x1 - x0, 40.)
+        clearance.airside = airsidekeep.Keep([(pad, (x0, 80., x1, 120.))])
+        return clearance
+
+    def test_airport_pavement_takes_no_tower_and_no_span(self):
+        """Towers (at x = 100 and 200) on or within AIRSIDE margin of a pad are left out; a span across one is cut
+        where it is over it; a cell with no airport pavement is as before."""
+        import airsidekeep
+        before, old_wires = self.place()
+        self.assertEqual((len(before), len(old_wires)), (2, 6))
+        for x0, x1, n_props, n_wires in ((60., 140., 1, None), (130., 170., 2, 12)):
+            props, wires = self.place(clearance=self.airside(x0, x1))
+            self.assertEqual(len(props), n_props)
+            if n_props == 1:
+                self.assertEqual(props[0][1], before[1][1])                   # (the far tower stays)
+            if n_wires is not None:
+                self.assertEqual(len(wires), n_wires)                         # (six conductors, each in two pieces)
+            keep = airsidekeep.Keep([(square(x0, 80., x1 - x0, 40.), (x0, 80., x1, 120.))])
+            for w, _r in wires:                                               # (no conductor on or by the pad)
+                self.assertFalse(keep.contains(w[:, :2]).any())
+
     def test_low_voltage_on_poles(self):
         """A 66 kV line: the wooden poles with three conductors, not left out (GitHub #797) nor pylons (#787)."""
         props, wires = self.place(tags='{"power":"line","voltage":"66000"}')

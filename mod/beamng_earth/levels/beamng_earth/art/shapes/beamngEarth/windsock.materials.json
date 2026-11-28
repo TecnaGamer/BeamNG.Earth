@@ -1,0 +1,71 @@
+{
+  "bne_windsock_pole": {
+    "name": "bne_windsock_pole",
+    "mapTo": "bne_windsock_pole",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5c8d2103-e890-55f0-871d-6eb52e82a8ae",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.63,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.35,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_windsock_orange": {
+    "name": "bne_windsock_orange",
+    "mapTo": "bne_windsock_orange",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ead87b58-8a22-5401-9719-c62fbe039dc0",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.3,
+          0.02,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_windsock_white": {
+    "name": "bne_windsock_white",
+    "mapTo": "bne_windsock_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3fe7ea5f-4eb5-59c9-889e-6dc0cc28c642",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.92,
+          0.92,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  }
+}

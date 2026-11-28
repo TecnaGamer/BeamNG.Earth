@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+<asset><unit name="meter" meter="1"/><up_axis>Z_UP</up_axis></asset>
+<library_effects><effect id="bne_apron_pool-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>1 0.86 0.62 1</color></diffuse></lambert></technique></profile_COMMON></effect></library_effects>
+<library_materials><material id="bne_apron_pool" name="bne_apron_pool"><instance_effect url="#bne_apron_pool-fx"/></material></library_materials>
+<library_geometries><geometry id="g0" name="g0"><mesh>
+<source id="g0-pos"><float_array id="g0-pos-a" count="9">-0.0100 0.0000 0.0000 0.0100 0.0000 0.0000 0.0000 0.0100 0.0000</float_array><technique_common><accessor source="#g0-pos-a" count="3" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+<source id="g0-nrm"><float_array id="g0-nrm-a" count="9">0.0000 0.0000 1.0000 0.0000 0.0000 1.0000 0.0000 0.0000 1.0000</float_array><technique_common><accessor source="#g0-nrm-a" count="3" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+<source id="g0-uv"><float_array id="g0-uv-a" count="6">0.5000 0.5000 0.5000 0.5000 0.5000 0.5000</float_array><technique_common><accessor source="#g0-uv-a" count="3" stride="2"><param name="S" type="float"/><param name="T" type="float"/></accessor></technique_common></source>
+<vertices id="g0-vtx"><input semantic="POSITION" source="#g0-pos"/></vertices>
+<triangles material="mat0" count="1"><input semantic="VERTEX" source="#g0-vtx" offset="0"/><input semantic="NORMAL" source="#g0-nrm" offset="1"/><input semantic="TEXCOORD" source="#g0-uv" offset="2" set="0"/><p>0 0 0 1 1 1 2 2 2</p></triangles>
+</mesh></geometry><geometry id="g1" name="g1"><mesh>
+<source id="g1-pos"><float_array id="g1-pos-a" count="12">-80.0000 -80.0000 0.0000 80.0000 -80.0000 0.0000 80.0000 80.0000 0.0000 -80.0000 80.0000 0.0000</float_array><technique_common><accessor source="#g1-pos-a" count="4" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+<source id="g1-nrm"><float_array id="g1-nrm-a" count="12">0.0000 0.0000 1.0000 0.0000 0.0000 1.0000 0.0000 0.0000 1.0000 0.0000 0.0000 1.0000</float_array><technique_common><accessor source="#g1-nrm-a" count="4" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+<source id="g1-uv"><float_array id="g1-uv-a" count="8">0.0000 0.0000 1.0000 0.0000 1.0000 1.0000 0.0000 1.0000</float_array><technique_common><accessor source="#g1-uv-a" count="4" stride="2"><param name="S" type="float"/><param name="T" type="float"/></accessor></technique_common></source>
+<vertices id="g1-vtx"><input semantic="POSITION" source="#g1-pos"/></vertices>
+<triangles material="mat0" count="2"><input semantic="VERTEX" source="#g1-vtx" offset="0"/><input semantic="NORMAL" source="#g1-nrm" offset="1"/><input semantic="TEXCOORD" source="#g1-uv" offset="2" set="0"/><p>0 0 0 1 1 1 2 2 2 0 0 0 2 2 2 3 3 3</p></triangles>
+</mesh></geometry></library_geometries>
+<library_visual_scenes><visual_scene id="scene"><node id="base00" name="base00" type="NODE"><matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix><node id="start01" name="start01" type="NODE"><matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix>
+<node id="pool2319" name="pool2319" type="NODE"><matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix><instance_geometry url="#g0"><bind_material><technique_common><instance_material symbol="mat0" target="#bne_apron_pool"/></technique_common></bind_material></instance_geometry></node><node id="pool2" name="pool2" type="NODE"><matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix><instance_geometry url="#g1"><bind_material><technique_common><instance_material symbol="mat0" target="#bne_apron_pool"/></technique_common></bind_material></instance_geometry></node>
+</node></node></visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>

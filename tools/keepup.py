@@ -36,7 +36,7 @@ NEAR_M = 100.0
 
 VEG = ("deciduous", "conifer", "shrub", "clump", "tuft", "fern", "rock", "palm", "oak", "tree", "bush", "cliff",
        "eucalyptus", "mediterranean", "hedge_plant", "straw", "silage")
-LIGHTS = ("lamp", "light", "lantern", "polelamp", "lampglow", "high_mast", "streetlight")
+LIGHTS = ("lamp", "light", "lantern", "polelamp", "lampglow", "apron_glow", "high_mast", "streetlight")
 SIGNS = ("stop", "giveway", "speed", "signal", "sign", "town", "vienna", "yield", "exit", "mile", "route", "dir",
          "kantstolpe", "se_", "de_", "fr_j", "rrcross", "rrflash")
 FENCES = ("fence", "hedge", "wall", "chainlink", "noise", "railing", "bollard")

@@ -150,6 +150,19 @@ function M.hookSpawnPois()
   poiWrap = function(levelIdentifier, ...)
     local info = type(levelIdentifier) == 'string' and levelIdentifier:lower() == M.LEVEL
       and levels.getLevelByName(levelIdentifier) or nil
+    if type(levelIdentifier) == 'string' and levelIdentifier:lower() == M.LEVEL and type(info) ~= 'table' then
+      -- our level missing from core_levels' list (a list built while the level's files were being written or mounted:
+      -- the stock function then indexes nil every frame, and the minimap's ImGui window is left open, "Missing
+      -- End()", Brisbane / London 2026-11-12/13): drop the list once (its onFilesChanged), look again, else leave the
+      -- level's spawn points out rather than fail
+      local now = os.clock()
+      if type(levels.onFilesChanged) == 'function' and now - (M._poiRefreshAt or -1e9) > 10 then
+        M._poiRefreshAt = now
+        pcall(levels.onFilesChanged, { { filename = M.PATH } })
+        info = levels.getLevelByName(levelIdentifier)
+      end
+      if type(info) ~= 'table' then return end
+    end
     local all = type(info) == 'table' and info.spawnPoints or nil
     if type(all) ~= 'table' then return orig(levelIdentifier, ...) end
     local kept = {}

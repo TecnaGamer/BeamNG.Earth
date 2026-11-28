@@ -227,6 +227,8 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
     except OSError as e:
         log.warning("power lines: tile %s_%s left out: %s: %s", tx, ty, type(e).__name__, e)
         return
+    import airsidekeep
+    airsidekeep.cut_wires(getattr(clearance, "airside", None), got_wires)       # (no span across an airport's pavement)
     props.extend(got_props)
     wires.extend(got_wires)
 

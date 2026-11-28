@@ -73,11 +73,13 @@ def sphere(r):
     return np.array(P), np.array(T, np.int64)
 
 
-def detail_sizes():
-    """The detail sizes (the engine's) where the speck and each ball start, falling: the speck from NEAR_M in, each
-    ball out to where it spans its END_PX on screen."""
-    R = GLOW_R[-1] * math.sqrt(3.0)                 # the shape's radius: its bounding box's half diagonal
-    ends = [NEAR_M] + [2.0 * r * SCREEN_PX / px for r, px in zip(GLOW_R[:-1], END_PX)]
+def detail_sizes(radii=GLOW_R, near_m=NEAR_M):
+    """The detail sizes (the engine's) where the speck and each ball start, falling: the speck from near_m in, each
+    ball out to where it spans its END_PX on screen. (The engine's size is the shape's radius over the distance: radii
+    and near_m scaled alike give the same sizes, build_airfield_lights.py's smaller balls switching proportionally
+    nearer.)"""
+    R = radii[-1] * math.sqrt(3.0)                  # the shape's radius: its bounding box's half diagonal
+    ends = [near_m] + [2.0 * r * SCREEN_PX / px for r, px in zip(radii[:-1], END_PX)]
     return [R * ENGINE_PX / d for d in ends] + [LAST_PX]
 
 
@@ -93,11 +95,20 @@ def write_materials(path):
     mats = {k: v for k, v in mats.items() if not k.startswith("bne_lamp_glow")}
     for k in range(len(GLOW_R)):
         name = f"bne_lamp_glow{k}"
-        mats[name] = {"name": name, "mapTo": name, "class": "Material", "version": 1.5,
-                      "persistentId": str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth:" + name)),
-                      "Stages": [{"baseColorFactor": [*GLOW_RGB, 1.0], "metallicFactor": 0, "roughnessFactor": 1,
-                                  "emissiveFactor": [0, 0, 0]}, {}, {}, {}],
-                      "castShadows": False}
+        mats[name] = glow_material(name, GLOW_RGB)
+    write_json(path, mats)
+
+
+def glow_material(name, rgb):
+    """One ball's material: dark by day (nightlights.lua sets its emissive after dusk), tinted rgb."""
+    return {"name": name, "mapTo": name, "class": "Material", "version": 1.5,
+            "persistentId": str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth:" + name)),
+            "Stages": [{"baseColorFactor": [*rgb, 1.0], "metallicFactor": 0, "roughnessFactor": 1,
+                        "emissiveFactor": [0, 0, 0]}, {}, {}, {}],
+            "castShadows": False}
+
+
+def write_json(path, mats):
     tmp = staging.tmp_for(path)
     with open(tmp, "w", newline="\n") as f:
         json.dump(mats, f, indent=2)
@@ -105,11 +116,20 @@ def write_materials(path):
     staging.replace(tmp, path)
 
 
-def main():
-    sizes = detail_sizes()
+def write_shape(out, xml):
+    tmp = staging.tmp_for(out)
+    with open(tmp, "w", newline="\n") as f:
+        f.write(xml)
+    staging.replace(tmp, out)
+
+
+def shape_xml(radii, hidden_r, near_m, mats, diffuse="1 0.8 0.5"):
+    """The shape's COLLADA text: the speck (radius hidden_r, material mats[0]) then a ball per radius (mats[1:]), each
+    its own detail level (see the docstring); diffuse: the colour of the shape's own effects."""
+    sizes = detail_sizes(radii, near_m)
     geoms, nodes = [], []
-    for k, r in enumerate((HIDDEN_R,) + GLOW_R):
-        mat = "bne_lamp_lens" if k == 0 else f"bne_lamp_glow{k - 1}"
+    for k, r in enumerate((hidden_r,) + tuple(radii)):
+        mat = mats[k]
         P, T = sphere(r)
         n = P / r
         UV = np.c_[0.5 + 0.5 * n[:, 0], 0.5 + 0.5 * n[:, 1]]
@@ -134,12 +154,12 @@ def main():
                      f'0 1</matrix><instance_geometry url="#{g}"><bind_material><technique_common><instance_material '
                      f'symbol="mat0" target="#{mat}"/></technique_common></bind_material></instance_geometry>'
                      '</node>')
-    names = ["bne_lamp_lens"] + [f"bne_lamp_glow{k}" for k in range(len(GLOW_R))]
-    effects = [f'<effect id="{m}-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>1 0.8 0.5 1'
+    names = list(dict.fromkeys(mats))                # (a speck sharing a ball's material: its effect once)
+    effects = [f'<effect id="{m}-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>{diffuse} 1'
                '</color></diffuse></lambert></technique></profile_COMMON></effect>' for m in names]
     materials = [f'<material id="{m}" name="{m}"><instance_effect url="#{m}-fx"/></material>' for m in names]
     ident = '<matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix>'
-    xml = f'''<?xml version="1.0" encoding="utf-8"?>
+    return f'''<?xml version="1.0" encoding="utf-8"?>
 <COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
 <asset><unit name="meter" meter="1"/><up_axis>Z_UP</up_axis></asset>
 <library_effects>{"".join(effects)}</library_effects>
@@ -151,13 +171,17 @@ def main():
 <scene><instance_visual_scene url="#scene"/></scene>
 </COLLADA>
 '''
-    shapes = os.path.join(HERE, "..", "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes", "beamngEarth")
-    out = os.path.join(shapes, "bne_lamp_glow.dae")
-    tmp = staging.tmp_for(out)
-    with open(tmp, "w", newline="\n") as f:
-        f.write(xml)
-    staging.replace(tmp, out)
-    write_materials(os.path.join(shapes, "lamps.materials.json"))
+
+
+SHAPES = os.path.join(HERE, "..", "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes", "beamngEarth")
+
+
+def main():
+    sizes = detail_sizes()
+    mats = ["bne_lamp_lens"] + [f"bne_lamp_glow{k}" for k in range(len(GLOW_R))]
+    out = os.path.join(SHAPES, "bne_lamp_glow.dae")
+    write_shape(out, shape_xml(GLOW_R, HIDDEN_R, NEAR_M, mats))
+    write_materials(os.path.join(SHAPES, "lamps.materials.json"))
     print(out, os.path.getsize(out), "bytes; detail sizes", [round(s, 1) for s in sizes])
     print("nightlights.lua M.GLOW_NITS = {", ", ".join(f"{n:g}" for n in glow_nits()), "}")
 

@@ -102,6 +102,10 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
                                       vfs_dir, country)
     if rail_mesh is not None:
         dir_mesh, dir_faces = busstationsign.merge(dir_mesh, rail_mesh), {**dir_faces, **rail_faces}
+    import airfieldsigns            # (an airfield's hold, location and direction signs: the station signs' path)
+    air_mesh, air_faces = _optional('Airfield signs', airfieldsigns.sign_tile, md, frame, tx, ty, elev, out_dir, vfs_dir)
+    if air_mesh is not None:
+        dir_mesh, dir_faces = busstationsign.merge(dir_mesh, air_mesh), {**dir_faces, **air_faces}
     import euguardrails
     french = False
     if euguardrails.enabled():

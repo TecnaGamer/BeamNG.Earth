@@ -19,6 +19,7 @@ import numpy as np
 import dmath
 import dnp
 
+import airsidekeep
 import franceroads
 import furniture
 import poleprofiles
@@ -169,6 +170,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
     """
     if not everywhere and not _french_kit(pole_profile):
         return
+    w0 = len(wires)
     import countrybounds
     index = countrybounds.bundled()
     skip_fr = everywhere and _french_kit(pole_profile)
@@ -312,6 +314,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
         for ac, bc in zip(aa, ab):
             wires.extend(furniture.wire_lines([attachment(pa, ac), attachment(pb, bc)],
                          ((0., 0., 0.),), max(pa[4].wire_radius or .012, pb[4].wire_radius or .012)))
+    airsidekeep.cut_wires(getattr(clearance, "airside", None), wires, w0)       # (no span across an airport's pavement)
 
 
 def _layers(md, frame, tx, ty, margin=MARGIN_M):

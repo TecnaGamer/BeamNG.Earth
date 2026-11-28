@@ -490,7 +490,31 @@ end
 -- the road tiles; the user, 2026-10-27: "extend the street and window lights as far as the buildings render"): glow
 -- rows of trees.lua's lampglow group (drawn at night only) while the tile shows, one trees tile per 256 m square
 -- (its distance rings and caps; ranks hashed under the farthest ring's 0.2: every one shown, a cap thinning evenly).
-M.FAR_LAMP_GROUPS = { 'lampglow' }
+-- A lamp's row has no fourth number; the airfield lights' (server airfieldlights.far_points: a lit runway's, its approach
+-- and its taxiways' lights; the user, 2026-11-17: "what lets me see city lights all the way in the distance, but not all
+-- the taxiways or to the end of the runway") have theirs, the glow group's number after lampglow (the server's COLOURS
+-- order: its FAR_GROUPS, test_airfieldlights), drawn as far as the lamps' (trees.lua GROUP_MAX_M) and lit with them. The apron
+-- masts' (server airsideprops.far_points; the same road tiles' near props hold them within ~1.3 km) are two more numbers: 6,
+-- the mast's pool of light on the ground (apron_glow, the last group), and FAR_HEAD, its head's glow, lampglow again but at the
+-- height airsideprops.MAST_HEAD_SCALE (the row's height is the glow ball's scale: a mast's cluster of floodlights is larger
+-- than a lamp's head).
+M.FAR_LAMP_GROUPS = { 'lampglow', 'afl_white', 'afl_green', 'afl_red', 'afl_blue', 'afl_yellow', 'apron_glow' }
+M.FAR_HEAD = #M.FAR_LAMP_GROUPS
+M.FAR_HEAD_HEIGHT = 2.5
+-- Pure: a far lamp row's code (its fourth value: nil, a lamp's lampglow, 0; or an airfield light's 1 .. 5, an apron pool's 6,
+-- a mast head's FAR_HEAD), and its group's number in FAR_LAMP_GROUPS and its height (the glow ball's scale)
+function M.farLampCode(c)
+  c = tonumber(c)
+  if c == M.FAR_HEAD then return c end
+  return (c and c >= 1 and c < #M.FAR_LAMP_GROUPS) and math.floor(c) or 0
+end
+function M.farLampGroup(c)
+  c = M.farLampCode(c)
+  return c == M.FAR_HEAD and 0 or c
+end
+function M.farLampHeight(c)
+  return M.farLampCode(c) == M.FAR_HEAD and M.FAR_HEAD_HEIGHT or 1
+end
 local function farLamps(key, f, on)
   if on == (f.lampKeys ~= nil) then return end
   local ok, trees = pcall(require, 'beamngEarth/trees')
@@ -505,7 +529,7 @@ local function farLamps(key, f, on)
     if type(p) == 'table' and p[1] and p[2] and p[3] then
       local k = tag .. math.floor(p[1] / 256) .. '_' .. math.floor(p[2] / 256)
       by[k] = by[k] or {}
-      by[k][#by[k] + 1] = { 0, p[1], p[2], p[3], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
+      by[k][#by[k] + 1] = { M.farLampGroup(p[4]), p[1], p[2], p[3], 0, 1, M.farLampHeight(p[4]), ((i * 7919) % 997) / 997 * 0.19 }
     end
   end
   f.lampKeys = {}
@@ -1747,9 +1771,11 @@ local function farPartPlace(f, p, a)
 end
 M._farPartPlace = farPartPlace
 
--- Pure: a far geotile's lamps {key: {pivot, rows {{x, y, z}, ...}}} as {key: {pivot, flat {x, y, z, i, ...}}} (nil: none):
--- one table a road geotile key instead of one a lamp (78k lamp tables in the 1,400 far tiles of LA, the most of the
--- mod's live Lua tables, which every collection goes through, 2026-11-02); i: the lamp's index in its rows (its phase)
+-- Pure: a far geotile's lamps {key: {pivot, rows {{x, y, z [, c]}, ...}}} as {key: {pivot, flat {x, y, z, i, c, ...}}}
+-- (nil: none): one table a road geotile key instead of one a lamp (78k lamp tables in the 1,400 far tiles of LA, the most
+-- of the mod's live Lua tables, which every collection goes through, 2026-11-02); i: the lamp's index in its rows (its
+-- phase); c: its code (farLampCode: its group's number, or a mast head's)
+M.FLAT_STRIDE = 5
 function M.flatLamps(lamps)
   local out = nil
   for k17, g in pairs(type(lamps) == 'table' and lamps or {}) do
@@ -1758,8 +1784,8 @@ function M.flatLamps(lamps)
       local x, y, z = type(pt) == 'table' and tonumber(pt[1]), type(pt) == 'table' and tonumber(pt[2]),
         type(pt) == 'table' and tonumber(pt[3])
       if x and y and z then
-        flat[n + 1], flat[n + 2], flat[n + 3], flat[n + 4] = x, y, z, i
-        n = n + 4
+        flat[n + 1], flat[n + 2], flat[n + 3], flat[n + 4], flat[n + 5] = x, y, z, i, M.farLampCode(pt[4])
+        n = n + M.FLAT_STRIDE
       end
     end
     if n > 0 then
@@ -1781,9 +1807,10 @@ local function farGeoLamps(f, on)
     local tk = 'FL' .. f.kind .. tostring(k17)
     if on then
       local rows, flat = {}, g.flat
-      for j = 1, #flat, 4 do
+      for j = 1, #flat, M.FLAT_STRIDE do
         local i = flat[j + 3]
-        rows[#rows + 1] = { 0, flat[j], flat[j + 1], flat[j + 2], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
+        rows[#rows + 1] = { M.farLampGroup(flat[j + 4]), flat[j], flat[j + 1], flat[j + 2], 0, 1, M.farLampHeight(flat[j + 4]),
+                            ((i * 7919) % 997) / 997 * 0.19 }
       end
       local fr = geotile.frameOf(k17)
       if #rows > 0 and fr then
@@ -1844,6 +1871,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   if not frame then release(); lastError = 'far geotile without a frame: ' .. tostring(msg.key); return false end
   local f = { geo = true, kind = k, gkey = msg.key, frame = frame, h = h, anchor = currentAnchor, parts = {},
     lamps = M.flatLamps(data.lamps) }
+  f.airfield = M.hasAirfield(f.lamps)
   if k == 'S' or k == 'P' then
     local z, x, y = geotile.parse(msg.key)
     f.sky = { z, x, y }
@@ -2015,6 +2043,23 @@ function M.farGeoHidden(f, sub)
   return M.nearShowsBuildings(p.near, p.nearKey)
 end
 
+-- Pure: do these flat lamps (flatLamps) hold an airfield light (a row with a group beyond lampglow)?
+function M.hasAirfield(flat)
+  for _, g in pairs(flat or {}) do
+    for j = M.FLAT_STRIDE, #g.flat, M.FLAT_STRIDE do
+      if g.flat[j] > 0 then return true end
+    end
+  end
+  return false
+end
+
+-- Pure-ish: is far geotile f with no mesh of its own hidden now, as its mesh would be (farGeoHidden)? Only its lamps ask.
+function M.farGeoMeshlessHidden(f)
+  if f.kind == 'F' then return M.nearShowsBuildings(f.gkey) end
+  if f.kind == 'S' or f.kind == 'P' then return M.farGeoHidden(f) end
+  return false
+end
+
 -- LAZY_FAR_PARTS: does far part sub of f wait (not made)? Only while it would be hidden now: a road geotile still
 -- being made keeps its far buildings as the quick stand-in (the user, 2026-10-25: "load simpler versions first then
 -- higher detail version later"). (LAZY_WAIT_MAX_S: a part waiting this long is made anyway, shown or hidden by the rule.)
@@ -2043,7 +2088,13 @@ local function updateFarGeo(key, f)
       if not hide then shown = true end
     end
   end
-  if f.lamps then farGeoLamps(f, shown) end
+  if f.lamps then
+    -- (a tile with airfield lights and no mesh - a runway's far tiles hold lights and no buildings - shows its lamps by
+    -- the rule its mesh would have followed: the road geotile of its key not showing its own buildings, its square's
+    -- far tiles not all here ...; the street lamps of a tile with no mesh stay unseen as before)
+    if not shown and f.airfield and next(f.parts) == nil then shown = not M.farGeoMeshlessHidden(f) end
+    farGeoLamps(f, shown)
+  end
 end
 
 -- The far tiles' hide checks, round-robin: at most FAR_CHECKS_PER_FRAME a frame (all ~600 of them every frame cost

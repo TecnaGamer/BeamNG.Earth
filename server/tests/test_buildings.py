@@ -447,7 +447,7 @@ class FarIndexLimitTest(unittest.TestCase):
             tile = geotiles.geobox(*geotiles.tile_of(40.758, -73.985, z), z)
             with tempfile.TemporaryDirectory() as d, \
                     mock.patch.object(blockworker, "_far_cells_ready", return_value=True), \
-                    mock.patch.object(blockworker, "_s", mock.Mock(md=None, widths=None, surface=None)), \
+                    mock.patch.object(blockworker, "_s", mock.Mock(md=None, widths=None, surface=None, airports=None)), \
                     mock.patch.object(bld, "far_items", return_value=(items, [], tile.box)), \
                     mock.patch.object(bld, "PACK_STYLE", "lite"):      # (the lite mesh: past the 16-bit indices)
                 data, shapes, n = blockworker._far_geo_build(kind, tile, 15, d, "/x", None)
@@ -581,7 +581,7 @@ class PackStyleTest(unittest.TestCase):
         seen = []
         with mock.patch.object(revisit, "load", side_effect=lambda _c, kind, k: seen.append((kind, k)) or None), \
                 mock.patch.object(blockworker, "_far_geo_build", return_value=None), \
-                mock.patch.object(blockworker, "_s", mock.Mock(cache_dir="/nonexistent", md=None)), \
+                mock.patch.object(blockworker, "_s", mock.Mock(cache_dir="/nonexistent", md=None, airports=None)), \
                 mock.patch.object(blockworker, "_md_versions", return_value="v"), \
                 mock.patch.object(blockworker, "_nyc_key", return_value=None):
             gx, gy = geotiles.tile_of(40.758, -73.985, geotiles.SKY_Z)

@@ -83,6 +83,31 @@ shape, sc = trees.pick('streetlight_double_arm', 13.76, 0)
 T.check(shape == '/art/shapes/objects/pole_light_double' and sc == 1,
         'double-arm lamp: West Coast stock pole at authored scale')
 T.check(trees.NO_COLLIDE.high_mast_light == true, 'high-mast light markers do not collide')
+-- the apron masts' own lens and the pool of light on the ground under each (server airsideprops.py G_LENS, G_POOL;
+-- tools/build_apron_glow.py): the lens the lamps', the pool a flat shape, neither colliding; the pool night only, seen
+-- far out (the real lights reach 450 m, the glow carries the apron beyond)
+T.check(trees.CATALOG.apron_mast_light and trees.CATALOG.apron_mast_light[1][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_lens'
+        and trees.NO_COLLIDE.apron_mast_light == true and trees.GROUP_MAX_M.apron_mast_light == 800, "the apron masts' lens: the lamp lens, no collision")
+T.check(trees.CATALOG.apron_glow and #trees.CATALOG.apron_glow == 1 and trees.CATALOG.apron_glow[1][2] == 1.0
+        and trees.CATALOG.apron_glow[1][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_apron_pool', 'the apron pool catalogued, a 1 x shape')
+T.check(trees.NO_COLLIDE.apron_glow == true and trees.groupOff.apron_glow == true, 'the apron pool never collides, off until night')
+T.check(trees.GROUP_MAX_M.apron_glow >= 2500, 'the apron pool drawn far out')
+local apronShape, apronScale = trees.pick('apron_glow', 1.0, 0)
+T.check(apronShape:find('bne_apron_pool', 1, true) ~= nil and apronScale == 1, 'the pool at its authored size')
+_, apronScale = trees.pick('lampglow', 2.5, 0)
+T.check(math.abs(apronScale - 2.5) < 1e-9, "a mast head's glow at 2.5 times a lamp's (the largest pick gives)")
+-- the airfield lights' glow groups (server airfieldlights.py GROUPS; tools/build_airfield_lights.py), as the lamps' glow:
+-- a one-metre shape each, never colliding, drawn far out, off until nightlights.lua turns them on at dusk
+for _, c in ipairs({ 'white', 'green', 'red', 'blue', 'yellow' }) do
+  local g = 'afl_' .. c
+  local e = trees.CATALOG[g]
+  T.check(e and #e == 1 and e[1][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_afl_' .. c and e[1][2] == 1.0,
+          g .. ' catalogued: a 1 m glow shape')
+  T.check(trees.NO_COLLIDE[g] == true, g .. ' never collides')
+  T.check(trees.GROUP_MAX_M[g] == trees.GROUP_MAX_M.lampglow and trees.GROUP_MAX_M[g] == 6000,
+          g .. ' shown as far as the street lamps (6 km: the far and skyline tiles carry them)')
+  T.check(trees.groupOff[g] == true, g .. ' off until night')
+end
 
 -- a tile of 100 items with ranks 0 .. 0.99 at the player: all made; far away: a quarter
 local rows = {}
@@ -913,6 +938,48 @@ do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is
   T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,
     'golfflag: its model at 1:1')
   T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
+end
+do -- an airfield windsock (server windsocks.py): its model at 1:1 (6.47 m), never solid, one spelling, shown out to 1.5 km
+  local shape, sc = trees.pick('windsock', 6.47, 0.7)
+  T.check(trees.CATALOG.windsock and #trees.CATALOG.windsock == 1 and shape == trees.CATALOG.windsock[1][1]
+    and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_windsock' and math.abs(sc - 1) < 1e-9,
+    'windsock: its model at 1:1')
+  T.check(trees.NO_COLLIDE.windsock == true and trees.ONE_SPELLING.windsock == true, 'a windsock never collides, one spelling')
+  T.check(trees.GROUP_MAX_M.windsock == 1500 and not trees.isBarrier('windsock') and not trees.groupOff.windsock,
+    'a windsock shows out to 1.5 km, by day, and is no barrier')
+end
+do -- parked aircraft (server parkedaircraft.py): four models at 1:1 (the tail fin's height) in seven liveries, solid, picked by rank
+  local names = { 'white', 'red', 'navy', 'sky', 'green', 'orange', 'purple' }
+  T.check(#trees.AIRCRAFT_LIVERIES == #names, 'seven aircraft liveries')
+  for _, a in ipairs({ { 'ac_light', 2.7, 800 }, { 'ac_turboprop', 7.6, 1500 }, { 'ac_narrow', 11.8, 2500 },
+                       { 'ac_wide', 17.5, 3000 } }) do
+    local g, h, far = a[1], a[2], a[3]
+    T.check(trees.CATALOG[g] and #trees.CATALOG[g] == #names, g .. ': a spelling a livery')
+    for i, n in ipairs(names) do
+      T.check(trees.CATALOG[g][i][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g .. '_' .. n
+        and trees.CATALOG[g][i][2] == h, g .. ': ' .. n .. ' (the catalogue height is the tail fin height)')
+      -- the rank the server writes (parkedaircraft.rank_for: (3 * count + i + 0.5) / 7919) picks livery i
+      local shape, sc = trees.pick(g, h, (3 * #names + (i - 1) + 0.5) / 7919)
+      T.check(shape == trees.CATALOG[g][i][1] and math.abs(sc - 1) < 1e-9, g .. ': rank for ' .. n .. ' picks it at 1:1')
+    end
+    T.check(trees.pick(g, h, 0.0) == trees.CATALOG[g][1][1], g .. ': rank 0 is the plain white')
+    T.check(not trees.NO_COLLIDE[g] and not trees.ONE_SPELLING[g], g .. ' is solid (a collision mesh in the .dae), several spellings')
+    T.check(trees.GROUP_MAX_M[g] == far and not trees.isBarrier(g) and not trees.groupOff[g],
+      g .. ' shows out to ' .. far .. ' m, by day, and is no barrier')
+  end
+end
+do -- the ILS aerials (server airfieldlights.py ils_masts): two models at 1:1, never solid, one spelling, shown by day to 2 km
+  for _, a in ipairs({ { 'ils_loc', 3.0 }, { 'ils_gs', 15.0 } }) do
+    local g, h = a[1], a[2]
+    local shape, sc = trees.pick(g, h, 0.7)
+    T.check(trees.CATALOG[g] and #trees.CATALOG[g] == 1 and shape == trees.CATALOG[g][1][1]
+      and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1')
+    T.check(trees.CATALOG[g][1][2] == h, g .. ': the catalogue height is the model\'s top')
+    T.check(trees.NO_COLLIDE[g] == true and trees.ONE_SPELLING[g] == true, g .. ' never collides, one spelling')
+    T.check(trees.GROUP_MAX_M[g] == 2000 and not trees.isBarrier(g) and not trees.groupOff[g],
+      g .. ' shows out to 2 km, by day, and is no barrier')
+  end
 end
 
 T.check(countChecks > 50 and #countMiss == 0, 'the running item count matches a full count at each of '

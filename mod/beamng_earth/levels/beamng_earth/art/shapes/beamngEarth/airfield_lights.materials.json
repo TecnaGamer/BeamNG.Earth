@@ -1,0 +1,1122 @@
+{
+  "bne_afl_white0": {
+    "name": "bne_afl_white0",
+    "mapTo": "bne_afl_white0",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "01fb76e8-d920-5729-9f49-2fc6ab0bc858",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.95,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_white1": {
+    "name": "bne_afl_white1",
+    "mapTo": "bne_afl_white1",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "13459d4c-36fe-525c-806a-e57e1a2a672e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.95,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_white2": {
+    "name": "bne_afl_white2",
+    "mapTo": "bne_afl_white2",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6777508c-f303-5b6c-85bb-214853be4c5e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.95,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_white3": {
+    "name": "bne_afl_white3",
+    "mapTo": "bne_afl_white3",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "466b4f44-47fb-564d-acae-a017e8dc0db5",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.95,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_white4": {
+    "name": "bne_afl_white4",
+    "mapTo": "bne_afl_white4",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d0befd34-2ac4-5cf6-b67c-a1111afdfead",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.95,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_white5": {
+    "name": "bne_afl_white5",
+    "mapTo": "bne_afl_white5",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "517b8a85-9b6b-5cf0-8a89-d6bf67ed7beb",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.95,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_white6": {
+    "name": "bne_afl_white6",
+    "mapTo": "bne_afl_white6",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5eada7e3-2118-51cf-9bdc-9bbb7b5454d1",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.95,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_white7": {
+    "name": "bne_afl_white7",
+    "mapTo": "bne_afl_white7",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6c6acf77-46a2-5b5b-8d1a-b3182e7b21df",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.95,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_green0": {
+    "name": "bne_afl_green0",
+    "mapTo": "bne_afl_green0",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "83aa9928-2d94-5acf-ba5a-c050cbe49f19",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          1.0,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_green1": {
+    "name": "bne_afl_green1",
+    "mapTo": "bne_afl_green1",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d2160cb2-67b7-56f3-becb-00d9ede97847",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          1.0,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_green2": {
+    "name": "bne_afl_green2",
+    "mapTo": "bne_afl_green2",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "916adf7b-2ff1-5441-8c67-5b221497cbb7",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          1.0,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_green3": {
+    "name": "bne_afl_green3",
+    "mapTo": "bne_afl_green3",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1bebdf54-e4cf-58c2-ad1b-fcdec51bc562",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          1.0,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_green4": {
+    "name": "bne_afl_green4",
+    "mapTo": "bne_afl_green4",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6f280f6c-dd1c-5fff-8160-84cd1e2de2dd",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          1.0,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_green5": {
+    "name": "bne_afl_green5",
+    "mapTo": "bne_afl_green5",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "933c621c-e3b6-54a5-8665-99cf884b8be9",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          1.0,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_green6": {
+    "name": "bne_afl_green6",
+    "mapTo": "bne_afl_green6",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "68f3f2f4-46fb-5249-8e09-e4445ec9edcb",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          1.0,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_green7": {
+    "name": "bne_afl_green7",
+    "mapTo": "bne_afl_green7",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "426ae6fb-4491-519c-a9f2-b51b6f7a88a3",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          1.0,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_red0": {
+    "name": "bne_afl_red0",
+    "mapTo": "bne_afl_red0",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "450e0b66-6d7d-590d-ba79-9216deea79d4",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.12,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_red1": {
+    "name": "bne_afl_red1",
+    "mapTo": "bne_afl_red1",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "4fb04fbe-21b7-52ce-8a9a-a54db042b535",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.12,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_red2": {
+    "name": "bne_afl_red2",
+    "mapTo": "bne_afl_red2",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "31df0373-258a-5f9e-9036-18858497185b",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.12,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_red3": {
+    "name": "bne_afl_red3",
+    "mapTo": "bne_afl_red3",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "e33c8194-8dc0-5a2f-8919-43b1732870b7",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.12,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_red4": {
+    "name": "bne_afl_red4",
+    "mapTo": "bne_afl_red4",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "68944ff1-b732-5c0e-95ce-b9124ff38515",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.12,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_red5": {
+    "name": "bne_afl_red5",
+    "mapTo": "bne_afl_red5",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "4ce37296-d010-5186-adbd-51e0ade9683b",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.12,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_red6": {
+    "name": "bne_afl_red6",
+    "mapTo": "bne_afl_red6",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fba46445-e95f-5039-a436-455ccf407f99",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.12,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_red7": {
+    "name": "bne_afl_red7",
+    "mapTo": "bne_afl_red7",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d315cfb1-5b8f-5272-989e-fa82eb8dae46",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.12,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_blue0": {
+    "name": "bne_afl_blue0",
+    "mapTo": "bne_afl_blue0",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f276d1ee-d7d9-56fc-9807-de72dd378e3b",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.4,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_blue1": {
+    "name": "bne_afl_blue1",
+    "mapTo": "bne_afl_blue1",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "477af5c8-cf7b-5a2c-b064-778dd97b5b7d",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.4,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_blue2": {
+    "name": "bne_afl_blue2",
+    "mapTo": "bne_afl_blue2",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b671d9df-ad50-55d7-a514-7539403dbb11",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.4,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_blue3": {
+    "name": "bne_afl_blue3",
+    "mapTo": "bne_afl_blue3",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a20335f5-57ec-5d6e-8c69-032f1df4b6e5",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.4,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_blue4": {
+    "name": "bne_afl_blue4",
+    "mapTo": "bne_afl_blue4",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a7427f49-b75e-5fa8-96dd-72820bf4d1bf",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.4,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_blue5": {
+    "name": "bne_afl_blue5",
+    "mapTo": "bne_afl_blue5",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d4474b50-2e8e-5da4-9489-e3ed73b89f8a",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.4,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_blue6": {
+    "name": "bne_afl_blue6",
+    "mapTo": "bne_afl_blue6",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f8667cd4-5393-5a39-9b53-2a98a404c4c2",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.4,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_blue7": {
+    "name": "bne_afl_blue7",
+    "mapTo": "bne_afl_blue7",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fdd52eee-c14d-59ec-bf26-b9e66ccdf6a7",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.4,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_yellow0": {
+    "name": "bne_afl_yellow0",
+    "mapTo": "bne_afl_yellow0",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "060569ba-a2ec-50e8-a643-a56b5946a7a5",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.75,
+          0.15,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_yellow1": {
+    "name": "bne_afl_yellow1",
+    "mapTo": "bne_afl_yellow1",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5a6a8d06-b0b8-5396-a1e3-ead8dd4b4c6c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.75,
+          0.15,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_yellow2": {
+    "name": "bne_afl_yellow2",
+    "mapTo": "bne_afl_yellow2",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "54512138-0587-5f75-8827-f12b41a7d161",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.75,
+          0.15,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_yellow3": {
+    "name": "bne_afl_yellow3",
+    "mapTo": "bne_afl_yellow3",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "aa274e7b-e320-553c-a9f0-ac17d12c882d",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.75,
+          0.15,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_yellow4": {
+    "name": "bne_afl_yellow4",
+    "mapTo": "bne_afl_yellow4",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8c272580-5527-577b-aa44-3e88bda8a54c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.75,
+          0.15,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_yellow5": {
+    "name": "bne_afl_yellow5",
+    "mapTo": "bne_afl_yellow5",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1fe30d13-515b-5ff7-941c-44c5494fd319",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.75,
+          0.15,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_yellow6": {
+    "name": "bne_afl_yellow6",
+    "mapTo": "bne_afl_yellow6",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "4524da5d-c70a-5fce-a1ed-ba223db674ff",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.75,
+          0.15,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_afl_yellow7": {
+    "name": "bne_afl_yellow7",
+    "mapTo": "bne_afl_yellow7",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b5dcc28e-5e55-5f08-bc82-5f29693f18ac",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.75,
+          0.15,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  }
+}

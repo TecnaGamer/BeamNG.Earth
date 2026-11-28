@@ -11906,9 +11906,41 @@ def line_through(roads):
     return pairs, stems, {f for f, n in count.items() if n >= 2}
 
 
+def _pads_xy(frame, pads, box, margin=30.0):
+    """The pads [(lat (k,), lon (k,))] (aeroways.pads) reaching box (x0, y0, x1, y1, + margin) as (ring xy (k, 2),
+    its box) in frame."""
+    out = []
+    for la, lo in pads or ():
+        if len(la) < 3:
+            continue
+        e, n, _ = frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), np.zeros(len(la)))
+        e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+        if e.max() < box[0] - margin or e.min() > box[2] + margin or n.max() < box[1] - margin or n.min() > box[3] + margin:
+            continue
+        out.append((np.c_[e, n], (e.min(), n.min(), e.max(), n.max())))
+    return out
+
+
+def cut_in_pads(pts, pads_xy, spacing=0.5):
+    """The pieces of a polyline (k, 3) outside the pads (_pads_xy: polygons in the tile's frame): an edge decal along a
+    road kept off an apron or a taxiway it crosses. Pure."""
+    if not pads_xy:
+        return [pts]
+    import polygon
+    d = densify(np.asarray(pts, np.float64), spacing)
+    lo, hi = d[:, :2].min(0), d[:, :2].max(0)
+    inside = np.zeros(len(d), bool)
+    for ring, (x0, y0, x1, y1) in pads_xy:
+        if x0 <= hi[0] and x1 >= lo[0] and y0 <= hi[1] and y1 >= lo[1]:
+            inside |= polygon.contains_points(ring, d[:, :2])
+    if not inside.any():
+        return [pts]
+    return _runs_outside(d, inside, MIN_PIECE_M)
+
+
 def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=None, widths=None, props=None,
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
-               buried=0.0, lamp_region=None, country=None,
+               buried=0.0, lamp_region=None, country=None, aero_pads=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
@@ -12334,6 +12366,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     # stood across the asphalt between the stall rows, Canton, 2026-10-28)
     lot_aisles = {fid for fid, (f, i, sp) in seen.items()
                   if sp.kind == "paved" and _rule_value(f.rules.get("subclass"), i) == "parking_aisle"}
+    # nor on an airport's apron or taxiway where a road crosses it (aero_pads: aeroways.pads, the paved airside): a
+    # service road across the apron drew grass edges on the asphalt (Brisbane, 2026-11-12)
+    aero_xy = _pads_xy(frame, aero_pads, box) if aero_pads else []
     # rounded corners where curbless paved roads meet (roadcorners.py, from PR #363): their fills when the roads are
     # meshes (else painted into the ground: surface.py), the gravel edge decal along each arc and a curved edge line
     # where both roads have them; corner_cuts end those road sides' straight edge lines and decals at the tangents
@@ -12506,6 +12541,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if look["m"] == EDGE_DECAL["m"]:
                 if fid in lot_aisles:
                     continue
+                if aero_xy:
+                    pieces = [r for pc in pieces for r in cut_in_pads(pc, aero_xy)]
                 # no gravel edge where another carriageway is near: a ramp's gore and a narrow median are paved
                 pieces = [r for pc in pieces for r in cut_outside(pc, decal_blockers, 0.5)]
             if look["m"] == EDGE_DECAL["m"] and (fid, side) in grassy:
@@ -12601,6 +12638,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if clearance_out is not None or (props is not None and walks is not None):
         import furniture
         clearance = furniture.RoadClearance(traffic_lines, traffic_decks, bounds=own_box)
+        if aero_xy:                                 # (no pole, tower or wire on an apron, taxiway or runway: airsidekeep)
+            import airsidekeep
+            clearance.airside = airsidekeep.Keep(aero_xy)
         if clearance_out is not None:
             clearance_out.append(clearance)
     sign_decks = [(np.asarray(ch["n"], np.float64), ch["w"] / 2) for ch in chunks if ch.get("deck")] if props is not None else ()

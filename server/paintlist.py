@@ -573,12 +573,12 @@ def _build_corners(s, bounds):
 
 
 def _build_lots(s):
-    """The parking lots (surface.lot_pads) and the golf layers (surface._golf_rings per GOLF_PHOTO row), in metres."""
+    """The parking lots (surface.parking_pads) and the golf layers (surface._golf_rings per GOLF_PHOTO row), in metres."""
     import surface as sf
 
     def build():
         frame = s.frame
-        lots = _polys_spec(lonlat_polys(frame, sf.lot_pads(s.lots)))
+        lots = _polys_spec(lonlat_polys(frame, sf.parking_pads(s.lots)))
         golf = []
         for classes, _ in sf.GOLF_PHOTO:
             rings = sf._golf_rings(s.lots, classes)

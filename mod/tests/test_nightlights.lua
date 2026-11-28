@@ -71,7 +71,7 @@ nl.dropKey('stock')
 nl.onRows('high-mast', { {0, 5, 0, 17.90, 0} }, {'high_mast_light'})
 clock = clock + 1; nl.update()
 T.check(nl.nearest(0,0,30,1)[1][6] == true, 'high-mast lighting profile retained')
-T.check(light and light.id == id and light.fields.range == '70' and light.fields.color == nl.HIGH_MAST.color,
+T.check(light and light.id == id and light.fields.range == tostring(nl.HIGH_MAST.range) and light.fields.color == nl.HIGH_MAST.color,
         'same bounded light pool serves high-mast floodlighting')
 nl.dropKey('high-mast')
 nl.onRows('double-arm', { {0, 4.9, 0, 12.62, 0}, {0, -4.9, 0, 12.62, 180} }, {'lamplens'})
@@ -157,5 +157,152 @@ tod = (20 - 12) / 24                                  -- (the next evening: the 
 clock = clock + 2; nl.update()
 T.check(mats.bne_bld_facade.fields.emissiveMap == nl.MAPS.bne_bld_facade[1] and nl.status().errors == 0,
   'the evening: its map back')
+nl.reset()
+
+-- The airfield lights' glow (tools/build_airfield_lights.py; server airfieldlights.py's afl_<colour> groups): five shapes
+-- of eight balls each, every ball's material defined and lit in its colour, no brighter than the lamps' glow, and the
+-- groups switched with it (one call: trees.lua refreshes once) at dusk and dawn.
+local nAfl = 0
+for colour, rgb in pairs(nl.AFL_COLOURS) do
+  local fa = io.open(shapes .. 'bne_afl_' .. colour .. '.dae'); local ad = fa:read('*a'); fa:close()
+  local seen = 0
+  for name in ad:gmatch('target="#([%w_]+)"') do
+    seen = seen + 1
+    local m = nl.MATERIALS[name]
+    T.check(m ~= nil and m[1] == rgb,
+            'afl material lit: ' .. name)
+  end
+  T.check(seen == #nl.GLOW_NITS + 1, 'a material per ball and the speck: ' .. colour .. ' ' .. seen)
+  for k = 1, #nl.GLOW_NITS do
+    local name = 'bne_afl_' .. colour .. (k - 1)
+    local m = nl.MATERIALS[name]
+    T.check(m and m[1] == rgb and m[2] == nl.GLOW_NITS[k] * nl.AFL_NITS_FACTOR * nl.AFL_COLOUR_GAIN[colour],
+            'afl ball ' .. name .. ' in its colour, at its colour brightness')
+    T.check(colour == 'blue' or (m and m[2] > nl.MATERIALS['bne_afl_blue' .. (k - 1)][2]),
+            'afl ball ' .. name .. ': a runway light brighter than a blue taxiway light')
+    nAfl = nAfl + 1
+  end
+end
+T.check(nAfl == 40, 'five colours of eight balls: ' .. nAfl)
+local fm = io.open(shapes .. 'airfield_lights.materials.json'); local aflJson = fm:read('*a'); fm:close()
+for colour in pairs(nl.AFL_COLOURS) do
+  for k = 0, #nl.GLOW_NITS - 1 do
+    T.check(aflJson:find('"bne_afl_' .. colour .. k .. '": {', 1, true) ~= nil, 'defined in the json: ' .. colour .. k)
+  end
+end
+T.check(#nl.AFL_GROUPS == 5, 'five groups')
+local set, enabled = {}, {}
+package.loaded['beamngEarth/trees'] = { setGroupEnabled = function(gs, on)
+  set[#set + 1] = { gs = gs, on = on }
+  for _, g in ipairs(gs) do enabled[g] = on end
+  return true
+end }
+core_environment = { getLightState = function() return { isNight = true } end }
+nl.reset()
+clock = clock + 2; nl.update()
+T.check(#set == 1 and set[1].on == true, 'dusk: one switch call')
+T.check(enabled.lampglow == true, 'dusk: the lamp glow on')
+T.check(enabled.apron_glow == true, 'dusk: the apron pools of light on')
+for colour in pairs(nl.AFL_COLOURS) do
+  T.check(enabled['afl_' .. colour] == true, 'dusk: afl_' .. colour .. ' on')
+end
+core_environment.getLightState = function() return { isNight = false } end
+clock = clock + 2; nl.update()
+T.check(#set == 2 and set[2].on == false, 'dawn: one switch call')
+T.check(enabled.lampglow == false, 'dawn: the lamp glow off')
+T.check(enabled.apron_glow == false, 'dawn: the apron pools off')
+for colour in pairs(nl.AFL_COLOURS) do
+  T.check(enabled['afl_' .. colour] == false, 'dawn: afl_' .. colour .. ' off')
+end
+package.loaded['beamngEarth/trees'] = nil
+nl.reset()
+
+-- The apron masts (server airsideprops.py G_LENS, G_POOL; tools/build_apron_glow.py): their own light profile, and a share of
+-- the pool taken before the street lamps (the user, 2026-11-17: a whole apron lit, not the one or two masts nearest the
+-- camera), the ground pool's shape, material and map made.
+T.check(#nl.NIGHT_GROUPS == 2 and nl.NIGHT_GROUPS[1] == 'lampglow' and nl.NIGHT_GROUPS[2] == 'apron_glow', 'the night-only groups')
+local af = io.open(shapes .. 'bne_apron_pool.dae'); local poolDae = af:read('*a'); af:close()
+af = io.open(shapes .. 'lamps.materials.json'); local lampsJson = af:read('*a'); af:close()
+T.check(poolDae:find('target="#bne_apron_pool"', 1, true) ~= nil and nl.MATERIALS.bne_apron_pool ~= nil
+        and lampsJson:find('"bne_apron_pool"', 1, true) ~= nil, 'the pool: its material lit at night and defined')
+T.check(lampsJson:find('"translucent": true', 1, true) ~= nil and lampsJson:find('bne_apron_pool_o.data.dds', 1, true) ~= nil,
+        'the pool: translucent, its opacity map a DDS')
+T.check(made:find('"levels/beamng_earth/art/shapes/beamngEarth/bne_apron_pool_o.data.dds"', 1, true) ~= nil,
+        "the pool's opacity map made at install (textures.json)")
+T.check(nl.APRON_MAST.drop < 0 and nl.APRON_MAST.drop == -nl.APRON_LIFT_M, 'the apron light raised over the mast head')
+T.check(nl.APRON_MAST.range >= (18 + nl.APRON_LIFT_M) / math.cos(math.rad(nl.APRON_MAST.outer / 2)),
+        "its range reaches the cone's slant edge: the head 18 m up, the light 30 m over it")
+T.check(nl.APRON_MAST.brightness <= 6 and nl.APRON_MAST.outer > nl.APRON_MAST.inner and nl.APRON_MAST.inner >= 90,
+        "a wide, flat cone, no brighter than the road masts' ballpark (overlapping pools do not burn out)")
+
+nl.reset()
+clock = clock + 10
+core_camera = { getPosition = function() return vec3(0, 0, 0) end, getForward = function() return vec3(1, 0, 0) end }
+core_environment = { getLightState = function() return { isNight = true } end }
+nl.LIGHTS_MAX = 20
+local ap = {}
+for i = 1, 3 do ap[#ap + 1] = { 0, 150 + 90 * i, (i - 2) * 30, 17.9, 0 } end
+nl.onRows('apron', ap, { 'apron_mast_light' })
+local al = nl.nearest(0, 0, 900, 10)
+T.check(#al == 3 and al[1][7] == true and al[1][6] == false and al[1][5] == false,
+        "an apron lens: its own profile, neither the road masts' nor a lantern's")
+T.check(#nl.nearest(0, 0, 900, 10, nil, nil, nil, 'apron') == 3 and #nl.nearest(0, 0, 900, 10, nil, nil, nil, 'other') == 0,
+        'the kinds: apron lenses apart from the others')
+local street = {}
+for i = 1, 40 do street[#street + 1] = { 0, 5 + i * 2, (i % 2) * 6, 8, 0 } end
+nl.onRows('street', street, { 'lamplens' })
+local nearestOnly = nl.nearest(0, 0, 900, 20)
+local nApronNear = 0
+for _, l in ipairs(nearestOnly) do if l[7] then nApronNear = nApronNear + 1 end end
+T.check(nApronNear == 0, 'by distance alone the 40 street lamps nearer would take all 20 lights (the masts 240 m and more off)')
+local function settle()                  -- (the pool is made a few lights a step: MAKE_PER_STEP)
+  for _ = 1, 8 do clock = clock + 1; nl.update() end
+end
+local function lit()
+  local apronLit, others, apronZ = 0, 0, nil
+  for _, o in pairs(S.objects) do
+    if o.class == 'SpotLight' and o.fields.isEnabled == 'true' then
+      if o.fields.range == tostring(nl.APRON_MAST.range) then
+        apronLit = apronLit + 1
+        apronZ = o.pos.z
+      else
+        others = others + 1
+      end
+    end
+  end
+  return apronLit, others, apronZ
+end
+settle()
+local a, o, z = lit()
+T.check(a == 3 and o == 17, 'all three masts lit, the others of the 20 the nearest lamps: ' .. a .. ' + ' .. o)
+T.check(z and math.abs(z - (17.9 + nl.APRON_LIFT_M)) < 1e-6, 'the apron light raised 30 m over the lens: ' .. tostring(z))
+nl.dropKey('apron')
+local many = {}
+for i = 1, 14 do many[#many + 1] = { 0, 100 + 20 * i, 0, 17.9, 0 } end
+nl.onRows('apron', many, { 'apron_mast_light' })
+settle()
+a, o = lit()
+T.check(a == math.floor(20 * nl.APRON_SHARE) and a + o == 20, 'many masts: their share of the pool, no more: ' .. a .. ' + ' .. o)
+nl.dropKey('apron')
+settle()
+a, o = lit()
+T.check(a == 0 and o == 20, 'no masts in reach: the share goes back to the street lamps')
+nl.onRows('far', { { 0, nl.APRON_NEAR_M + 50, 0, 17.9, 0 } }, { 'apron_mast_light' })
+settle()
+a = lit()
+T.check(a == 0, 'a mast past APRON_NEAR_M: no real light (its pool of glow shows)')
+nl.dropKey('far')
+nl.onRows('behind', { { 0, -(nl.APRON_AROUND_M + 20), 0, 17.9, 0 }, { 0, -(nl.APRON_AROUND_M - 20), 0, 17.9, 0 } }, { 'apron_mast_light' })
+settle()
+a = lit()
+T.check(a == 1, 'behind the camera: only the mast within APRON_AROUND_M of it: ' .. a)
+nl.dropKey('behind')
+nl.setLightCount('few')
+T.check(nl.LIGHTS_MAX == 48 and math.floor(nl.LIGHTS_MAX * nl.APRON_SHARE) == 19, 'the few-lights setting: 19 for the masts')
+nl.setLightCount('normal')
+core_environment.getLightState = function() return { isNight = false } end
+settle()
+a, o = lit()
+T.check(a == 0 and o == 0 and nl.status().errors == 0, 'day: every light off, no errors')
 nl.reset()
 T.done('test_nightlights')

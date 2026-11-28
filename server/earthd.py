@@ -109,6 +109,7 @@ import reach as reachmod  # noqa: E402
 import privacyregion as privacyregionmod
 import perfstats  # noqa: E402
 import rails as railsmod  # noqa: E402
+import taxiwaymarks as taxiwaymarksmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import urgency as urgencymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
@@ -146,7 +147,9 @@ import terrainpatch as terrainpatchmod  # noqa: E402
 import geodesy  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 import gravity as gravitymod  # noqa: E402
+import aeroways  # noqa: E402
 import airportgrade as airportgrademod  # noqa: E402
+import runwaysnap  # noqa: E402
 import airports as airportsmod  # noqa: E402
 import seacarve as seacarvemod  # noqa: E402
 import seatiles as seatilesmod  # noqa: E402
@@ -1260,6 +1263,8 @@ class Server:
         _railways.RAW_ELEV = lambda la, lo, _d=self.dem: _d.sample(la, lo, gradingmod.PROFILE_ZOOM)
         # runways graded in (--airports on: main() loads the OurAirports copy before the worker processes)
         self.airports = airportgrademod.AirportGrader(airports_db, self.dem) if airports_db is not None else None
+        if self.airports is not None:
+            runwaysnap.set_provider(self.airports.runways_in_box)      # (the mapped runway lines are laid on the graded runways)
         self.airports_db = airports_db  # (also the road rules' country where no border says: navgraph.country_at)
         self.regional_poles = regional_poles
         if regional_poles != "off":
@@ -3262,7 +3267,14 @@ class Server:
             towns = self.towns.maker(anchor.frame, roadsmod.cells_of_tile(anchor.frame, tx, ty,
                                                                           blockworker.TOWNS_MARGIN_M),
                                      self.out_dir, self.vfs_dir, town_faces)
+        try:                            # the airside pavement (aeroways): roads over it get no verge (roads._on_pads)
+            aero_pads = aeroways.pads([self.mapdata.cell(k, layers=("infrastructure",), kind="demand").layers.get(
+                "infrastructure") for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, 50.0)])
+        except Exception as ex:
+            log.debug("airside pavement: %s: %s", type(ex).__name__, ex)
+            aero_pads = None
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
+                                     aero_pads=aero_pads,
                                      sign_obstacles=sign_obstacles,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
@@ -3284,6 +3296,12 @@ class Server:
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
+        try:                            # the taxiways' centrelines and runway holding markings (taxiwaymarks)
+            chunks += taxiwaymarksmod.tile_chunks_md(
+                self.mapdata, roadsmod.cells_of_tile(anchor.frame, tx, ty, taxiwaymarksmod.REACH_M),
+                anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
+        except Exception as ex:         # (a marking is not worth the tile)
+            log.debug("taxiway markings: %s: %s", type(ex).__name__, ex)
         x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
         if items is not None:           # front doors and shopfronts, driveways into the road mesh
             # (no street tree in a house: its own or the next tile's)
@@ -3476,6 +3494,35 @@ class Server:
                 raise
             except Exception as ex:
                 log.warning("lights and fans: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            if self.airports is not None:
+                try:   # (a lit runway's edge / threshold / end lights, the taxiways' blue edge lights: airfieldlights)
+                    import airfieldlights
+                    db = self.airports.db
+                    props.extend(airfieldlights.tile_rows(anchor.frame, box, infra_fn,
+                                                          lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev,
+                                                          roads_fn=lambda k: self.mapdata.cell(k, layers=("roads",), kind="demand").layers.get("roads"),
+                                                          buildings_fn=bld_fn, reach_m=airfieldlights.CENTRE_REACH_M))
+                except Exception as ex:
+                    log.warning("airfield lights: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+                try:   # (a windsock near each runway end: windsocks; along the runway, the wind would freeze in the tile)
+                    import windsocks
+                    props.extend(windsocks.tile_rows(anchor.frame, box, infra_fn,
+                                                     lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev,
+                                                     roads_fn=lambda k: self.mapdata.cell(k, layers=("roads",), kind="demand").layers.get("roads")))
+                except Exception as ex:
+                    log.warning("windsocks: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+                try:   # (parked aircraft at the terminal gates and on the GA aprons: parkedaircraft)
+                    import parkedaircraft
+                    props.extend(parkedaircraft.tile_rows(anchor.frame, box, infra_fn,
+                                                          parkedaircraft.building_layers_fn(self.mapdata), elev))
+                except Exception as ex:
+                    log.warning("parked aircraft: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+                try:   # (ground vehicles at the stands, apron masts, containers by the hangars: airsideprops)
+                    import airsideprops
+                    props.extend(airsideprops.tile_rows(anchor.frame, box, infra_fn,
+                                                        parkedaircraft.building_layers_fn(self.mapdata), elev))
+                except Exception as ex:
+                    log.warning("airside props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             try:       # (solar farms, container terminals, marinas, trailer parks, construction sites)
                 props.extend(places.tile_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor),
                                               clearance=clearance[0] if clearance else None))

@@ -1,0 +1,71 @@
+{
+  "bne_ils_white": {
+    "name": "bne_ils_white",
+    "mapTo": "bne_ils_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "91599acd-1ad5-5792-98ee-207b04ddc329",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.92,
+          0.92,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_ils_red": {
+    "name": "bne_ils_red",
+    "mapTo": "bne_ils_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7824a786-d624-565c-873e-faed25ebf551",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.78,
+          0.07,
+          0.05,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_ils_grey": {
+    "name": "bne_ils_grey",
+    "mapTo": "bne_ils_grey",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7aaed746-a913-569d-9b60-daa969a0e242",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.57,
+          0.6,
+          1.0
+        ],
+        "metallicFactor": 0.35,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  }
+}

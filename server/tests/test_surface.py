@@ -12,9 +12,12 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import aeroways  # noqa: E402
 import earthd  # noqa: E402
+import geodesy  # noqa: E402
 import heightmap  # noqa: E402
 import mapcells  # noqa: E402
+import mapgeom  # noqa: E402
 import maprasters  # noqa: E402
 import surface as sf  # noqa: E402
 
@@ -640,6 +643,21 @@ class LotTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[30, 11], np.round((240 + paved) / 2)))   # half covered
         self.assertTrue(np.array_equal(out[2, 2], [240, 240, 240]) and np.array_equal(rgb[30, 30], [240, 240, 240]))
 
+    def test_off_green_leaves_grass_and_softens_its_edge(self):
+        """photo_pads(off_green=True) (an airfield's paving): coverage goes where the photo is grass, over 3 x 3 pixels,
+        and nowhere else; off it, photo_pads is as it was."""
+        rgb = np.full((32, 32, 3), 150, np.uint8)
+        rgb[:, 16:] = (70, 110, 50)                     # grass on the east half
+        cov = np.ones((32, 32), np.float32)
+        out = sf._off_green(rgb, cov)
+        self.assertTrue((out[:, :14] == 1.0).all(), "pavement: kept whole")
+        self.assertTrue((out[:, 18:] == 0.0).all(), "grass: none")
+        self.assertTrue(((out[:, 14:18] >= 0.0) & (out[:, 14:18] <= 1.0)).all())
+        self.assertTrue((np.diff(out[10, 13:19]) <= 1e-6).all(), "falling across the edge, not a stair of noise")
+        self.assertIs(sf._off_green(rgb, np.zeros((32, 32), np.float32)).dtype, np.dtype(np.float32))
+        self.assertTrue(np.array_equal(cov, np.ones((32, 32), np.float32)), "the input untouched")
+        self.assertEqual(float(sf._off_green(np.full((8, 8, 3), 150, np.uint8), np.ones((8, 8), np.float32)).min()), 1.0)
+
 
     def test_dirt_track_visible_on_pale_ground(self):
         """A dirt track painted into a pale field photo stays clearly darker than it (a farm track near Suchy Dul read
@@ -1110,6 +1128,200 @@ class GolfSurfaceTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[40, 40], expect))
         self.assertTrue(np.array_equal(out[2, 2], [40, 40, 40]))
         self.assertTrue(np.array_equal(rgb[40, 40], [40, 40, 40]))
+
+
+class ApronConcreteTest(unittest.TestCase):
+    """An apron's slab joints, a gate's stand stains (surface._apron_slabs) and the infield's mown green
+    (surface._infield_grass), in surface.photo_lots: subtle, over paving or vegetation only, the same in every tile."""
+    FRAME = geodesy.EnuFrame(40.0, -76.0)
+    CONCRETE, DRY, GREEN = (185, 183, 178), (150, 135, 85), (60, 100, 45)
+
+    def lonlat(self, e, n):
+        la, lo, _ = self.FRAME.enu_to_geodetic(np.asarray(e, np.float64), np.asarray(n, np.float64), 0.0)
+        return np.stack([lo, la], 1)
+
+    def feats(self, rows):
+        """Infrastructure Features of (kind, points, class) rows: points are (east, north) metres from the frame's origin."""
+        geoms = []
+        for kind, pts, _cls in rows:
+            ring = list(pts) + ([pts[0]] if kind == mapgeom.POLYGON else [])
+            geoms.append((kind, [[self.lonlat([p[0] for p in ring], [p[1] for p in ring])]]))
+        f = mapgeom.build("infrastructure", np.array([f"i{k:03d}" for k in range(len(rows))]), geoms)
+        f.attrs = {"class": mapgeom.text_column([r[2] for r in rows]),
+                   "subtype": mapgeom.text_column(["airport"] * len(rows)),
+                   "tags": mapgeom.text_column(["{}"] * len(rows)),
+                   "surface": mapgeom.text_column([None] * len(rows))}
+        return f
+
+    def box(self, w, h, cx=0.0, cy=0.0):
+        return [(cx - w / 2, cy - h / 2), (cx + w / 2, cy - h / 2), (cx + w / 2, cy + h / 2), (cx - w / 2, cy + h / 2)]
+
+    def photo(self, texel, size=256.0, apron_box=(120.0, 60.0)):
+        """A photo of a dry-grass field with a concrete apron (the box) on it, centred, and its Features."""
+        px = int(round(size / texel))
+        e, n = np.meshgrid((np.arange(px) + 0.5) * size / px - size / 2, size / 2 - (np.arange(px) + 0.5) * size / px)
+        rgb = np.empty((px, px, 3), np.uint8)
+        rgb[:] = self.DRY
+        inside = (np.abs(e) < apron_box[0] / 2) & (np.abs(n) < apron_box[1] / 2)
+        rgb[inside] = self.CONCRETE
+        f = self.feats([(mapgeom.POLYGON, self.box(*apron_box), "apron"),
+                        (mapgeom.POLYGON, self.box(600.0, 400.0), "international_airport")])
+        return rgb, inside, f, size
+
+    def lots(self, rgb, f, size, x0=None, y0=None):
+        x0 = -size / 2 if x0 is None else x0
+        y0 = -size / 2 if y0 is None else y0
+        return sf.photo_lots(rgb, self.FRAME, x0, y0, size, [f])
+
+    def test_joints_every_7_5_m_a_little_darker(self):
+        rgb, inside, f, size = self.photo(0.25)
+        base = sf.photo_pads(rgb, self.FRAME, -size / 2, -size / 2, size, aeroways.pads([f]), off_green=True)
+        out = sf._apron_slabs(base, self.FRAME, -size / 2, -size / 2, size, [f])
+        core = inside & (np.abs(np.arange(out.shape[1])[None, :] * 0.25 - size / 2) < 50) \
+            & (np.abs(size / 2 - np.arange(out.shape[0])[:, None] * 0.25) < 25)
+        was, now = base[core].astype(float).mean(axis=1), out[core].astype(float).mean(axis=1)
+        ratio = now / was
+        self.assertLess(float(ratio.min()), 0.97, "a joint is darker (a 0.3 m line on a 0.25 m texel: about 5.6 %)")
+        self.assertGreater(float(ratio.min()), 0.88, "and under 12 %: subtle")
+        self.assertLessEqual(float(ratio.max()), 1.0 + 1e-6)
+        share = float((ratio < 0.985).mean())
+        self.assertGreater(share, 0.04, "joints in both directions")
+        self.assertLess(share, 0.20, "thin: a 0.3 m line every 7.5 m")
+        # the lines repeat every 7.5 m along the apron's long edge: a row half way between two horizontal joints
+        r = int((size / 2 + 11.25) / 0.25)
+        row = out[r, :, :].astype(float).mean(axis=1)
+        x = (np.arange(row.shape[0]) + 0.5) * 0.25 - size / 2
+        sel = np.abs(x) < 50
+        dark = np.flatnonzero(sel & (row < np.median(row[sel]) - 3))
+        groups = np.split(dark, np.flatnonzero(np.diff(dark) > 3) + 1)
+        centres = np.array([(x[g[0]] + x[g[-1]]) / 2 for g in groups if len(g)])
+        self.assertGreaterEqual(len(centres), 12)
+        self.assertTrue(np.allclose(np.diff(centres), 7.5, atol=0.3), np.diff(centres))
+
+    def test_joints_follow_the_longest_edge_and_not_the_grass(self):
+        # an apron turned 30 degrees: its joint lines turn with it
+        c, s = np.cos(np.radians(30.0)), np.sin(np.radians(30.0))
+        pts = [(c * x - s * y, s * x + c * y) for x, y in self.box(90.0, 45.0)]
+        f = self.feats([(mapgeom.POLYGON, pts, "apron")])
+        size, texel = 192.0, 0.25
+        px = int(size / texel)
+        e, n = np.meshgrid((np.arange(px) + 0.5) * texel - size / 2, size / 2 - (np.arange(px) + 0.5) * texel)
+        u, v = e * c + n * s, -e * s + n * c
+        rgb = np.full((px, px, 3), self.DRY, np.uint8)
+        inside = (np.abs(u) < 45) & (np.abs(v) < 22.5)
+        rgb[inside] = self.CONCRETE
+        got = sf._apron_slabs(rgb, self.FRAME, -size / 2, -size / 2, size, [f])
+        self.assertTrue(np.array_equal(got[~inside & (np.abs(u) > 55)], rgb[~inside & (np.abs(u) > 55)]), "grass untouched")
+        v_line = np.abs(np.mod((u + 45) / 7.5 + 0.5, 1.0) - 0.5) * 7.5 < 0.1          # (on a joint, in the apron's frame)
+        on = inside & v_line & (np.abs(u) < 38) & (np.abs(v) < 18)
+        off = inside & (np.abs(np.mod((u + 45) / 7.5 + 0.5, 1.0) - 0.5) * 7.5 > 0.6) \
+            & (np.abs(np.mod((v + 22.5) / 7.5 + 0.5, 1.0) - 0.5) * 7.5 > 0.6) & (np.abs(u) < 38) & (np.abs(v) < 18)
+        self.assertLess(float(got[on].mean()), float(got[off].mean()) - 5.0)
+        self.assertTrue(np.array_equal(got[off], rgb[off]), "between the joints: the photo")
+
+    def test_coarse_texels_draw_one_faint_pixel_line(self):
+        rgb, inside, f, size = self.photo(1.0)
+        base = sf.photo_pads(rgb, self.FRAME, -size / 2, -size / 2, size, aeroways.pads([f]), off_green=True)
+        out = sf._apron_slabs(base, self.FRAME, -size / 2, -size / 2, size, [f])
+        ratio = (out[inside].astype(float).mean(axis=1) + 1e-9) / (base[inside].astype(float).mean(axis=1) + 1e-9)
+        self.assertGreater(float(ratio.min()), 0.94, "faint at a 1 m texel (about 4 %)")
+        self.assertLess(float(ratio.min()), 0.99, "but there")
+
+    def test_stains_along_a_gates_centreline_and_the_joints_line_up_across_tiles(self):
+        apron = (mapgeom.POLYGON, self.box(120.0, 60.0), "apron")
+        gate = (mapgeom.POINT, [(3.0, 31.0)], "airport_gate")        # (just outside the apron's north edge)
+        f = self.feats([apron, gate])
+        size, texel = 128.0, 0.5
+        px = int(size / texel)
+        rgb = np.full((px, px, 3), self.CONCRETE, np.uint8)
+        got = sf._apron_slabs(rgb, self.FRAME, -64.0, -64.0, size, [f])
+        e = (np.arange(px) + 0.5) * texel - 64.0
+        n = 64.0 - (np.arange(px) + 0.5) * texel
+        row = got[int(np.argmin(np.abs(n - 12.0))), :, :].astype(float).mean(axis=1)      # (18 m in from the apron's edge)
+        centre, beside = float(row[np.abs(e - 3.0) < 0.5].mean()), float(row[(e > 9.5) & (e < 12.5)].mean())
+        self.assertLess(centre, beside - 3.0, "the stain: darker on the centreline")
+        self.assertGreater(centre, beside * 0.8, "subtle")
+        far = got[int(np.argmin(np.abs(n + 25.0))), :, :].astype(float).mean(axis=1)       # (past the stain's end)
+        self.assertLess(abs(float(far[np.abs(e - 3.0) < 0.5].mean()) - float(far[(e > 9.5) & (e < 12.5)].mean())), 1.0)
+        # a block of another origin draws the same joints and stains where they overlap
+        r0, c0 = 40, 90
+        part = sf._apron_slabs(rgb[r0:r0 + 64, c0:c0 + 64], self.FRAME, -64.0 + c0 * texel, 64.0 - (r0 + 64) * texel, 32.0, [f])
+        diff = np.abs(part.astype(int) - got[r0:r0 + 64, c0:c0 + 64].astype(int))
+        self.assertLessEqual(int(diff.max()), 1)
+        self.assertLess(float((diff > 0).mean()), 0.01)
+
+    def test_no_apron_no_change(self):
+        f = self.feats([(mapgeom.LINE, [(-50.0, 0.0), (50.0, 0.0)], "taxiway")])
+        rgb = np.full((64, 64, 3), 120, np.uint8)
+        self.assertIs(sf._apron_slabs(rgb, self.FRAME, -32.0, -32.0, 64.0, [f]), rgb)
+        self.assertIs(sf._apron_slabs(rgb, self.FRAME, -32.0, -32.0, 64.0, [None]), rgb)
+
+    def test_infield_grass_half_way_to_mown_green_on_vegetation_only(self):
+        size, texel = 128.0, 0.5
+        px = int(size / texel)
+        f = self.feats([(mapgeom.POLYGON, self.box(100.0, 100.0), "international_airport"),
+                        (mapgeom.POLYGON, self.box(20.0, 20.0, 0.0, 0.0), "apron")])
+        e, n = np.meshgrid((np.arange(px) + 0.5) * texel - 64, 64 - (np.arange(px) + 0.5) * texel)
+        rgb = np.full((px, px, 3), self.GREEN, np.uint8)
+        rgb[(e > 20) & (e < 40) & (n > 20)] = self.DRY
+        rgb[(e > 20) & (e < 40) & (n < -20)] = (40, 80, 150)                 # water
+        rgb[(e < -20) & (e > -40) & (n > 20)] = (140, 140, 138)              # a roof
+        rgb[(e < -20) & (e > -40) & (n < -20)] = (150, 90, 60)               # bare soil
+        painted = sf.photo_pads(rgb, self.FRAME, -64.0, -64.0, size, aeroways.pads([f]))        # (the apron's paving over the green)
+        out = sf._infield_grass(painted, self.FRAME, -64.0, -64.0, size, [f], before=rgb)
+        mown = sf._infield_target(painted).astype(float)
+        for name, sel in (("green", (np.abs(e) < 15) & (n > 25) & (n < 45) & (np.abs(e) > 5)), ("dry", (e > 25) & (e < 35) & (n > 25) & (n < 40))):
+            was = rgb[sel].astype(float)
+            want = was + (mown - was) * sf.INFIELD_SHARE
+            self.assertLess(float(np.abs(out[sel].astype(float) - want).max()), 1.01, name)
+        for name, sel in (("water", (e > 25) & (e < 35) & (n < -25) & (n > -40)), ("roof", (e < -25) & (e > -35) & (n > 25) & (n < 40)),
+                          ("soil", (e < -25) & (e > -35) & (n < -25) & (n > -40)), ("outside", (np.abs(e) > 55) | (np.abs(n) > 55)),
+                          ("paving", (np.abs(e) < 8) & (np.abs(n) < 8))):
+            self.assertTrue(np.array_equal(out[sel], (painted if name == "paving" else rgb)[sel]), name)
+        self.assertTrue(np.array_equal(rgb[0, 0], self.GREEN), "the input untouched")
+
+    def test_infield_keeps_the_photos_detail(self):
+        size, texel = 128.0, 0.5
+        px = int(size / texel)
+        f = self.feats([(mapgeom.POLYGON, self.box(100.0, 100.0), "international_airport")])
+        rng = np.random.default_rng(3)
+        rgb = np.clip(np.array(self.GREEN, float) + rng.normal(0, 8, (px, px, 1)) + rng.normal(0, 2, (px, px, 3)), 0, 255).astype(np.uint8)
+        out = sf._infield_grass(rgb, self.FRAME, -64.0, -64.0, size, [f])
+        core = (slice(100, 156), slice(100, 156))
+        s_in, s_out = (float(a[core].astype(float).std(axis=(0, 1)).mean()) for a in (rgb, out))
+        self.assertGreater(s_out, 0.35 * s_in)
+        self.assertLess(s_out, 0.65 * s_in)
+
+    def test_infield_without_a_polygon_uses_the_pads_hull(self):
+        size, texel = 512.0, 1.0
+        px = int(size / texel)
+        f = self.feats([(mapgeom.LINE, [(-50.0, 0.0), (50.0, 0.0)], "taxiway")])
+        rgb = np.full((px, px, 3), self.DRY, np.uint8)                       # (the tile's own vegetation: dry, its median)
+        for rr, cc in ((60, 0), (200, 0), (0, 240)):
+            rgb[int(size / 2 - rr) - 2:int(size / 2 - rr) + 3, int(size / 2 + cc) - 2:int(size / 2 + cc) + 3] = self.GREEN
+        out = sf.photo_lots(rgb, self.FRAME, -size / 2, -size / 2, size, [f])
+        r = lambda n: int(size / 2 - n)
+        c = lambda e: int(size / 2 + e)
+        self.assertFalse(np.array_equal(out[r(60), c(0)], self.GREEN), "within 150 m of the taxiway: mown")
+        self.assertTrue(np.array_equal(out[r(200), c(0)], self.GREEN), "past it: the photo")
+        self.assertTrue(np.array_equal(out[r(0), c(240)], self.GREEN))
+
+    def test_non_airport_ground_is_unchanged(self):
+        rgb = np.full((64, 64, 3), self.GREEN, np.uint8)
+        lot = self.feats([(mapgeom.POLYGON, self.box(30.0, 30.0), "parking")])
+        lot.attrs["subtype"] = mapgeom.text_column(["transit"])
+        out = sf.photo_lots(rgb, self.FRAME, -32.0, -32.0, 64.0, [lot])
+        outside = np.ones((64, 64), bool)
+        outside[16:48, 16:48] = False
+        self.assertTrue(np.array_equal(out[outside], rgb[outside]), "no airport: no mown green, no joints")
+        self.assertTrue(np.array_equal(sf.photo_lots(rgb, self.FRAME, -32.0, -32.0, 64.0, [None]), rgb))
+
+    def test_deterministic(self):
+        rgb, _inside, f, size = self.photo(0.5)
+        a = self.lots(rgb, f, size)
+        b = self.lots(rgb, f, size)
+        self.assertTrue(np.array_equal(a, b))
+        self.assertFalse(np.array_equal(a, rgb))
 
 
 if __name__ == "__main__":

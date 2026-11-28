@@ -110,7 +110,7 @@ do      -- the lamps' rows as the trees get them: kept as flat arrays, the same 
     'lamp rows: positions and phases')
 end
 local fl = require('beamngEarth/roads').flatLamps({ a = { pivot = 3, rows = { { 1, 2, 3 }, 'x', { 4, 5, 6 } } }, b = { rows = {} } })
-T.check(fl.a.pivot == 3 and table.concat(fl.a.flat, ',') == '1,2,3,1,4,5,6,3' and fl.b == nil,
+T.check(fl.a.pivot == 3 and table.concat(fl.a.flat, ',') == '1,2,3,1,0,4,5,6,3,0' and fl.b == nil,
   'flatLamps: a bad lamp left out, its index kept; a key without lamps none')
 T.check(require('beamngEarth/roads').flatLamps({}) == nil and require('beamngEarth/roads').flatLamps(nil) == nil, 'flatLamps: none')
 
@@ -228,5 +228,51 @@ roads.onFarDrop({ anchorId = 1, key = K })
 run(1, B)
 T.check(#objsWith('bb_') == 0 and #objsWith('bs_') == 0 and #objsWith('bf2_') == 0 and #objsWith('bf3_') == 0,
   'dropped: their objects gone')
+
+-- airfield lights in the lamps (server airfieldlights.far_points: a lamp row's fourth number is its glow group, 1 .. 5):
+-- a runway's far tile holds lights and no buildings, its lamps shown by the rule its mesh would have followed (hidden
+-- once the road geotile of its key shows its own), a tile with only street lamps and no mesh as before (unseen)
+do
+  local fa = roads.flatLamps({ a = { pivot = 3, rows = { { 1, 2, 3 }, { 4, 5, 6, 4 }, { 7, 8, 9, 9 }, { 1, 1, 1, 'x' } } } })
+  T.check(table.concat(fa.a.flat, ',') == '1,2,3,1,0,4,5,6,2,4,7,8,9,3,0,1,1,1,4,0',
+    'flatLamps: an airfield light keeps its group number, a bad one is lampglow')
+  T.check(roads.hasAirfield(fa) and not roads.hasAirfield(roads.flatLamps({ a = { rows = { { 1, 2, 3 } } } }))
+    and not roads.hasAirfield(nil), 'hasAirfield: only rows with a group')
+  local g = roads.FAR_LAMP_GROUPS
+  T.check(#g == 7 and g[1] == 'lampglow' and g[2] == 'afl_white' and g[3] == 'afl_green' and g[4] == 'afl_red'
+    and g[5] == 'afl_blue' and g[6] == 'afl_yellow' and g[7] == 'apron_glow',
+    'the far groups: lampglow, the colours in the server order, the pool of the apron masts')
+  -- the apron masts' rows (server airsideprops.far_points): 6, a pool (group number 6, scale 1); FAR_HEAD, a head's glow, lampglow
+  -- at the cluster's height
+  T.check(roads.FAR_HEAD == 7 and roads.FAR_HEAD_HEIGHT == 2.5 and roads.farLampGroup(7) == 0 and roads.farLampHeight(7) == 2.5
+    and roads.farLampGroup(6) == 6 and roads.farLampHeight(6) == 1 and roads.farLampGroup(8) == 0 and roads.farLampHeight(nil) == 1
+    and roads.farLampCode(7) == 7 and roads.farLampCode(8) == 0 and roads.farLampCode(0) == 0, 'the far lamp codes: pool 6, head 7')
+  local fm = roads.flatLamps({ a = { pivot = 3, rows = { { 1, 2, 3, 6 }, { 4, 5, 6, 7 } } } })
+  T.check(table.concat(fm.a.flat, ',') == '1,2,3,1,6,4,5,6,2,7' and roads.hasAirfield(fm), 'flatLamps: a pool and a head keep their codes')
+  local K3, K4 = geotile.key(gx + 1, gy + 1), geotile.key(gx + 2, gy + 1)
+  local f3 = { v = 1, key = K3, frame = { geotile.centre(17, gx + 1, gy + 1) }, h = 'a1',
+    lamps = { [K3] = { pivot = 30, rows = { { 1, 2, 30, 1 }, { 5, 6, 30, 4 }, { 9, 9, 31 }, { 3, 3, 30, 6 }, { 3, 3, 48, 7 } } } } }
+  local f4 = { v = 1, key = K4, frame = { geotile.centre(17, gx + 2, gy + 1) }, h = 'a2',
+    lamps = { [K4] = { pivot = 30, rows = { { 1, 2, 30 } } } } }
+  roads.onFarTile(farMsg(K3, nil, f3), 1)
+  roads.onFarTile(farMsg(K4, nil, f4), 1)
+  run(1, B)
+  local c = called('trees', 'onGeoRows', 'FLF' .. K3)
+  local rows = c[#c] and c[#c][5]
+  T.check(#c >= 1 and type(rows) == 'table' and #rows == 5 and rows[1][1] == 1 and rows[2][1] == 4 and rows[3][1] == 0
+    and c[#c][6] == roads.FAR_LAMP_GROUPS, 'a tile with no mesh shows its airfield lights, each in its group')
+  T.check(rows[4][1] == 6 and rows[4][6] == 1 and rows[4][7] == 1 and rows[5][1] == 0 and rows[5][6] == 1 and rows[5][7] == 2.5
+    and rows[5][4] == 48 and rows[3][7] == 1, 'an apron mast: a pool (apron_glow, scale 1) and a head (lampglow, height 2.5)')
+  T.check(#called('trees', 'onGeoRows', 'FLF' .. K4) == 0, 'street lamps alone in a tile with no mesh: unseen, as before')
+  -- its road geotile arrives with buildings: the far tile hides, its lights go (the road geotile's own are in its props)
+  files['/s/rg3.json'] = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h = "r3",
+    bld = { shape = "/s/rg3_bld.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 } }]], K3,
+    geotile.centre(17, gx + 1, gy + 1))
+  roads.onTile({ anchorId = 1, key = K3, path = '/s/rg3.json', n = 0, frame = { geotile.centre(17, gx + 1, gy + 1) }, h = 'r3' }, 1, B)
+  local drops = #called('trees', 'dropKey', 'g:FLF' .. K3)
+  for _ = 1, 5 do run(1, B) end
+  T.check(roads.nearShowsBuildings(K3) and #called('trees', 'dropKey', 'g:FLF' .. K3) > drops,
+    'its road geotile shows its own buildings: the far tile lights dropped')
+end
 
 T.done('test_fargeo')

@@ -140,6 +140,58 @@ class LotTest(unittest.TestCase):
         self.assertLess(len(spots), len(parking.lot_spots([self.LOT], (0, 0, 256, 256), z)))
 
 
+class AirsideLotTest(unittest.TestCase):
+    """No parked car and no stall line on an airport's apron or its airside lots; lots elsewhere as before."""
+    BOX = (0, 0, 256, 256)
+
+    def md(self, rows):
+        import test_airportroles as tar
+        inf = tar.infra(*rows)
+        cell = type("Cell", (), {"layers": {"infrastructure": inf, "roads": None}})()
+        return type("MD", (), {"cell": lambda self_, key, layers=(), kind=None: cell})()
+
+    def frame(self):
+        import geodesy
+        return geodesy.EnuFrame(-27.39, 153.118)
+
+    def rows(self, lot):
+        import mapgeom
+        import test_airportroles as tar
+        return [tar.FIELD, (mapgeom.POLYGON, tar.rect(0, 0, 256, 100), "apron"), lot]
+
+    def test_airside_rings_hold_the_apron_and_the_lot_in_it(self):
+        import mapgeom
+        import test_airportroles as tar
+        lot = (mapgeom.POLYGON, tar.rect(20, 20, 60, 40), "parking")
+        got = parking.airside_rings(self.frame(), [tar.infra(*self.rows(lot))])
+        self.assertEqual(len(got), 2)
+        self.assertEqual(parking.airside_rings(self.frame(), [None]), [])
+
+    def test_no_cars_or_stall_lines_on_the_apron_but_a_landside_lot_keeps_them(self):
+        import mapgeom
+        import test_airportroles as tar
+        frame = self.frame()
+        for lot_xy, cars in (((20, 20), False), ((20, 150), True)):      # (on the apron; 50 m off it)
+            lot = (mapgeom.POLYGON, tar.rect(lot_xy[0], lot_xy[1], 60, 40), "parking")
+            md = self.md(self.rows(lot))
+            elev = lambda la, lo: np.zeros(np.shape(la))                # noqa: E731
+            curb = [[30.0, 30.0, 0.0, 90.0]]                            # (a curb spot in the apron: dropped as well)
+            got = parking.tile_lot_spots(frame, 0, 0, md, elev, [], curb)
+            marks = parking.finish_markings(frame, 0, 0, md, elev, [], [])
+            self.assertEqual(bool([r for r in got if len(r) == 5]), cars, lot_xy)
+            self.assertEqual(bool(marks), cars, lot_xy)
+            self.assertEqual([r for r in got if len(r) == 4], [], "the apron's curb spot")
+
+    def test_a_lot_with_no_airport_in_the_cells_is_as_before(self):
+        import mapgeom
+        import test_airportroles as tar
+        lot = (mapgeom.POLYGON, tar.rect(20, 20, 60, 40), "parking", "transportation")
+        md = self.md([lot])
+        elev = lambda la, lo: np.zeros(np.shape(la))                    # noqa: E731
+        got = parking.tile_lot_spots(self.frame(), 0, 0, md, elev, [], [])
+        self.assertGreater(len(got), 20)
+
+
 class AisleTest(unittest.TestCase):
     def test_stalls_both_sides_nose_out(self):
         aisle = ("a", roads.Spec(6.0, "paved", True, "service", False), np.array([(0.0, 50.0, 0.0), (80.0, 50.0, 0.0)]), 0.0)
