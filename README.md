@@ -168,6 +168,14 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   drifting with the wind aloft, fog from the real visibility, ground wind with gusts that pushes the cars,
   rain and snow, the air temperature, and the sun dimming under overcast. It goes through the game's own
   weather system, so the Time & Weather menu shows the real values.
+- **Live air traffic** (off by default; Settings, Air traffic): the real aircraft around you from live ADS-B data
+  (adsb.lol, with airplanes.live and adsb.fi as stand-ins), based on devo343's Live Air Traffic add-on: 25 airframe
+  models with airline colours, spinning propellers and rotors, gear on the ground and on final, lights at dusk and
+  overhead, contrails from the real weather (where it is cold enough aloft, longer-lived in humid air), engine sounds
+  heard from where the aircraft was, labels, a follow camera and a seat view (Ctrl+Alt+F), and the aircraft on the 2D
+  and 3D maps (click one to set the GPS). Turning it on says first what is sent: only your approximate area (a point
+  on a ~17 mile grid), about every 15 seconds while you are in the world. Flight routes (adsbdb.com) have their own
+  switch. The graphics preset sets how many models and contrails are drawn.
 - **Weather page and radial menu**: Real weather, one of 15 presets (clear to thunderstorm, fog, snow, blizzard,
   sleet, freezing rain, hail) or Off (the game's own controls); intensity, how fast it changes, rain and snow on or
   off, rain visibility, the real clouds, fog, wind and rain each on or off, and a limit on how thick fog gets. Rain
@@ -435,7 +443,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   black lanes with slush at their edges, side streets packed white with grey wheel tracks, markings fading under the
   snow, snowbanks along plowed roads (never across junctions, crossings or bridges), sidewalks shovelled, trampled or
   left covered, white bridge decks. `BNE_WINTER=light`, `heavy` or `ice` forces a fixed light-snow, snowstorm or
-  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too); **New puddles (server)** (`BNE_PUDDLES=v2`: the weather comes with the last day of real rain, so the Weather page's New puddle look starts with the puddles a wet morning left; later versions add new puddle shapes and water along the kerbs). A switch set by hand in the
+  ice-storm state; `BNE_WINTER_ROADS=off` leaves the snowy streets out); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too); **New puddles (server)** (`BNE_PUDDLES=v2`: the weather comes with the last day of real rain, so the Weather page's New puddle look starts with the puddles a wet morning left; later versions add new puddle shapes and water along the kerbs); **Leaf cycle** (`BNE_LEAF_CYCLE=on`, with Winter: broadleaf trees colour and lose their leaves over several weeks in autumn, one tree at a time, and leaf out the same way in spring, by the place's latitude, height and climate). A switch set by hand in the
   server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
@@ -459,8 +467,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
   own mod manager, after a notice naming the author (they are not made by BeamNG.Earth); each download comes from the
   author's own GitHub releases and is checked against GitHub's checksum. Not while a BeamMP server is joined. Other
-  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`), and programs beside the game can read your
-  position from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md).
+  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`, which also says when the streamed world
+  changes and lists the buildings and towns round a point), and programs beside the game can read your position
+  from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md). Like the stock
+  maps, the level has a police vehicle group of the region you are in and its buildings in a `Buildings` group.
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads
@@ -742,6 +752,9 @@ The repository contains only code; all map data is downloaded at runtime and cac
   contributors (ODbL, rebuilt weekly), its Städte and Märkte from the Statistisches Bundesamt (Destatis,
   Gemeindeverzeichnis); German lettering: D-DIN (SIL OFL 1.1).
 - Railways: OpenStreetMap contributors (ODbL; railway tags, rebuilt weekly from the planet by the [BeamNG.Earth-data](https://github.com/TecnaGamer/BeamNG.Earth-data) repo's GitHub Action); US level crossings: the Federal Railroad Administration's Highway-Rail Crossing Inventory (public domain).
+- Live air traffic (off by default): aircraft data © adsb.lol contributors (ODbL), airplanes.live, adsb.fi
+  (https://adsb.fi); flight routes from adsbdb.com (memory only); models, sounds and code from devo343's Live Air
+  Traffic add-on (with permission); close-up jet sound from Pixabay.
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).
 Each source's terms apply to the downloaded data; the in-game window shows the attribution line.

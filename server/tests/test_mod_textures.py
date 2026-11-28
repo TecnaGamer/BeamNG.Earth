@@ -151,7 +151,9 @@ class ModTexturesTest(unittest.TestCase):
         seen = set()
         for rel, e in sorted(entries.items()):
             kind = e.get("derive", "").split(":")[0]
-            if not kind or kind in seen:
+            # ("coverage" is no derived map: level 0 as its source, the mips scaled, texdds.rs coverage_levels and its
+            # tests; test_twig_lods)
+            if not kind or kind in seen or kind == "coverage":
                 continue
             seen.add(kind)
             src = (ROOT / "mod" / "texture_sources" / e["source"]).read_bytes()

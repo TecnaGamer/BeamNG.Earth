@@ -187,6 +187,7 @@ import fast  # noqa: E402
 import protocol  # noqa: E402
 msgs = protocol.ef  # noqa: E402  (made in Rust: far_tile, far_swap, far_remove, far_done, status, load_progress)
 import weather as weathermod  # noqa: E402
+import airtraffic as airtrafficmod  # noqa: E402
 import snow as snowmod  # noqa: E402
 import liveaudio as liveaudiomod  # noqa: E402
 
@@ -483,6 +484,8 @@ WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
 # the modding API's places (Connection.places): incomplete requests waiting for their cells at a time, and how long
 # each waits (tries x WHERE_PLACE_RETRY_S: 2 min, then its last answer says it is still incomplete)
 PLACES_FOLLOWUPS, PLACES_TRIES = 4, 24
+# the modding API's towns (Connection.towns): the radius and count when the request names none (placenames caps both)
+TOWNS_RADIUS_DEFAULT_M, TOWNS_LIMIT_DEFAULT = 20000.0, 50
 
 HM_CACHE = 48               # heightmaps kept, the protected ones with them (6 before 2026-10-30: a fast player's
                             # prefetched chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again;
@@ -1515,6 +1518,10 @@ class Server:
         self._prune_scheduled = set()
         # Real weather at the player (weather.py): a weathermod.Service, or None (--weather off)
         self.weather = weather
+        # Live air traffic (airtraffic.py): asked by the mod only while the player turned it on; the answers shared by
+        # every connection per cell and slot, the routes in memory only
+        self.airtraffic = airtrafficmod.Service(net=self.net)
+        self.airroutes = airtrafficmod.Routes(net=self.net)
         # Winter W1 (snow.py): a snowmod.Service when BNE_WINTER is set (main), else None: no snowstate at all
         self.snow = None
         # Live weather sounds (liveaudio.py): the weathersynth child, started by a 'weather_audio' with mode 'live'
@@ -4039,6 +4046,10 @@ class Server:
     def _plan_elev(self, la, lo):
         """The road plans' ground: the DEM at grading.PROFILE_ZOOM with the tunnels' lids (tunnellids)."""
         z = self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
+        import embankfield
+        emb = embankfield.of(self)        # (M5 round 8: a road's embankment, blockworker.plan_elev's)
+        if emb is not None:
+            z = emb.apply(la, lo, z)
         return self.lids.apply(la, lo, z) if getattr(self, "lids", None) is not None else z
 
     def ground(self, frame, la, lo, z, grader=None):
@@ -8848,6 +8859,46 @@ class Connection:
         finally:
             self._places_followups = getattr(self, "_places_followups", 1) - 1
 
+    def _town_rows(self, lat, lon, radius, limit):
+        """api.towns' rows (worker thread): ([[name, lat, lon, class, population, dist m], ...] the largest first,
+        complete). Only the regions on disk or in memory (placenames.labels without fetch: the status bar fetches the
+        player's own); complete is False when some were missing."""
+        pn = self.s.place_names()
+        rows = pn.labels(lat, lon, radius, limit=limit)
+        complete = all(os.path.exists(pn.path(k)) for k in placenamesmod.cells_for(lat, lon, radius))
+        if not rows:
+            return [], complete
+        d = placenamesmod._dist_km(lat, lon, [r[1] for r in rows], [r[2] for r in rows]) * 1000.0
+        return [[r[0], round(r[1], 6), round(r[2], 6), r[3], int(r[4]) if math.isfinite(r[4]) else 0,
+                 round(float(m), 1)] for r, m in zip(rows, d)], complete
+
+    async def towns(self, msg):
+        """The modding API's towns {"id", "lat", "lon", "radius", "limit"} -> towns_result {"id", "towns": [[name,
+        lat, lon, class, population, dist m], ...], "complete", "error"?} (placenames.labels, the 3D map's town
+        labels; api.towns in the mod). One answer from the regions the app has; it fetches none for this."""
+        rid = msg.get("id")
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+            radius = float(msg.get("radius") or TOWNS_RADIUS_DEFAULT_M)
+            limit = int(msg.get("limit") or TOWNS_LIMIT_DEFAULT)
+        except (KeyError, TypeError, ValueError):
+            self.send({"type": "towns_result", "id": rid, "towns": [], "complete": False, "error": "bad request"})
+            return
+        if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(radius)
+                and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            self.send({"type": "towns_result", "id": rid, "towns": [], "complete": False, "error": "bad coordinates"})
+            return
+        radius = max(1000.0, min(radius, placenamesmod.LABELS_RADIUS_MAX_M))
+        limit = max(1, min(limit, placenamesmod.LABELS_MAX))
+        try:
+            rows, complete = await asyncio.get_running_loop().run_in_executor(
+                self.s.place_pool, self._town_rows, lat, lon, radius, limit)
+        except Exception as e:          # a damaged cell file, odd data: none, and why
+            log.info("towns: %s: %s", type(e).__name__, e)
+            self.send({"type": "towns_result", "id": rid, "towns": [], "complete": False, "error": type(e).__name__})
+            return
+        self.send({"type": "towns_result", "id": rid, "towns": rows, "complete": complete})
+
     async def _where_place_later(self, out, lat, lon, seq):
         """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
         never ahead of the world's own downloads), asked again every WHERE_PLACE_RETRY_S while Overture's hosts are
@@ -8890,6 +8941,23 @@ class Connection:
         else:
             self.s._geocode_said = None
         log.debug("geocode %r: %d results%s", q, len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
+        self.send(out)
+
+    async def air_traffic(self, msg):
+        """Live air traffic {"id", "lat", "lon", "rangeNm", "routes"} -> air_traffic_result {"id", "ok", "src",
+        "credit", "srvNow", "ac": [rows], "error"?} (airtraffic.answer in its own small pool: network waits there never
+        hold a build's or the search's threads). Only the mod's own switch sends these."""
+        try:
+            out = await asyncio.get_running_loop().run_in_executor(
+                airtrafficmod.POOL, airtrafficmod.answer, self.s.airtraffic, self.s.airroutes, msg)
+        except Exception as e:          # (answer catches the network's errors; anything else is a bug: said once)
+            out = {"type": "air_traffic_result", "id": msg.get("id"), "ok": False,
+                   "error": f"{type(e).__name__}: {e}"[:200]}
+        err = None if out.get("ok") else out.get("error")
+        if err != getattr(self.s, "_airtraffic_said", None):     # once per change, not every 15 s
+            self.s._airtraffic_said = err
+            if err:
+                log.info("air traffic: %s", err)
         self.send(out)
 
     async def stations(self, msg):
@@ -9388,6 +9456,8 @@ class Connection:
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
             if getattr(self, "terrain_files", False):
                 m["terrainFiles"] = 1
+            if airtrafficmod.TEST_ON:           # (BNE_AIRTRAFFIC_TEST=on: test runs see the aircraft without the page)
+                m["airTrafficTest"] = True
             import budget
             from cliffsettings import SETTINGS as cliff_settings
             from cliffsettings import available as cliffs_available
@@ -9563,6 +9633,8 @@ class Connection:
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
             self.spawn(self.geocode(msg))
+        elif kind == "air_traffic":             # live air traffic (airtraffic.py): the player's switch is on
+            self.spawn(self.air_traffic(msg))
         elif kind == "debug_map":
             self.spawn(self.debug_map(msg))
         elif kind == "cache_map":               # the map's cache view: what is cached where (covermap.py)
@@ -9585,7 +9657,9 @@ class Connection:
             self.spawn(self.map_labels(msg))
         elif kind == "places":                  # the modding API's places round a point (places.py; api.places)
             self.spawn(self.places(msg))
-        elif kind == "map_focus":               # the 3D map flying: where the view will end (map3d.flyHint)
+        elif kind == "towns":                   # the modding API's towns round a point (placenames.py; api.towns)
+            self.spawn(self.towns(msg))
+        elif kind == "map_focus":              # the 3D map flying: where the view will end (map3d.flyHint)
             self.on_map_focus(msg)
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)
             self.spawn(self.random_place(msg))
@@ -10268,6 +10342,12 @@ class Connection:
             ready["koppen"] = int(climate.koppen_at(lat, lon))
         except Exception as e:          # (no class: the mod keeps the full cycle)
             log.warning("koppen at the anchor: %s", e)
+        import leafcycle
+        if leafcycle.ON:                # BNE_LEAF_CYCLE: the place's leaf calendar (baretrees.lua: each tree's dates)
+            try:
+                ready["leaf"] = leafcycle.anchor_leaf(lat, gz, ready.get("koppen"))
+            except Exception as e:      # (none: the bare trees by the season's amount)
+                log.warning("leaf calendar at the anchor: %s", e)
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
         progress["done"] = True

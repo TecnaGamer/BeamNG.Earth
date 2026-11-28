@@ -394,6 +394,31 @@ Stock BeamNG rock models and contact-detail maps are read from the player's own
 installation. They and their derivatives are not redistributed in this repository
 or the optional texture pack.
 
+## Live air traffic (bundled, off by default)
+
+Built in from **devo343**'s [Live Air Traffic add-on](https://github.com/TecnaGamer/BeamNG.Earth/pull/1580) (2.10.3),
+used with the author's permission (confirmed by the project owner, 2026-11-27): its aircraft prediction, lights,
+contrails, sounds, follow and seat cameras, the airline colour schemes, the 25 airframe models and their gear, cabins,
+propellers, rotors and letters (made by the author's own model generator), and the synthesised engine sounds. Our
+changes: the fetching moved into the app (no companion window), the models got detail levels and one tinted livery
+each (`tools/build_airtraffic_shapes.py`), the sounds were re-made from the author's synthesiser and stored as OGG
+(`tools/build_airtraffic_sounds.py`), contrails follow the real weather.
+
+| What | Source | Licence / terms |
+|---|---|---|
+| Aircraft positions (first choice) | [adsb.lol](https://adsb.lol), from its volunteer feeders | Open Database License (ODbL): "Aircraft data © adsb.lol contributors (ODbL)" |
+| Aircraft positions (stand-in while adsb.lol is busy) | [airplanes.live](https://airplanes.live) | its terms: free, non-commercial, no uptime guarantee; credited in game |
+| Aircraft positions (stand-in while adsb.lol is busy) | [adsb.fi](https://adsb.fi) | its terms: personal, non-commercial use, a credit with a link to https://adsb.fi (in game and here) |
+| Flight routes (only with Flight routes on) | [adsbdb.com](https://www.adsbdb.com) | kept in memory only, never saved (its routes may not be copied into other databases) |
+| Close-up jet sound (`lat_jet_close.ogg`) | [Pixabay](https://pixabay.com), "big plane sound effect" by tanweraman, made into a 15 s loop by devo343 | Pixabay Content License (use inside a project allowed); credited here |
+| Every other aircraft sound | synthesised by devo343's generator (seeded numpy), ported to `tools/build_airtraffic_sounds.py` | the add-on's, with permission |
+| Letters painted on the followed aircraft | outlines from DejaVu Sans Bold, by devo343's glyph generator | DejaVu fonts licence (free) |
+
+The add-on's distant-jet recording (`lat_jet_distant.wav`) is **not** included (its source's terms forbid hosting it
+elsewhere); the add-on's own synthesised distant-jet sound is used instead.
+
+If you can, support these networks by feeding them with an ADS-B receiver.
+
 ## JPEG encoding in the companion server
 
 The native encoder uses libjpeg-turbo 3.1.0 through turbojpeg-sys 1.2.0.

@@ -36,6 +36,7 @@ import farfield
 import furniture
 import natural
 import geodesy
+import embankfield
 import grading as gradingmod
 import heightmap
 import l0roads
@@ -785,6 +786,9 @@ def plan_elev(la, lo):
     _st)."""
     st = _st()
     z = st.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
+    emb = embankfield.of(st)          # (M5 round 8: a road's embankment the surface model's filter cut; off by default)
+    if emb is not None:
+        z = emb.apply(la, lo, z)
     return st.lids.apply(la, lo, z) if getattr(st, "lids", None) is not None else z
 
 

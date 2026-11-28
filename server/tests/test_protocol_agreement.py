@@ -144,6 +144,7 @@ EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises s
                        "where_result",                               # the status bar: asked by the mod while driving
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
                        "places_result",                              # the modding API's places (test_places_api)
+                       "towns_result",                               # the modding API's towns (test_places_api)
                        "globe",                                      # the 3D map's globe: needs EOX tiles
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                                                                      # (test_randomplace)
