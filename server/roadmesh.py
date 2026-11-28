@@ -2068,14 +2068,17 @@ def _slabs_from_tops(P, T, UV, M, tops, side):
 
 
 def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=None, parapet_h=PARAPET_H,
-         low_parapet_decks=(), pads=()):
+         low_parapet_decks=(), pads=(), railing_decks=()):
     """The bridge decks of a tile as one colliding mesh: per "deck" chunk a slab of opaque concrete
     (DECK_SIDE) whose top is at the chunk's fixed heights (the road surface, drawn DECK_SKIN above it
     by build()), with sides and underside DECK_DEPTH below; the piers, and the truss beams (p, q, width, height:
     bridgetypes.truss_members) in painted steel (TRUSS_STEEL). (positions, tris, uvs, materials, tri
     material index) or None. ground: the tile's ground carriageways (roads.build_tile cover_out) for the parapet
-    test, drawn or not (with the roads painted into the ground the chunks have none). Pure."""
+    test, drawn or not (with the roads painted into the ground the chunks have none). railing_decks: {the parapet runs'
+    "deck" id: in town} drawn as a concrete cap with a guard rail (not in town) and a railing instead (bridgerailings,
+    BNE_BRIDGE_RAILINGS; a set: none in town). Pure."""
     chunks, context = _slab_chunks(_shown(chunks)), _slab_chunks(_shown(context))
+    railing_decks = railing_decks if isinstance(railing_decks, dict) else dict.fromkeys(railing_decks or (), False)
     dch = [c for c in chunks if c.get("deck")]
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
@@ -2085,6 +2088,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     if not rb and not piers and not beams and not pads and not faces:
         return None
     low_parapet_decks = set(low_parapet_decks or ())
+    railing_parts = []          # the guard rails' and railings' steel meshes (bridgerailings.mesh), added at the end
     if parapets is None:
         parapets = parapet_runs(chunks, context, _rb=rb, ground=ground, pads=pads)
     parapets_by_deck = {}
@@ -2219,7 +2223,10 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
             h = np.minimum(h, BRIDGE_CURB_H if BRIDGE_RAILS and n in low_parapet_decks and not parapet.get("nose")
                            else parapet_h)
             pz = active_field.at(parapet['edge']) if active_field is not None else parapet['z']
-            bp, bt_, buv = barrier_solid(parapet["edge"], -parapet["out"], pz, h, parapet["v"])
+            if n in railing_decks and not parapet.get("nose"):
+                bp, bt_, buv = _railing_curb(parapet, pz, railing_parts, railing_decks[n])
+            else:
+                bp, bt_, buv = barrier_solid(parapet["edge"], -parapet["out"], pz, h, parapet["v"])
             P.append(bp - origin)
             UV.append(buv)
             T.append(bt_ + nv)
@@ -2240,7 +2247,10 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     for run in parapets:
         if run["deck"] < 0:
             h = np.minimum(parapet_heights(run["mid"], run["ends"]), BRIDGE_CURB_H if BRIDGE_RAILS and run["deck"] in low_parapet_decks else parapet_h)
-            bp, bt, buv = barrier_solid(run["edge"], -run["out"], run["z"], h, run["v"])
+            if run["deck"] in railing_decks and not run.get("nose"):
+                bp, bt, buv = _railing_curb(run, run["z"], railing_parts, railing_decks[run["deck"]])
+            else:
+                bp, bt, buv = barrier_solid(run["edge"], -run["out"], run["z"], h, run["v"])
             P.append(bp - origin)
             UV.append(buv)
             T.append(bt + nv)
@@ -2285,6 +2295,15 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
                                              origin, ground, centre)
         P[start_p:], T[start_t:], UV[start_uv:], M[start_m:] = [pp], [tt + start_nv], [uu], [mm]
         nv = start_nv + len(pp)
+    if railing_parts:               # (BNE_BRIDGE_RAILINGS: the guard rails' and railings' steel, one material)
+        import bridgerailings
+        mats.append(bridgerailings.STEEL)
+        for rp, rt, ruv in railing_parts:
+            P.append(rp - origin)
+            UV.append(ruv)
+            T.append(rt + nv)
+            M.append(np.full(len(rt), len(mats) - 1))
+            nv += len(rp)
     if len(beams):
         for pt in sorted({b[4] if len(b) > 4 else "grey" for b in beams}):
             mats.append(steel(pt))
@@ -2295,6 +2314,16 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     if junctions:
         pp, uu, tt = _shared(pp, uu, tt)
     return pp, tt, uu, mats, np.concatenate(M)
+
+
+def _railing_curb(run, pz, railing_parts, town=False):
+    """A parapet run that takes the German edge (BNE_BRIDGE_RAILINGS): its concrete cap (bridgerailings.mesh, from the
+    road's heights pz at the run's edge; town: no guard rail) as barrier_solid's (positions, triangles, uv) in its place, the guard rail
+    and the railing on it appended to railing_parts (steel)."""
+    import bridgerailings
+    cap, steel = bridgerailings.mesh(run["edge"], run["out"], pz, town)
+    railing_parts.append(steel)
+    return cap
 
 
 def skirt(el, er, z, dd, e, ov, bank=0.0):
