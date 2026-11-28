@@ -169,7 +169,7 @@ def test_both_eval_sides_wait_for_the_lidar(tmp_path, monkeypatch):
     monkeypatch.setattr(ee, "run_watched", lambda cmd, log_path, env, cwd, watch=None: seen.append(env) or (0, None))
 
     class A:
-        out, image, views, reuse, online, no_buildings, cache = str(tmp_path), "10x10", "top", False, False, False, None
+        out, image, views, reuse, no_buildings, cache = str(tmp_path), "10x10", "top", False, False, None
     for side in ee.SIDES:
         ee.build_side({"name": "j", "at": [1.0, 2.0]}, side, "tree", A, lambda m: None)
     assert [e["BNE_LIDAR_GAPS_WAIT"] for e in seen] == [ee.LIDAR_WAIT_S] * 2
