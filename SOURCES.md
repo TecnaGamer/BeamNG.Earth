@@ -88,7 +88,11 @@ Pennsylvania (`imagery.pasda.psu.edu`), Virginia (`vginmaps.vdem.virginia.gov`),
 (`mapy.geoportal.gov.pl`), Czechia (`ags.cuzk.gov.cz`), Estonia (`tiles.maaamet.ee`), Flanders
 (`geo.api.vlaanderen.be`), Bavaria (`geoservices.bayern.de`), North Rhine-Westphalia (`www.wms.nrw.de`),
 Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersachsen.de`), Berlin
-(`gdi.berlin.de`), Hesse (`www.gds-srv.hessen.de`), Japan (`cyberjapandata.gsi.go.jp`), Hong Kong
+(`gdi.berlin.de`), Hesse (`www.gds-srv.hessen.de`), Hamburg (`geodienste.hamburg.de`), Bremen
+(`geodienste.bremen.de`), Schleswig-Holstein (`dienste.gdi-sh.de`), Mecklenburg-Vorpommern (`www.geodaten-mv.de`),
+Brandenburg (`isk.geobasis-bb.de`), Saxony-Anhalt (`www.geodatenportal.sachsen-anhalt.de`), Saxony
+(`geodienste.sachsen.de`), Thuringia (`www.geoproxy.geoportal-th.de`), Saarland (`geoportal.saarland.de`),
+Rhineland-Palatinate (`geo4.service24.rlp.de`), Japan (`cyberjapandata.gsi.go.jp`), Hong Kong
 (`mapapi.hkmapservice.gov.hk`), New South Wales (`maps.six.nsw.gov.au`), Tasmania
 (`services.thelist.tas.gov.au`) and Ontario (`ws.geoservices.lrc.gov.on.ca`).
 

@@ -126,6 +126,9 @@ class Source:
     # (the parent at z - export, (TILE << export)² px), split into z tiles on disk; url takes {bbox}
     # (EPSG:3857) and {size}. 0: an XYZ source (url takes {z}, {x}, {y}).
     export: int = 0
+    # An export source that burns a mark into its images' top-left corner (imagery_regional.MARGIN): px its request
+    # reaches past the parent's top and left edges, cut off before the split. 0: the parent's box as it is.
+    margin: int = 0
     # Never fetched by a render: a tile not on disk yet is missing there this time (the next source fills
     # it); warm() fetches them ahead of the player, one request at a time (slow hosts: USGS's NAIP
     # service took ~10 s a request in-game, 512 or 1024 px alike, and 5xx'd under parallel requests).
@@ -285,7 +288,7 @@ for _n, (_url, _attr, _bounds, _kind, _leaf) in imagery_regional.REGIONAL.items(
                              leaf_off=_leaf)
     else:                       # a WMS / ArcGIS export: one 1024 px image per z15 parent, ahead of the player
         SOURCES[_n] = Source(_n, _url, 17, _attr, min_zoom=17, export=2, lazy=True, bounds=_bounds, nodata="white",
-                             leaf_off=_leaf)
+                             leaf_off=_leaf, margin=imagery_regional.MARGIN.get(_n, 0))
 # British Columbia's lidar-programme orthophotos (bcortho.py: 10-15 cm, rendered from the Province's GeoTIFFs, not
 # fetched as images): after the regional services, like an export source
 SOURCES["bcortho"] = Source("bcortho", bcorthomod.URL, 17, bcorthomod.ATTRIBUTION, min_zoom=17, export=2, lazy=True,
@@ -506,6 +509,14 @@ def mercator_bbox(z, x, y):
     size = EARTH_CIRC / 2 ** z
     x0, y1 = -EARTH_CIRC / 2 + x * size, EARTH_CIRC / 2 - y * size
     return x0, y1 - size, x0 + size, y1
+
+
+def margin_bbox(mb, size, m):
+    """An EPSG:3857 extent (minx, miny, maxx, maxy) drawn at size px, widened by m px to the west and the north: the
+    box of a (size + m)² request whose bottom-right size² px are mb's (Source.margin)."""
+    x0, y0, x1, y1 = mb
+    d = (x1 - x0) / size * m
+    return x0 - d, y0, x1, y1 + d
 
 
 def _box_any(a, k):
@@ -919,7 +930,11 @@ class Imagery:
             mb = mercator_bbox(z - k, x >> k, y >> k)
             if src.url == bcorthomod.URL:
                 return self._render_bcortho(src, z, x, y, mb)
-            url = src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=lat_lon_bbox(mb), size=TILE << k)
+            m = src.margin
+            if m:                               # (the mark lands in the strip cut off below)
+                mb = margin_bbox(mb, TILE << k, m)
+            url = src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=lat_lon_bbox(mb),
+                                 size=(TILE << k) + m)
             if self.fetcher.miss_alive(miss, url):
                 return None
             kind = getattr(self._local, "kind", "demand")
@@ -942,6 +957,10 @@ class Imagery:
                 im = Image.open(io.BytesIO(r.body)).convert("RGB")
             except (OSError, ValueError) as e:
                 raise ImageryError(f"undecodable {src.name} image {parent}: {e}") from None
+            if m:
+                if im.size != ((TILE << k) + m, (TILE << k) + m):
+                    im = im.resize(((TILE << k) + m, (TILE << k) + m), Image.BILINEAR)
+                im = im.crop((m, m, m + (TILE << k), m + (TILE << k)))
             if im.size != (TILE << k, TILE << k):
                 im = im.resize((TILE << k, TILE << k), Image.BILINEAR)
             out = self._split_export(src, z, x, y, np.asarray(im))
