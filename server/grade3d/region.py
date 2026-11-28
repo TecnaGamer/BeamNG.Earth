@@ -95,11 +95,12 @@ def _solve_block(planner, bx, by):
     c0 = np.array([bx, by], np.float64) * BLOCK_M
     c1 = c0 + BLOCK_M
     reach = RAMP_M + MARGIN_M
-    ms = members_in(planner, c0 - reach - READ_PAD_M, c1 + reach + READ_PAD_M)
+    box = (c0 - reach - READ_PAD_M, c1 + reach + READ_PAD_M)
+    ms = members_in(planner, *box)
     if not ms:
         return Block((c0, c1), {}, time.perf_counter() - t0, {"members": 0})
     t1 = time.perf_counter()
-    net = network.build(ms, _linenet.Network())
+    net = network.build(ms, _linenet.Network(), box)
     if time.perf_counter() - t1 > BUILD_SLOW_S:
         log.warning("grading: 3D block (%d, %d) of region %s: its network of %d members took %.1f s to build",
                     bx, by, planner.region, len(ms), time.perf_counter() - t1)

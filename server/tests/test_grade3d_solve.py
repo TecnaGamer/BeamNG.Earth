@@ -89,14 +89,17 @@ def test_a_street_over_a_tunnel_stays_on_its_terrain_and_the_tunnel_goes_under()
 
 def test_a_road_ending_near_a_tunnels_middle_is_not_joined_to_it():
     # (Suedtiroler Platz: a street ends 1.8 m off the line of the tunnel under it; the two share a map node, but at the
-    # tunnel's portal, not there: no join, the street over the tunnel by its clearance)
+    # tunnel's portal, not there: no join, the street over the tunnel by its clearance. Its end meets a lane there: an
+    # end the map joins to nothing driven would be open, layers' "open")
     portal = ("b", 150.0, 0.0)
     ms = [_m("w", _line(-600, 0, -150, 0, 46), cls="primary", nodes=frozenset({"a"}), node_xy=(("a", -150.0, 0.0),)),
           _m("tube", _line(-150, 0, 150, 0, 31), "tunnel", cls="primary", level=-1.0, nodes=frozenset({"a", "b"}),
              node_xy=(("a", -150.0, 0.0), portal)),
           _m("e", _line(150, 0, 600, 0, 46), cls="primary", nodes=frozenset({"b"}), node_xy=(portal,)),
-          _m("street", _line(0, 1.8, 0, 300, 31), cls="residential", nodes=frozenset({"b", "s"}),
-             node_xy=(portal, ("s", 0.0, 300.0)))]
+          _m("street", _line(0, 1.8, 0, 300, 31), cls="residential", nodes=frozenset({"b", "s", "x"}),
+             node_xy=(portal, ("s", 0.0, 300.0), ("x", 0.0, 1.8))),
+          _m("lane", _line(0, 1.8, -200, 300, 31), cls="residential", nodes=frozenset({"x"}),
+             node_xy=(("x", 0.0, 1.8),))]
     net = network.build(ms)
     keys = [str(m.key) for m in net.members]
     st, tu = keys.index("street"), keys.index("tube")

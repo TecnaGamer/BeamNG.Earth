@@ -13,6 +13,10 @@ the map does not put one path over the other there:
 - two tunnels at one level ("apart"): the one under the other, and the map does not say which;
 - by the levels alone within NEAR_END_M of an end of a path ("merge"): a ramp merging into a deck, mapped crossing it
   one level apart, its end the merge;
+- by the kinds too within NEAR_END_M of an end of a path that the map joins to nothing driven ("open",
+  network.open_ends): the road ends in the map there, its height unknown (La Defense's car park spiral rising from a
+  node only a footway touches, 2 m from where the map has it pass over the Tour Legende's delivery tunnel, its car park
+  not mapped; the user, #135);
 - where the map joins the two places so near each other that no route between them through its joins can part them by
   the clearance ("joined", Reach): along a path a stretch climbs or falls at most its steepest member's grade, across
   a join not at all (one height). The map has them both meet and pass one over the other, and its joins (the nodes
@@ -35,8 +39,8 @@ NEAR_END_M = 20.0       # m from a path's end within which an order by the level
 @dataclass(frozen=True)
 class Layer:
     """A crossing of members a and b (at sa, sb; at q): upper "a", "b" or None (no clearance); need (m) the upper's road
-    over the lower's at least (0 without a clearance); why "kinds", "levels" (a clearance), "grade", "apart", "merge"
-    or "joined" (none)."""
+    over the lower's at least (0 without a clearance); why "kinds", "levels" (a clearance), "grade", "apart", "open",
+    "merge" or "joined" (none)."""
     a: int
     sa: float
     b: int
@@ -57,6 +61,13 @@ def _near_end(network, i, s):
     """Whether member i's arc length s is within NEAR_END_M of an end of its path."""
     p, sp = network.path_s(i, s)
     return min(sp, network.paths[p].length - sp) <= NEAR_END_M
+
+
+def _near_open_end(network, i, s):
+    """Whether member i's arc length s is within NEAR_END_M of an end of its path the map joins to nothing driven
+    (network.open_ends)."""
+    p, sp = network.path_s(i, s)
+    return any(abs(sp - se) <= NEAR_END_M for se in network.open_ends.get(p, ()))
 
 
 def _grade(m):
@@ -142,6 +153,8 @@ def layer(network, a, sa, b, sb, q, reach=None):
     by_kind = _gsh.LEVEL_BAND[ma.kind] != _gsh.LEVEL_BAND[mb.kind]
     if not by_kind and (_near_end(network, a, sa) or _near_end(network, b, sb)):
         return Layer(a, sa, b, sb, q, None, 0.0, "merge")
+    if _near_open_end(network, a, sa) or _near_open_end(network, b, sb):
+        return Layer(a, sa, b, sb, q, None, 0.0, "open")
     u, d = (a, b) if up == "i" else (b, a)
     need = float(_gsh.clearance_need(net, u, d, q))
     if not (Reach(network) if reach is None else reach).apart(*network.path_s(a, sa), *network.path_s(b, sb), need):

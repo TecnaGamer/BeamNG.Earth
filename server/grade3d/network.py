@@ -46,13 +46,15 @@ class Network:
     """members: [gradeshapes.Member]; net: their gradeshapes.Net (lines, arc lengths, the line network); paths: [Path]
     (in order of their first member's key); at: {member: (path, part index)}; joins: [(member a, s on a, member b, s on
     b)] each once, a < b, those inside a path left out; crossings: [(member a, s on a, member b, s on b, q (2,))] each
-    once, a < b."""
+    once, a < b; open_ends: {path: (arc length, ...)}, open_ends' (where a road ends that the map joins to nothing
+    driven)."""
     members: list
     net: object
     paths: list
     at: dict
     joins: list = field(default_factory=list)
     crossings: list = field(default_factory=list)
+    open_ends: dict = field(default_factory=dict)
 
     def path_s(self, i, s):
         """(path, arc length along it) of member i's arc length s."""
@@ -392,9 +394,47 @@ def chain(net, rel):
     return out
 
 
-def build(members, network=None):
+def open_ends(network, box=None):
+    """{path: (arc length along it, ...)}: where on the network's paths a driven member (a road, not a footpath; a
+    track) ends that the map joins to nothing of its family that is driven (a road's to no road but a footpath, a
+    track's to no track), through its joins or its own path's chain: where the road ends in the map, a car park's ramp
+    whose park is not mapped (La Defense's spiral, rising from a node only a footway touches, the two one path). box
+    (lo, hi): the area the members were read over (every member touching it read): an end outside it may go on to what
+    was not read, and is not one; None: every end is the map's."""
+    m, lines, L = network.members, network.net.lines, network.net.L
+
+    def driven(i, j):
+        return family(m[j].kind) == family(m[i].kind) and (m[j].cls or "") not in _gsh.PATHS
+
+    joined = set()                      # {(member, 0 its start or 1 its end)}
+    for a, sa, b, sb in network.joins:
+        for i, si, j in ((a, sa, b), (b, sb, a)):
+            e = _end(network.net, i, si)
+            if e is not None and driven(i, j):
+                joined.add((i, e))
+    for path in network.paths:
+        for (a, fa), (b, fb) in zip(path.parts, path.parts[1:]):
+            if driven(a, b):
+                joined.add((a, 1 if fa else 0))
+            if driven(b, a):
+                joined.add((b, 0 if fb else 1))
+    out = {}
+    for i, mi in enumerate(m):
+        if (mi.cls or "") in _gsh.PATHS:
+            continue
+        for e in (0, 1):
+            xy = np.asarray(lines[i][-1 if e else 0][:2], np.float64)
+            if (i, e) in joined or (box is not None and not (np.all(xy >= box[0]) and np.all(xy <= box[1]))):
+                continue
+            p, s = network.path_s(i, float(L[i]) if e else 0.0)
+            out.setdefault(p, []).append(s)
+    return {p: tuple(sorted(v)) for p, v in out.items()}
+
+
+def build(members, network=None, box=None):
     """The Network of members (one_way's of them): their Net (on the line network: the process's, or network), every
-    member's joins and crossings, and the members chained into paths."""
+    member's joins and crossings, the members chained into paths, and its paths' open ends (box: the area the members
+    were read over, open_ends)."""
     members = one_way(members)
     net = _gsh.Net(members, network)
     rel = relations(net)
@@ -415,4 +455,6 @@ def build(members, network=None):
             joins.append((i, si, j, sj))
         else:
             crossings.append((i, si, j, sj, np.asarray(q, np.float64)))
-    return Network(members, net, paths, at, joins, crossings)
+    out = Network(members, net, paths, at, joins, crossings)
+    out.open_ends = open_ends(out, box)
+    return out

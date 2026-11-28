@@ -123,6 +123,33 @@ def test_two_roads_joined_through_a_third_too_near_their_crossing_are_joined_the
     assert xs and all(y.upper is not None for y in xs)
 
 
+def test_a_crossing_near_an_end_the_map_joins_to_nothing_driven_is_open():
+    # (La Defense's car park spiral: its ramp rises from a node only a footway touches, its car park not mapped, and 2 m
+    # on the map has it over a delivery tunnel (here 12 m on): the map says nothing of its height there)
+    ramp = _noded("ramp", np.array([[-2.0, 0.0], [0.0, 0.0], [200.0, 0.0]]), "ground", 0.0,
+                  [("r0", -2.0, 0.0), ("r1", 200.0, 0.0)])
+    walk = _noded("walk", _line(-2, 0, -2, -80, 9), "ground", 0.0, [("r0", -2.0, 0.0), ("w1", -2.0, -80.0)],
+                  cls="footway")
+    tube = _noded("tube", _line(10, -100, 10, 100, 21), "tunnel", -1.0, [("t0", 10.0, -100.0), ("t1", 10.0, 100.0)])
+    street = _noded("street", _line(200, -100, 200, 100, 21), "ground", 0.0, [("r1", 200.0, 0.0), ("s0", 200.0, -100.0),
+                                                                                ("s1", 200.0, 100.0)], cls="secondary")
+    net = network.build([ramp, walk, tube, street])
+    (x,) = [y for y in layers.order(net) if {str(net.members[y.a].key), str(net.members[y.b].key)} == {"ramp", "tube"}]
+    assert x.upper is None and x.why == "open"
+    # (its end joined to a street: the map's road goes on there, the tunnel under it by its clearance)
+    linenet.reset()
+    lane = _noded("lane", _line(-2, -100, -2, 100, 21), "ground", 0.0, [("r0", -2.0, 0.0), ("l0", -2.0, -100.0),
+                                                                        ("l1", -2.0, 100.0)], cls="residential")
+    net = network.build([ramp, lane, tube, street])
+    (x,) = [y for y in layers.order(net) if {str(net.members[y.a].key), str(net.members[y.b].key)} == {"ramp", "tube"}]
+    assert x.why == "kinds" and str(net.members[x.over()[0]].key) == "ramp"
+    # (its end outside the area read: it may go on to what was not read, the clearance kept)
+    linenet.reset()
+    net = network.build([ramp, walk, tube, street], box=(np.array([0.0, -150.0]), np.array([300.0, 150.0])))
+    (x,) = [y for y in layers.order(net) if {str(net.members[y.a].key), str(net.members[y.b].key)} == {"ramp", "tube"}]
+    assert x.why == "kinds"
+
+
 def test_two_tunnels_at_one_level_are_left_apart():
     ms = [_m("road", _line(-200, 0, 200, 0), "tunnel", level=-1.0), _m("track", _line(0, -200, 0, 200), "tunnel", level=-1.0)]
     net = network.build(ms)

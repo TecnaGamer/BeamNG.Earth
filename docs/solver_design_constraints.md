@@ -29,8 +29,10 @@ These apply to every change.
 The map gives these; the solve must meet every one exactly (#119).
 
 1. **Joins.** Roads the map joins meet at one height. A join is a map node both roads share, at that node's place (#119), never two lines merely lying near each other.
+   - The node's place is read from where the lines meet: the end of one on the other nearest the node, within 6 m (`NODE_M`). The node positions come from the map's connector fractions, which can place one node metres apart on two short ways (#135).
+   - Any node of both counts, not only the one nearest the end. Example: Barcelona's bus depot, where an aisle meets a ramp loop at its second-to-last node, 0.45 m from its end.
 2. **Clearances.** Where two roads cross at different levels, the upper clears the lower by at least its headroom plus the upper's structure (`gradeshapes.clearance_need`):
-   - The headroom is the lower road's mapped `maxheight` where it has one. Otherwise 4.0 m for a road and 6.0 m for a track, plus a 0.15 m margin.
+   - The headroom is the lower road's mapped `maxheight` where it has one. A car park aisle (`service=parking_aisle`, Overture's subclass `parking_aisle`) without a sign has a car's 2.3 m (the user, #135: car parks are signed 2.0–2.3 m). Otherwise 4.0 m for a road and 6.0 m for a track. Each gets a 0.15 m margin on top.
    - The structure is a deck's depth by its span, a rail deck's 1.68 m, or a tunnel's 1.0 m cover.
 3. **Grading laws.** Each road keeps its class's maximum grade and minimum vertical curve. A major road's vertical curve is the one it is driven over at its class's driving speed (`laws.DRIVE_KMH`, at most 0.2 g of lift). Each stretch is held to the laws of the road it is on, not to those of the fastest road its path joins (#133).
 
@@ -71,6 +73,8 @@ Each rule below reads a kind of map data; none is tied to a place.
 - **"grade":** the two are at one level and the map has no node of both there, so it says nothing of their heights.
 - **"apart":** two tunnels at one level; the map does not say which is under.
 - **"merge":** ordered by levels alone, within 20 m of a path's end. This is a ramp merging, mapped as crossing.
+- **"open":** within 20 m of where a road ends that the map joins to nothing driven (no road, only a footpath or nothing; for a track, no track) (#135, the user). The road goes on off the map there, and the map says nothing of its height. Example: La Défense's car park spiral rises from a node only a footway touches, its car park not mapped, and 2 m on the map has it over the Tour Légende's delivery tunnel.
+  - An end outside the area the block read may go on to what was not read, so it is not one.
 - **"joined":** no route between the two places, through the map's joins, can part them by the clearance (#135). Examples: a raceway's deck crossing its own ground approach 14 m from where they meet (Vienna's Südtiroler Platz); a service tunnel at La Défense passing 5.25 m under a junction 9 m from the node it starts at. Along a route, a stretch climbs at most its length × its steepest member's grade. Across a join it climbs nothing.
   - The map then says both "they meet" and "one passes over the other". Its joins (topology, which every router reads) outrank its layer (drawing order).
   - The search is bounded by the clearance divided by the grade: about 40–160 m for roads and about 250 m for track. It never leaves the block.
@@ -89,6 +93,6 @@ Each rule below reads a kind of map data; none is tied to a place.
 
 ## 7. Open questions for the user
 
-1. **A link's vertical curve.** A motorway link is driven at its motorway's 130 km/h, a 665 m curve. Is that the law for links, or do links get their own driving speed? (Pregerson, #133.)
+1. **A link's vertical curve.** A motorway link is driven at its motorway's 130 km/h, a 665 m curve. Is that the law for links, or do links get their own driving speed? (Pregerson, #133.) Links at their own law or at 80 km/h do not alone solve Pregerson's block (#135).
 2. **`tunnel=building_passage`.** It is a road through a building at street level, which Overture gives as a plain tunnel. Read the OSM value per way through the tag join, so a passage is ground? Bowker's block now solves without it.
 3. **Solving the blocks ahead** of the car within the preload distance (section 6).

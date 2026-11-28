@@ -75,6 +75,23 @@ class HeightLimitTest(unittest.TestCase):
         self.assertAlmostEqual(float(e.max()), 520.0, delta=1.0)
         self.assertEqual(roads.height_limit_lines(features([[(0, 0), (10, 0)]], ["secondary"])), [])
 
+    def test_a_car_park_aisle_without_a_sign_has_a_cars_limit(self):
+        # (car parks are signed 2.0-2.3 m: La Defense's spiral and the lot under the Pregerson stack held a truck's 4 m)
+        f = features([[(0, 0), (100, 0)], [(0, 50), (100, 50)]], ["service", "service"],
+                     subclasses=[(0, "parking_aisle"), (1, "driveway")])
+        (ring, h), = roads.height_limit_lines(f)
+        self.assertEqual(h, roads.CAR_PARK_HEADROOM_M)
+        e, n, _ = FRAME.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+        self.assertAlmostEqual(float(e.min()), 0.0, delta=1.0)
+        self.assertAlmostEqual(float(e.max()), 100.0, delta=1.0)
+        self.assertLess(float(np.abs(n).max()), 1.0)          # (the aisle's; the driveway keeps a truck's)
+        # (a sign over a part of it: the sign's there, a car's either side)
+        f = features([[(0, 0), (100, 0)]], ["service"], subclasses=[(0, "parking_aisle")])
+        f.rules["max_height_m"] = rules([(0, 2.1, 0.4, 0.6)], "float")
+        got = sorted((round(float(h), 3), round(float(FRAME.geodetic_to_enu(r[:, 1], r[:, 0], 0.0)[0].min()))) for r, h in
+                     roads.height_limit_lines(f))
+        self.assertEqual(got, [(2.1, 40), (roads.CAR_PARK_HEADROOM_M, 0), (roads.CAR_PARK_HEADROOM_M, 60)])
+
 
 if __name__ == "__main__":
     unittest.main()

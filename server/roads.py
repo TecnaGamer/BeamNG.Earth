@@ -894,7 +894,8 @@ def part_floor(feats, i, rngs=None):
 
 def height_limit_lines(feats, on_bridges=True):
     """[(ring (k, 2) lon/lat, limit m)]: where a height limit (the "max_height_m" rule: a maxheight sign, Overture's
-    access restriction for vehicles over a height) holds, each range of each road as its polyline. A road under a low
+    access restriction for vehicles over a height; else a car park aisle's, CAR_PARK_HEADROOM_M) holds, each range of
+    each road as its polyline. A road under a low
     bridge has one over the bridge's short stretch. on_bridges=False: without the ranges lying mostly on the road's own
     bridge (tag_level_ranges): a truss or covered bridge's own limit is not the clearance of a road under it (PR #1267
     review). Kept on the layer."""
@@ -904,9 +905,11 @@ def height_limit_lines(feats, on_bridges=True):
         return got
     t = feats.rules.get("max_height_m") if feats is not None else None
     out = []
+    signed = {}
     if t is not None and len(t):
         for i in sorted({int(x) for x in np.asarray(t.feature).tolist()}):
             rows = t.for_feature(i)
+            signed[i] = [(a, b) for _h, a, b in rows]
             if not on_bridges:
                 decks = [(ra, rb) for ra, rb, kind in tag_level_ranges(feats, i) if kind == "bridge"]
                 rows = [(h, a, b) for h, a, b in rows
@@ -915,7 +918,35 @@ def height_limit_lines(feats, on_bridges=True):
             rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
             hs = [float(h) for h, _a, _b in rows] * len(rings)
             out.extend(zip(sub_polylines(rings, [(a, b) for _h, a, b in rows], whole=False), hs))
+    sub = feats.rules.get("subclass") if feats is not None else None
+    if sub is not None and len(sub):
+        for i in sorted({int(x) for x in np.asarray(sub.feature).tolist()}):
+            pieces = _unsigned([(a, b) for v, a, b in sub.for_feature(i) if v == "parking_aisle"], signed.get(i, ()))
+            if not pieces:
+                continue
+            rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
+            out.extend((r, CAR_PARK_HEADROOM_M) for r in sub_polylines(rings, pieces, whole=False))
     feats.__dict__[memo] = out
+    return out
+
+
+CAR_PARK_HEADROOM_M = 2.3   # m: a car park aisle's height limit where no sign gives one (the user, #135: car parks are
+#                             signed 2.0-2.3 m; a truck's 4 m under La Defense's car park spiral, over its own entry,
+#                             and the park-and-ride lot under the Pregerson stack left their blocks with no answer)
+
+
+def _unsigned(ranges, signed):
+    """The parts of the (a, b) ranges outside every signed (a, b) range, each longer than 1e-4."""
+    out = []
+    for a, b in ranges:
+        cuts = sorted((max(a, sa), min(b, sb)) for sa, sb in signed if min(b, sb) > max(a, sa))
+        at = a
+        for ca, cb in cuts:
+            if ca - at > 1e-4:
+                out.append((at, ca))
+            at = max(at, cb)
+        if b - at > 1e-4:
+            out.append((at, b))
     return out
 
 

@@ -645,6 +645,35 @@ def _node_of_both_at(mi, mj, q):
     return any(c in at_i and math.hypot(x - q[0], y - q[1]) <= JOIN_M for c, x, y in mj.node_xy)
 
 
+def _node_ends(net, i, j, ends):
+    """{k}: the ends (_pair_geometry's, by index) that a map node of both members marks as their meeting: of the ends
+    within NODE_M of a node of both on both lines (each node where it lies along each member: Member.node_xy, placed
+    from the map's connector fractions, metres apart on two short ways), the nearest that node. The node is the join;
+    the end's own place is where the lines meet. Barcelona's bus depot: a ground aisle meets a floor's ramp loop at its
+    second-to-last node, 0.45 m from its end, its last node joining two others: the end's own node the nearest
+    (_mapped_at), the meeting was missed and a 4.65 m clearance held across it (#135). Each node one end, the nearest:
+    a 2 m aisle between two roads it meets at its two nodes (Suedtiroler Platz) is not joined to either at both."""
+    mi, mj = net.m[i], net.m[j]
+    if not ends or not mi.node_xy or not mj.node_xy:
+        return set()
+    on_j = {}
+    for c, x, y in mj.node_xy:
+        on_j.setdefault(c, []).append((x, y))
+    out = set()
+    for c, x, y in mi.node_xy:
+        for xj, yj in on_j.get(c, ()):
+            si = float(proj(net.lines[i], net.s[i], np.array([x, y], np.float64))[0])
+            sj = float(proj(net.lines[j], net.s[j], np.array([xj, yj], np.float64))[0])
+            best = None
+            for k, (swap, se, so, _q) in enumerate(ends):
+                d = max(abs((so if swap else se) - si), abs((se if swap else so) - sj))
+                if d <= NODE_M and (best is None or d < best[0]):
+                    best = (d, k)
+            if best is not None:
+                out.add(best[1])
+    return out
+
+
 def _cross_through(a, b, tol=0.01):
     """Plan crossings of polylines a and b through both, not where either only touches the other with an end of its
     line: [q]."""
@@ -746,11 +775,13 @@ def _pair_geometry(net, i, j):
 
 
 def _pair_from(net, i, j, hits, ends):
-    """_pair_relations from the pair's geometry (_pair_geometry's): what each contact is."""
+    """_pair_relations from the pair's geometry (_pair_geometry's): what each contact is. An end a map node of both
+    marks (_node_ends) is a joint."""
     out = []
-    for swap, se, so, q in ends:
+    marked = _node_ends(net, i, j, ends)
+    for k, (swap, se, so, q) in enumerate(ends):
         e, o = (j, i) if swap else (i, j)
-        if _end_meets(net, e, se, o, so, bool(hits)):
+        if k in marked or _end_meets(net, e, se, o, so, bool(hits)):
             kind = "join"
         elif _turns_beside(net, e, se, o, so):
             continue
