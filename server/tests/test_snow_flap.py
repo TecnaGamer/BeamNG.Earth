@@ -165,6 +165,41 @@ class NewAnchorTest(unittest.TestCase):
         finally:
             loop.close()
 
+    def test_a_snapped_teleport_under_a_new_anchor_id(self):
+        """Codex on 2ebc7b8f: a snapped teleport lands under a NEW anchor id whose frame has the same origin as the
+        last, 2 km from the origin and 10 m higher (under REFETCH_M and REZ_M): the destination's first pose still
+        gets a state (the mod dropped the origin's at the teleport), not one at the next UTC hour."""
+        import geodesy
+        loop = asyncio.new_event_loop()
+        try:
+            a = (61.13, -146.36, 100.0)
+            fetch = ByCell({a: "davos"})
+            now = [last_hour(RESPONSES["davos"]) - 24 * 3600 + 600]
+            svc = snow.Service(fetch=fetch, mode="real", clock=lambda: now[0], cover=FakeCover(), winter=True)
+            server = Recorder(svc)
+            conn, tr = Conn(server, loop), snow.Tracker()
+            frame = geodesy.EnuFrame(a[0], a[1])
+            same = geodesy.EnuFrame(a[0], a[1])         # (anchor 2's frame: the snapped grid point, the same origin)
+
+            def states():
+                return [m for m in conn.sent if m["type"] == "snowstate"]
+            tr.on_pose(conn, frame, 0.0, 0.0, a[2], 1)
+            conn.settle()
+            tr.on_pose(conn, frame, 0.0, 300.0, a[2], 1)      # (driving under anchor 1: nothing new)
+            conn.settle()
+            self.assertEqual(len(states()), 1)
+            self.assertLess(2000.0, snow.REFETCH_M)
+            self.assertLess(10.0, snow.REZ_M)
+            tr.on_pose(conn, same, 0.0, 2000.0, a[2] + 10.0, 2)      # (2 km north: the same forcing cell)
+            conn.settle()
+            self.assertEqual(len(states()), 2, "the destination's first pose: its state at once")
+            tr.on_pose(conn, same, 0.0, 2050.0, a[2] + 10.0, 2)
+            conn.settle()
+            self.assertEqual(len(states()), 2, "then as before: by the hour, the distance, the height")
+            self.assertEqual(len(fetch.calls), 1, "the same cell and hour: from the cache")
+        finally:
+            loop.close()
+
 
 def table(rows, road=(8,) * 15, ice=0):
     return snowcover.Field(0.1, uniform=snowcover.Table(rows, road, ice))

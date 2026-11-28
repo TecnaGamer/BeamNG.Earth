@@ -510,7 +510,7 @@ class Tracker:
         self.bin = -1
         self.pose = None            # (lat, lon) of the last pose
         self.epoch = 0              # the place's number: a teleport makes a new one (a new anchor too: new_anchor)
-        self.frame = None           # (lat0, lon0) of the last pose's anchor frame
+        self.frame = None           # the last pose's anchor: ("aid", id), or its frame's (lat0, lon0)
 
     def due(self, svc, lat, lon, z, now):
         if self.inflight or now < self.retry_at:
@@ -538,12 +538,16 @@ class Tracker:
         svc.leave(conn, lat, lon)
         return True
 
-    def new_anchor(self, frame):
-        """A pose in another anchor's frame than the last (a teleport, a rebase): a state is computed for here at once
-        and one still being fetched is dropped when it comes, so the first state after it is this place's (the mod
-        drops the origin's at a teleport and takes the next one as the destination's: winter.lua onTeleport; Codex on
-        17fb1d0e). The forcing is cached per cell and hour (Service.forcing): mostly no fetch. True when it was."""
-        at = (float(getattr(frame, "lat0", 0.0)), float(getattr(frame, "lon0", 0.0)))
+    def new_anchor(self, frame, aid=None):
+        """A pose under another anchor than the last (a teleport, a rebase): a state is computed for here at once and
+        one still being fetched is dropped when it comes, so the first state after it is this place's (the mod drops
+        the origin's at a teleport and takes the next one as the destination's: winter.lua onTeleport; Codex on
+        17fb1d0e). The anchor by its id (earthd's pose: aid), so a snapped teleport onto the same frame origin under a
+        new anchor is one too (Codex on 2ebc7b8f: within REFETCH_M and REZ_M no state came until the next UTC hour,
+        the car on stock grip); without an id, by the frame's origin. The forcing is cached per cell and hour
+        (Service.forcing): mostly no fetch. True when it was."""
+        at = ("aid", aid) if aid is not None else \
+            (float(getattr(frame, "lat0", 0.0)), float(getattr(frame, "lon0", 0.0)))
         old, self.frame = self.frame, at
         if old is None or old == at:
             return False
@@ -551,9 +555,9 @@ class Tracker:
         self.last, self.inflight, self.retry_at, self.fails = None, False, 0.0, 0
         return True
 
-    def on_pose(self, conn, frame, x, y, z):
-        """earthd Connection._pose_ground: the player at (x, y, z) in its anchor's frame. Nothing without the service
-        (BNE_WINTER off)."""
+    def on_pose(self, conn, frame, x, y, z, aid=None):
+        """earthd Connection._pose_ground: the player at (x, y, z) in its anchor's frame (aid: that anchor's id).
+        Nothing without the service (BNE_WINTER off)."""
         svc = conn.s.snow
         if svc is None:
             return
@@ -561,7 +565,7 @@ class Tracker:
         if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(h)):
             return
         self.arrive(conn, svc, lat, lon)
-        self.new_anchor(frame)
+        self.new_anchor(frame, aid)
         now = svc.clock()
         if not self.due(svc, lat, lon, h, now):
             return

@@ -10847,7 +10847,7 @@ class Connection:
     def _pose_ground(self, aid, x, y, vx, vy, msg):
         self.gravity.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
         if self.s.snow is not None:         # (BNE_WINTER only)
-            self.snow.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
+            self.snow.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0), aid)
         self.ground_ahead(aid, x, y, vx, vy)
         self.deck_spans(aid, x, y)
         if self.s.sea is not None:
