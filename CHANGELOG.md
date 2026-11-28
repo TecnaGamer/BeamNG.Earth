@@ -12,6 +12,14 @@ What changed in each release of BeamNG.Earth, newest first.
   loaded round a point, the towns round a point and whether the collision round a point is in (docs/ADDONS.md).
   The AI road graph is no longer applied again when it has not changed, which should reduce the hitches and the
   reloads that mods listening for it went through.
+- **Mod compatibility: the ground and the moving origin**: mods that ask the game where the ground is
+  (`core_terrain.getTerrainHeight`) now get the land you see past the terrain block round you, instead of one height
+  for everywhere, which should stop things a mod places far away (a weather mod's storms) from sinking into hills
+  and hanging over valleys. The modding API 1.13 adds the ground's height at any point (`groundHeight`) and a way to
+  carry positions a mod keeps across a rebase or a teleport (`fromOldFrame`); `onBeamNGEarthRebased` now says how far
+  the origin moved (docs/ADDONS.md). Prop "vehicles" of other mods (debris, cones) are no longer treated as parked
+  player cars, so they should no longer be taken out and spawned again far away, or get the collision building a
+  player car gets.
 - **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
   weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
   snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,

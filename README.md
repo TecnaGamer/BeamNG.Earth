@@ -462,7 +462,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   mods can use BeamNG.Earth through its modding API (`beamngEarth_api`, which also says when the streamed world
   changes and lists the buildings and towns round a point), and programs beside the game can read your position
   from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md). Like the stock
-  maps, the level has a police vehicle group of the region you are in and its buildings in a `Buildings` group.
+  maps, the level has a police vehicle group of the region you are in and its buildings in a `Buildings` group, and
+  the game's terrain height query answers the land you see everywhere, not only on the terrain round you. The API
+  also gives the ground's height at any point and carries a mod's own positions across a rebase or a teleport.
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads

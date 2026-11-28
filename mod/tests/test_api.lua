@@ -54,8 +54,9 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 12,
-  'version 1.12 (contentChanged, loadedBuildings, towns, collisionReady; 1.9-1.11 taken by open pull requests)')
+T.check(api.version() == 1 and select(2, api.version()) == 13,
+  'version 1.13 (groundHeight, frameChange; 1.12 contentChanged ...; 1.9-1.11 taken by open pull requests)')
+T.check(api.has('groundHeight') and api.has('frameChange'), '1.13 features')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -181,6 +182,40 @@ T.check(api.rebasing() == false, 'rebasing: not between a rebase\'s frames')
 st.rebasing = { purpose = 'rebase' }
 T.check(api.rebasing() == true, 'rebasing: between a rebase\'s two frames')
 st.rebasing = nil
+
+-- 1.13: what an add-on kept in game coordinates, carried into the new frame (the AWS study: a storm km away jumped with
+-- every rebase and came along with every teleport). Exact through latitude / longitude / height, at any distance.
+T.check(api.fromOldFrame(10, 20, 30) == nil and api.fromOldFrameDir(1, 0, 0) == nil, 'no frame before: nil')
+do
+  local A, B = geodesy.newAnchor(45.0, 7.0), geodesy.newAnchor(45.02, 7.03)    -- (a rebase about 3 km on)
+  api._setFrames(A, B)
+  for _, p in ipairs({ { 0, 0, 250 }, { 6000, -2500, 900 }, { -24000, 18000, 1500 } }) do
+    local x, y, zz = api.fromOldFrame(p[1], p[2], p[3])
+    local la, lo, h = A:worldToGeodetic(p[1], p[2], p[3])
+    local la2, lo2, h2 = B:worldToGeodetic(x, y, zz)
+    T.check(math.abs(la - la2) < 1e-9 and math.abs(lo - lo2) < 1e-9 and math.abs(h - h2) < 1e-4,
+      string.format('fromOldFrame: the same place (%.0f, %.0f) %.2e %.2e %.2e', p[1], p[2], la - la2, lo - lo2, h - h2))
+  end
+  -- the old origin lands about where the new frame says the old anchor is
+  local ox, oy = api.fromOldFrame(0, 0, 0)
+  local bx, by = B:geodeticToWorld(45.0, 7.0, 0)
+  T.check(math.abs(ox - bx) < 1e-6 and math.abs(oy - by) < 1e-6 and ox < -2000 and oy < -2000,
+    string.format('fromOldFrame: the old origin %.1f, %.1f south-west of the new one', ox, oy))
+  local dx, dy, dz = api.fromOldFrameDir(3, 4, 0)
+  T.near(math.sqrt(dx * dx + dy * dy + dz * dz), 5, 1e-9, 'fromOldFrameDir: the length kept')
+  T.check(math.abs(dx - 3) < 0.01 and math.abs(dy - 4) < 0.01, 'fromOldFrameDir: turned only a little over 3 km')
+  -- a teleport 500 km away: the kept place is where it really is, far off (the frame's world inverts to within a few
+  -- tenths of a m at this distance, metres at 1000 km: far past anything drawn either way)
+  local C = geodesy.newAnchor(48.85, 2.35)
+  api._setFrames(B, C)
+  local x, y, zz = api.fromOldFrame(1500, 0, 300)
+  local la, lo = B:worldToGeodetic(1500, 0, 300)
+  local la2, lo2 = C:worldToGeodetic(x, y, zz)
+  T.check(math.abs(la - la2) < 1e-5 and math.abs(lo - lo2) < 1e-5 and math.sqrt(x * x + y * y) > 4e5,
+    string.format('fromOldFrame after a teleport: the same real place, far away (%.0f km)', math.sqrt(x * x + y * y) / 1000))
+  api._setFrames(nil, C)
+  T.check(api.fromOldFrame(1, 2, 3) == nil, 'the level\'s first origin: no frame before it')
+end
 
 T.check(api.has('options') and select(2, api.version()) >= 1, 'options: has() and minor version 1')
 package.loaded['beamngEarth/addons'] = { optionValues = function(id) return id == 'x' and { port = 1 } or nil end }

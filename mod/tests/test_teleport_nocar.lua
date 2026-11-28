@@ -195,6 +195,9 @@ put = cam.puts[#cam.puts]
 T.check(st.placeSnapped == false and near(put.x, req.px) and near(put.y, req.py) and req.py < -100,
   'adopted anchor: the target off its origin, not snapped')
 T.check(near(put.z, 1176 + 1 + core.CAM_ABOVE_M), string.format('adopted anchor: 3 m over the ground the ray found (%.1f)', put.z))
+T.check(rebased[1].distance == nil and #rebased >= 2 and rebased[#rebased].purpose == 'teleport'
+  and type(rebased[#rebased].distance) == 'number' and rebased[#rebased].distance > 1000,
+  string.format('rebased (1.13): the distance between the origins (%s m; none at the first)', tostring(rebased[#rebased].distance)))
 mps.adoptAnchor = adopt
 
 -- 2. a map teleport with the camera's move reported 3 frames late: the target is the player meanwhile (not the old

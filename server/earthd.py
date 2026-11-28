@@ -483,6 +483,12 @@ WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
 PLACES_FOLLOWUPS, PLACES_TRIES = 4, 24
 # the modding API's towns (Connection.towns): the radius and count when the request names none (placenames caps both)
 TOWNS_RADIUS_DEFAULT_M, TOWNS_LIMIT_DEFAULT = 20000.0, 50
+# The modding API's ground heights (api.groundHeight 1.13, the mod's ground.lua; the 2026-11-27 AWS Tornado study):
+# at most this many points a request; a point with no far tile of the anchor over it reads the DEM at the zoom whose
+# pixels are about its distance from the origin / GROUND_FAR_PX_DIV (the global far tiles' own scale), at least
+# GROUND_FAR_PX_MIN m.
+GROUND_POINTS_MAX = 512
+GROUND_FAR_PX_DIV, GROUND_FAR_PX_MIN = 48.0, 16.0
 
 HM_CACHE = 48               # heightmaps kept, the protected ones with them (6 before 2026-10-30: a fast player's
                             # prefetched chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again;
@@ -8868,6 +8874,64 @@ class Connection:
             return
         self.send({"type": "towns_result", "id": rid, "towns": rows, "complete": complete})
 
+    async def ground(self, msg):
+        """The modding API's ground heights {"id", "anchorId", "pts": [x, y, ...]} (game coordinates of that anchor's
+        frame) -> ground_result {"id", "anchorId", "z": [m or false, ...], "error"?}: the land's height there in the
+        same frame, from the DEM at the zoom of the far tile drawn over the point (the one it was built from, so the
+        tile is on disk), else at a zoom for its distance. The mod's ground.lua asks for the 16 m lattice corners a
+        mod's getTerrainHeight / api.groundHeight needs past the terrain block, where the engine has no ground."""
+        rid, aid = msg.get("id"), msg.get("anchorId")
+        try:
+            pts = [float(v) for v in msg["pts"]]
+        except (KeyError, TypeError, ValueError):
+            self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": [], "error": "bad request"})
+            return
+        anchor = self.s.anchors.get(aid) if isinstance(aid, int) else None
+        if anchor is None or self.s.dem is None:
+            self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": [],
+                       "error": "no such anchor" if anchor is None else "no elevation data"})
+            return
+        if len(pts) % 2 or len(pts) > 2 * GROUND_POINTS_MAX or not all(map(math.isfinite, pts)):
+            self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": [], "error": "bad points"})
+            return
+        try:
+            z = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self._ground_heights, anchor,
+                                                                 pts[0::2], pts[1::2])
+        except Exception as e:          # a damaged DEM tile, offline for an uncached one: none, and why
+            log.info("ground heights: %s: %s", type(e).__name__, e)
+            self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": [], "error": type(e).__name__})
+            return
+        self.send({"type": "ground_result", "id": rid, "anchorId": aid, "z": z})
+
+    def _ground_heights(self, anchor, xs, ys):
+        """(ground) z in anchor's frame at the plane points (xs, ys): [m or False (no elevation)]. Blocking."""
+        xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+        lat, lon, _ = anchor.frame.enu_to_geodetic(xs, ys, 0.0)
+        lat, lon = np.atleast_1d(np.asarray(lat, np.float64)), np.atleast_1d(np.asarray(lon, np.float64))
+        layout = self.s.layout
+        sent = self.sent if getattr(self, "active", None) == anchor.id else {}
+        zooms = np.empty(len(xs), np.int64)
+        for k in range(len(xs)):        # (the finest far tile of the anchor over the point: the zoom it was made from)
+            zoom = None
+            for level in range(layout.min_level, farfield.GLOBAL_MIN_LEVEL):
+                size = farfield.level_size(level)
+                if f"{level}_{math.floor(xs[k] / size)}_{math.floor(ys[k] / size)}" in sent:
+                    zoom = anchor.hm_zoom if level <= 0 else anchor.zooms.get(level)
+                    if zoom is None:
+                        zoom = farfield.zoom_for_level(layout, float(lat[k]), level)
+                    break
+            if zoom is None:
+                px = max(GROUND_FAR_PX_MIN, math.hypot(xs[k], ys[k]) / GROUND_FAR_PX_DIV)
+                zoom = demmod.zoom_for(float(lat[k]), px)
+            zooms[k] = zoom
+        h = np.full(len(xs), np.nan)
+        for zoom in sorted(set(zooms.tolist())):
+            m = zooms == zoom
+            h[m] = np.asarray(self.s.dem.sample(lat[m], lon[m], int(zoom)), np.float64)
+        _, _, z = anchor.frame.geodetic_to_enu(lat, lon, np.where(np.isfinite(h), h, 0.0))
+        z = np.atleast_1d(np.asarray(z, np.float64))
+        return [round(float(v), 2) if math.isfinite(hv) else False for v, hv in zip(z, h)]     # (false, not null: a hole)
+
     async def _where_place_later(self, out, lat, lon, seq):
         """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
         never ahead of the world's own downloads), asked again every WHERE_PLACE_RETRY_S while Overture's hosts are
@@ -9607,6 +9671,8 @@ class Connection:
             self.spawn(self.places(msg))
         elif kind == "towns":                   # the modding API's towns round a point (placenames.py; api.towns)
             self.spawn(self.towns(msg))
+        elif kind == "ground":                  # the modding API's ground heights past the block (ground.lua)
+            self.spawn(self.ground(msg))
         elif kind == "map_focus":              # the 3D map flying: where the view will end (map3d.flyHint)
             self.on_map_focus(msg)
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)

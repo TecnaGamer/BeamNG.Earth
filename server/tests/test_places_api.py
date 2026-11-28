@@ -521,5 +521,74 @@ class EarthdTownsTest(unittest.TestCase):
         self.assertEqual(asked, [])
 
 
+class EarthdGroundTest(unittest.TestCase):
+    """earthd's 'ground' (the mod's ground.lua: api.groundHeight and getTerrainHeight past the terrain block, 1.13):
+    the land's height at plane points of the anchor's frame, z in that frame (the earth's curve in it); the DEM read at
+    the zoom of the far tile drawn over a point (the one it was made from), else at a zoom for its distance; no
+    elevation: null; bad requests and unknown anchors answered with why."""
+
+    def run_ground(self, msg, sent_tiles=(), hm=1600.0, active=1):
+        import earthd
+        import farfield
+        import geodesy
+        sent, asked = [], []
+
+        class FakeDem:
+            def sample(self, lat, lon, zoom):
+                asked.append((len(lat), int(zoom)))
+                lat = np.asarray(lat)
+                return np.where(lat > LAT + 1, np.nan, hm + 0.0 * lat)
+
+        async def run():
+            from concurrent.futures import ThreadPoolExecutor
+            pool = ThreadPoolExecutor(1)
+            anchor = earthd.Anchor(id=1, lat=LAT, lon=LON, frame=geodesy.EnuFrame(LAT, LON), hm_zoom=15,
+                                   zooms={1: 14, 2: 13})
+            layout = types.SimpleNamespace(min_level=-1, spacing=lambda level: farfield.level_size(level) / 64)
+            s = types.SimpleNamespace(ui_pool=pool, anchors={1: anchor}, dem=FakeDem(), layout=layout)
+            conn = types.SimpleNamespace(s=s, send=sent.append, active=active, sent={k: object() for k in sent_tiles})
+            conn._ground_heights = lambda *a: earthd.Connection._ground_heights(conn, *a)
+            try:
+                await earthd.Connection.ground(conn, msg)
+            finally:
+                pool.shutdown()
+        asyncio.run(run())
+        return sent, asked
+
+    def test_heights_in_the_frame(self):
+        import geodesy
+        pts = [0.0, 0.0, 2000.0, 300.0, 15000.0, -9000.0]
+        sent, asked = self.run_ground({"id": 4, "anchorId": 1, "pts": pts}, sent_tiles=("1_3_0",))
+        out = sent[0]
+        self.assertEqual((out["type"], out["id"], out["anchorId"]), ("ground_result", 4, 1))
+        f = geodesy.EnuFrame(LAT, LON)
+        for k in range(3):
+            lat, lon, _ = f.enu_to_geodetic(pts[2 * k], pts[2 * k + 1], 0.0)
+            _, _, want = f.geodetic_to_enu(lat, lon, 1600.0)
+            self.assertAlmostEqual(out["z"][k], float(want), delta=0.01)
+        self.assertLess(out["z"][2], out["z"][0] - 20)       # (17.5 km off: the earth's curve, 24 m down)
+        zooms = sorted(z for _, z in asked)
+        self.assertIn(14, zooms)                              # (2000, 300) under the L1 tile 1_3_0: its zoom
+        self.assertEqual(sum(n for n, _ in asked), 3)
+
+    def test_no_elevation_is_null(self):
+        sent, _ = self.run_ground({"id": 5, "anchorId": 1, "pts": [0.0, 200000.0]})  # (1.8 deg north: the fake has none)
+        self.assertEqual(sent[0]["z"], [False])
+
+    def test_says_why(self):
+        import earthd
+        sent, asked = self.run_ground({"id": 6, "anchorId": 9, "pts": [0, 0]})
+        self.assertEqual(sent[0]["error"], "no such anchor")
+        sent, _ = self.run_ground({"id": 7, "anchorId": 1, "pts": [0, 0, 1]})
+        self.assertEqual(sent[0]["error"], "bad points")
+        sent, _ = self.run_ground({"id": 8, "anchorId": 1, "pts": [0.0] * (2 * earthd.GROUND_POINTS_MAX + 2)})
+        self.assertEqual(sent[0]["error"], "bad points")
+        sent, _ = self.run_ground({"id": 9, "anchorId": 1, "pts": "x"})
+        self.assertEqual(sent[0]["error"], "bad request")
+        sent, _ = self.run_ground({"id": 10, "anchorId": 1, "pts": [float("nan"), 0]})
+        self.assertEqual(sent[0]["error"], "bad points")
+        self.assertEqual(asked, [])
+
+
 if __name__ == "__main__":
     unittest.main()

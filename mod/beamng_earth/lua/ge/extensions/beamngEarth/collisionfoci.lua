@@ -98,11 +98,33 @@ end
 -- forever (in game 2026-11-10: z -1.17e6 at 2100 m/s), and as 'player' cars each was an island of its own that moved
 -- every second: terrain patches and solid trees remade round it, a be:reloadCollision every 6 s even with the player
 -- parked (0 in 40 s with them left out).
+-- Since 2026-11-27 every model whose info.json says "Type": "Prop" (the game's own cones, barriers, ramps, spike
+-- strips; another mod's props: the AWS Tornado mod's debris, ~/bnge-tests/compat/AWS_COMPAT.md) is one: it pools up to
+-- 28 debris "vehicles" parked inactive over a storm km away, each was a 'player' car (an island of its own with solid
+-- trees, a focus the server built road tiles round), and farcars.lua saved and deleted the ones past 2.5 km, so the mod
+-- spawned them again (a long frame each) and lost them again 5 s later. A prop is not a car someone drives: no island
+-- of its own (it lies in the active car's, or is the mod's to handle) and never saved and taken out.
 M.PROP_JBEAMS = { spikestrip = true }
+M.PROP_TYPE = 'prop'
+local propType = {}     -- jbeam -> true / false: its info.json's Type, read once
+function M._infoType(name)           -- (tests: replaced) the model's info.json Type, or nil
+  if type(jsonReadFile) ~= 'function' then return nil end
+  local ok, info = pcall(jsonReadFile, '/vehicles/' .. name .. '/info.json')
+  return ok and type(info) == 'table' and type(info.Type) == 'string' and info.Type or nil
+end
 function M.isProp(o)
   local ok, name = pcall(function() return o.getJBeamFilename and o:getJBeamFilename() end)
-  return ok and name ~= nil and M.PROP_JBEAMS[name] == true
+  if not ok or type(name) ~= 'string' then return false end
+  if M.PROP_JBEAMS[name] then return true end
+  local known = propType[name]
+  if known == nil then
+    local t = M._infoType(name)
+    known = type(t) == 'string' and t:lower() == M.PROP_TYPE
+    propType[name] = known
+  end
+  return known
 end
+function M._resetPropTypes() propType = {} end
 
 -- The game's vehicles as { id, x, y, kind, controlled }: a locally occupied car is a player even if traffic or
 -- parking still lists it. Traffic's full data also contains player cars; its AI list does not.
