@@ -703,6 +703,7 @@ do
     'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expStaleRevisit' }
   local inOrder = {}
   for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
+  exp[#exp + 1] = 'standalonePaths'
   for _, k in ipairs(exp) do
     local s = settings.SCHEMA[k]
     T.check(s and s.kind == 'bool' and s.default == false, 'experimental ' .. k .. ': a bool, off by default')

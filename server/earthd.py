@@ -3184,8 +3184,10 @@ class Server:
         wires = [] if self.buildings else None
         park = [] if self.buildings else None
         signs = [] if self.buildings and poleprofiles.kit_enabled(Server.pole_profile(self, anchor)) else None
+        import standalonepaths
         items = town = None
         wrows, mapped_lamps = [], None
+        path_parts = None
         _bridge_fps, _bridge_ends = [], {}      # 3dmr model bridges over the tile (as blockworker._tile_parts)
         if self.buildings:
             # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
@@ -3514,7 +3516,9 @@ class Server:
         if radar_props:
             props = (props or []) + radar_props
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
-                                   mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
+                                   mesh, dmesh, bld, standalonepaths.finish_props(
+                                       props, anchor.frame, box, cells, urban, self.road_widths, path_parts=path_parts),
+                                   wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
                                    custom_entries=custom_entries, signs=signs, wells=oil_wells, bld_none=bool(self.buildings),
                                    barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks,

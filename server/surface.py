@@ -402,6 +402,16 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         return m
 
     out = idx.copy()
+    import standalonepaths
+    if standalonepaths.enabled():
+        path_segs = {}
+        path_box = (min(gb[0]), min(gb[1]), max(gb[0]), max(gb[1]))
+        for _, xy, width, kind in standalonepaths.parts(gfr, path_box, feats_list, urban_fn, widths, quick):
+            la, lo, _ = gfr.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.)
+            c, r = to_px(lo, la)
+            add(path_segs.setdefault(kind, ([], [])), c, r, width / 2)
+        for kind, strips in path_segs.items():
+            out[mask(strips)] = ROAD_MATERIAL[kind]
     out[mask(lawn)] = LAWN
     # roundabout footprints: lawn under the grass photo fill (photo_roads), so tyres feel grass not asphalt scar
     for lonlat in _island_lonlat_rings(feats_list, urban_fn, widths, lat0=la_c, lon0=lo_c, lat=lat, lon=lon,

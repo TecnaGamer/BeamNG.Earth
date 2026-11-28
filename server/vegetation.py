@@ -264,12 +264,21 @@ def _conifer_share(lat, lon):
     return np.where(_north_america(lat, lon), share, other)
 
 
+@dataclass
+class _PathClearance:
+    frame: object = None
+    blockers: tuple = ()
+
+
 class Vegetation:
     def __init__(self, md, cache_dir=None):
         self.md = md
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
         self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
+        import standalonepaths
+        if self.dir and standalonepaths.enabled():
+            self.dir = os.path.join(self.dir, "standalone-paths-v5")  # individual trees use their trunk position
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -346,6 +355,13 @@ class Vegetation:
                 else:
                     log.exception("vegetation: building cell %s", (x, y))
 
+    def _cell_path(self, x, y):
+        if (x, y) == (8988, 5281):
+            import standalonepaths
+            if standalonepaths.enabled():
+                y = f"{y}-charzykowy-promenada-4m"
+        return self._path(x, y)
+
     def ready(self, key):
         k = (int(key[1]), int(key[2]))
         with self._lock:
@@ -353,7 +369,7 @@ class Vegetation:
                 return True
         if k in self._on_disk:
             return True
-        p = self._path(*k)
+        p = self._cell_path(*k)
         if p and os.path.exists(p):
             self._on_disk.add(k)        # (the warm thread asks at every new place: each cell's file checked once)
             return True
@@ -364,7 +380,7 @@ class Vegetation:
         return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
 
     def _load(self, x, y):
-        p = self._path(x, y)
+        p = self._cell_path(x, y)
         fields = ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")
         if p and os.path.exists(p):
             # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
@@ -395,6 +411,11 @@ class Vegetation:
             return [None] * len(f.kind)
 
     def _build(self, x, y):
+        paths = _PathClearance()
+        items = self._build_items(x, y, paths)
+        return items.take(_off_paths(items, paths.frame, paths.blockers)) if paths.blockers else items
+
+    def _build_items(self, x, y, paths):
         key = (mapcells.ZOOM, x, y)
         cd = self.md.cell(key, layers=("canopy", "landcover", "buildings", "roads", "water"))
         chm = cd.layers.get("canopy")
@@ -445,6 +466,13 @@ class Vegetation:
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
+        import standalonepaths
+        if standalonepaths.enabled():
+            import pathlayout
+            path_frame, path_box, path_parts = pathlayout.cell_parts(
+                cd.bounds, road_cells, getattr(self.surface, "urban", None), self.widths)
+            paths.frame = path_frame
+            paths.blockers = tuple((xy, width / 2) for _, xy, width, _ in path_parts)
         tops = np.zeros(h.shape, bool)
         k = _merc_k((lat0 + lat1) / 2)     # (the radii below in pixels at MERC_REF_LAT: scaled to the ground's)
         for lo_m, hi_m, r in ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4)):
@@ -538,6 +566,9 @@ class Vegetation:
                 _mask_polys(lu, vines, chm, 0.0, select=lclass == "vineyard")
         except Exception as e:                  # not at hand: scattered as before
             log.debug("vegetation: land use of %s: %s", (x, y), e)
+        if paths.blockers:
+            keep = _off_paths(tree, paths.frame, paths.blockers)
+            tree, lcls = tree.take(keep), lcls[keep]
         if orchard.any():
             keep = _keep_off_mask(tree, orchard, chm)
             tree, lcls = tree.take(keep), lcls[keep]
@@ -737,6 +768,21 @@ FARM_BUSH_ALONG = 6.0
 FARM_BUSH_POLY = 500
 FARM_BUSH_CELL = 2000
 FARM_MIN_M2 = 800.0
+
+
+def _off_paths(items, frame, blockers):
+    """Keep trunks and low vegetation off paths, allowing individual tree crowns to overhang."""
+    import pathlayout
+    e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, 0.)
+    # A far clump represents several trunks spread over its footprint, not one
+    # trunk at its centre. Its individual near trees are tested separately.
+    single_tree = (items.kind == KIND_TREE) & ~np.isin(items.group, CLUMP_GROUPS)
+    radius = np.where(single_tree, 0.0, items.radius)
+    import pathfootprints
+    for group in np.unique(items.group[~single_tree]):
+        sel = (~single_tree) & (items.group == group)
+        radius[sel] = pathfootprints.radii(GROUPS[int(group)], items.height[sel], radius[sel])
+    return pathlayout.keep_outside(np.column_stack((e, n)), blockers, radius)
 
 
 def _keep_off_mask(items, mask, chm):
