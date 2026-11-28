@@ -77,10 +77,10 @@ class StandalonePathsTest(unittest.TestCase):
         from test_vegetation import FakeMapData
         with tempfile.TemporaryDirectory() as directory:
             v = vegetation.Vegetation(FakeMapData(), directory)
-            self.assertEqual(Path(v._path(8988, 5281)).name, "5281-charzykowy-promenada-4m.npz")
-            self.assertEqual(Path(v._path(8987, 5281)).name, "5281.npz")
+            self.assertEqual(Path(v._cell_path(8988, 5281)).name, "5281-charzykowy-promenada-4m.npz")
+            self.assertEqual(Path(v._cell_path(8987, 5281)).name, "5281.npz")
             with patch.dict(os.environ, BNE_STANDALONE_PATHS="off"):
-                self.assertEqual(Path(v._path(8988, 5281)).name, "5281.npz")
+                self.assertEqual(Path(v._cell_path(8988, 5281)).name, "5281.npz")
 
     def test_only_ground_and_no_sidewalk_or_second_road(self):
         classes = ["residential", "footway", "footway", "cycleway", "steps", "path", "footway", "pedestrian", "cycleway"]
@@ -331,7 +331,7 @@ class StandalonePathsTest(unittest.TestCase):
                 v.cell(KEY)
             build.assert_called_once_with(KEY.x, KEY.y)
             self.assertTrue(old.exists())
-            self.assertTrue(Path(v._path(KEY.x, KEY.y)).exists())
+            self.assertTrue(Path(v._cell_path(KEY.x, KEY.y)).exists())
 
     def test_infer_house_access_only_on_a_local_street_without_existing_access(self):
         street = np.array([[-50., 6.], [100., 6.]])

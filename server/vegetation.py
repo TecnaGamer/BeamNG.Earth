@@ -264,6 +264,12 @@ def _conifer_share(lat, lon):
     return np.where(_north_america(lat, lon), share, other)
 
 
+@dataclass
+class _PathClearance:
+    frame: object = None
+    blockers: tuple = ()
+
+
 class Vegetation:
     def __init__(self, md, cache_dir=None):
         self.md = md
@@ -349,6 +355,13 @@ class Vegetation:
                 else:
                     log.exception("vegetation: building cell %s", (x, y))
 
+    def _cell_path(self, x, y):
+        if (x, y) == (8988, 5281):
+            import standalonepaths
+            if standalonepaths.enabled():
+                y = f"{y}-charzykowy-promenada-4m"
+        return self._path(x, y)
+
     def ready(self, key):
         k = (int(key[1]), int(key[2]))
         with self._lock:
@@ -356,7 +369,7 @@ class Vegetation:
                 return True
         if k in self._on_disk:
             return True
-        p = self._path(*k)
+        p = self._cell_path(*k)
         if p and os.path.exists(p):
             self._on_disk.add(k)        # (the warm thread asks at every new place: each cell's file checked once)
             return True
@@ -364,16 +377,10 @@ class Vegetation:
 
     def _path(self, x, y):
         rel = getattr(self.md, "release", "x")
-        # The wider promenade fits inside this one level-14 cell. Rebuild its opted-in plants.
-        name = f"{y}.npz"
-        if (x, y) == (8988, 5281):
-            import standalonepaths
-            if standalonepaths.enabled():
-                name = f"{y}-charzykowy-promenada-4m.npz"
-        return os.path.join(self.dir, str(rel), str(x), name) if self.dir else None
+        return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
 
     def _load(self, x, y):
-        p = self._path(x, y)
+        p = self._cell_path(x, y)
         fields = ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")
         if p and os.path.exists(p):
             # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
@@ -404,6 +411,11 @@ class Vegetation:
             return [None] * len(f.kind)
 
     def _build(self, x, y):
+        paths = _PathClearance()
+        items = self._build_items(x, y, paths)
+        return items.take(_off_paths(items, paths.frame, paths.blockers)) if paths.blockers else items
+
+    def _build_items(self, x, y, paths):
         key = (mapcells.ZOOM, x, y)
         cd = self.md.cell(key, layers=("canopy", "landcover", "buildings", "roads", "water"))
         chm = cd.layers.get("canopy")
@@ -451,17 +463,16 @@ class Vegetation:
                 road_cells.append(c2.layers.get("roads"))
         # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
-        import pathlayout
-        path_frame = path_box = path_parts = None
-        path_blockers = []
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
         import standalonepaths
         if standalonepaths.enabled():
+            import pathlayout
             path_frame, path_box, path_parts = pathlayout.cell_parts(
                 cd.bounds, road_cells, getattr(self.surface, "urban", None), self.widths)
-            path_blockers.extend((xy, width / 2) for _, xy, width, _ in path_parts)
+            paths.frame = path_frame
+            paths.blockers = tuple((xy, width / 2) for _, xy, width, _ in path_parts)
         tops = np.zeros(h.shape, bool)
         k = _merc_k((lat0 + lat1) / 2)     # (the radii below in pixels at MERC_REF_LAT: scaled to the ground's)
         for lo_m, hi_m, r in ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4)):
@@ -555,11 +566,11 @@ class Vegetation:
                 _mask_polys(lu, vines, chm, 0.0, select=lclass == "vineyard")
         except Exception as e:                  # not at hand: scattered as before
             log.debug("vegetation: land use of %s: %s", (x, y), e)
+        if paths.blockers:
+            keep = _off_paths(tree, paths.frame, paths.blockers)
+            tree, lcls = tree.take(keep), lcls[keep]
         if orchard.any():
             keep = _keep_off_mask(tree, orchard, chm)
-            tree, lcls = tree.take(keep), lcls[keep]
-        if path_blockers:
-            keep = _off_paths(tree, path_frame, path_blockers)
             tree, lcls = tree.take(keep), lcls[keep]
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
@@ -572,8 +583,7 @@ class Vegetation:
         hedges = farm_foliage(lu, chm, blocked, bounds)
         rows = vineyard_items(lu, chm, blocked, bounds)
         bales = bale_items(lu, chm, blocked, bounds)
-        items = _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
-        return items.take(_off_paths(items, path_frame, path_blockers)) if path_blockers else items
+        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
