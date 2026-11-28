@@ -130,7 +130,7 @@ impl Raster<'_> {
 #[pyfunction]
 #[pyo3(signature = (mx, my, cx, cy, kx, ky, ox, oy, idx, raw, bh, bw, h, w, near, sea_e, thr, d, lv))]
 #[allow(clippy::too_many_arguments)]
-pub fn sea_cell_lookup(py: Python<'_>, mx: PyReadonlyArray1<'_, f64>, my: PyReadonlyArray1<'_, f64>,
+pub fn sea_cell_lookup(mx: PyReadonlyArray1<'_, f64>, my: PyReadonlyArray1<'_, f64>,
                        cx: PyReadonlyArray1<'_, i64>, cy: PyReadonlyArray1<'_, i64>, kx: i64, ky: i64, ox: f64, oy: f64,
                        idx: PyReadonlyArray2<'_, i32>, raw: PyReadonlyArray1<'_, u8>, bh: usize, bw: usize, h: usize,
                        w: usize, near: bool, sea_e: f64, thr: f64, mut d: PyReadwriteArray1<'_, f32>,
@@ -164,14 +164,18 @@ pub fn sea_cell_lookup(py: Python<'_>, mx: PyReadonlyArray1<'_, f64>, my: PyRead
     let corner = |fx: f64, fy: f64| -> (usize, usize) {
         (np_i64(fx.floor()).clamp(0, hi_i) as usize, np_i64(fy.floor()).clamp(0, hi_j) as usize)
     };
-    // Without the GIL, over par's threads in fixed parts of the points: each point's values from its own position
-    // and the raster only, and the near test an any() of booleans (the same answer and bits on any number of threads).
+    // Over par's threads in fixed parts of the points: each point's values from its own position and the raster only,
+    // and the near test an any() of booleans (the same answer and bits on any number of threads). With the GIL held
+    // throughout (the workers run no Python): no Python thread can write the borrowed arrays (the caller's points, the
+    // raster, d and lv) while they are read and written, nor change what the index check above passed. Copies to own
+    // them instead cost ~4 ms a block's call (32 MB in, 8 MB out), and the held GIL is ~5 ms a call on 4 threads (the
+    // one-thread lookup held it ~20 ms).
     let mut d = d.as_array_mut();
     let mut lv = lv.as_array_mut();
     let (Some(ds), Some(ls)) = (d.as_slice_mut(), lv.as_slice_mut()) else {
         return Err(PyValueError::new_err("sea_cell_lookup: d and lv must be contiguous"));
     };
-    let ok = py.detach(|| {
+    let ok = (|| {
         if near {
             let (e, t) = (sea_e as f32, thr as f32);
             let by_sea = crate::par::any(n, |k| {
@@ -211,6 +215,6 @@ pub fn sea_cell_lookup(py: Python<'_>, mx: PyReadonlyArray1<'_, f64>, my: PyRead
             }
         });
         true
-    });
+    })();
     Ok(ok)
 }
