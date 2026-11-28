@@ -193,10 +193,12 @@ class NativeThreadsTest(unittest.TestCase):
 
     def test_mips_and_encoders(self):
         img = photo_like(np.random.default_rng(1), 1024)
+        rgba = np.ascontiguousarray(np.concatenate([img, img[:, :, :1]], 2))     # (650: bc7.mips' RGBA chain)
         lut, sh = imagery._TO_LIN, float(imagery.MIP_SHARPEN)
         for name, fn in (
                 ("mip_levels", lambda: [a.tobytes() for a in EF.mip_levels(img, lut, sh)]),
                 ("mip_levels_fast", lambda: [a.tobytes() for a in EF.mip_levels_fast(img, lut, sh)]),
+                ("mip_levels_fast rgba", lambda: [a.tobytes() for a in EF.mip_levels_fast(rgba, lut, sh)]),
                 ("bc1_encode_fast", lambda: EF.bc1_encode_fast(img)),
                 ("bc7_encode", lambda: EF.bc7_encode(img)),
                 ("dds_levels", lambda: EF.dds_levels(img, lut, sh, False)[:2])):

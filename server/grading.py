@@ -3538,9 +3538,14 @@ class _Planner:
         return out
 
     def _obs(self, key, lonlat=None):
-        """plan_roads' obs: the measured heights of ground roads (roadz.PROVIDER, level 0) where cell key's (or the
-        part's) elevation is only the coarse global model (dem.coarse_at): on lidar terrain the DTM is the better
-        height (decimetres; BD TOPO's Z is 1.5-2.5 m), so None there, as when roadz is off."""
+        """plan_roads' obs: the measured heights of ground roads (_obs_measured). (A road's embankment in the surface
+        model's ground is the plans' ground's own: embankfield, through plan_elev.)"""
+        return self._obs_measured(key, lonlat)
+
+    def _obs_measured(self, key, lonlat=None):
+        """The measured heights of ground roads (roadz.PROVIDER, level 0) where cell key's (or the part's) elevation
+        is only the coarse global model (dem.coarse_at): on lidar terrain the DTM is the better height (decimetres; BD
+        TOPO's Z is 1.5-2.5 m), so None there, as when roadz is off."""
         import roadz
         prov = roadz.PROVIDER
         if prov is None or not prov.enabled:

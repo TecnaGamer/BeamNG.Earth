@@ -36,6 +36,7 @@ import farfield
 import furniture
 import natural
 import geodesy
+import embankfield
 import grading as gradingmod
 import heightmap
 import l0roads
@@ -785,6 +786,9 @@ def plan_elev(la, lo):
     _st)."""
     st = _st()
     z = st.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
+    emb = embankfield.of(st)          # (M5 round 8: a road's embankment the surface model's filter cut; off by default)
+    if emb is not None:
+        z = emb.apply(la, lo, z)
     return st.lids.apply(la, lo, z) if getattr(st, "lids", None) is not None else z
 
 
@@ -4332,7 +4336,7 @@ def _base_veg():
 
 
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
-               quick=False, trees=False, canopy=False, allow_none=False):
+               quick=False, trees=False, canopy=False, allow_none=False, pack=True):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
@@ -4343,7 +4347,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     the roads are painted in: earthd.BASE_PX). quick: earthd.Server.write_quick_base's stand-in (imagery alone
     at px, then enlarged). With the generated ground on, the packed copy fades its forest
     floor out through the mips (earthd.Server.write_base); canopy: its canopy version (or None) returned too, a
-    fourth element."""
+    fourth element. pack=False: no packed copy here (the server's process encodes it on its GPU, the one device:
+    earthd Server._base_pack); the canopy version is returned then too."""
     _take_pads(fuel_pads)
     import imagery as imagerymod
     import roads as roadsmod
@@ -4387,8 +4392,9 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         with open(tmp, "wb") as f:
             f.write(terraincache.stored_photo(rgb))
         staging.replace(tmp, path)
-        user_dir, base_vfs, ao_vfs, ao_value = cache
-        terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+        if pack:
+            user_dir, base_vfs, ao_vfs, ao_value = cache
+            terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
         return rgb, used, pending
     import fast
     import surface as surfacemod
@@ -4440,11 +4446,13 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         f.write(terraincache.stored_photo(rgb))
     staging.replace(tmp, path)
     user_dir, base_vfs, ao_vfs, ao_value = cache
-    if can is not None:         # (the forest floor faded out through the mips, as the far tiles')
+    if not pack:
+        pass
+    elif can is not None:         # (the forest floor faded out through the mips, as the far tiles')
         terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, (can, size / rgb.shape[0]))
     else:
         terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
-    if canopy:
+    if canopy or not pack:
         return rgb, used, pending, can
     return rgb, used, pending
 

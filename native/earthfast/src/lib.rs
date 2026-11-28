@@ -80,6 +80,7 @@ mod underpass;
 mod coarseease;
 mod junctionsnap;
 mod landings;
+mod embank;
 mod tunnelcover;
 mod tunnelchain;
 mod tunnelrec;
@@ -114,6 +115,7 @@ mod roadz;
 mod fartex;
 mod photojpeg;
 mod leafon;
+mod phenology;
 mod snowlook;
 mod snowroad; // winter W3 (BNE_WINTER): snowy roads by plow class, sidewalks, snowbanks (server/snowroad.py)
 mod photomesh;
@@ -146,6 +148,7 @@ mod roadlanes;
 mod propassembly;
 mod waytags;
 mod pmtiles;
+mod airtraffic;
 mod underdeck;
 mod deckground;
 mod railseam;
@@ -489,6 +492,83 @@ pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarr
 #[pyfunction]
 fn gpu_name(py: Python<'_>) -> Option<String> {
     py.detach(|| gpu::get().map(|g| g.name.clone()))
+}
+
+/// 650: the GPU service's view for the server's log (gpu.rs): {"describe": one line (adapter, backend, driver, PCI
+/// ids, Windows' preemption granularity, the Deck's gate), "name", "backend", "driver", "deck", "preempt_compute"},
+/// or None without a device (made on first use, as gpu_name).
+#[pyfunction]
+fn gpu_info<'py>(py: Python<'py>) -> PyResult<Option<Bound<'py, pyo3::types::PyDict>>> {
+    let Some(g) = py.detach(gpu::get) else { return Ok(None) };
+    let d = pyo3::types::PyDict::new(py);
+    d.set_item("describe", gpu::describe(g))?;
+    d.set_item("name", &g.info.name)?;
+    d.set_item("backend", format!("{:?}", g.info.backend))?;
+    d.set_item("driver", format!("{} {}", g.info.driver, g.info.driver_info).trim().to_string())?;
+    d.set_item("deck", gpu::deck())?;
+    d.set_item("preempt_compute", g.preempt.map(|p| p.1))?;
+    Ok(Some(d))
+}
+
+/// 650: the calling thread's last GPU kernel call (gpu.rs CallStat), or None: {"kernel", "submits", "wait_s",
+/// "max_submit_s", "up_bytes", "down_bytes", "wall_s", "ok"}.
+#[pyfunction]
+fn gpu_last<'py>(py: Python<'py>) -> PyResult<Option<Bound<'py, pyo3::types::PyDict>>> {
+    let Some(s) = gpu::last() else { return Ok(None) };
+    let d = pyo3::types::PyDict::new(py);
+    d.set_item("kernel", s.kernel)?;
+    d.set_item("submits", s.submits)?;
+    d.set_item("wait_s", s.wait_s)?;
+    d.set_item("max_submit_s", s.max_submit_s)?;
+    d.set_item("up_bytes", s.up_bytes)?;
+    d.set_item("down_bytes", s.down_bytes)?;
+    d.set_item("wall_s", s.wall_s)?;
+    d.set_item("ok", s.ok)?;
+    Ok(Some(d))
+}
+
+/// 650: the process's GPU kernel totals, {kernel: {"calls", "fails", "submits", "wait_s", "wall_s", "max_submit_s",
+/// "up_bytes", "down_bytes"}} (reset: start again from zero).
+#[pyfunction]
+fn gpu_stats<'py>(py: Python<'py>, reset: bool) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let out = pyo3::types::PyDict::new(py);
+    for (k, t) in gpu::totals(reset) {
+        let d = pyo3::types::PyDict::new(py);
+        d.set_item("calls", t.calls)?;
+        d.set_item("fails", t.fails)?;
+        d.set_item("submits", t.submits)?;
+        d.set_item("wait_s", t.wait_s)?;
+        d.set_item("wall_s", t.wall_s)?;
+        d.set_item("max_submit_s", t.max_submit_s)?;
+        d.set_item("up_bytes", t.up_bytes)?;
+        d.set_item("down_bytes", t.down_bytes)?;
+        out.set_item(k, d)?;
+    }
+    Ok(out)
+}
+
+/// 650: may a kernel run on the GPU now (gpu.rs allowed: a Steam Deck only while parked or loading)?
+#[pyfunction]
+fn gpu_allowed() -> bool {
+    gpu::allowed()
+}
+
+/// 650: a pose for the Deck's gate (gpu.rs note_pose; the server's pose handler calls it itself): speed m/s, loading.
+#[pyfunction]
+fn gpu_note_pose(speed: f64, loading: bool) {
+    gpu::note_pose(speed, loading)
+}
+
+/// 650: the Deck's gate: (deck, seconds standing or None before the first moving pose, allowed).
+#[pyfunction]
+fn gpu_gate() -> (bool, Option<f64>, bool) {
+    (gpu::deck(), gpu::standing_s(), gpu::allowed())
+}
+
+/// 650: lets go of the block encoders' kept GPU buffers unused for idle_s (0: all); the bytes still kept.
+#[pyfunction]
+fn gpu_trim(py: Python<'_>, idle_s: f64) -> u64 {
+    py.detach(|| gpu::trim_idle(std::time::Duration::from_secs_f64(idle_s.max(0.0))))
 }
 
 /// colormatch.detect_seams' angle loop on the GPU (gpu.rs): src (7, h, w) float32 = [w, w*L_0 .. w*L_5]. Returns
@@ -6781,6 +6861,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(near_crossers, m)?)?;
     m.add_function(wrap_pyfunction!(clip_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_name, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_info, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_last, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_allowed, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_note_pose, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_gate, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_trim, m)?)?;
     m.add_function(wrap_pyfunction!(seam_detect_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(bc1_encode_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(colormatch::colour_blur, m)?)?;
@@ -6903,6 +6990,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(snowlook::snow_perm_possible, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::season_amounts, m)?)?;
+    m.add_function(wrap_pyfunction!(phenology::leaf_calendar, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_on, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_fields, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_blend, m)?)?;
@@ -7848,11 +7936,26 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 640 (637-639 taken on dev): winter W3 (snowroad.rs: snowroad_classes / zones / class_at / banks / look /
     // walk_slots / crossing_discs; SnowLook's road mask by (class, zone), 15 slots)
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
+    // 649 (643 at first; 642 tunnels, 645 snow S1, 646 power plants, 647 air traffic, 648 trees): M5 round 8: roadsys_kept_ends / roadsys_approach_run / roadsys_ramp_dz (a short chain
+    // keeps its profile's deck end where its approach ground lies in a hollow; the approach is ramped to it) and
+    // embank_lift / embank_along (embank.rs: a mapped road's embankment the surface model's ground filter cut)
+    m.add_function(wrap_pyfunction!(embank::embank_lift, m)?)?;
+    m.add_function(wrap_pyfunction!(embank::embank_along, m)?)?;
     // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
     // tunnels' and the roads' branches)
+    // 647: airtraffic::adsb_compact / adsbdb_route (live air traffic: an ADS-B network's answer as the mod's rows, an
+    // adsbdb route; server/airtraffic.py; 645 snow, 646 power plants are taken on other branches)
+    m.add_function(wrap_pyfunction!(airtraffic::adsb_compact, m)?)?;
+    m.add_function(wrap_pyfunction!(airtraffic::adsbdb_route, m)?)?;
+    // 648 (645-647 are taken by the snow S1, power plant and air traffic branches): phenology::leaf_calendar (the trees' leaf cycle at a place); texdds derive "coverage:REF[:SCALE]" (the winter
+    // twig cards' opacity mips keep their drawn share: no LOD pop)
+    // 649: the M5 round 8 kernels above (roadsys_kept_ends / approach_run / ramp_dz, embank_lift / along), so that a
+    // 644 module, which lacks them, fails fast.require
+    // 650: the GPU service (gpu_info / gpu_last / gpu_stats / gpu_allowed / gpu_note_pose / gpu_gate / gpu_trim) and
+    // RGBA integer mips in mip_levels_fast (bc7.mips)
     // 651: the terrain block's elementwise kernels on par's threads (dm_vec, geo_tile_of, dem_sample, sea_cell_lookup
-    // without the GIL, landcover_classify, block_chunk_grid / block_coordinates / block_up): the same bits on any number
-    // of threads (645-650 are taken by other branches)
+    // with the GIL held, landcover_classify, block_chunk_grid / block_coordinates / block_up): the same bits on any
+    // number of threads (645-650 are taken by other branches)
     m.add("VERSION", 651)?;
     Ok(())
 }

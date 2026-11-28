@@ -357,6 +357,20 @@ def preview(rgb, op, sky=(170, 195, 225), levels=5):
     return sheet
 
 
+# The opacity maps' mips (texdds.rs derive "coverage:REF[:SCALE]", Castano 2010): every mip keeps level 0's share of
+# texels at the material's alphaRef (baretrees.lua ALPHA_REF / ALPHA_REF_FAR), so a crown keeps its twig density from
+# near to far instead of fading into a haze the alpha test drops (and then popping to the denser far LOD). The far
+# LODs' atlases (bigger cards, coarser texels) are scaled so their crowns draw the near cards' area at the switch
+# (tools/twig_lodcheck.py: drawn area far / near 2.51 -> 1.06 for tree_oak_large_a; the birch's far cards 0.5).
+COVERAGE_REF = {"near": 100, "far": 50}
+COVERAGE_SCALE = {"oak_distant": "0.7", "beech_distant": "0.7", "birch_distant": "0.5"}
+
+
+def coverage_derive(name):
+    ref = COVERAGE_REF["far" if name.endswith("_distant") else "near"]
+    return f"coverage:{ref}" + (f":{COVERAGE_SCALE[name]}" if name in COVERAGE_SCALE else "")
+
+
 def webp_bytes(im):
     b = io.BytesIO()
     im.save(b, "WEBP", lossless=True, quality=100, method=6, exact=True)
@@ -390,6 +404,8 @@ def main():
             with open(src, "wb") as f:
                 f.write(webp_bytes(img))
             entries[rel + ".dds"] = {"source": rel + ".webp", "format": fmt, "role": role}
+            if role == "data":      # (the drawn share kept at every mip: no thinning with distance, no LOD pop)
+                entries[rel + ".dds"]["derive"] = coverage_derive(name)
     if not args.no_write:
         sys.path.insert(0, os.path.join(ROOT, "tools"))
         import mod_textures_dds
