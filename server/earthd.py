@@ -448,7 +448,9 @@ def base_ao_vfs(px):
 # takes the modules that call revisit.key / load / store, and this one calls them as revisitmod), so a change here to how
 # a block's photo is made (write_base, write_quick_base's overlap, _base_in's arguments, BASE_SHIFT_M) bumps it, or a
 # place visited before keeps the photo the older code made. blockworker.base_photo and genground.py are in the code key.
-BASE_PHOTO_VERSION = 2
+# 3 (2026-11-27, earthfast 650): the packed copy's mips in integers (bc7.mips: the far textures' chain, no longer the
+# float one; within one sRGB step, other bytes), so a kept photo of the float chain is never shown beside new ones
+BASE_PHOTO_VERSION = 3
 BASE_AO = 251                   # its flat value (tools/make_level_assets.py)
 GRAPHICS_SCALE = (0.5, 3.0)     # the 'graphics' message's scales are clamped to this (Connection.set_graphics)
 # Screen-space LOD (the mod's lodPx setting, the 'graphics' message; Connection.view): tau is clamped to LOD_PX_MAX; the
@@ -5191,7 +5193,8 @@ class Server:
                "season_mode": im.season_mode, "snow": Server.base_snow(self, anchor, cx, cy)}
         if fin:
             tex["fin"] = fin
-        Server._record_pack(self, name)        # (the block process writes its pack)
+        Server._record_pack(self, name)        # (the block process writes its pack, or this one: pack_here)
+        pack_here = bc7.gpu_ok()        # (this process's GPU, the server's one device: the block process has none)
         try:
             got = pool.submit(blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                               cy - size / 2 - BASE_SHIFT_M, size,
@@ -5199,7 +5202,7 @@ class Server:
                               os.path.join(self.out_dir, name),
                               (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), BASE_AO),
                               fuel_pads=self.block_fuel_pads(anchor, cx, cy, size), out_px=self.base_px,
-                              allow_none=Server._none_ok(self, key),
+                              allow_none=Server._none_ok(self, key), pack=not pack_here,
                               **({"trees": getattr(self, "veg", None) is not None, "canopy": canopy_out is not None}
                                  if genground.ON else {})).result()
         except Exception as e:
@@ -5211,6 +5214,8 @@ class Server:
         if got is None:
             return None
         rgb, _, pending = got[:3]
+        if pack_here:
+            Server._base_pack(self, name, rgb, got[3] if len(got) > 3 else None, size)
         if canopy_out is not None:      # (its canopy version: the revisit cache's, _base_keep)
             canopy_out.append(got[3] if len(got) > 3 else None)
         self._base_kept(anchor, cx, cy, pending)
@@ -5562,21 +5567,38 @@ class Server:
         tex = {"chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                "season_mode": im.season_mode}
         t0 = time.perf_counter()
-        Server._record_pack(self, name)        # (the block process writes its pack)
+        Server._record_pack(self, name)        # (the block process writes its pack, or this one: pack_here)
+        pack_here = bc7.gpu_ok()        # (this process's GPU, the server's one device: _base_in)
         try:
             got = (pool or self.block_pools[lane][0]).submit(
                 blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                 cy - size / 2 - BASE_SHIFT_M, size, QUICK_BASE_PX, tex, False, anchor.zooms[0],
                 os.path.join(self.out_dir, name), (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px),
-                                                   BASE_AO), out_px=self.base_px, quick=True).result()
+                                                   BASE_AO), out_px=self.base_px, quick=True,
+                pack=not pack_here).result()
         except Exception as e:
             log.info("quick base photo %s in the block process: %s", key, e)
             return None
         if got is None:
             log.info("quick base photo %s: not in the block process (an imagery tile not on disk)", key)
             return None
+        if pack_here:
+            Server._base_pack(self, name, got[0], None, size)
         log.info("quick base photo %s in the block process in %.2f s", key, time.perf_counter() - t0)
         return name
+
+    def _base_pack(self, name, rgb, canopy, size):
+        """The packed copy (terraincache.base_entry) of base photo `name`, which a block process rendered and wrote
+        without one (blockworker.base_photo pack=False): encoded here on this process's GPU, the server's one device
+        (fast.gpu_owner; on a Steam Deck driving, bc7.dds then encodes it on the CPU here). canopy: its canopy version
+        (the generated ground's mip fade) or None. Raises as base_entry does but for OSError (logged: as write_base)."""
+        args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
+        if canopy is not None:
+            args += ((canopy, size / np.shape(rgb)[0]),)
+        try:
+            terraincache.base_entry(*args)
+        except OSError as e:
+            log.info("terrain cache for %s: %s", name, e)
 
     def write_ground_base(self, anchor, cx, cy, info):
         """L0 ground: a block's stand-in photo from its own ground layers (l0roads.ground_photo: the materials' colours,
@@ -12674,6 +12696,9 @@ def main():
     # 26.2-devel, 2026-11-07). Its implicit layer's own off switch; this process and its workers only, not the game)
     if sys.platform.startswith("linux"):
         os.environ.setdefault("DISABLE_GAMESCOPE_WSI", "1")
+    # (one GPU device in the server, this process's: the block, far-tile and road processes started from here inherit
+    # BNGE_GPU_OWNER and keep their CPU paths; this process encodes their photos' packed copies, _base_pack)
+    fast.gpu_owner()
     # (this run's id, inherited by its worker processes: roadz keeps one lidar decision per map cell and run in it)
     os.environ.setdefault("BNGE_ROADZ_SESSION", f"{os.getpid()}.{int(time.time())}")
     home = os.path.expanduser("~")

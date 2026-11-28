@@ -491,6 +491,83 @@ fn gpu_name(py: Python<'_>) -> Option<String> {
     py.detach(|| gpu::get().map(|g| g.name.clone()))
 }
 
+/// 650: the GPU service's view for the server's log (gpu.rs): {"describe": one line (adapter, backend, driver, PCI
+/// ids, Windows' preemption granularity, the Deck's gate), "name", "backend", "driver", "deck", "preempt_compute"},
+/// or None without a device (made on first use, as gpu_name).
+#[pyfunction]
+fn gpu_info<'py>(py: Python<'py>) -> PyResult<Option<Bound<'py, pyo3::types::PyDict>>> {
+    let Some(g) = py.detach(gpu::get) else { return Ok(None) };
+    let d = pyo3::types::PyDict::new(py);
+    d.set_item("describe", gpu::describe(g))?;
+    d.set_item("name", &g.info.name)?;
+    d.set_item("backend", format!("{:?}", g.info.backend))?;
+    d.set_item("driver", format!("{} {}", g.info.driver, g.info.driver_info).trim().to_string())?;
+    d.set_item("deck", gpu::deck())?;
+    d.set_item("preempt_compute", g.preempt.map(|p| p.1))?;
+    Ok(Some(d))
+}
+
+/// 650: the calling thread's last GPU kernel call (gpu.rs CallStat), or None: {"kernel", "submits", "wait_s",
+/// "max_submit_s", "up_bytes", "down_bytes", "wall_s", "ok"}.
+#[pyfunction]
+fn gpu_last<'py>(py: Python<'py>) -> PyResult<Option<Bound<'py, pyo3::types::PyDict>>> {
+    let Some(s) = gpu::last() else { return Ok(None) };
+    let d = pyo3::types::PyDict::new(py);
+    d.set_item("kernel", s.kernel)?;
+    d.set_item("submits", s.submits)?;
+    d.set_item("wait_s", s.wait_s)?;
+    d.set_item("max_submit_s", s.max_submit_s)?;
+    d.set_item("up_bytes", s.up_bytes)?;
+    d.set_item("down_bytes", s.down_bytes)?;
+    d.set_item("wall_s", s.wall_s)?;
+    d.set_item("ok", s.ok)?;
+    Ok(Some(d))
+}
+
+/// 650: the process's GPU kernel totals, {kernel: {"calls", "fails", "submits", "wait_s", "wall_s", "max_submit_s",
+/// "up_bytes", "down_bytes"}} (reset: start again from zero).
+#[pyfunction]
+fn gpu_stats<'py>(py: Python<'py>, reset: bool) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let out = pyo3::types::PyDict::new(py);
+    for (k, t) in gpu::totals(reset) {
+        let d = pyo3::types::PyDict::new(py);
+        d.set_item("calls", t.calls)?;
+        d.set_item("fails", t.fails)?;
+        d.set_item("submits", t.submits)?;
+        d.set_item("wait_s", t.wait_s)?;
+        d.set_item("wall_s", t.wall_s)?;
+        d.set_item("max_submit_s", t.max_submit_s)?;
+        d.set_item("up_bytes", t.up_bytes)?;
+        d.set_item("down_bytes", t.down_bytes)?;
+        out.set_item(k, d)?;
+    }
+    Ok(out)
+}
+
+/// 650: may a kernel run on the GPU now (gpu.rs allowed: a Steam Deck only while parked or loading)?
+#[pyfunction]
+fn gpu_allowed() -> bool {
+    gpu::allowed()
+}
+
+/// 650: a pose for the Deck's gate (gpu.rs note_pose; the server's pose handler calls it itself): speed m/s, loading.
+#[pyfunction]
+fn gpu_note_pose(speed: f64, loading: bool) {
+    gpu::note_pose(speed, loading)
+}
+
+/// 650: the Deck's gate: (deck, seconds standing or None before the first moving pose, allowed).
+#[pyfunction]
+fn gpu_gate() -> (bool, Option<f64>, bool) {
+    (gpu::deck(), gpu::standing_s(), gpu::allowed())
+}
+
+/// 650: lets go of the block encoders' kept GPU buffers unused for idle_s (0: all); the bytes still kept.
+#[pyfunction]
+fn gpu_trim(py: Python<'_>, idle_s: f64) -> u64 {
+    py.detach(|| gpu::trim_idle(std::time::Duration::from_secs_f64(idle_s.max(0.0))))
+}
+
 /// colormatch.detect_seams' angle loop on the GPU (gpu.rs): src (7, h, w) float32 = [w, w*L_0 .. w*L_5]. Returns
 /// (best [h, w], ang [h, w], D [h, w, 3]) float32. RuntimeError when there is no GPU or it failed.
 #[pyfunction]
@@ -6781,6 +6858,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(near_crossers, m)?)?;
     m.add_function(wrap_pyfunction!(clip_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_name, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_info, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_last, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_allowed, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_note_pose, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_gate, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_trim, m)?)?;
     m.add_function(wrap_pyfunction!(seam_detect_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(bc1_encode_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(colormatch::colour_blur, m)?)?;
@@ -7850,6 +7934,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
     // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
     // tunnels' and the roads' branches)
-    m.add("VERSION", 644)?;
+    m.add("VERSION", 650)?;
     Ok(())
 }
