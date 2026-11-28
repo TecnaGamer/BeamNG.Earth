@@ -3558,9 +3558,8 @@ pub(crate) fn season_grade_core(img: numpy::ndarray::ArrayView3<u8>, nv_: numpy:
             let mut nvv = vv * (1.0f32 + (tv - 1.0f32) * w);
             if winter > 0.0 {
                 let bare = vg * cg * wi * sm_f32(nn, 0.25, 0.4);
-                let grass = vg * (1.0f32 - cg) * wi;
-                nh = nh + (30.0f32 - nh) * bare + (45.0f32 - nh) * grass;
-                ns = ns * (1.0f32 - wd * bare) * (1.0f32 - 0.45f64 as f32 * grass);
+                nh = nh + (30.0f32 - nh) * bare;
+                ns = ns * (1.0f32 - wd * bare);
                 nvv = nvv * (1.0f32 + 0.15f64 as f32 * bare);
             }
             if spring > 0.0 {

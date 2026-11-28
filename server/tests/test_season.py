@@ -53,7 +53,8 @@ class ColourTest(unittest.TestCase):
         self.assertEqual(season.amounts_for("auto", 45.0, d), season.season_amounts(start, 45.0),
                          "graded with the slot's date: the key says it all")
         k = season.season_key("auto", 45.0, d)
-        self.assertEqual(k, ("auto", "2026-11-23"))
+        self.assertEqual(k, ("auto", "2026-11-23", season.WINTER_GRADE_REV))
+        self.assertEqual(season.season_key("winter", 45.0, d), ("winter", season.WINTER_GRADE_REV))
         self.assertEqual(season.season_key("auto", 45.0, start + datetime.timedelta(days=6)), k, "same week, same key")
         self.assertNotEqual(season.season_key("auto", 45.0, d + datetime.timedelta(days=7)), k, "next week: another")
         self.assertEqual(season.season_key("auto", 0.0, d), ("auto", "none"), "the tropics: no season, one key")
@@ -88,6 +89,8 @@ class ColourTest(unittest.TestCase):
         _, s0, _ = _hsv(rgb)
         _, s1, _ = _hsv(win)
         self.assertLess(float(s1[:, :64].mean()), 0.7 * float(s0[:, :64].mean()), "winter: the canopy greys")
+        np.testing.assert_allclose(win[:, 70:], rgb[:, 70:], atol=1,
+                                   err_msg="bright smooth winter grass retains its source colour")
         # world-anchored: the same place graded alone gives the same texels
         part = season.grade(rgb[:, :64], xs[:, :64], -ys[:, :64], {"fall": 1.0})
         self.assertLess(np.abs(part[:, 10:54].astype(int) - out[:, 10:54].astype(int)).max(), 2)
