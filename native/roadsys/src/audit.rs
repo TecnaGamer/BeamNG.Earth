@@ -371,7 +371,8 @@ fn fmt(v: f64) -> String {
 /// One located cell of the audit (tools/roadscan, the corridor scanner): what ROADSYS_AUDIT_DUMP prints, as data.
 /// `code`: "SA" (every lane cell: z = drive height or NaN in a hole, v = the terrain's, kind = what was driven on:
 /// 0 terrain, else 1 + the entry kind), "HOLE", "DO", "EN" (mask: the kinds), "TE", "RF", "CS" (v = the gap), "PI",
-/// "PARAPET", "STEP" (v = the second difference, kind 1 along / 2 across), "LIP" (v = mm, kind = the top's kind,
+/// "PARAPET", "STEP" (v = the second difference, kind 1 along / 2 across), "DROP" (v = mm: the nearest surface off a
+/// lane's free edge however far, roadscan's edge_drop), "LIP" (v = mm, kind = the top's kind,
 /// mask 1 = to the terrain), "HO", "HE", "MOUTH" (v = the step, m), "MOUTHHOLE". Collected only inside
 /// `audit_findings`; the metrics are the same either way.
 #[derive(Clone, Copy, Debug)]
@@ -783,6 +784,22 @@ pub fn audit(sc: &Scene) -> Metrics {
                     }
                 }
                 if hidden { continue; }
+                // (roadscan's DROP: the real step a wheel meets off this free edge, the nearest surface over or under it
+                // whatever its distance (the lip's own window is 15 cm: a drop brought under it was counted as a new lip,
+                // one over it as none); no metric, findings only)
+                if collecting() {
+                    let mut all = f64::INFINITY;
+                    let zt = ter.at(p[0], p[1]);
+                    if zt.is_finite() { all = (zt - ze).abs(); }
+                    for &k in col_flat.at(p[0], p[1]) {
+                        let t = &tris[k as usize];
+                        if t.cls != UP || t.entry == *entry { continue; }
+                        if let Some(z) = ray(t, p[0], p[1]) { let d = (z - ze).abs(); if d < all { all = d; } }
+                    }
+                    if all.is_finite() && all > 0.005 {
+                        note(Finding { z: ze, v: all * 1000.0, kind: tri.kind, ..Finding::at("DROP", p[0], p[1]) });
+                    }
+                }
                 let mut best = f64::INFINITY;
                 let mut terrain = false;
                 let zt = ter.at(p[0], p[1]);

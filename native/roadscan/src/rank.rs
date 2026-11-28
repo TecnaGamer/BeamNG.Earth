@@ -51,6 +51,7 @@ pub fn describe(kind: &str) -> (&'static str, &'static str) {
         "kerb_at_lane_edge" => ("a kerb or sidewalk collider in the outer metre of the mapped lanes (the map's width a little over the built road)", "cells"),
         "kerb_face_at_lane_edge" => ("a kerb's face (a step) in the outer metre of the mapped lanes", "m"),
         "lip" => ("a lip at a colliding surface's free edge (hand-over to the terrain or the next piece)", "mm"),
+        "edge_drop" => ("the real step off a colliding surface's free edge in a lane: the nearest surface over or under it, however far (a lip is its part under 15 cm)", "mm"),
         "open_terrain_hole" => ("a terrain hole nothing covers (sky or void through the ground)", "squares"),
         "open_hole_edge" => ("an open edge of a terrain hole (no floor, roof or wall closing it)", "edges"),
         "crest" => ("a crest a car feels at the class's speed (negative g lifts it; -1 g leaves the road)", "g"),
@@ -98,6 +99,7 @@ pub fn kind_of(r: &Rec) -> Option<(&'static str, f64)> {
         }
         "BSTEP" | "ENDSTEP" => (if r.mask & 8 != 0 { "kerb_step" } else { deck_or_tunnel(r.mask, r.level) }, r.v),
         "LIP" => ("lip", r.v),
+        "DROP" => ("edge_drop", r.v),
         "HO" => ("open_terrain_hole", 1.0),
         "HE" => ("open_hole_edge", 1.0),
         "MOUTH" => { if r.v <= 0.10 { return None; } ("tunnel_mouth_step", r.v) }
@@ -135,7 +137,7 @@ pub fn severity(kind: &str, m: f64, n: usize) -> u8 {
         "kerb_step" => if a > 0.10 && n >= 2 { 2 } else { 1 },
         "kerb_at_lane_edge" => 1,
         "kerb_face_at_lane_edge" => if n >= 2 { 1 } else { 0 },
-        "lip" => if a > 60.0 { 3 } else if a > 25.0 { 2 } else if a > 10.0 { 1 } else { 0 },
+        "lip" | "edge_drop" => if a > 60.0 { 3 } else if a > 25.0 { 2 } else if a > 10.0 { 1 } else { 0 },
         "open_terrain_hole" => if n >= 4 { 2 } else { 1 },
         "open_hole_edge" => 1,
         "crest" | "dip" => if a > 1.2 { 3 } else if a > 0.8 { 2 } else { 1 },
@@ -426,6 +428,17 @@ mod tests {
         assert!((is[0].mag - 0.2).abs() < 1e-9);
         assert_eq!(is[1].kind, "crest");
         assert_eq!(is[2].sev, 1);
+    }
+
+    #[test]
+    fn an_edge_drop_is_its_real_height_however_far() {
+        // (a lip is a drop's part under 15 cm; the drop itself, 1.6 m off a deck's free edge, is the edge_drop's)
+        assert_eq!(kind_of(&rec("DROP", 40.0, -75.0, 1638.0)).map(|k| k.0), Some("edge_drop"));
+        assert_eq!(kind_of(&rec("LIP", 40.0, -75.0, 120.0)).map(|k| k.0), Some("lip"));
+        let is = rank(&[rec("DROP", 40.0, -75.0, 1638.0)], None, 40.0);
+        assert_eq!(is.len(), 1);
+        assert_eq!(is[0].kind, "edge_drop");
+        assert_eq!(is[0].sev, 3);
     }
 
     #[test]
