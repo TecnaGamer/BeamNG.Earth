@@ -187,6 +187,7 @@ import fast  # noqa: E402
 import protocol  # noqa: E402
 msgs = protocol.ef  # noqa: E402  (made in Rust: far_tile, far_swap, far_remove, far_done, status, load_progress)
 import weather as weathermod  # noqa: E402
+import airtraffic as airtrafficmod  # noqa: E402
 import snow as snowmod  # noqa: E402
 import liveaudio as liveaudiomod  # noqa: E402
 
@@ -1515,6 +1516,10 @@ class Server:
         self._prune_scheduled = set()
         # Real weather at the player (weather.py): a weathermod.Service, or None (--weather off)
         self.weather = weather
+        # Live air traffic (airtraffic.py): asked by the mod only while the player turned it on; the answers shared by
+        # every connection per cell and slot, the routes in memory only
+        self.airtraffic = airtrafficmod.Service(net=self.net)
+        self.airroutes = airtrafficmod.Routes(net=self.net)
         # Winter W1 (snow.py): a snowmod.Service when BNE_WINTER is set (main), else None: no snowstate at all
         self.snow = None
         # Live weather sounds (liveaudio.py): the weathersynth child, started by a 'weather_audio' with mode 'live'
@@ -8916,6 +8921,23 @@ class Connection:
         log.debug("geocode %r: %d results%s", q, len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
 
+    async def air_traffic(self, msg):
+        """Live air traffic {"id", "lat", "lon", "rangeNm", "routes"} -> air_traffic_result {"id", "ok", "src",
+        "credit", "srvNow", "ac": [rows], "error"?} (airtraffic.answer in its own small pool: network waits there never
+        hold a build's or the search's threads). Only the mod's own switch sends these."""
+        try:
+            out = await asyncio.get_running_loop().run_in_executor(
+                airtrafficmod.POOL, airtrafficmod.answer, self.s.airtraffic, self.s.airroutes, msg)
+        except Exception as e:          # (answer catches the network's errors; anything else is a bug: said once)
+            out = {"type": "air_traffic_result", "id": msg.get("id"), "ok": False,
+                   "error": f"{type(e).__name__}: {e}"[:200]}
+        err = None if out.get("ok") else out.get("error")
+        if err != getattr(self.s, "_airtraffic_said", None):     # once per change, not every 15 s
+            self.s._airtraffic_said = err
+            if err:
+                log.info("air traffic: %s", err)
+        self.send(out)
+
     async def stations(self, msg):
         """The station finder {"id", "lat", "lon", "r_km", "kinds", "mode"} -> stations_result {"id", "items": [{"lat",
         "lon", "name", "brand", "kind", "km"}], "partial", "error"?} (stationindex.StationIndex.query, in the search
@@ -9412,6 +9434,8 @@ class Connection:
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
             if getattr(self, "terrain_files", False):
                 m["terrainFiles"] = 1
+            if airtrafficmod.TEST_ON:           # (BNE_AIRTRAFFIC_TEST=on: test runs see the aircraft without the page)
+                m["airTrafficTest"] = True
             import budget
             from cliffsettings import SETTINGS as cliff_settings
             from cliffsettings import available as cliffs_available
@@ -9587,6 +9611,8 @@ class Connection:
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
             self.spawn(self.geocode(msg))
+        elif kind == "air_traffic":             # live air traffic (airtraffic.py): the player's switch is on
+            self.spawn(self.air_traffic(msg))
         elif kind == "debug_map":
             self.spawn(self.debug_map(msg))
         elif kind == "cache_map":               # the map's cache view: what is cached where (covermap.py)

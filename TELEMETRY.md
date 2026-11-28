@@ -145,6 +145,15 @@ and the version, at most once per square every 6 hours, only with the main switc
 to build it, not who asked. Prebuilt plans are only ever made by the project's own machine and signed; nothing your
 computer makes is uploaded.
 
+## Not telemetry: live air traffic
+
+The live air traffic (off by default) is not part of telemetry and is not sent to us. When you turn it on, the
+settings page first says what it sends and to whom: your approximate area (a point on a grid about 17 miles / 28 km
+wide, never your exact position) about every 15 seconds to adsb.lol (airplanes.live or adsb.fi when adsb.lol is busy),
+and, only with Flight routes on, the flight numbers around you to adsbdb.com. Nothing is sent while it is off or while
+you are not in the world. These services see your internet address, as any website does. The Network load counts above
+include requests to these services like any other.
+
 ## What happens to the data
 
 - **Sole purpose**: counting players, protecting the free map services BeamNG.Earth relies on, and finding what to
