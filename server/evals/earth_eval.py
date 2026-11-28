@@ -475,7 +475,8 @@ def write_report(results, a):
     with open(os.path.join(a.out, "report.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(md))
     with open(os.path.join(a.out, "report.json"), "w", encoding="utf-8") as f:
-        json.dump({"before": a.before, "after": a.after, "junctions": results}, f, indent=1)
+        json.dump({"before": a.before, "after": a.after, "labels": list(getattr(a, "labels", SIDES)),
+                   "junctions": results}, f, indent=1)
     return "\n".join(rows)
 
 
