@@ -228,9 +228,11 @@ def _cut(base, structures):
 
 
 def one_way(members):
-    """members with each way once: the copies of a way of one kind (its clips from several cells, a road twice from its
-    lane sections) fused into one line; a way's road or track without the stretch its own deck or tunnel lies along (the
-    structure is the way there). Members of no other way's are untouched."""
+    """members with each way once: the copies of a way of one kind and level (its clips from several cells, a road twice
+    from its lane sections) fused into one line; a way's road or track without the stretch its own deck or tunnel lies
+    along (the structure is the way there). Members of no other way's are untouched. Two parts of one way at different
+    levels are not copies of each other: Gravelly Hill's link climbs on a level-1 deck onto a level-4 one, and fused by
+    kind alone the level-1 deck went on as the longer level-4 one, over the level-3 M6 it passes under."""
     groups = {}
     for i, m in enumerate(members):
         groups.setdefault(way_of(m), []).append(i)
@@ -242,10 +244,10 @@ def one_way(members):
             continue
         by_kind = {}
         for m in ms:
-            by_kind.setdefault(m.kind, []).append(m)
+            by_kind.setdefault((m.kind, float(m.level)), []).append(m)
         fused = {k: (_fuse(v) if len(v) > 1 else v) for k, v in by_kind.items()}
-        structures = [m for k, v in fused.items() if k in _gsh.STRUCTURES for m in v]
-        for k, v in fused.items():
+        structures = [m for (k, _lv), v in fused.items() if k in _gsh.STRUCTURES for m in v]
+        for (k, _lv), v in fused.items():
             for m in v:
                 out.extend(_cut(m, structures) if structures and k not in _gsh.STRUCTURES else [m])
     return out

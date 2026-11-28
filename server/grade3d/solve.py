@@ -184,19 +184,69 @@ def program(chains, couplings, why):
     return c, A, b, A_eq, b_eq, bounds, rows.g, n
 
 
-def _irreducible(A, b, A_eq, b_eq, bounds, groups):
+NEAR_M = 250.0               # m round the conflict the first search for its irreducible set reads (doubled until enough)
+
+
+def _where(A, b, A_eq, b_eq, bounds, gid, todo):
+    """The groups of todo that the problem's conflict strains: each group's rows given one slack of its own, their sum
+    the least it can be (the elastic program, always with an answer while the joins have one); the groups whose slack
+    is not 0. [] when it has no answer."""
+    G = len(todo)
+    rows = np.concatenate([np.asarray(gid[g], np.int64) for g in todo])
+    cols = np.repeat(np.arange(G), [len(gid[g]) for g in todo])
+    S = sp.csr_matrix((np.full(len(rows), -1.0), (rows, cols)), shape=(A.shape[0], G))
+    Ae = sp.hstack([A, S], format="csr")
+    Aeq = None if A_eq is None else sp.hstack([A_eq, sp.csr_matrix((A_eq.shape[0], G))], format="csr")
+    res = highs(np.r_[np.zeros(A.shape[1]), np.ones(G)], A_ub=Ae, b_ub=b, A_eq=Aeq, b_eq=b_eq,
+                bounds=list(bounds) + [(0.0, None)] * G)
+    if res.status != 0:
+        return []
+    s = res.x[A.shape[1]:]
+    return [g for g, v in zip(todo, s) if v > 1e-6]
+
+
+def _irreducible(A, b, A_eq, b_eq, bounds, groups, xy):
     """An irreducible set of the groups (a path's grade, a path's curve, one crossing's clearances) that has no answer
     with the joins and the rest of the earthwork's rows: each taken out in turn, a half of those left first, and left out
-    for good while what remains still has none."""
+    for good while what remains still has none. Read first among the groups near the conflict (xy: each height's place):
+    those within NEAR_M of the groups the elastic program strains (_where), the reach doubled until they alone have no
+    answer (all of them at last). Each step of the search is then a small program: Yokohama's next block took over 40
+    minutes on its whole 1,900 members, one large program a step."""
     gid = {}
     for r, g in enumerate(groups):
         gid.setdefault(g, []).append(r)
     zero = np.zeros(A.shape[1])
+    n = len(xy)
 
     def feasible(mask):
         return highs(zero, A_ub=A[mask], b_ub=b[mask], A_eq=A_eq, b_eq=b_eq, bounds=bounds).status == 0
-    alive = np.ones(len(b), bool)
     todo = [g for g in gid if g[0] != "earth"]
+    earth = np.zeros(len(b), bool)
+    for g in gid:
+        if g[0] == "earth":
+            earth[gid[g]] = True
+    # (each group's heights: the columns of its rows that are heights)
+    Ac = A.tocsr()
+    at = {g: np.unique(Ac[gid[g]].indices) for g in todo}
+    at = {g: c[c < n] for g, c in at.items()}
+    hot = [g for g in _where(A, b, A_eq, b_eq, bounds, gid, todo) if len(at[g])]
+    if hot:
+        from scipy.spatial import cKDTree
+        tree = cKDTree(np.concatenate([xy[at[g]] for g in hot if len(at[g])]))
+        far = {g: (float(tree.query(xy[at[g]])[0].min()) if len(at[g]) else np.inf) for g in todo}
+        reach = NEAR_M
+        while True:
+            near = [g for g in todo if far[g] <= reach]
+            mask = earth.copy()
+            for g in near:
+                mask[gid[g]] = True
+            if len(near) == len(todo) or not feasible(mask):
+                break
+            reach *= 2.0
+        todo = near
+    else:
+        mask = np.ones(len(b), bool)
+    alive = mask
     core = []
     chunk = len(todo)
     while todo:
@@ -239,7 +289,8 @@ def _solve(chains, couplings, why, names, what):
         return np.zeros(0), dict(status="Solved", rows=0)
     res = highs(c, A_ub=A, b_ub=b, A_eq=A_eq, b_eq=b_eq, bounds=bounds)
     if res.status == 2:
-        core = _irreducible(A, b, A_eq, b_eq, bounds, groups)
+        xy = np.concatenate([np.asarray(ch["xy"], np.float64).reshape(-1, 2) for ch in chains])
+        core = _irreducible(A, b, A_eq, b_eq, bounds, groups, xy)
         raise NotSolved("grade3d: %s has no answer: these cannot hold together with the map's joins:\n  %s" % (
             what, "\n  ".join(_named(chains, couplings, why, names, core))))
     if res.status != 0:

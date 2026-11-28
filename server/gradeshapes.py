@@ -633,6 +633,15 @@ def _goes_on(net, a, p):
     return out
 
 
+def _node_of_both_at(mi, mj, q):
+    """Whether a map node of both members lies at point q (within JOIN_M on each: their nodes are placed along their
+    lines, _cell_nodes)."""
+    if not mi.node_xy or not mj.node_xy:
+        return False
+    at_i = {c for c, x, y in mi.node_xy if math.hypot(x - q[0], y - q[1]) <= JOIN_M}
+    return any(c in at_i and math.hypot(x - q[0], y - q[1]) <= JOIN_M for c, x, y in mj.node_xy)
+
+
 def _cross_through(a, b, tol=0.01):
     """Plan crossings of polylines a and b through both, not where either only touches the other with an end of its
     line: [q]."""
@@ -649,15 +658,15 @@ def _turns_beside(net, e, se, o, so):
     """Whether member e's end (at arc length se) lying by member o's line (at so), not joined to it, is where one of
     the two roads changes level beside the other: it goes on there (_goes_on: into a part of its own way, or a road the
     map joins it to there) on the other side of the other's level or at it (a tunnel's portal where its road rises onto
-    a deck: under the other, then over it), and the two roads, each with what it goes on into, do not cross through each
-    other there (_cross_through: a line only ending on the other is no crossing). No height is clear of the other at such
+    a deck: under the other, then over it), and e's and o's lines do not cross through each other there (_cross_through:
+    a line only ending on the other is no crossing). No height is clear of the other at such
     a point: it is no separation. Porte Maillot's primary left its tunnel straight onto a level-1 part, its portal 2.2 m
     from a service road's own portal beside it; each of its two ends by the service road was a separation of its own,
     the one point held 6.35 m over the service road and 5.15 m under it: its block had no answer. Suedtiroler Platz's
     building passage opened onto a 2 m aisle into a car park's ring 2 m from its portal, Kawazu's deck landed on a
     junction 2 m from the next one along a stub: the passage held 5.15 m under the ring, the deck 5.05 m over the road
-    leaving the next junction, joined to both through 2 m of road. Where the roads cross, the contact is kept (the map's
-    contradiction, reported)."""
+    leaving the next junction, joined to both through 2 m of road. Where e's and o's own lines cross, the contact is
+    kept (the map's contradiction, reported)."""
     up = _over(net.m[e], net.m[o])
     if up is None:
         return False
@@ -674,13 +683,10 @@ def _turns_beside(net, e, se, o, so):
     if not flips:
         return False
     q = flips[0]
-    road_e = [e] + _goes_on(net, e, net.lines[e][0] if se <= net.L[e] - se else net.lines[e][-1])
-    road_o = [o] + [c for c in _goes_on(net, o, q) if c != o]
-    for x in road_e:
-        for y in road_o:
-            if x != y and any(math.hypot(*(h - q)) <= NODE_M for h in _cross_through(net.lines[x], net.lines[y])):
-                return False
-    return True
+    # (a crossing there of what either goes on into is that pair's contact, found with it: Montfort Drive's bridge
+    # starting 1.4 m before LBJ's ramp deck crosses it, the ramp through the bridge, the street's ground part ending
+    # short of the ramp: the ground part held 6.35 m under the ramp and the bridge 6.35 m over it, at their one joint)
+    return not any(math.hypot(*(h - q)) <= NODE_M for h in _cross_through(net.lines[e], net.lines[o]))
 
 
 def _mapped_at(net, e, se, o):
@@ -757,8 +763,14 @@ def _pair_from(net, i, j, hits, ends):
     out[:] = uniq
     up = _over(net.m[i], net.m[j])
     for si, sj, q in hits:
-        if any(r_[0] == j and r_[1] == "cross" and abs(r_[2] - si) < 1.0 for r_ in out):
+        if any(r_[0] == j and r_[1] in ("cross", "join") and abs(r_[2] - si) < 1.0 for r_ in out):
             continue                        # (on a vertex: found on both its segments)
+        if _node_of_both_at(net.m[i], net.m[j], q):
+            # (the map joins them where they cross: one height, whatever their layers. A car park's floors mapped as
+            # layers 1 and 2, no bridge, each crossing the aisles of the floor under it at a node of both (Barcelona's
+            # bus depot by Carrer de Santander): held 6.35 m over the aisle they meet, the block had no answer)
+            out.append((j, "join", si, sj, q))
+            continue
         if up is not None and net.m[i].kind in STRUCTURES and net.m[j].kind in STRUCTURES:
             # (a crossing nearer a joint of the same two structures than the clearance takes at their grade, along both
             # to it, is that joint: one stretch of road meeting itself at a shallow angle, not one over the other, which
