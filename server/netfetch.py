@@ -250,6 +250,11 @@ POLICIES = {
     # camera rises above the clouds; public domain, no key)
     "gibs.earthdata.nasa.gov": HostPolicy(rate=8.0, burst=40.0, max_conc=6, daily_budget=6000, cache_ttl=3 * 3600.0,
                                           miss_ttl=3600.0, timeout=20.0, max_attempts=2, optional=True, **TILE_HOST),
+    # NOAA IMS 1 km snow cover (snowfield.py, local weather S1, BNE_LOCAL_WEATHER=snowfield): one ~3 MB day file a
+    # day (two after a gap), public domain, no key; a 404 is "not published yet" (the day's file comes ~14 UTC)
+    "noaadata.apps.nsidc.org": HostPolicy(rate=0.2, burst=2.0, max_conc=1, daily_budget=12, daily_hard=24,
+                                          miss_ttl=3 * 3600.0, timeout=60.0, max_attempts=2, optional=True,
+                                          binary=True),
     # 20 variables a request = 2 Open-Meteo calls: 500 requests = 1,000 calls a day, hard
     "api.open-meteo.com": HostPolicy(rate=0.1, burst=2.0, max_conc=1, daily_budget=500, daily_hard=500,
                                      cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True,
@@ -535,6 +540,7 @@ ROLES = {
     "tecnagamer.github.io": "railway details, US railroad crossing equipment, lane markings and New York's "
                             "building setbacks; estimated meanwhile",
     "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",
+    "noaadata.apps.nsidc.org": "the satellites' snow map (Local snow); the snow from the weather alone meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "api.adsb.lol": "live air traffic; the other aircraft sources stand in",
     "api.airplanes.live": "live air traffic (a stand-in source)",

@@ -21,14 +21,15 @@ pub fn block_coordinates<'py>(
     let (o, r) = crate::frame_of(&origin, &rot)?;
     let (xs, ys) = (xs.as_array(), ys.as_array());
     let (lat, lon) = py.detach(|| {
-        let mut lat = Array2::zeros((ys.len(), xs.len()));
-        let mut lon = lat.clone();
-        for ((row, col), la) in lat.indexed_iter_mut() {
-            let (a, b, _) = crate::e2g_one(xs[col], ys[row], 0., &o, &r);
-            *la = a;
-            lon[[row, col]] = b;
-        }
-        (lat, lon)
+        // (each sample from its own lattice point, over par's threads: the same bits on any number)
+        let w = xs.len();
+        let v = crate::par::map(ys.len() * w, |i| {
+            let (a, b, _) = crate::e2g_one(xs[i % w], ys[i / w], 0., &o, &r);
+            (a, b)
+        });
+        let (la, lo): (Vec<f64>, Vec<f64>) = v.into_iter().unzip();
+        (Array2::from_shape_vec((ys.len(), w), la).expect("rows x cols"),
+         Array2::from_shape_vec((ys.len(), w), lo).expect("rows x cols"))
     });
     Ok((lat.into_pyarray(py), lon.into_pyarray(py)))
 }
@@ -51,9 +52,13 @@ pub fn block_up<'py>(
     }
     Ok(py
         .detach(|| {
-            Array2::from_shape_fn(lat.dim(), |i| {
+            // (each sample from its own position and elevation, over par's threads: the same bits on any number)
+            let (h, w) = lat.dim();
+            let v = crate::par::map(h * w, |k| {
+                let i = (k / w.max(1), k % w.max(1));
                 crate::g2e_one(lat[i], lon[i], elev[i], &o, &r).2
-            })
+            });
+            Array2::from_shape_vec((h, w), v).expect("rows x cols")
         })
         .into_pyarray(py))
 }

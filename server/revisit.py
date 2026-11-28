@@ -414,7 +414,10 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 # (the trees' leaf cycle, leafcycle.py: a field of the anchor's message only, the mod's trees by it)
                 "BNE_LEAF_CYCLE",
                 # (the live air traffic's test switch, airtraffic.TEST_ON: a hello flag for the mod, nothing built)
-                "BNE_AIRTRAFFIC_TEST")
+                "BNE_AIRTRAFFIC_TEST",
+                # (local weather, snowfield.py and the later parts: live weather only; S1's snow photos are keyed by
+                # their tables as W2's, snowcover.key_parts with the S1 tables' own marker)
+                "BNE_LOCAL_WEATHER")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
