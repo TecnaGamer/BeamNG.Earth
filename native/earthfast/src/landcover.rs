@@ -210,7 +210,9 @@ pub fn landcover_classify<'py>(
     let [lawn_id, dry_id, sand_id, rock, snow] = materials;
     let out = py.detach(|| {
         let sand = beaches(c, square, distances);
-        Array2::from_shape_fn((h, w), |(y, x)| {
+        // (each sample from its own class, position and neighbours' heights: over par's threads, the same on any number)
+        let v = crate::par::map(h * w, |k| {
+            let (y, x) = (k / w, k % w);
             let i = [y, x];
             let mut m = lut[c[i] as usize];
             if let (Some(lat), Some(lon)) = (lat, lon) {
@@ -234,7 +236,8 @@ pub fn landcover_classify<'py>(
                 }
             }
             m
-        })
+        });
+        Array2::from_shape_vec((h, w), v).expect("h * w samples")
     });
     Ok(out.into_pyarray(py))
 }

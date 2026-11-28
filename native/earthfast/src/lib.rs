@@ -7850,6 +7850,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 641: roadwear::puddle_spots (a skin's puddles as spots for the mod's aquaplaning)
     // 644: snow::snow_band_table_relief (W2's band table cut to the cell's real relief; 642 / 643 are taken by the
     // tunnels' and the roads' branches)
-    m.add("VERSION", 644)?;
+    // 651: the terrain block's elementwise kernels on par's threads (dm_vec, geo_tile_of, dem_sample, sea_cell_lookup
+    // without the GIL, landcover_classify, block_chunk_grid / block_coordinates / block_up): the same bits on any number
+    // of threads (645-650 are taken by other branches)
+    m.add("VERSION", 651)?;
     Ok(())
 }

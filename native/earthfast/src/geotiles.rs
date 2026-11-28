@@ -286,7 +286,9 @@ pub fn geo_tile_of<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: P
                         -> (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>) {
     let (la, lo) = (lat.as_array(), lon.as_array());
     let m = la.len();
-    let (xs, ys): (Vec<i64>, Vec<i64>) = crate::release(py, m * 40, || (0..m).map(|i| tile_of(la[i], lo[i], z)).unzip());
+    // (each point's tile from its own coordinates, over par's threads for a block's million: the same on any number)
+    let (xs, ys): (Vec<i64>, Vec<i64>) =
+        crate::release(py, m * 40, || crate::par::map(m, |i| tile_of(la[i], lo[i], z)).into_iter().unzip());
     (xs.into_pyarray(py), ys.into_pyarray(py))
 }
 

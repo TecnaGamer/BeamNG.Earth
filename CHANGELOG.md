@@ -98,6 +98,9 @@ What changed in each release of BeamNG.Earth, newest first.
 - **BeamMP hosting:** the releases no longer carry the Windows and Linux host bundles with BeamMP's own server program
   inside. Get the server from BeamMP's own releases and add `BeamNG.Earth-BeamMP-Server-<version>.zip` (the mod and
   the server plugin). The Docker image is unchanged.
+- Terrain blocks should be built a little faster on machines with several cores: more of the ground's per-point work
+  (elevation, positions, water depth, land cover and the server's maths) is split over the world server's few threads,
+  with the same ground as before.
 
 ## 1.10.1 beta (2026-11-15)
 

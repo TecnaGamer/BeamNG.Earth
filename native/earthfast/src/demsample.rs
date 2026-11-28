@@ -32,7 +32,6 @@ pub(crate) fn bilinear_mosaic(ts: &[Option<ArrayView2<'_, f32>>], nx: usize, til
                               ys: ArrayView1<'_, f64>) -> Result<Array1<f64>, ()> {
     let ny = ts.len() / nx;
     let (h, w) = (ny * tile, nx * tile);
-    let mut bad = false;
     let px = |y: usize, x: usize, bad: &mut bool| match &ts[(y / tile) * nx + x / tile] {
         Some(t) => t[[y % tile, x % tile]] as f64,
         None => {
@@ -40,7 +39,11 @@ pub(crate) fn bilinear_mosaic(ts: &[Option<ArrayView2<'_, f32>>], nx: usize, til
             0.0
         }
     };
-    let out = Array1::from_shape_fn(xs.len(), |i| {
+    // (each point from its own position and the tiles: over par's threads, the same bits on any number; a pixel
+    // outside the tiles read marks the call bad, whichever thread meets it)
+    let bad_at = std::sync::atomic::AtomicBool::new(false);
+    let v = crate::par::map(xs.len(), |i| {
+        let mut bad = false;
         let (x, y) = (xs[i], ys[i]);
         let ix = (x.floor() as i64).clamp(0, w as i64 - 2) as usize;
         let iy = (y.floor() as i64).clamp(0, h as i64 - 2) as usize;
@@ -48,9 +51,12 @@ pub(crate) fn bilinear_mosaic(ts: &[Option<ArrayView2<'_, f32>>], nx: usize, til
         let wy = (y - iy as f64).clamp(0.0, 1.0);
         let (v00, v10) = (px(iy, ix, &mut bad), px(iy, ix + 1, &mut bad));
         let (v01, v11) = (px(iy + 1, ix, &mut bad), px(iy + 1, ix + 1, &mut bad));
+        if bad {
+            bad_at.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         (v00 * (1.0 - wx) + v10 * wx) * (1.0 - wy) + (v01 * (1.0 - wx) + v11 * wx) * wy
     });
-    if bad { Err(()) } else { Ok(out) }
+    if bad_at.load(std::sync::atomic::Ordering::Relaxed) { Err(()) } else { Ok(Array1::from_vec(v)) }
 }
 
 struct Cfg {
@@ -244,11 +250,12 @@ fn plan(cfg: &Cfg, lat: &[f64], lon: &[f64]) -> Result<Plan, PlanErr> {
     let fx0 = (lon[0] / 360.0 + 0.5) * w;
     let deg = std::f64::consts::PI / 180.0;
     let tau = 2.0 * std::f64::consts::PI;
-    let mut fx: Vec<f64> = lon.iter().map(|&l| {
-        let f = (l / 360.0 + 0.5) * w;
+    // (each point's pixel from its own coordinates, over par's threads for a block's million: the same on any number)
+    let mut fx: Vec<f64> = crate::par::map(lon.len(), |i| {
+        let f = (lon[i] / 360.0 + 0.5) * w;
         f - w * ((f - fx0) / w).round_ties_even() - 0.5
-    }).collect();
-    let mut fy: Vec<f64> = lat.iter().map(|&a| (0.5 - (a * deg).dtan().dasinh() / tau) * w - 0.5).collect();
+    });
+    let mut fy: Vec<f64> = crate::par::map(lat.len(), |i| (0.5 - (lat[i] * deg).dtan().dasinh() / tau) * w - 0.5);
     let (mut xmin, mut xmax, mut ymin, mut ymax) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     for (&x, &y) in fx.iter().zip(&fy) {
         if !(x.is_finite() && y.is_finite()) {

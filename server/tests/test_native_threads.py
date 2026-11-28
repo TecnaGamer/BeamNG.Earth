@@ -1,6 +1,7 @@
 """The per-sample kernels on threads (earthfast par.rs, 287): the same bits on one thread and on several, for the plan
 apply (grade_points_binned's bins), the mip levels (float and integer), the CPU BC1 / BC7 encoders and the far
-textures' DDS payload; and the integer mips / ISPC BC1 against the float mips / our BC1 (the far textures' look)."""
+textures' DDS payload, and (651) the terrain block's elementwise kernels; and the integer mips / ISPC BC1 against the
+float mips / our BC1 (the far textures' look)."""
 import os
 import sys
 import unittest
@@ -99,6 +100,96 @@ class NativeThreadsTest(unittest.TestCase):
                 np.testing.assert_array_equal(g, got[0])
                 np.testing.assert_array_equal(np.signbit(g), np.signbit(got[0]))
             self.assertGreater(int((got[0] != base).sum()), 10000, "the plans graded the ground")
+
+    def test_terrain_block_kernels(self):
+        # 651: the terrain block's elementwise kernels split over the threads: the same bits on 1, 2, 3 and 8 (arrays
+        # over par.rs's 32 k items a thread, with NaN and edge values)
+        import heightmap
+        import geodesy
+        import geotiles
+        import seacarve
+        import surface
+        fast.require(651, "threaded terrain kernels")
+        rng = np.random.default_rng(11)
+        n = 300_000
+        x = rng.normal(0, 3, n)
+        x[:5] = (np.nan, np.inf, -np.inf, 0.0, -0.0)
+        y = rng.normal(0, 3, n)
+        for op in (0, 5, 9, 12, 15):            # sin, atan, asinh, log, cbrt
+            got = on_threads(lambda: EF.dm_vec(op, x).tobytes())
+            self.assertTrue(all(g == got[0] for g in got[1:]), op)
+        for op in (32, 33, 34):                 # atan2, pow, hypot
+            got = on_threads(lambda: EF.dm_vec(op, x, y).tobytes())
+            self.assertTrue(all(g == got[0] for g in got[1:]), op)
+        lat = 40.7 + rng.random(n) * 0.05
+        lon = -74.0 + rng.random(n) * 0.05
+        got = on_threads(lambda: [a.tobytes() for a in geotiles.tile_of(lat, lon, 16)])
+        self.assertTrue(all(g == got[0] for g in got[1:]))
+
+        def tiles(keys):        # (heights from each tile's key: the same tiles whatever is asked first)
+            return [np.random.default_rng(abs(hash(tuple(k))) % 2 ** 32).random((512, 512)).astype(np.float32) * 50
+                    for k in keys]
+        got = on_threads(lambda: EF.dem_sample(lat, lon, 15, 512, 84.9, 1024, 16, 4, 2, tiles,
+                                               lambda la, lo: None).tobytes())
+        self.assertTrue(all(g == got[0] for g in got[1:]))
+
+        # the block lattice: coordinates, heights back, the chunk grid (all chunks new and some from the cache)
+        frame = geodesy.EnuFrame(40.72, -73.99)
+        size, cx, cy = 1024, 0.0, 0.0
+        xs, ys = heightmap.sample_coords(cx, cy, size)
+
+        def elev(la, lo):
+            return 10.0 + 30.0 * np.sin((np.asarray(la) - 40.72) * 900.0) + (np.asarray(lo) + 73.99) * 100.0
+        got = on_threads(lambda: [a.tobytes() for a in EF.block_coordinates(xs, ys, frame.origin, frame.rot)])
+        self.assertTrue(all(g == got[0] for g in got[1:]))
+        la, lo = EF.block_coordinates(xs, ys, frame.origin, frame.rot)
+        got = on_threads(lambda: EF.block_up(la, lo, elev(la, lo), frame.origin, frame.rot).tobytes())
+        self.assertTrue(all(g == got[0] for g in got[1:]))
+
+        def chunked():
+            cache, keep = heightmap.ChunkCache(), {}
+            u, _ = heightmap.grid_u_chunked(frame, elev, cx, cy, size, cache, keep)
+            u2, share = heightmap.grid_u_chunked(frame, elev, cx + heightmap.CHUNK * heightmap.SQUARE, cy, size,
+                                                 cache, {})
+            self.assertGreater(share, 0.0)
+            self.assertLess(share, 1.0)
+            return [u.tobytes(), u2.tobytes(), keep["lat"].tobytes(), keep["lon"].tobytes()]
+        got = on_threads(chunked)
+        self.assertTrue(all(g == got[0] for g in got[1:]))
+
+        # the land cover's classes on a block (the slope's neighbours across the threads' parts, lawns, sand)
+        m = 600
+        classes = rng.choice(np.array([10, 20, 30, 40, 50, 60, 80, 90], np.uint8), (m, m))
+        classes[:, :200] = 80
+        u = np.cumsum(rng.normal(0, 0.6, (m, m)), axis=1)
+        lat2, lon2 = np.meshgrid(np.linspace(40.70, 40.71, m), np.linspace(-74.0, -73.99, m), indexing="ij")
+        got = on_threads(lambda: surface.classify(classes, u, 1.0, lat2, lon2).tobytes())
+        self.assertTrue(all(g == got[0] for g in got[1:]))
+
+        # the sea's cell lookup (the floor's bilinear and the near test), a cell's points among many others'
+        rn, b, c = 1026, seacarve.RAW_BLOCK_PX, seacarve.CELL_PX
+        jj, ii = np.mgrid[0:rn, 0:rn].astype(np.float32)
+        r = seacarve._in_blocks(((ii * 0.25 + jj * 0.5).astype(np.float32), np.full((rn, rn), 30.0, np.float32),
+                                 np.zeros((rn, rn), bool)))
+        kx, ky = 70, 90
+        mx = kx * c + rng.random(n) * (rn + 40) - 20
+        my = ky * c + rng.random(n) * (rn + 40) - 20
+        cxs = np.where(rng.random(n) < 0.7, kx, kx + 1).astype(np.int64)
+        cys = np.full(n, ky, np.int64)
+
+        def lookup():
+            d, lv = np.full(n, -1, np.float32), np.full(n, -1, np.float32)
+            ok = seacarve._lookup(r, (mx, my, cxs, cys), kx, ky, (d, lv), False)
+            return ok, d.tobytes(), lv.tobytes()
+        got = on_threads(lookup)
+        self.assertTrue(got[0][0])
+        self.assertTrue(all(g == got[0] for g in got[1:]))
+        sea = seacarve._in_blocks(((ii * 0.25).astype(np.float32),
+                                   np.where(ii > 1000, np.float32(seacarve.SEA_E), np.float32(30.0)).astype(np.float32),
+                                   np.zeros((rn, rn), bool)))
+        got = on_threads(lambda: seacarve._lookup(sea, (mx, my, cxs, cys), kx, ky,
+                                                   (np.zeros(n, np.float32), np.zeros(n, np.float32)), True))
+        self.assertEqual(got, [False] * len(THREADS), "a point by the sea's level found on any number of threads")
 
     def test_mips_and_encoders(self):
         img = photo_like(np.random.default_rng(1), 1024)

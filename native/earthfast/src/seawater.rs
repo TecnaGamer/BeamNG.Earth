@@ -130,8 +130,8 @@ impl Raster<'_> {
 #[pyfunction]
 #[pyo3(signature = (mx, my, cx, cy, kx, ky, ox, oy, idx, raw, bh, bw, h, w, near, sea_e, thr, d, lv))]
 #[allow(clippy::too_many_arguments)]
-pub fn sea_cell_lookup(mx: PyReadonlyArray1<'_, f64>, my: PyReadonlyArray1<'_, f64>, cx: PyReadonlyArray1<'_, i64>,
-                       cy: PyReadonlyArray1<'_, i64>, kx: i64, ky: i64, ox: f64, oy: f64,
+pub fn sea_cell_lookup(py: Python<'_>, mx: PyReadonlyArray1<'_, f64>, my: PyReadonlyArray1<'_, f64>,
+                       cx: PyReadonlyArray1<'_, i64>, cy: PyReadonlyArray1<'_, i64>, kx: i64, ky: i64, ox: f64, oy: f64,
                        idx: PyReadonlyArray2<'_, i32>, raw: PyReadonlyArray1<'_, u8>, bh: usize, bw: usize, h: usize,
                        w: usize, near: bool, sea_e: f64, thr: f64, mut d: PyReadwriteArray1<'_, f32>,
                        mut lv: PyReadwriteArray1<'_, f32>) -> PyResult<bool> {
@@ -164,38 +164,53 @@ pub fn sea_cell_lookup(mx: PyReadonlyArray1<'_, f64>, my: PyReadonlyArray1<'_, f
     let corner = |fx: f64, fy: f64| -> (usize, usize) {
         (np_i64(fx.floor()).clamp(0, hi_i) as usize, np_i64(fy.floor()).clamp(0, hi_j) as usize)
     };
-    if near {
-        let (e, t) = (sea_e as f32, thr as f32);
-        for k in 0..n {
-            if cx[k] != kx || cy[k] != ky {
-                continue;
-            }
-            let (i0, j0) = corner((mx[k] - ox) + 0.5, (my[k] - oy) + 0.5);
-            for (a, b) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-                if (r.level(j0 + a, i0 + b) - e).abs() < t {
-                    return Ok(false);
-                }
-            }
-        }
-    }
+    // Without the GIL, over par's threads in fixed parts of the points: each point's values from its own position
+    // and the raster only, and the near test an any() of booleans (the same answer and bits on any number of threads).
     let mut d = d.as_array_mut();
     let mut lv = lv.as_array_mut();
-    for k in 0..n {
-        if cx[k] != kx || cy[k] != ky {
-            continue;
+    let (Some(ds), Some(ls)) = (d.as_slice_mut(), lv.as_slice_mut()) else {
+        return Err(PyValueError::new_err("sea_cell_lookup: d and lv must be contiguous"));
+    };
+    let ok = py.detach(|| {
+        if near {
+            let (e, t) = (sea_e as f32, thr as f32);
+            let by_sea = crate::par::any(n, |k| {
+                if cx[k] != kx || cy[k] != ky {
+                    return false;
+                }
+                let (i0, j0) = corner((mx[k] - ox) + 0.5, (my[k] - oy) + 0.5);
+                [(0, 0), (0, 1), (1, 0), (1, 1)].iter().any(|&(a, b)| (r.level(j0 + a, i0 + b) - e).abs() < t)
+            });
+            if by_sea {
+                return false;
+            }
         }
-        let fx = add(sub(mx[k], ox), 0.5);      // raster coords: pixel centres at i + 0.5 - 1
-        let fy = add(sub(my[k], oy), 0.5);
-        let (i0, j0) = corner(fx, fy);
-        let tx = clip01(sub(fx, i0 as f64));
-        let ty = clip01(sub(fy, j0 as f64));
-        let (ux, uy) = (sub(1.0, tx), sub(1.0, ty));
-        let top = add(mul(r.depth(j0, i0), ux), mul(r.depth(j0, i0 + 1), tx));
-        let bottom = add(mul(r.depth(j0 + 1, i0), ux), mul(r.depth(j0 + 1, i0 + 1), tx));
-        d[k] = narrow(add(mul(top, uy), mul(bottom, ty)));
-        let ni = np_i64((fx + 0.5).floor()).clamp(0, w as i64 - 1) as usize;
-        let nj = np_i64((fy + 0.5).floor()).clamp(0, h as i64 - 1) as usize;
-        lv[k] = r.level(nj, ni);
-    }
-    Ok(true)
+        let one = |k: usize, d: &mut f32, lv: &mut f32| {
+            if cx[k] != kx || cy[k] != ky {
+                return;
+            }
+            let fx = add(sub(mx[k], ox), 0.5);      // raster coords: pixel centres at i + 0.5 - 1
+            let fy = add(sub(my[k], oy), 0.5);
+            let (i0, j0) = corner(fx, fy);
+            let tx = clip01(sub(fx, i0 as f64));
+            let ty = clip01(sub(fy, j0 as f64));
+            let (ux, uy) = (sub(1.0, tx), sub(1.0, ty));
+            let top = add(mul(r.depth(j0, i0), ux), mul(r.depth(j0, i0 + 1), tx));
+            let bottom = add(mul(r.depth(j0 + 1, i0), ux), mul(r.depth(j0 + 1, i0 + 1), tx));
+            *d = narrow(add(mul(top, uy), mul(bottom, ty)));
+            let ni = np_i64((fx + 0.5).floor()).clamp(0, w as i64 - 1) as usize;
+            let nj = np_i64((fy + 0.5).floor()).clamp(0, h as i64 - 1) as usize;
+            *lv = r.level(nj, ni);
+        };
+        let threads = crate::par::threads_for(n, crate::par::MAP_ITEMS_PER_THREAD);
+        let parts: Vec<(usize, &mut [f32], &mut [f32])> = ds.chunks_mut(crate::par::PART)
+            .zip(ls.chunks_mut(crate::par::PART)).enumerate().map(|(k, (a, b))| (k, a, b)).collect();
+        crate::par::run_parts(parts, threads, |(k, a, b)| {
+            for (j, (dv, lvv)) in a.iter_mut().zip(b.iter_mut()).enumerate() {
+                one(k * crate::par::PART + j, dv, lvv);
+            }
+        });
+        true
+    });
+    Ok(ok)
 }
